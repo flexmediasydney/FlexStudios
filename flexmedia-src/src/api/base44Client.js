@@ -445,3 +445,4 @@ export const base44 = {
 
 // Also export individual Supabase clients for direct use where needed
 export { supabase, supabaseAdmin };
+// force rebuild 1773921131
