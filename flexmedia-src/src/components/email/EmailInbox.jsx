@@ -13,7 +13,7 @@ import EmailThreadViewer from "./EmailThreadViewer";
 import EmailCompose from "./EmailCompose";
 import EmailAccountSetup from "./EmailAccountSetup";
 import EmailSettings from "./EmailSettings";
-import Skeleton from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const labelColors = {
   important: 'bg-red-100 text-red-700',
@@ -57,15 +57,23 @@ export default function EmailInbox() {
     enabled: !!selectedAccount
   });
 
-  // Sync mutation
+  // Sync mutation — syncs the selected account using per-account OAuth tokens
   const syncMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('syncGmailMessages'),
-    onSuccess: () => {
-      toast.success("Email synced successfully");
+    mutationFn: async () => {
+      if (!selectedAccount) throw new Error('No account selected');
+      const result = await base44.functions.invoke('syncGmailMessagesForAccount', {
+        accountId: selectedAccount.id,
+        userId: selectedAccount.assigned_to_user_id,
+      });
+      return result;
+    },
+    onSuccess: (res) => {
+      const n = res?.data?.synced ?? 0;
+      toast.success(n > 0 ? `Synced ${n} new email${n !== 1 ? 's' : ''}` : "Already up to date");
       refetchMessages();
     },
-    onError: () => {
-      toast.error("Failed to sync emails");
+    onError: (err) => {
+      toast.error(err?.message || "Failed to sync emails");
     }
   });
 

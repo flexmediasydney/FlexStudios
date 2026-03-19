@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog as UIDialog, DialogContent as UIDialogContent, DialogHeader as UIDialogHeader, DialogTitle as UIDialogTitle } from "@/components/ui/dialog";
 import { FileText, Signature, Save, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -95,6 +94,7 @@ export default function EmailSettings({ onClose }) {
   });
 
   return (
+    <>
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -180,60 +180,60 @@ export default function EmailSettings({ onClose }) {
           </TabsContent>
         </Tabs>
       </DialogContent>
-
-      {showTemplateDialog && (
-        <UIDialog open onOpenChange={setShowTemplateDialog}>
-          <UIDialogContent>
-            <UIDialogHeader>
-              <UIDialogTitle>Create Email Template</UIDialogTitle>
-            </UIDialogHeader>
-
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium">Template Name</label>
-                <Input
-                  placeholder="e.g., Follow-up Email"
-                  value={templateName}
-                  onChange={(e) => setTemplateName(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Subject</label>
-                <Input
-                  placeholder="Email subject"
-                  value={templateSubject}
-                  onChange={(e) => setTemplateSubject(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium">Body</label>
-                <Textarea
-                  placeholder="Email body..."
-                  value={templateBody}
-                  onChange={(e) => setTemplateBody(e.target.value)}
-                  rows={8}
-                />
-              </div>
-
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setShowTemplateDialog(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => createTemplateMutation.mutate()}
-                  disabled={createTemplateMutation.isPending || !templateName || !templateSubject}
-                  className="gap-2"
-                >
-                  <Plus className="h-4 w-4" />
-                  {createTemplateMutation.isPending ? 'Creating...' : 'Create'}
-                </Button>
-              </div>
-            </div>
-          </UIDialogContent>
-        </UIDialog>
-      )}
     </Dialog>
+
+    {showTemplateDialog && (
+      <Dialog open onOpenChange={setShowTemplateDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Email Template</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Template Name</label>
+              <Input
+                placeholder="e.g., Follow-up Email"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Subject</label>
+              <Input
+                placeholder="Email subject"
+                value={templateSubject}
+                onChange={(e) => setTemplateSubject(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Body</label>
+              <Textarea
+                placeholder="Email body..."
+                value={templateBody}
+                onChange={(e) => setTemplateBody(e.target.value)}
+                rows={8}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowTemplateDialog(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => createTemplateMutation.mutate()}
+                disabled={createTemplateMutation.isPending || !templateName || !templateSubject}
+                className="gap-2"
+              >
+                <Plus className="h-4 w-4" />
+                {createTemplateMutation.isPending ? 'Creating...' : 'Create'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    )}
   );
 }

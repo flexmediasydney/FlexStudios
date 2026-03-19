@@ -334,18 +334,30 @@ export default function EmailComposeDialog({
     if (!file) return;
 
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      // Upload to Supabase Storage (email-attachments bucket)
+      const supabase = base44._supabase;
+      const filePath = `${selectedAccount}/${Date.now()}-${file.name}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('email-attachments')
+        .upload(filePath, file);
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from('email-attachments')
+        .getPublicUrl(uploadData.path);
+
       setAttachments([
         ...attachments,
         {
           filename: file.name,
           mime_type: file.type,
           size: file.size,
-          file_url,
+          file_url: urlData.publicUrl,
         },
       ]);
       toast.success(`${file.name} attached`);
     } catch (error) {
+      console.error('Attachment upload error:', error);
       toast.error("Failed to attach file");
     }
   };

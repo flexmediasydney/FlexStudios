@@ -221,14 +221,14 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
             </div>
             <Select
               value={formData.team_id}
-              onValueChange={(value) => setFormData({ ...formData, team_id: value })}
+              onValueChange={(value) => setFormData({ ...formData, team_id: value === "__none__" ? "" : value })}
               disabled={!formData.agency_id}
             >
               <SelectTrigger>
                 <SelectValue placeholder={teamsLoading ? "Loading..." : "Select team (optional)"} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={null}>No team</SelectItem>
+                <SelectItem value="__none__">No team</SelectItem>
                 {availableTeams.length === 0 && !teamsLoading && formData.agency_id ? (
                   <div className="p-2 text-sm text-muted-foreground">No teams in this organisation</div>
                 ) : (

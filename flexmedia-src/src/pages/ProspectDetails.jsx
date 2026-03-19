@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useEntityList, useEntityData } from '@/components/hooks/useEntityData';
-
+import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { base44 } from '@/api/base44Client';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -15,8 +15,9 @@ import ProspectStatusManager from '@/components/prospecting/ProspectStatusManage
 export default function ProspectDetails() {
   const urlParams = new URLSearchParams(window.location.search);
   const agentId = urlParams.get('id');
+  const { data: currentUser } = useCurrentUser();
   const { data: agent, loading, error } = useEntityData('Agent', agentId);
-   const { data: interactions = [] } = agentId ? useEntityList('InteractionLog', '-date_time', 500, { entity_type: 'Agent', entity_id: agentId }) : { data: [] };
+   const { data: interactions = [] } = useEntityList(agentId ? 'InteractionLog' : null, '-date_time', 500, agentId ? { entity_type: 'Agent', entity_id: agentId } : null);
    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
    const prospectInteractions = interactions?.sort((a, b) => new Date(b.date_time) - new Date(a.date_time)) || [];
@@ -36,9 +37,21 @@ export default function ProspectDetails() {
       ]);
     } catch { /* non-fatal — proceed with delete */ }
 
-    if (await base44.entities.Agent.delete(agentId)) {
-      window.location.href = createPageUrl('Prospecting');
-    }
+    // Create audit log before deleting
+    await base44.entities.AuditLog.create({
+      entity_type: "agent",
+      entity_id: agentId,
+      entity_name: agent?.name,
+      action: "delete",
+      changed_fields: [],
+      previous_state: agent || {},
+      new_state: {},
+      user_name: currentUser?.full_name,
+      user_email: currentUser?.email
+    }).catch(() => {}); // non-fatal
+
+    await base44.entities.Agent.delete(agentId);
+    window.location.href = createPageUrl('Prospecting');
   };
 
   if (loading) {
@@ -141,9 +154,10 @@ export default function ProspectDetails() {
           </TabsList>
 
           <TabsContent value="interactions" className="mt-6">
-            <InteractionLogPanel 
+            <InteractionLogPanel
               prospect={agent}
               interactions={prospectInteractions}
+              entityType="Agent"
             />
           </TabsContent>
 

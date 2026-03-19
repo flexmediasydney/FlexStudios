@@ -10,17 +10,19 @@ import { toast } from "sonner";
 
 export default function InviteUserDialog({ open, onClose, onSuccess }) {
   const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
   const [role, setRole] = useState("employee");
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    
+
     try {
-      await base44.users.inviteUser(email, role);
+      await base44.users.inviteUser(email, role, fullName || undefined);
       toast.success("Invitation sent successfully!");
       setEmail("");
+      setFullName("");
       setRole("employee");
       onSuccess();
       onClose();
@@ -37,7 +39,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
         <DialogHeader>
           <DialogTitle>Invite New User</DialogTitle>
         </DialogHeader>
-        
+
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <Label htmlFor="email">Email Address *</Label>
@@ -50,7 +52,21 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               required
             />
           </div>
-          
+
+          <div>
+            <Label htmlFor="fullName">Full Name</Label>
+            <Input
+              id="fullName"
+              type="text"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Jane Smith"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Optional. They can update this after accepting the invite.
+            </p>
+          </div>
+
           <div>
             <Label htmlFor="role">Role *</Label>
             <Select value={role} onValueChange={setRole}>
@@ -69,12 +85,12 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               {role === "contractor" && "Can only see assigned projects, no pricing"}
             </p>
           </div>
-          
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={loading}>
+            <Button type="submit" disabled={loading || !email}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Send Invitation
             </Button>

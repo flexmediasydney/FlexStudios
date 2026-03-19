@@ -446,18 +446,62 @@ const usersApi = {
    * Invite a user by email with a specific role.
    * Base44 signature: base44.users.inviteUser(email, role)
    *
-   * Uses Supabase admin API to send an invitation email,
-   * and stores the role in user metadata.
+   * 1. Creates an auth user via Supabase admin API (sends invitation email)
+   * 2. Creates a corresponding row in the `users` table with role and metadata
+   * 3. Returns the created user record
    */
-  async inviteUser(email, role) {
+  async inviteUser(email, role, fullName) {
     if (!supabaseAdmin) {
       throw new Error('Service role key required for user invitations');
     }
-    const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
-      data: { role },
+
+    // Step 1: Create auth user and send invitation email
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
+      data: { role, full_name: fullName || email.split('@')[0] },
     });
-    if (error) throw new Error(error.message);
-    return data;
+    if (authError) throw new Error(authError.message);
+
+    const authUser = authData?.user;
+    if (!authUser) throw new Error('Auth user was not created');
+
+    // Step 2: Create a row in the users table so the user appears in the app immediately
+    try {
+      const displayName = fullName?.trim() || email.split('@')[0];
+      const { data: userRow, error: insertError } = await supabaseAdmin
+        .from('users')
+        .insert({
+          id: authUser.id,
+          email: email.toLowerCase().trim(),
+          full_name: displayName,
+          role: role || 'employee',
+          is_active: true,
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        // If the user row already exists (e.g. re-invite), update it instead
+        if (insertError.code === '23505') { // unique_violation
+          const { data: updatedRow, error: updateError } = await supabaseAdmin
+            .from('users')
+            .update({ role: role || 'employee', is_active: true })
+            .eq('email', email.toLowerCase().trim())
+            .select()
+            .single();
+          if (updateError) {
+            console.warn('Failed to update existing user row during invite:', updateError.message);
+          }
+          return updatedRow || authData;
+        }
+        console.warn('Failed to create user row during invite:', insertError.message);
+        // Don't throw — the auth user was created; the row can be synced later
+      }
+
+      return userRow || authData;
+    } catch (err) {
+      console.warn('Error creating user row during invite:', err.message);
+      return authData;
+    }
   },
 };
 

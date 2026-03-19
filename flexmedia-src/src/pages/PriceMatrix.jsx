@@ -275,7 +275,7 @@ function MatrixContent({ enriched, entityType, loading, searchQuery, viewMode, c
   }
 
   if (viewMode === "table") {
-    return <CompactTable enriched={enriched} entityType={entityType} creating={creating} onCreate={onCreate} selectedProjectType={selectedProjectType} selectedProjectTypeId={selectedProjectTypeId} />;
+    return <CompactTable enriched={enriched} entityType={entityType} creating={creating} onCreate={onCreate} selectedProjectType={selectedProjectType} />;
   }
 
   return (
@@ -298,8 +298,9 @@ function MatrixContent({ enriched, entityType, loading, searchQuery, viewMode, c
   );
 }
 
-function CompactTable({ enriched, entityType, creating, onCreate, selectedProjectType, selectedProjectTypeId }) {
+function CompactTable({ enriched, entityType, creating, onCreate, selectedProjectType }) {
   const Icon = entityType === "agency" ? Building : User;
+  const selectedProjectTypeId = selectedProjectType?.id || null;
 
   return (
     <Card className="overflow-hidden">

@@ -92,10 +92,7 @@ export default function BusinessIntelligence() {
   const { canSeeBI } = usePermissions();
   const [period, setPeriod] = useState("3m");
 
-  if (!canSeeBI) {
-    return <div className="p-8 text-center text-muted-foreground">Access denied — admin only</div>;
-  }
-
+  // All hooks must be called unconditionally (React rules of hooks)
   const { data: allProjects = [] }   = useEntityList("Project");
   const { data: allRevisions = [] }  = useEntityList("ProjectRevision");
   const { data: allUsers = [] }      = useEntityList("User");
@@ -336,7 +333,7 @@ export default function BusinessIntelligence() {
     if (periodProjects.length === 0) return null;
     const deliveredIds = new Set(periodProjects.filter(p => p.status === 'delivered').map(p => p.id));
     const relevantLogs = allTimeLogs.filter(l => deliveredIds.has(l.project_id));
-    const totalSeconds = relevantLogs.reduce((s, l) => s + (l.duration_seconds || 0), 0);
+    const totalSeconds = relevantLogs.reduce((s, l) => s + (l.total_seconds || 0), 0);
     return deliveredIds.size > 0 ? (totalSeconds / 3600 / deliveredIds.size).toFixed(1) : null;
   }, [allTimeLogs, periodProjects]);
 
@@ -384,6 +381,10 @@ export default function BusinessIntelligence() {
     const standardRev = standard.reduce((s, p) => s + projectValue(p), 0);
     return { premium: premium.length, standard: standard.length, premiumRev, standardRev };
   }, [periodProjects]);
+
+  if (!canSeeBI) {
+    return <div className="p-8 text-center text-muted-foreground">Access denied — admin only</div>;
+  }
 
   return (
     <ErrorBoundary>

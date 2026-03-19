@@ -8,16 +8,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Users, Building2 } from "lucide-react";
 import { toast } from "sonner";
+
+const RELATIONSHIP_STATES = ['Prospecting', 'Active', 'Dormant', 'Do Not Contact'];
 
 const INITIAL_STATE = {
   name: "",
   address: "",
   phone: "",
   email: "",
-  notes: ""
+  notes: "",
+  relationship_state: "Prospecting",
+  onboarding_date: ""
 };
 
 function FieldError({ error }) {
@@ -33,7 +38,7 @@ export default function AgencyForm({ agency, open, onClose }) {
   const { data: agents = [] } = useEntityList(open && agency ? "Agent" : null, "name");
 
   const agencyTeams = teams.filter(t => t.agency_id === agency?.id);
-  const agencyAgents = agents.filter(a => a.agency_id === agency?.id);
+  const agencyAgents = agents.filter(a => a.current_agency_id === agency?.id);
 
   useEffect(() => {
     if (open) {
@@ -91,12 +96,12 @@ export default function AgencyForm({ agency, open, onClose }) {
       return result;
     },
     onSuccess: () => {
-      toast.success(agency ? "Agency updated" : "Agency created");
+      toast.success(agency ? "Organisation updated" : "Organisation created");
       setFormData(INITIAL_STATE);
       onClose();
     },
     onError: (error) => {
-      toast.error(error.message || "Failed to save agency");
+      toast.error(error.message || "Failed to save organisation");
     }
   });
 
@@ -129,11 +134,11 @@ export default function AgencyForm({ agency, open, onClose }) {
         if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSubmit(e); }
       }}>
         <DialogHeader>
-          <DialogTitle>{agency ? "Edit Agency" : "Add Agency"}</DialogTitle>
+          <DialogTitle>{agency ? "Edit Organisation" : "Add Organisation"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <Label>Agency Name *</Label>
+            <Label>Organisation Name *</Label>
             <Input
               value={formData.name}
               onChange={(e) => handleChange("name", e.target.value)}
@@ -180,6 +185,32 @@ export default function AgencyForm({ agency, open, onClose }) {
               <FieldError error={errors.email} />
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Relationship State</Label>
+              <Select
+                value={formData.relationship_state || "Prospecting"}
+                onValueChange={(value) => setFormData(prev => ({ ...prev, relationship_state: value }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select state" />
+                </SelectTrigger>
+                <SelectContent>
+                  {RELATIONSHIP_STATES.map(state => (
+                    <SelectItem key={state} value={state}>{state}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Onboarding Date</Label>
+              <Input
+                type="date"
+                value={formData.onboarding_date ? formData.onboarding_date.slice(0, 10) : ""}
+                onChange={(e) => setFormData(prev => ({ ...prev, onboarding_date: e.target.value || "" }))}
+              />
+            </div>
+          </div>
           <div>
             <Label>Notes</Label>
             <Textarea
@@ -190,7 +221,7 @@ export default function AgencyForm({ agency, open, onClose }) {
             />
             <p className="text-xs text-muted-foreground mt-1 text-right">{(formData.notes || "").length}/{LIMITS.notes}</p>
           </div>
-          
+
           {agency && (
             <div className="space-y-3 pt-4 border-t">
               <div className="flex items-center justify-between">

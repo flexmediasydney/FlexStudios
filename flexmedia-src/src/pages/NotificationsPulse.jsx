@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { base44 } from "@/api/base44Client";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Badge } from "@/components/ui/badge";
@@ -50,6 +50,7 @@ function relTime(ts) {
 export default function NotificationsPulse() {
   const { data: currentUser } = useCurrentUser();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [severity, setSeverity] = useState("all");
@@ -61,9 +62,23 @@ export default function NotificationsPulse() {
   const { data: allNotifications = [], isLoading, refetch, dataUpdatedAt } = useQuery({
     queryKey: ["pulse-all-notifications"],
     queryFn: () => base44.entities.Notification.list("-created_date", 500),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000, // Reduced — realtime handles instant updates
     enabled: isAdmin,
   });
+
+  // Realtime subscription — auto-refetch when new notifications arrive
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const unsubscribe = base44.entities.Notification.subscribe((event) => {
+      if (!event) return;
+      if (event.type === 'create' || event.type === 'update') {
+        queryClient.invalidateQueries({ queryKey: ["pulse-all-notifications"] });
+      }
+    });
+
+    return unsubscribe;
+  }, [isAdmin, queryClient]);
 
   const { data: allUsers = [] } = useQuery({
     queryKey: ["pulse-users"],

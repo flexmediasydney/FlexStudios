@@ -381,9 +381,9 @@ export default function EmailAccountSettingsTab() {
                       <Label>Assign to Team</Label>
                       {/* FIX 11: use "" not null */}
                       <Select
-                        value={selectedAccount.team_id || ""}
+                        value={selectedAccount.team_id || "__none__"}
                         onValueChange={(val) => {
-                          const teamId = val === "" ? null : val;
+                          const teamId = val === "__none__" ? null : val;
                           const team = teams.find((t) => t.id === teamId);
                           handleFieldSave("team_id", teamId);
                           handleFieldSave("team_name", team?.name || "");
@@ -393,7 +393,7 @@ export default function EmailAccountSettingsTab() {
                           <SelectValue placeholder="No team (personal)" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value={null}>No team (personal)</SelectItem>
+                          <SelectItem value="__none__">No team (personal)</SelectItem>
                           {teams.map((t) => (
                             <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
                           ))}
@@ -855,7 +855,7 @@ function AddGmailAccountForm({ onSuccess }) {
             <SelectValue placeholder="Personal inbox" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={null}>Personal (no team)</SelectItem>
+            <SelectItem value="__none__">Personal (no team)</SelectItem>
             {teams.map((t) => (
               <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
             ))}

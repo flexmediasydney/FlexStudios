@@ -43,7 +43,7 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
     enabled: open && !!team
   });
 
-  const teamAgents = allAgents.filter(a => a.team_id === team?.id);
+  const teamAgents = allAgents.filter(a => a.current_team_id === team?.id);
 
   useEffect(() => {
     if (open) {

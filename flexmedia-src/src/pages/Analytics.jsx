@@ -30,6 +30,7 @@ export default function Analytics() {
   useEffect(() => {
     const t = searchParams.get("tab");
     if (t && t !== activeTab) setActiveTab(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   return (

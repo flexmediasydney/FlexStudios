@@ -100,11 +100,18 @@ Deno.serve(async (req) => {
       finalBody += `\n${signatures[0].signature_html}`;
     }
 
-    // Build email
+    // Build email with proper From header and In-Reply-To for threading
+    const fromHeader = account.display_name
+      ? `${account.display_name} <${account.email_address}>`
+      : account.email_address;
+
     const email = [
+      `From: ${fromHeader}`,
       `To: ${to}`,
       cc ? `Cc: ${cc}` : '',
       bcc ? `Bcc: ${bcc}` : '',
+      inReplyTo ? `In-Reply-To: ${inReplyTo}` : '',
+      inReplyTo ? `References: ${inReplyTo}` : '',
       `Subject: ${subject}`,
       'Content-Type: text/html; charset="UTF-8"',
       'MIME-Version: 1.0',
@@ -112,12 +119,13 @@ Deno.serve(async (req) => {
       finalBody
     ].filter(Boolean).join('\r\n');
 
-    const encodedEmail = btoa(email).replace(/\+/g, '-').replace(/\//g, '_');
+    // Encode to base64url — use TextEncoder for proper UTF-8 support
+    const emailBytes = new TextEncoder().encode(email);
+    const binaryStr = Array.from(emailBytes, (b) => String.fromCharCode(b)).join('');
+    const encodedEmail = btoa(binaryStr).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-    const payload = {
-      raw: encodedEmail,
-      threadId: threadId
-    };
+    const payload: Record<string, string> = { raw: encodedEmail };
+    if (threadId) payload.threadId = threadId;
 
     const response = await fetch(
       'https://www.googleapis.com/gmail/v1/users/me/messages/send',

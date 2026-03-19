@@ -4,7 +4,7 @@ import { useCurrentUser } from "@/components/auth/PermissionGuard";
 
 const NotificationContext = createContext(null);
 
-const POLL_INTERVAL_MS = 30_000;
+const POLL_INTERVAL_MS = 60_000; // Reduced polling since we have realtime
 const MAX_DISPLAY = 50;
 
 export function NotificationProvider({ children }) {
@@ -36,6 +36,55 @@ export function NotificationProvider({ children }) {
     if (currentUser?.id) fetchNotifications();
   }, [currentUser?.id, fetchNotifications]);
 
+  // Realtime subscription — listen for INSERT/UPDATE/DELETE on notifications table
+  // and update local state immediately without waiting for the next poll
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const unsubscribe = base44.entities.Notification.subscribe((event) => {
+      if (!event) return;
+
+      if (event.type === 'create' && event.data) {
+        // Only add if this notification belongs to the current user
+        if (event.data.user_id !== currentUser.id) return;
+        if (event.data.is_dismissed) return;
+
+        setNotifications(prev => {
+          // Avoid duplicates
+          if (prev.some(n => n.id === event.id)) return prev;
+          const updated = [event.data, ...prev].slice(0, MAX_DISPLAY);
+          return updated;
+        });
+        setUnreadCount(prev => prev + (event.data.is_read ? 0 : 1));
+      } else if (event.type === 'update' && event.data) {
+        // Only process if this is our notification
+        if (event.data.user_id !== currentUser.id) return;
+
+        setNotifications(prev => {
+          if (event.data.is_dismissed) {
+            // Remove dismissed notifications from list
+            return prev.filter(n => n.id !== event.id);
+          }
+          return prev.map(n => n.id === event.id ? event.data : n);
+        });
+        // Recalculate unread count
+        setNotifications(prev => {
+          setUnreadCount(prev.filter(n => !n.is_read && !n.is_dismissed).length);
+          return prev;
+        });
+      } else if (event.type === 'delete') {
+        setNotifications(prev => prev.filter(n => n.id !== event.id));
+        setNotifications(prev => {
+          setUnreadCount(prev.filter(n => !n.is_read && !n.is_dismissed).length);
+          return prev;
+        });
+      }
+    });
+
+    return unsubscribe;
+  }, [currentUser?.id]);
+
+  // Fallback polling (reduced frequency since realtime handles most updates)
   useEffect(() => {
     if (!currentUser?.id) return;
     pollRef.current = setInterval(() => fetchNotifications(true), POLL_INTERVAL_MS);

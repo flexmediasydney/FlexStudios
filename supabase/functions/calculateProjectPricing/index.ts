@@ -112,8 +112,11 @@ Deno.serve(async (req) => {
       return matrices.find((m: any) => !m.project_type_id) || matrices[0] || null;
     }
 
-    const agentM = pickMatrix(agentMatrix || []);
-    const agencyM = pickMatrix(agencyMatrix || []);
+    // Null out matrices that use default pricing — their overrides should be ignored
+    const rawAgentM = pickMatrix(agentMatrix || []);
+    const rawAgencyM = pickMatrix(agencyMatrix || []);
+    const agentM = rawAgentM?.use_default_pricing ? null : rawAgentM;
+    const agencyM = rawAgencyM?.use_default_pricing ? null : rawAgencyM;
 
     function getMatrixPrice(type: 'product' | 'package', id: string, basePrice: number): number {
       if (type === 'product' && agentM?.product_pricing) {
@@ -312,7 +315,7 @@ Deno.serve(async (req) => {
       line_items: lineItems,
       subtotal: totalPrice,
       blanket_discount_applied: appliedDiscount,
-      price_matrix_snapshot: agentM || agencyM,
+      price_matrix_snapshot: agentM || agencyM || rawAgentM || rawAgencyM,
     });
 
   } catch (error: any) {

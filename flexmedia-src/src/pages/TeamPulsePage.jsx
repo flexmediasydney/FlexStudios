@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { createPageUrl } from "@/utils";
 import { base44 } from "@/api/base44Client";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import EffortTimersTab from "@/components/team-pulse/EffortTimersTab";
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -718,6 +718,7 @@ function StatsView({ events, users }) {
 // ── Main Page ─────────────────────────────────────────────────────────────
 export default function TeamPulsePage() {
   const { data: currentUser } = useCurrentUser();
+  const queryClient = useQueryClient();
   const [view, setView] = useState("feed"); // 'feed' | 'board' | 'effort' | 'stats' | 'notifications'
   const [paused, setPaused] = useState(false);
   const [newCount, setNewCount] = useState(0);
@@ -728,28 +729,57 @@ export default function TeamPulsePage() {
     queryKey: ["teamActivityFeed", currentUser?.role],
     queryFn: async () => {
       const all = await base44.entities.TeamActivityFeed.list("-created_date", 300);
-      
+
       // Filter by visible_to_roles: if empty, all roles see it;
       // if set, only show if currentUser role is included
       if (!currentUser?.role) return all;
-      
+
       return all.filter(event => {
         if (!event.visible_to_roles || event.visible_to_roles.trim() === "") {
           return true; // Visible to all
         }
-        
+
         const allowedRoles = event.visible_to_roles
           .split(",")
           .map(r => r.trim())
           .filter(Boolean);
-        
+
         return allowedRoles.includes(currentUser.role);
       });
     },
-    refetchInterval: paused ? false : POLL_INTERVAL_MS,
+    refetchInterval: paused ? false : 60_000, // Reduced from 15s — realtime handles instant updates
     enabled: !!currentUser?.id,
-    staleTime: 10_000, // Consider data fresh for 10s
+    staleTime: 10_000,
   });
+
+  // Realtime subscription for TeamActivityFeed — triggers react-query refetch on new events
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const unsubscribe = base44.entities.TeamActivityFeed.subscribe((event) => {
+      if (!event) return;
+      if (event.type === 'create') {
+        // Invalidate the query to trigger a refetch with fresh data
+        queryClient.invalidateQueries({ queryKey: ["teamActivityFeed"] });
+      }
+    });
+
+    return unsubscribe;
+  }, [currentUser?.id, queryClient]);
+
+  // Realtime subscription for Notification table — update pulse notifications tab
+  useEffect(() => {
+    if (!currentUser?.id || view !== 'notifications') return;
+
+    const unsubscribe = base44.entities.Notification.subscribe((event) => {
+      if (!event) return;
+      if (event.type === 'create' || event.type === 'update') {
+        queryClient.invalidateQueries({ queryKey: ["pulse-notifications"] });
+      }
+    });
+
+    return unsubscribe;
+  }, [currentUser?.id, view, queryClient]);
 
   const { data: users = [] } = useQuery({
     queryKey: ["users"],
@@ -949,7 +979,7 @@ export default function TeamPulsePage() {
          </button>
 
         <span className="text-xs text-muted-foreground ml-1 bg-muted/30 px-2 py-1 rounded-full">
-          ⟳ Refreshes every 15s
+          ⟳ Realtime + polling fallback
         </span>
       </div>
 

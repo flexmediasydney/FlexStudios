@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { base44 } from '@/api/base44Client';
+import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,6 +13,7 @@ const VALUE_OPTIONS = ['Low', 'Medium', 'High', 'Enterprise'];
 const MEDIA_NEEDS = ['Photography', 'Video Production', 'Drone Footage', 'Virtual Staging', 'Social Media Mgmt', 'Website Design', 'Branding'];
 
 export default function ProspectEditPanel({ prospect }) {
+  const { data: user } = useCurrentUser();
   const [formData, setFormData] = useState({
     name: prospect.name,
     title: prospect.title || '',
@@ -36,7 +38,35 @@ export default function ProspectEditPanel({ prospect }) {
     setSuccess(false);
 
     try {
-      await base44.entities.Agent.update(prospect.id, formData);
+      // Track changed fields for audit log
+      const changedFields = [];
+      Object.keys(formData).forEach(key => {
+        if (formData[key] !== prospect[key]) {
+          changedFields.push({
+            field: key,
+            old_value: prospect[key] || "",
+            new_value: formData[key] || ""
+          });
+        }
+      });
+
+      const result = await base44.entities.Agent.update(prospect.id, formData);
+
+      // Create audit log
+      if (changedFields.length > 0) {
+        await base44.entities.AuditLog.create({
+          entity_type: "agent",
+          entity_id: prospect.id,
+          entity_name: formData.name || prospect.name,
+          action: "update",
+          changed_fields: changedFields,
+          previous_state: prospect,
+          new_state: result,
+          user_name: user?.full_name,
+          user_email: user?.email
+        }).catch(() => {}); // non-fatal
+      }
+
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {

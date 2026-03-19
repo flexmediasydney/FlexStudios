@@ -71,6 +71,19 @@ export default function ProspectStatusManager({ prospect }) {
          relationship_state_at_time: prospect.relationship_state || 'Prospecting'
        });
 
+       // Create audit log for status change
+       await base44.entities.AuditLog.create({
+         entity_type: "agent",
+         entity_id: prospect.id,
+         entity_name: prospect.name,
+         action: "update",
+         changed_fields: [{ field: "status", old_value: prospect.status || "", new_value: newStatus }],
+         previous_state: prospect,
+         new_state: { ...prospect, status: newStatus },
+         user_name: user?.full_name,
+         user_email: user?.email
+       }).catch(() => {}); // non-fatal
+
        // Auto-transition relationship_state when converted to client
        if (newStatus === 'Converted to Client' && prospect.relationship_state !== 'Active') {
          await base44.entities.Agent.update(prospect.id, {

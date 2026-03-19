@@ -456,12 +456,19 @@ function LayoutContent({ currentPageName, children, onBack }) {
               <span>Search</span>
               <kbd className="ml-auto text-[8px] bg-muted/40 px-1 py-0.5 rounded border border-border/30">⌘K</kbd>
             </Button>
-            <Button 
-              variant="ghost" 
+            <Button
+              variant="ghost"
               size="sm"
               className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground hover:bg-destructive/10 transition-all duration-200 h-9 px-2 text-xs"
-              onClick={() => {
-                if (confirm("Sign out?")) base44.auth.logout();
+              onClick={async () => {
+                if (confirm("Sign out?")) {
+                  try {
+                    await base44.auth.logout('/login');
+                  } catch {
+                    // Fallback: redirect even if signOut call fails
+                    window.location.href = '/login';
+                  }
+                }
               }}
               title="Sign out"
             >

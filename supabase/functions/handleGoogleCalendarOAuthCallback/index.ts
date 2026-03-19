@@ -70,10 +70,14 @@ Deno.serve(async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
 
+    // Fetch user to get email for created_by filter (column stores email, not UUID)
+    const stateUser = await entities.User.get(userId).catch(() => null);
+    const createdByEmail = stateUser?.email || emailAddress;
+
     // Check if this calendar is already connected
     const existingConnections = await entities.CalendarConnection.filter({
       account_email: emailAddress,
-      created_by: userId
+      created_by: createdByEmail
     });
 
     if (existingConnections.length > 0) {

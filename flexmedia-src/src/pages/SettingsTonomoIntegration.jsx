@@ -188,6 +188,9 @@ export default function SettingsTonomoIntegration() {
     onError: (err) => toast.error(err?.message || "Operation failed"),
   });
 
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const webhookUrl = `${supabaseUrl}/functions/v1/receiveTonomoWebhook`;
+
   const testWebhookMutation = useMutation({
     mutationFn: async () => {
       const testPayload = {
@@ -196,7 +199,7 @@ export default function SettingsTonomoIntegration() {
         orderName: "Test Order",
         when: { start_time: Math.floor(Date.now() / 1000), end_time: Math.floor(Date.now() / 1000) + 3600 }
       };
-      const res = await fetch('https://flexstudios.app/api/functions/receiveTonomoWebhook', {
+      const res = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(testPayload)
@@ -204,8 +207,6 @@ export default function SettingsTonomoIntegration() {
       return await res.json();
     }
   });
-
-  const webhookUrl = "https://flexstudios.app/api/functions/receiveTonomoWebhook";
 
   const handleCopy = () => {
     navigator.clipboard.writeText(webhookUrl);

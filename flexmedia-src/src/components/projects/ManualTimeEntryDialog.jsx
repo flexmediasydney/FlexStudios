@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
+import { toast } from "sonner";
 
 export default function ManualTimeEntryDialog({ open, onClose, task, project, user, role }) {
   // All hooks must be called unconditionally (before any returns)
@@ -77,22 +78,6 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
         team_id: user.team_id || null,
         team_name: user.team_name || null
       });
-    },
-    onSuccess: () => {
-      if (project?.id) {
-        base44.entities.ProjectActivity.create({
-          project_id: project.id,
-          project_title: project.title || project.property_address || '',
-          action: 'manual_time_entry',
-          description: `Manual time entry: ${hours || 0}h ${minutes || 0}m on "${task?.title || 'Task'}" by ${user?.full_name || 'Unknown'}`,
-          user_name: user?.full_name || 'Unknown',
-          user_email: user?.email || '',
-        }).catch(() => {});
-      }
-      setHours("");
-      setMinutes("");
-      setError("");
-      if (onClose) onClose();
     },
     onSuccess: () => {
       if (project?.id) {

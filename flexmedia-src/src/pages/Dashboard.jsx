@@ -148,7 +148,7 @@ export default function Dashboard() {
     return {
       totalRevenue,
       revenueGrowth: parseFloat(revenueGrowth),
-      activeProjects: activeProjects.length,
+      activeProjectCount: activeProjects.length,
       projectsGrowth: 0,
       completionRate: parseFloat(completionRate),
       completionTrend: parseFloat(completionTrend),
@@ -447,7 +447,7 @@ export default function Dashboard() {
              {projectsLoading ? (
                <span className="inline-block h-4 w-48 bg-muted animate-pulse rounded" />
              ) : (
-               `${projects.length} projects · ${typeof analytics.activeProjects === 'number' ? analytics.activeProjects : analytics.activeProjects?.length || 0} active`
+               `${projects.length} projects · ${analytics.activeProjectCount} active`
              )}
            </p>
          </div>

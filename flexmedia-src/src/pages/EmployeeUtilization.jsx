@@ -417,7 +417,7 @@ export default function EmployeeUtilization() {
           {
             label: 'Total hours logged',
             value: (() => {
-              const secs = periodLogs.reduce((s, l) => s + (l.duration_seconds || 0), 0);
+              const secs = periodLogs.reduce((s, l) => s + (l.total_seconds || 0), 0);
               const h = Math.floor(secs / 3600);
               return `${h}h`;
             })(),
