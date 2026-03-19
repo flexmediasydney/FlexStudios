@@ -45,13 +45,13 @@ Deno.serve(async (req) => {
     // ── SECURITY GATE 1: Source check ────────────────────────────────────────
     if (calEvent.event_source === 'tonomo') {
       return jsonResponse({
-        error: 'Tonomo booking events cannot be deleted from FlexMedia. Cancel in Tonomo.',
+        error: 'Tonomo booking events cannot be deleted from FlexStudios. Cancel in Tonomo.',
         code: 'TONOMO_EVENT_IMMUTABLE'
       }, 403);
     }
     if (calEvent.event_source === 'google') {
       return jsonResponse({
-        error: 'Google Calendar events are read-only in FlexMedia. Delete in Google Calendar.',
+        error: 'Google Calendar events are read-only in FlexStudios. Delete in Google Calendar.',
         code: 'GOOGLE_EVENT_READONLY'
       }, 403);
     }

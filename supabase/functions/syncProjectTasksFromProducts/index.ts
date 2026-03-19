@@ -392,7 +392,7 @@ Deno.serve(async (req) => {
         action: 'system_tasks_generated',
         description: `Tasks generated: ${createdCount + tasksToCreate.filter((t: any) => t.type === 'create').length} created, ${skippedCount} already existed.`,
         actor_type: 'system', actor_source: 'syncProjectTasksFromProducts',
-        user_name: 'System', user_email: 'system@flexmedia',
+        user_name: 'System', user_email: 'system@flexstudios.app',
       });
     } catch { /* non-fatal */ }
 

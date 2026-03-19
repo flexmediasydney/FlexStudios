@@ -165,7 +165,7 @@ Deno.serve(async (req) => {
         actor_type: 'system',
         actor_source: 'applyProjectRoleDefaults',
         user_name: 'System',
-        user_email: 'system@flexmedia',
+        user_email: 'system@flexstudios.app',
         metadata: JSON.stringify({ roles_applied: applied, roles_skipped: skipped }),
       }).catch(() => {});
     }

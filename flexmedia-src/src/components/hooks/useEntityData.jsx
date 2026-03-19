@@ -1,5 +1,5 @@
 /**
- * useEntityData.jsx — v4.0
+ * useEntityData.jsx — v5.0 (Supabase-compatible)
  *
  * Architecture: shared cache + subscription fan-out
  *
@@ -10,7 +10,7 @@
  *   inFlight         Map<string, Promise>              dedup concurrent fetches
  *   listListeners    Map<entityName, Set<refreshFn>>   fan-out on list change
  *   singleListeners  Map<"Entity:id", Set<refreshFn>>  fan-out on single change
- *   subscriptions    Map<entityName, unsubscribeFn>    one Base44 sub per entity
+ *   subscriptions    Map<entityName, unsubscribeFn>    one Supabase Realtime sub per entity
  *
  * Per-component:
  *   local state, registers a refresh listener, cleans up on unmount
@@ -20,6 +20,11 @@
  *   - navigate away and back → instant cache hit, no HTTP request
  *   - real-time event → all mounted components update simultaneously
  *   - component unmount → cleanly removed from listener set, nothing breaks
+ *
+ * Supabase notes:
+ *   - RLS denial returns empty array (not an error); we log a dev warning
+ *   - The shim's mapRow already aliases created_at → created_date etc.
+ *   - Retry logic lives in the throttler; hook only retries on transient failures
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -45,6 +50,23 @@ const LIST_LIMIT = 1000;           // always fetch up to 1000; limit applied cli
 function isCacheFresh(key) {
   const ts = cacheTimestamps.get(key);
   return ts != null && (Date.now() - ts) < CACHE_TTL;
+}
+
+/**
+ * Identify transient errors worth retrying at the hook level.
+ * Rate-limit errors are NOT included because the globalThrottler already
+ * retries those internally.
+ */
+function isTransientError(err) {
+  if (!err) return false;
+  const msg = (err.message || '').toLowerCase();
+  return (
+    msg.includes('failed to fetch') ||    // browser offline / DNS failure
+    msg.includes('network')         ||    // generic network error
+    msg.includes('timeout')         ||    // request timeout
+    msg.includes('load failed')     ||    // Safari-specific fetch failure
+    msg.includes('aborted')               // AbortController
+  );
 }
 
 function notifyListListeners(entityName) {
@@ -79,8 +101,11 @@ function removeSingleListener(entityName, entityId, fn) {
 }
 
 /**
- * Ensure exactly one Base44 subscription per entity type.
+ * Ensure exactly one Supabase Realtime subscription per entity type.
  * All events → update shared caches → fan-out to all listener sets.
+ *
+ * The shim's subscribe() already normalises Supabase Realtime payloads to
+ * { id, type: 'create'|'update'|'delete', data } so the hook is format-agnostic.
  */
 function ensureSubscription(entityName) {
   if (subscriptions.has(entityName)) return;
@@ -143,19 +168,43 @@ function ensureSubscription(entityName) {
     singlesDirty.forEach(id => notifySingleListeners(entityName, id));
   };
 
-  const unsubscribe = base44.entities[entityName].subscribe((event) => {
-    if (!event) return;
-    pendingEvents.push(event);
-    if (!debounceTimer) debounceTimer = setTimeout(flush, 30);
-  });
+  try {
+    const unsubscribe = base44.entities[entityName].subscribe((event) => {
+      if (!event) return;
+      pendingEvents.push(event);
+      if (!debounceTimer) debounceTimer = setTimeout(flush, 30);
+    });
 
-  subscriptions.set(entityName, unsubscribe);
+    subscriptions.set(entityName, unsubscribe);
+  } catch (err) {
+    // Supabase Realtime may fail to connect (network issues, missing table, etc.)
+    // This is non-fatal: the hook still works via polling/manual refetch.
+    console.warn(`[useEntityData] Realtime subscription failed for ${entityName}:`, err?.message);
+  }
+}
+
+/**
+ * Tear down and re-create a subscription (e.g. after a reconnect).
+ */
+function resubscribe(entityName) {
+  const unsub = subscriptions.get(entityName);
+  if (unsub) {
+    try { unsub(); } catch (_) { /* ignore */ }
+    subscriptions.delete(entityName);
+  }
+  ensureSubscription(entityName);
 }
 
 /**
  * Fetch entity list with in-flight dedup.
  * Returns a Promise<void> that resolves when the cache is populated.
  * All concurrent callers for the same entity share the same Promise.
+ *
+ * Supabase notes:
+ *   - RLS denial returns an empty array, not an error. We log a dev-mode
+ *     warning so misconfigured policies surface during development.
+ *   - The globalThrottler already handles rate-limit retries, so we do NOT
+ *     add retry logic here (avoids compounding retries).
  */
 function fetchEntityList(entityName) {
   // Fresh cache → no fetch needed
@@ -173,6 +222,16 @@ function fetchEntityList(entityName) {
     .then(items => {
       inFlight.delete(entityName);
       const raw = items || [];
+
+      // Dev-mode RLS warning: if we expected data but got nothing, it may be an
+      // RLS policy misconfiguration (Supabase returns [] instead of an error).
+      if (raw.length === 0 && process.env.NODE_ENV === 'development') {
+        console.debug(
+          `[useEntityData] ${entityName}.list() returned 0 rows. ` +
+          `If this is unexpected, check RLS policies for the corresponding table.`
+        );
+      }
+
       entityCache.set(entityName, raw);
       const now = Date.now();
       cacheTimestamps.set(entityName, now);
@@ -276,6 +335,12 @@ function applyLimit(items, limit) {
 
 // ─── Public cache management ──────────────────────────────────────────────────
 
+/**
+ * Tear down and re-create the Realtime subscription for an entity.
+ * Call this after auth state changes (login/logout) or connection drops.
+ */
+export { resubscribe as resubscribeEntity };
+
 /** Force-expire the list cache for an entity (triggers refetch on next access). */
 export function invalidateEntityCache(entityName) {
   entityCache.delete(entityName);
@@ -298,7 +363,10 @@ export async function refetchEntityList(entityName) {
   }
 }
 
-/** Clear ALL caches and subscriptions. Must be called on logout. */
+/**
+ * Clear ALL caches and subscriptions. Must be called on logout.
+ * Also resets the request throttler to clear any backoff state.
+ */
 export function clearEntityCache() {
   entityCache.clear();
   singleCache.clear();
@@ -310,6 +378,8 @@ export function clearEntityCache() {
     try { unsub(); } catch (_) { /* ignore */ }
   });
   subscriptions.clear();
+  // Reset throttler backoff state so the next session starts clean
+  globalThrottler.reset();
 }
 
 // ─── useEntityList ─────────────────────────────────────────────────────────────
@@ -379,9 +449,11 @@ export function useEntityList(entityName, sortBy = null, limit = null, filter = 
         refresh();
       } catch (err) {
         if (!mountedRef.current) return;
-        if (retryCount < 3) {
+        // Rate-limit retries are handled inside globalThrottler.
+        // We only retry here for transient network errors (offline → online).
+        if (retryCount < 2 && isTransientError(err)) {
           retryCount++;
-          setTimeout(load, Math.min(500 * Math.pow(2, retryCount - 1), 8000));
+          setTimeout(load, 1000 * retryCount);
         } else {
           setError(err);
           setLoading(false);
@@ -466,9 +538,11 @@ export function useEntityData(entityName, entityId) {
         refresh();
       } catch (err) {
         if (!mountedRef.current) return;
-        if (retryCount < 3) {
+        // Rate-limit retries are handled inside globalThrottler.
+        // Retry here only for transient network errors.
+        if (retryCount < 2 && isTransientError(err)) {
           retryCount++;
-          setTimeout(load, Math.min(500 * Math.pow(2, retryCount - 1), 8000));
+          setTimeout(load, 1000 * retryCount);
         } else {
           setError(err);
           setLoading(false);

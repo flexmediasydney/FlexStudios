@@ -32,7 +32,7 @@ Deno.serve(async (req) => {
 
           // Log cleanup action
           await entities.PermissionAuditLog.create({
-            actor_email: 'system@flexmedia.com',
+            actor_email: 'system@flexstudios.app',
             action: 'permission_revoked',
             target_user_email: perm.user_email,
             permission_name: perm.permission_name,

@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
       action: 'update',
       description: `Pricing recalculated: $${Math.round(newPrice).toLocaleString()}${oldPrice ? ` (was $${Math.round(oldPrice).toLocaleString()})` : ''}. Tier: ${tier}.`,
       actor_type: 'system', actor_source: 'recalculateProjectPricingServerSide',
-      user_name: 'System', user_email: 'system@flexmedia',
+      user_name: 'System', user_email: 'system@flexstudios.app',
       changed_fields: JSON.stringify([{ field: 'calculated_price', old_value: oldPrice?.toString() || '0', new_value: Math.round(newPrice).toString() }]),
     }).catch(() => {});
 

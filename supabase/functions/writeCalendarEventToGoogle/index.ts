@@ -51,13 +51,13 @@ Deno.serve(async (req) => {
     const eventSource = calEvent.event_source || 'flexmedia';
     if (eventSource === 'tonomo') {
       return jsonResponse({
-        error: 'Tonomo booking events cannot be modified from FlexMedia. Edit in Tonomo.',
+        error: 'Tonomo booking events cannot be modified from FlexStudios. Edit in Tonomo.',
         code: 'TONOMO_EVENT_IMMUTABLE'
       }, 403);
     }
     if (eventSource === 'google') {
       return jsonResponse({
-        error: 'Google Calendar events are read-only in FlexMedia. Edit in Google Calendar.',
+        error: 'Google Calendar events are read-only in FlexStudios. Edit in Google Calendar.',
         code: 'GOOGLE_EVENT_READONLY'
       }, 403);
     }
@@ -108,13 +108,13 @@ Deno.serve(async (req) => {
       try {
         const project = await userEntities.Project.get(calEvent.project_id);
         if (project) {
-          const appUrl = Deno.env.get('BASE44_APP_URL') || 'https://flexstudios.app';
+          const appUrl = Deno.env.get('APP_URL') || 'https://flexstudios.app';
           const projectLink = `${appUrl}/ProjectDetails?id=${project.id}`;
           const contextLines = [
             `Project: ${project.title || project.property_address || 'Untitled'}`,
             project.property_address ? `Address: ${project.property_address}` : null,
             project.shoot_date ? `Shoot: ${project.shoot_date}` : null,
-            `View in FlexMedia: ${projectLink}`,
+            `View in FlexStudios: ${projectLink}`,
           ].filter(Boolean).join('\n');
           enrichedDescription = enrichedDescription
             ? `${enrichedDescription}\n\n──────────────\n${contextLines}`
@@ -124,7 +124,7 @@ Deno.serve(async (req) => {
     }
 
     const gEventPayload: Record<string, any> = {
-      summary: calEvent.title || 'FlexMedia Activity',
+      summary: calEvent.title || 'FlexStudios Activity',
       description: enrichedDescription,
       location: calEvent.location || '',
       start: toGoogleDateTime(calEvent.start_time, isAllDay),

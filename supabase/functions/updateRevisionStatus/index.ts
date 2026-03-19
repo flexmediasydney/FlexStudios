@@ -80,7 +80,7 @@ Deno.serve(async (req) => {
           actor_type: 'system',
           actor_source: 'updateRevisionStatus',
           user_name: 'System',
-          user_email: 'system@flexmedia',
+          user_email: 'system@flexstudios.app',
         }).catch(() => {});
 
         // Notify on key events

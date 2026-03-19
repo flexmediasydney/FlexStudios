@@ -66,7 +66,16 @@ class RequestThrottler {
       resolve(result);
     } catch (error) {
       clearTimeout(timeout);
-      if (error?.message?.includes('Rate limit') || error?.message?.includes('timeout')) {
+      const errMsg = (error?.message || '').toLowerCase();
+      const isRetryable =
+        errMsg.includes('rate limit') ||      // Base44-era pattern
+        errMsg.includes('too many requests') || // Supabase 429 pattern
+        errMsg.includes('timeout') ||
+        errMsg.includes('failed to fetch') ||  // browser offline / DNS
+        errMsg.includes('load failed') ||      // Safari fetch failure
+        (error?.status === 429) ||             // HTTP 429 from Supabase
+        (error?.code === 'PGRST301');          // PostgREST connection limit
+      if (isRetryable) {
         this.backoffMultiplier = Math.min(this.backoffMultiplier * 2, 8);
         this.minInterval = Math.min(150 * this.backoffMultiplier, 1000);
         this.maxConcurrent = Math.max(this.maxConcurrent - 1, 1); // Reduce concurrency on errors (Fix #3)

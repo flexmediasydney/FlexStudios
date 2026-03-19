@@ -146,7 +146,7 @@ Deno.serve(async (req) => {
       actor_type: 'system',
       actor_source: 'applyRevisionPricingImpact',
       user_name: 'System',
-      user_email: 'system@flexmedia',
+      user_email: 'system@flexstudios.app',
     }).catch(() => {});
 
     // Notify if price changed significantly (>$50 or >5%)

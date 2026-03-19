@@ -375,7 +375,7 @@ Deno.serve(async (req) => {
       } catch { /* non-fatal */ }
     }
 
-    // Mark FlexMedia CalendarEvents done when project cancelled
+    // Mark FlexStudios CalendarEvents done when project cancelled
     if (newStatus === 'cancelled') {
       try {
         const linkedEvents = await entities.CalendarEvent.filter(

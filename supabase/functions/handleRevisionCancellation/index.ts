@@ -60,7 +60,7 @@ Deno.serve(async (req) => {
         actor_type: 'system',
         actor_source: 'handleRevisionCancellation',
         user_name: 'System',
-        user_email: 'system@flexmedia',
+        user_email: 'system@flexstudios.app',
       }).catch(() => {});
 
       if (project) {
