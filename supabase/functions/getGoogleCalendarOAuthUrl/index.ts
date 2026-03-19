@@ -20,8 +20,8 @@ Deno.serve(async (req) => {
       return errorResponse('Google OAuth not configured', 500);
     }
 
-    const appUrl = Deno.env.get('BASE44_APP_URL') || 'http://localhost:3000';
-    const redirectUri = `${appUrl}/api/functions/handleGoogleCalendarOAuthCallback`;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const redirectUri = `${supabaseUrl}/functions/v1/handleGoogleCalendarOAuthCallback`;
 
     const scopes = [
       'https://www.googleapis.com/auth/calendar',

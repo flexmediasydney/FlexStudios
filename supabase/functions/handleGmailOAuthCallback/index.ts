@@ -29,8 +29,8 @@ Deno.serve(async (req) => {
 
     const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
     const clientSecret = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET');
-    const appUrl = Deno.env.get('APP_URL') || 'http://localhost:3000';
-    const redirectUri = `${appUrl}/api/functions/handleGmailOAuthCallback`;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const redirectUri = `${supabaseUrl}/functions/v1/handleGmailOAuthCallback`;
 
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',

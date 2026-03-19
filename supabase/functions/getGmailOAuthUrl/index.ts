@@ -22,8 +22,8 @@ Deno.serve(async (req) => {
       return errorResponse('Google OAuth not configured', 500);
     }
 
-    const appUrl = Deno.env.get('APP_URL') || 'http://localhost:3000';
-    const redirectUri = `${appUrl}/api/functions/handleGmailOAuthCallback`;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const redirectUri = `${supabaseUrl}/functions/v1/handleGmailOAuthCallback`;
 
     const scopes = [
       'https://www.googleapis.com/auth/gmail.modify',
