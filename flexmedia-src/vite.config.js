@@ -12,5 +12,14 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-supabase': ['@supabase/supabase-js'],
+          'vendor-utils': ['@tanstack/react-query', 'date-fns', 'lucide-react'],
+          'vendor-recharts': ['recharts'],
+        },
+      },
+    },
   },
 })
