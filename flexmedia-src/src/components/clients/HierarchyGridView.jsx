@@ -224,7 +224,7 @@ export default function HierarchyGridView({
                   </Button>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="More actions">
                         <MoreVertical className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -273,7 +273,7 @@ export default function HierarchyGridView({
                               </div>
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="icon" className="h-7 w-7">
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="More actions">
                                     <MoreVertical className="h-3.5 w-3.5" />
                                   </Button>
                                 </DropdownMenuTrigger>

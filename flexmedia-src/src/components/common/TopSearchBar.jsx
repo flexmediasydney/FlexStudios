@@ -1,15 +1,16 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { useQuery } from "@tanstack/react-query";
 import { base44 } from "@/api/base44Client";
 import { stageConfig, stageLabel } from "@/components/projects/projectStatuses";
 import { fmtDate } from "@/components/utils/dateUtils";
-import { 
-  Search, X, Camera, Users, Building2, MapPin, Clock, 
+import {
+  Search, X, Camera, Users, Building2, MapPin, Clock,
   Plus, ChevronRight, Grid2X2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePrefetchProjectDetails } from "@/components/lib/prefetchRoutes";
 
 const CATEGORIES = [
   { id: 'all', label: 'All categories', icon: Grid2X2 },
@@ -42,6 +43,12 @@ export default function TopSearchBar() {
   const [recentlyViewed, setRecentlyViewed] = useState([]);
   const inputRef = useRef(null);
   const dropdownRef = useRef(null);
+  const { prefetch: prefetchProject } = usePrefetchProjectDetails();
+
+  // Prefetch project data when hovering over a search result
+  const handleResultHover = useCallback((type, id) => {
+    if (type === 'project') prefetchProject(id);
+  }, [prefetchProject]);
 
   // Lazy-load: only fetch when the search bar is open.
   // This prevents 3 DB queries on every page load across the entire app.
@@ -319,6 +326,7 @@ export default function TopSearchBar() {
                       <button
                         key={p.id}
                         onClick={() => handleSelect('project', p.id, p.title || p.property_address)}
+                        onMouseEnter={() => handleResultHover('project', p.id)}
                         className="w-full flex items-start gap-3 px-3 py-2.5 hover:bg-muted rounded-md transition-colors duration-150 text-left group"
                         aria-label={`Go to project ${p.title || p.property_address}`}
                       >

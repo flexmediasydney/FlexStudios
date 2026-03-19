@@ -571,34 +571,50 @@ export default function Dashboard() {
 
           {/* Operational Widgets Row */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
-              <TodaysScheduleWidget projects={projects} calendarEvents={calendarEvents} />
-              <ActiveTimersWidget timeLogs={allTimeLogs} tasks={allTasks} />
-              <PendingReviewsWidget projects={projects} />
-              <TeamWorkloadChart tasks={allTasks} users={allUsers} />
+              <ErrorBoundary fallbackLabel="Today's Schedule" compact>
+                <TodaysScheduleWidget projects={projects} calendarEvents={calendarEvents} />
+              </ErrorBoundary>
+              <ErrorBoundary fallbackLabel="Active Timers" compact>
+                <ActiveTimersWidget timeLogs={allTimeLogs} tasks={allTasks} />
+              </ErrorBoundary>
+              <ErrorBoundary fallbackLabel="Pending Reviews" compact>
+                <PendingReviewsWidget projects={projects} />
+              </ErrorBoundary>
+              <ErrorBoundary fallbackLabel="Team Workload" compact>
+                <TeamWorkloadChart tasks={allTasks} users={allUsers} />
+              </ErrorBoundary>
             </div>
             </>
           )}
 
           {/* Charts Row 1 - Revenue Comparison + Stage Distribution */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '100ms'}}>
-            {projects.length > 0 ? <RevenueComparisonChart projects={projects} /> : <Card className="lg:col-span-2 p-6 text-center text-muted-foreground text-sm">No revenue data</Card>}
-            {projects.length > 0 ? <StageDistributionChart projects={projects} /> : <Card className="p-6 text-center text-muted-foreground text-sm">No project data</Card>}
+            {projects.length > 0 ? <ErrorBoundary fallbackLabel="Revenue Chart" compact><RevenueComparisonChart projects={projects} /></ErrorBoundary> : <Card className="lg:col-span-2 p-6 text-center text-muted-foreground text-sm">No revenue data</Card>}
+            {projects.length > 0 ? <ErrorBoundary fallbackLabel="Stage Distribution" compact><StageDistributionChart projects={projects} /></ErrorBoundary> : <Card className="p-6 text-center text-muted-foreground text-sm">No project data</Card>}
           </div>
 
           {/* Charts Row 2 */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
-            <ProjectVelocityChart data={velocityData} />
-            <TopPerformersPanel
-              topAgencies={topPerformers.topAgencies}
-              topAgents={topPerformers.topAgents}
-              topUsers={topPerformers.topUsers}
-            />
+            <ErrorBoundary fallbackLabel="Project Velocity" compact>
+              <ProjectVelocityChart data={velocityData} />
+            </ErrorBoundary>
+            <ErrorBoundary fallbackLabel="Top Performers" compact>
+              <TopPerformersPanel
+                topAgencies={topPerformers.topAgencies}
+                topAgents={topPerformers.topAgents}
+                topUsers={topPerformers.topUsers}
+              />
+            </ErrorBoundary>
           </div>
 
           {/* Charts Row 3 */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
-            <CashFlowForecast data={cashFlowData} forecastedRevenue={forecastedRevenue} />
-            <ProjectHealthScore healthMetrics={healthMetrics} />
+            <ErrorBoundary fallbackLabel="Cash Flow Forecast" compact>
+              <CashFlowForecast data={cashFlowData} forecastedRevenue={forecastedRevenue} />
+            </ErrorBoundary>
+            <ErrorBoundary fallbackLabel="Project Health" compact>
+              <ProjectHealthScore healthMetrics={healthMetrics} />
+            </ErrorBoundary>
           </div>
 
           {/* AI Insights */}
@@ -630,7 +646,9 @@ export default function Dashboard() {
                 <CardTitle className="text-base">Recent Activity</CardTitle>
               </CardHeader>
               <CardContent>
-                <RealtimeActivityStream maxItems={6} compact />
+                <ErrorBoundary fallbackLabel="Recent Activity" compact>
+                  <RealtimeActivityStream maxItems={6} compact />
+                </ErrorBoundary>
               </CardContent>
             </Card>
           </div>
@@ -638,39 +656,57 @@ export default function Dashboard() {
 
 
         <TabsContent value="deadlines" className="space-y-6 mt-0">
-          <TaskDeadlineDashboard />
+          <ErrorBoundary fallbackLabel="Task Deadlines">
+            <TaskDeadlineDashboard />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="tasks" className="space-y-6 mt-0">
-          <TaskReportingDashboard />
+          <ErrorBoundary fallbackLabel="Task Reports">
+            <TaskReportingDashboard />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="map" className="space-y-6 mt-0">
-          <ProjectHeatmap />
+          <ErrorBoundary fallbackLabel="Project Heatmap">
+            <ProjectHeatmap />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="files" className="space-y-6 mt-0">
-          <DropboxFileFeed />
+          <ErrorBoundary fallbackLabel="File Feed">
+            <DropboxFileFeed />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="today" className="space-y-6 mt-0">
-          <TodayBoard />
+          <ErrorBoundary fallbackLabel="Today Board">
+            <TodayBoard />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="pipeline" className="space-y-6 mt-0">
-          <PipelineAnalyzer />
+          <ErrorBoundary fallbackLabel="Pipeline Analyzer">
+            <PipelineAnalyzer />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="territory" className="mt-0" style={{ height: 'calc(100vh - 200px)' }}>
-          <TerritoryMap />
+          <ErrorBoundary fallbackLabel="Territory Map">
+            <TerritoryMap />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="deliveries" className="space-y-6 mt-0">
-          <DeliveryFeed />
+          <ErrorBoundary fallbackLabel="Delivery Feed">
+            <DeliveryFeed />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="revenue" className="space-y-6 mt-0">
-          <RevenueIntelligence />
+          <ErrorBoundary fallbackLabel="Revenue Intelligence">
+            <RevenueIntelligence />
+          </ErrorBoundary>
         </TabsContent>
       </Tabs>
 

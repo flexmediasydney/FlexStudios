@@ -19,6 +19,8 @@ import { getActivityType, ACTIVITY_TYPE_LIST, getEventSource, EVENT_SOURCE_CONFI
 import EventDetailsDialog from "@/components/calendar/EventDetailsDialog";
 import CalendarIntegration from "@/components/calendar/CalendarIntegration";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { usePermissions } from '@/components/auth/PermissionGuard';
 
@@ -76,6 +78,29 @@ function getInitials(name = '') {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
+function CalendarSkeleton({ view }) {
+  if (view === 'month') {
+    return (
+      <div className="grid grid-cols-7 gap-px bg-border p-4">
+        {Array.from({ length: 35 }).map((_, i) => (
+          <Skeleton key={i} className="h-20 rounded-md" />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="flex gap-px p-4">
+      {Array.from({ length: view === 'week' ? 7 : 1 }).map((_, i) => (
+        <div key={i} className="flex-1 space-y-2">
+          {Array.from({ length: 12 }).map((_, j) => (
+            <Skeleton key={j} className="h-8 rounded-md" />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function CalendarPage() {
   const { isContractor, user: permUser } = usePermissions();
   
@@ -158,7 +183,7 @@ export default function CalendarPage() {
   const [lastManualSync, setLastManualSync] = useState(0);
   const syncDebounceMs = 3000;
   
-  const { data: rawEvents = [], isFetching: eventsFetching } = useQuery({
+  const { data: rawEvents = [], isFetching: eventsFetching, isLoading: eventsLoading } = useQuery({
     queryKey: ["calendar-events-team", view, format(currentDate, 'yyyy-MM')],
     queryFn: async () => {
       // Gap fix: Fetch only visible range + 1 month buffer, max 500 events (not 5000)
@@ -688,10 +713,13 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {eventsFetching && <div className="h-0.5 bg-primary/20 animate-pulse w-full" />}
+      {eventsFetching && !eventsLoading && <div className="h-0.5 bg-primary/20 animate-pulse w-full" />}
 
       {/* ── Calendar grid ──────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-auto min-h-0">
+        {eventsLoading ? (
+          <CalendarSkeleton view={view} />
+        ) : (
         <ErrorBoundary fallbackLabel="Calendar View">
         {view === "month" && (
           <MonthView
@@ -731,6 +759,7 @@ export default function CalendarPage() {
           />
         )}
         </ErrorBoundary>
+        )}
       </div>
 
       <EventDetailsDialog

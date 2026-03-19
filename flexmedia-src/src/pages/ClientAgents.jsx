@@ -23,6 +23,7 @@ import HierarchyHealthCheck from "@/components/hierarchy/HierarchyHealthCheck";
 import AgencyForm from "@/components/clients/AgencyForm";
 import TeamForm from "@/components/clients/TeamForm";
 import AgentForm from "@/components/clients/AgentForm";
+import ContactActivityPanel from "@/components/clients/ContactActivityPanel";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePermissions } from '@/components/auth/PermissionGuard';
@@ -101,16 +102,39 @@ export default function ClientAgents() {
   const [selectedAgentIds, setSelectedAgentIds] = useState(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
 
+  // Activity panel state
+  const [activityPanelAgent, setActivityPanelAgent] = useState(null);
+
   const needsExtendedData = activeTab === 'statistics' || activeTab === 'health';
 
   const { data: agencies = [], loading: agenciesLoading } = useEntityList("Agency", "name");
   const { data: teams = [], loading: teamsLoading } = useEntityList("Team", "name");
   const { data: agents = [], loading: agentsLoading } = useEntityList("Agent", "name");
+  const { data: projects = [] } = useEntityList("Project", null, 5000);
   const { data: projectTypes = [] } = useEntityList("ProjectType", "name", needsExtendedData ? 200 : 0);
   const { data: products = [] } = useEntityList("Product", null, needsExtendedData ? 500 : 0);
   const { data: packages = [] } = useEntityList("Package", null, needsExtendedData ? 200 : 0);
 
   const isLoading = agenciesLoading || teamsLoading || agentsLoading;
+
+  // Compute per-agent project counts and revenue for health scores
+  const { agentProjectCounts, agentRevenue } = useMemo(() => {
+    const counts = {};
+    const rev = {};
+    for (const p of projects) {
+      if (p.agent_id) {
+        counts[p.agent_id] = (counts[p.agent_id] || 0) + 1;
+        rev[p.agent_id] = (rev[p.agent_id] || 0) + (p.calculated_price || p.price || 0);
+      }
+    }
+    return { agentProjectCounts: counts, agentRevenue: rev };
+  }, [projects]);
+
+  // Overdue follow-ups count
+  const overdueFollowUps = useMemo(() => {
+    const now = new Date();
+    return agents.filter(a => a.next_follow_up_date && new Date(a.next_follow_up_date) < now).length;
+  }, [agents]);
 
   // When searching, filter agencies and show their complete sub-trees
   const filteredAgencies = useMemo(() => {
@@ -388,14 +412,14 @@ export default function ClientAgents() {
               <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
                 <div className="relative flex-1 max-w-sm">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input placeholder="Search organisations…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 h-10" />
+                  <Input placeholder="Search organisations…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 h-10" aria-label="Search organisations" />
                 </div>
                 {/* View mode switcher */}
                 <div className="flex items-center bg-muted rounded-lg p-1 gap-0.5">
                 {VIEW_MODES.map(mode => {
                    const Icon = mode.icon;
                    return (
-                     <button key={mode.id} onClick={() => setViewMode(mode.id)} title={mode.label}
+                     <button key={mode.id} onClick={() => setViewMode(mode.id)} title={mode.label} aria-label={`Switch to ${mode.label} view`} aria-pressed={viewMode === mode.id}
                        className={cn(
                          "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
                          viewMode === mode.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"

@@ -391,6 +391,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
   const { enabledFields } = useCardFields();
   const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 500);
   const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog");
+  const { prefetch: prefetchProject } = usePrefetchProjectDetails();
 
   // Filter out archived projects
   const activeProjects = projects.filter(p => !p.is_archived);
@@ -859,6 +860,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                     ...provided.draggableProps.style,
                                     animationDelay: `${index * 30}ms`,
                                   }}
+                                  onMouseEnter={() => prefetchProject(project.id)}
                                   onClick={() => navigate(createPageUrl("ProjectDetails") + "?id=" + project.id)}
                                 >
                                   {/* Card Header */}

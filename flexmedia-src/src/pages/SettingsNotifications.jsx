@@ -206,16 +206,18 @@ function MyPreferencesTab({ userId }) {
             </div>
             {digestSettings.quiet_hours_enabled && (
               <div className="flex items-center gap-3 pl-1">
-                <Label className="text-xs">From</Label>
+                <Label htmlFor="quiet-hours-start" className="text-xs">From</Label>
                 <Input
+                  id="quiet-hours-start"
                   type="time"
                   className="w-28 h-7 text-xs"
                   value={digestSettings.quiet_hours_start}
                   onChange={e => setDigestSettings(p => ({ ...p, quiet_hours_start: e.target.value }))}
                   onBlur={() => saveDigestMutation.mutate(digestSettings)}
                 />
-                <Label className="text-xs">to</Label>
+                <Label htmlFor="quiet-hours-end" className="text-xs">to</Label>
                 <Input
+                  id="quiet-hours-end"
                   type="time"
                   className="w-28 h-7 text-xs"
                   value={digestSettings.quiet_hours_end}
@@ -352,7 +354,7 @@ function NotificationLogTab() {
 
       <div className="flex gap-2 flex-wrap">
         <div className="relative flex-1 min-w-40">
-          <Input placeholder="Search..." className="h-8 pl-3 text-xs" value={search} onChange={e => setSearch(e.target.value)} />
+          <Input placeholder="Search..." className="h-8 pl-3 text-xs" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search notification settings" />
         </div>
         <Select value={catFilter} onValueChange={setCatFilter}>
           <SelectTrigger className="w-36 h-8 text-xs"><SelectValue placeholder="Category" /></SelectTrigger>
