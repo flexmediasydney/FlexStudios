@@ -34,9 +34,14 @@ const SUPABASE_SERVICE_ROLE_KEY = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY
 const supabase = createSupabaseClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Service-role client (bypasses RLS, used for elevated backend-like operations)
+// Uses a distinct storageKey to avoid "Multiple GoTrueClient" conflicts
 const supabaseAdmin = SUPABASE_SERVICE_ROLE_KEY
   ? createSupabaseClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      auth: { autoRefreshToken: false, persistSession: false },
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+        storageKey: 'sb-admin-token',
+      },
     })
   : null;
 

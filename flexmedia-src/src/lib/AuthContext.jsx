@@ -13,6 +13,19 @@ export const AuthProvider = ({ children }) => {
     // Check existing session on mount
     checkSession();
 
+    // Safety net: if auth check takes more than 10 seconds, stop loading
+    const timeout = setTimeout(() => {
+      setIsLoadingAuth((current) => {
+        if (current) {
+          console.warn('Auth check timed out — clearing session');
+          supabase.auth.signOut().catch(() => {});
+          setIsAuthenticated(false);
+          return false;
+        }
+        return current;
+      });
+    }, 10000);
+
     // Listen for auth state changes (sign in, sign out, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
@@ -29,6 +42,7 @@ export const AuthProvider = ({ children }) => {
     );
 
     return () => {
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
@@ -42,6 +56,8 @@ export const AuthProvider = ({ children }) => {
 
       if (error) {
         console.error('Session check failed:', error);
+        // Clear corrupt session to prevent infinite spinner
+        await supabase.auth.signOut().catch(() => {});
         setIsLoadingAuth(false);
         setIsAuthenticated(false);
         return;
@@ -56,6 +72,8 @@ export const AuthProvider = ({ children }) => {
       }
     } catch (error) {
       console.error('Unexpected auth error:', error);
+      // Clear corrupt session to prevent infinite spinner
+      await supabase.auth.signOut().catch(() => {});
       setAuthError({
         type: 'unknown',
         message: error.message || 'An unexpected error occurred',
