@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/components/lib/query-client'
@@ -10,22 +10,30 @@ import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import { clearEntityCache } from '@/components/hooks/useEntityData';
 import Login from './pages/Login';
-import TonomoIntegrationDashboard from './pages/TonomoIntegrationDashboard';
-import TonomoPulse from './pages/TonomoPulse';
 import Analytics from './pages/Analytics';
-import SettingsTonomoIntegration from './pages/SettingsTonomoIntegration';
-import SettingsTonomoMappings from './pages/SettingsTonomoMappings';
-import SettingsSystemHealth from './pages/SettingsSystemHealth';
-import SettingsAutomationRules from './pages/SettingsAutomationRules';
 import NotificationsPage from './pages/NotificationsPage';
-import SettingsNotifications from './pages/SettingsNotifications';
-import NotificationsPulse from './pages/NotificationsPulse';
-import TeamPulsePage from './pages/TeamPulsePage';
-import BusinessIntelligence from './pages/BusinessIntelligence';
-import Reports from './pages/Reports';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { canAccessRoute } from '@/components/lib/routeAccess';
 import { AlertCircle } from 'lucide-react';
+
+// Lazy-loaded heavy pages (code-split into separate chunks)
+const TonomoIntegrationDashboard = React.lazy(() => import('./pages/TonomoIntegrationDashboard'));
+const TonomoPulse = React.lazy(() => import('./pages/TonomoPulse'));
+const SettingsTonomoIntegration = React.lazy(() => import('./pages/SettingsTonomoIntegration'));
+const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMappings'));
+const SettingsSystemHealth = React.lazy(() => import('./pages/SettingsSystemHealth'));
+const SettingsAutomationRules = React.lazy(() => import('./pages/SettingsAutomationRules'));
+const SettingsNotifications = React.lazy(() => import('./pages/SettingsNotifications'));
+const NotificationsPulse = React.lazy(() => import('./pages/NotificationsPulse'));
+const TeamPulsePage = React.lazy(() => import('./pages/TeamPulsePage'));
+const BusinessIntelligence = React.lazy(() => import('./pages/BusinessIntelligence'));
+const Reports = React.lazy(() => import('./pages/Reports'));
+
+const LazyFallback = () => (
+  <div className="fixed inset-0 flex items-center justify-center">
+    <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
+  </div>
+);
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -127,6 +135,7 @@ const AuthenticatedApp = () => {
 
   // Render the main app
   return (
+    <Suspense fallback={<LazyFallback />}>
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/" element={
@@ -281,6 +290,7 @@ const AuthenticatedApp = () => {
       />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
+    </Suspense>
   );
 };
 

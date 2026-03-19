@@ -225,7 +225,7 @@ function fetchEntityList(entityName) {
 
       // Dev-mode RLS warning: if we expected data but got nothing, it may be an
       // RLS policy misconfiguration (Supabase returns [] instead of an error).
-      if (raw.length === 0 && process.env.NODE_ENV === 'development') {
+      if (raw.length === 0 && import.meta.env.DEV) {
         console.debug(
           `[useEntityData] ${entityName}.list() returned 0 rows. ` +
           `If this is unexpected, check RLS policies for the corresponding table.`
