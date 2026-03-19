@@ -171,7 +171,7 @@ export default function EventDetailsDialog({
         savedId = created?.id;
       }
 
-      // Fire-and-forget: push to Google Calendar if this is a native FlexMedia event
+      // Fire-and-forget: push to Google Calendar if this is a native FlexStudios event
       // and the user has a connected calendar. Non-blocking — dialog closes immediately.
       if (source === 'flexmedia' && savedId) {
         base44.functions.invoke('writeCalendarEventToGoogle', {
@@ -230,7 +230,7 @@ export default function EventDetailsDialog({
         outcome_note: formData.outcome_note,
       });
 
-      // Remove from Google Calendar if this is a FlexMedia event that was pushed
+      // Remove from Google Calendar if this is a FlexStudios event that was pushed
       if (event.google_event_id && getEventSource(event) === 'flexmedia') {
         base44.functions.invoke('deleteCalendarEventFromGoogle', {
           calendar_event_id: event.id,

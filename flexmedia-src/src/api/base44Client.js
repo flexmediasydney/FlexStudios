@@ -154,6 +154,25 @@ function applySort(query, sortBy) {
   return query.order(mapped, { ascending: !desc });
 }
 
+// ─── Field name mapping (DB → Base44 compat) ─────────────────────────────────
+
+/**
+ * Map database field names back to Base44-style names in response data.
+ * created_at → created_date, updated_at → updated_date
+ * This ensures frontend code referencing old field names keeps working.
+ */
+function mapRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  const mapped = { ...row };
+  if ('created_at' in mapped) { mapped.created_date = mapped.created_at; }
+  if ('updated_at' in mapped) { mapped.updated_date = mapped.updated_at; }
+  return mapped;
+}
+function mapRows(rows) {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map(mapRow);
+}
+
 // ─── Entity proxy builder ────────────────────────────────────────────────────
 
 /**
@@ -174,7 +193,7 @@ function createEntityApi(entityName, client) {
       if (limit) query = query.limit(limit);
       const { data, error } = await query;
       if (error) throw new Error(error.message);
-      return data || [];
+      return mapRows(data || []);
     },
 
     /**
@@ -188,7 +207,7 @@ function createEntityApi(entityName, client) {
       if (limit) query = query.limit(limit);
       const { data, error } = await query;
       if (error) throw new Error(error.message);
-      return data || [];
+      return mapRows(data || []);
     },
 
     /**
@@ -202,7 +221,7 @@ function createEntityApi(entityName, client) {
         .eq('id', id)
         .single();
       if (error) throw new Error(error.message);
-      return data;
+      return mapRow(data);
     },
 
     /**
@@ -216,7 +235,7 @@ function createEntityApi(entityName, client) {
         .select()
         .single();
       if (error) throw new Error(error.message);
-      return result;
+      return mapRow(result);
     },
 
     /**
@@ -231,7 +250,7 @@ function createEntityApi(entityName, client) {
         .select()
         .single();
       if (error) throw new Error(error.message);
-      return result;
+      return mapRow(result);
     },
 
     /**

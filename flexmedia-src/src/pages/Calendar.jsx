@@ -180,12 +180,19 @@ export default function CalendarPage() {
       // Fallback: attendees email match
       if (owners.size === 0 && ev.attendees) {
         try {
-          const atts = JSON.parse(ev.attendees);
-          for (const att of atts) {
-            const matched = users.find(u => u.email === att.email);
-            if (matched) owners.add(matched.id);
+          const atts = typeof ev.attendees === 'string' ? JSON.parse(ev.attendees) : ev.attendees;
+          if (Array.isArray(atts)) {
+            for (const att of atts) {
+              const matched = users.find(u => u.email === att.email);
+              if (matched) owners.add(matched.id);
+            }
           }
         } catch { /* ignore */ }
+      }
+
+      // Last resort: if no owner found, assign to the first user so events still render
+      if (owners.size === 0 && users.length > 0) {
+        owners.add(users[0].id);
       }
 
       for (const uid of owners) {
@@ -203,7 +210,7 @@ export default function CalendarPage() {
     const MAX_RECURRING_INSTANCES = 52; // Cap recurring expansions
     const result = [];
     for (const item of rawEvents) {
-      // FlexMedia events store recurrence as 'daily'/'weekly'/'monthly'
+      // FlexStudios events store recurrence as 'daily'/'weekly'/'monthly'
       // Google events (via incremental sync) may store recurrence_rule as JSON RRULE array
       const isRecurring = item.recurrence && item.recurrence !== 'none';
       if (isRecurring) {
@@ -214,7 +221,7 @@ export default function CalendarPage() {
             const instances = expandRecurringEvent({ ...item, recurrence: rule }, rangeStart, rangeEnd);
             result.push(...instances.slice(0, MAX_RECURRING_INSTANCES));
           } else {
-            // FlexMedia-style — recurrence is already 'daily'/'weekly'/'monthly'
+            // FlexStudios-style — recurrence is already 'daily'/'weekly'/'monthly'
             const instances = expandRecurringEvent(item, rangeStart, rangeEnd);
             result.push(...instances.slice(0, MAX_RECURRING_INSTANCES));
           }

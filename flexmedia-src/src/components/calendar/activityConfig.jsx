@@ -35,9 +35,9 @@ export function getEventSource(event) {
   return 'flexmedia';
 }
 
-// Whether the event can be edited inside FlexMedia.
+// Whether the event can be edited inside FlexStudios.
 // Two conditions must both be true:
-//   1. The event is a native FlexMedia event (not Tonomo or Google-synced)
+//   1. The event is a native FlexStudios event (not Tonomo or Google-synced)
 //   2. The current user is the creator (created_by_user_id matches)
 // currentUserId is the UUID from useCurrentUser().data.id
 // If currentUserId is not provided, only the source check applies (fallback for

@@ -108,7 +108,7 @@ export default function SettingsTonomoMappings() {
     onError: (err) => toast.error(err?.message || "Operation failed"),
   });
 
-  // Generate virtual mappings for unmapped FlexMedia entities
+  // Generate virtual mappings for unmapped FlexStudios entities
   const allTabMappings = useMemo(() => {
     // Booking flows tab — driven by TonomoBookingFlowTier records directly
     if (activeType === 'bookingflow') {
@@ -145,7 +145,7 @@ export default function SettingsTonomoMappings() {
     const ents = rightEntities[entKey] || [];
     const realMappings = mappings.filter(m => m.mapping_type === activeType);
     
-    // Create a set of FlexMedia IDs that have mappings
+    // Create a set of FlexStudios IDs that have mappings
     const mappedIds = new Set(realMappings.map(m => m.flexmedia_entity_id).filter(Boolean));
     
     // For each entity without a mapping, create a virtual mapping
@@ -262,7 +262,7 @@ export default function SettingsTonomoMappings() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Tonomo Mappings</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Link Tonomo entities to your FlexMedia records. Confirmed links apply automatically to every booking.
+              Link Tonomo entities to your FlexStudios records. Confirmed links apply automatically to every booking.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
@@ -347,7 +347,7 @@ export default function SettingsTonomoMappings() {
         <div className="grid grid-cols-[1fr_28px_220px_120px] gap-0 px-6 py-2 border-b bg-muted/30 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
           <div>Tonomo flow type</div>
           <div />
-          <div>FlexMedia project type</div>
+          <div>FlexStudios project type</div>
           <div className="text-right">Default fallback</div>
         </div>
       ) : activeType === 'bookingflow' ? (
@@ -361,7 +361,7 @@ export default function SettingsTonomoMappings() {
         <div className="grid grid-cols-[1fr_120px_1fr_120px] gap-0 px-6 py-2 border-b bg-muted/30 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
           <div>Tonomo</div>
           <div className="text-center">Status</div>
-          <div>FlexMedia</div>
+          <div>FlexStudios</div>
           <div />
         </div>
       )}
@@ -689,7 +689,7 @@ function MappingRow({ mapping, type, entities, users, onLink, onUnlink, onConfir
         <span className={`text-xs font-medium ${cfg.iconColor}`}>{cfg.label}</span>
       </div>
 
-      {/* RIGHT — FlexMedia side */}
+      {/* RIGHT — FlexStudios side */}
       <div className="relative min-w-0">
         {linkedEntity ? (
           <div className="flex items-start gap-2.5">

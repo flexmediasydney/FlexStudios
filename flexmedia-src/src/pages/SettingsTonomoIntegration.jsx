@@ -265,7 +265,7 @@ export default function SettingsTonomoIntegration() {
             <div>
               <p className="text-sm font-medium">Auto-link calendar events</p>
               <p className="text-xs text-muted-foreground">
-                Automatically link synced Google Calendar events to FlexMedia projects
+                Automatically link synced Google Calendar events to FlexStudios projects
                 using the Tonomo Google Calendar event ID. Disable if you want all
                 calendar linking to be manual only.
               </p>

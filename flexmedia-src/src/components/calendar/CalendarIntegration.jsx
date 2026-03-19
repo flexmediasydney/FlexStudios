@@ -502,7 +502,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
               </div>
               <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 space-y-1">
                 <p className="font-medium">⚠ What happens to synced events?</p>
-                <p>Events synced from this calendar will be removed from your FlexMedia calendar view.</p>
+                <p>Events synced from this calendar will be removed from your FlexStudios calendar view.</p>
                 <p>Tonomo booking events linked to projects are never affected.</p>
               </div>
               <div className="flex gap-2 justify-end">
@@ -531,6 +531,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
 function formatLastSync(isoString) {
   if (!isoString) return '';
   const d = new Date(isoString.endsWith('Z') ? isoString : isoString + 'Z');
+  if (isNaN(d.getTime())) return '';
   const diffMs = Date.now() - d.getTime();
   const diffMins = Math.floor(diffMs / 60000);
   if (diffMins < 1) return 'just now';

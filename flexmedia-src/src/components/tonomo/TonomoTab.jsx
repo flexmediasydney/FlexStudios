@@ -213,7 +213,7 @@ export default function TonomoTab({ project }) {
                   </Card>
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-sm">What FlexMedia Stored</CardTitle>
+                  <CardTitle className="text-sm">What FlexStudios Stored</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
                   <DetailRow label="Title" value={project.title} />

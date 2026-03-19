@@ -87,7 +87,7 @@ export default function ProjectCalendarEvents({ projectId }) {
                     <span>
                       {event.event_source === 'tonomo' ? 'Tonomo booking'
                         : event.event_source === 'google' ? (event.calendar_account || 'Google Calendar')
-                        : event.event_source === 'flexmedia' ? 'FlexMedia activity'
+                        : event.event_source === 'flexmedia' ? 'FlexStudios activity'
                         : event.calendar_account || 'Unknown source'}
                     </span>
                     {event.is_synced && (

@@ -543,7 +543,7 @@ function MappingsTab({ mappings }) {
         <p className="text-blue-700 text-xs leading-relaxed">
           When Tonomo bookings arrive, each service (e.g. "Drone Images", "Silver Package") is
           identified by its <strong>Tonomo service ID</strong> and auto-suggested to the matching
-          FlexMedia product or package by name. <strong>Confirm each row once</strong> — after that,
+          FlexStudios product or package by name. <strong>Confirm each row once</strong> — after that,
           products are applied automatically with the correct quantities on every new booking.
           Quantities are extracted directly from the tier name (e.g. "10 Sales Images" → qty 10).
           Unconfirmed mappings are never applied automatically.
