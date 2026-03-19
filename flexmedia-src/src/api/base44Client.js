@@ -74,6 +74,7 @@ function toTableName(entityName) {
 
   // Handle known exceptions / overrides
   const overrides = {
+    'agencys': 'agencies',
     'project_medias': 'project_media',
     'photographer_availabilitys': 'photographer_availabilities',
     'delivery_settingses': 'delivery_settings',
@@ -84,6 +85,8 @@ function toTableName(entityName) {
     'price_matrixes': 'price_matrices',
     'price_matrix_audit_logses': 'price_matrix_audit_logs',
     'price_matrix_snapshotses': 'price_matrix_snapshots',
+    'employee_utilitys': 'employee_utilization',
+    'external_listings': 'external_listings',
   };
 
   snake = overrides[snake] || snake;
@@ -316,7 +319,7 @@ function createEntityApi(entityName, client) {
 
       // Return unsubscribe function (same interface as Base44)
       return () => {
-        client.removeChannel(channel);
+        channel.unsubscribe();
       };
     },
   };
@@ -390,8 +393,9 @@ const authApi = {
     const { data: { user }, error } = await supabase.auth.getUser();
     if (error || !user) throw new Error(error?.message || 'Not authenticated');
 
-    // Fetch the app-level user record from our users table
-    const { data: appUser, error: appError } = await supabase
+    // Fetch the app-level user record using admin client to bypass RLS
+    const dbClient = supabaseAdmin || supabase;
+    const { data: appUser, error: appError } = await dbClient
       .from('users')
       .select('*')
       .eq('email', user.email)
