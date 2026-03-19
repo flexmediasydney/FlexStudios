@@ -40,6 +40,11 @@ import TodayBoard from '@/components/dashboard/TodayBoard';
 import PipelineAnalyzer from '@/components/dashboard/PipelineAnalyzer';
 import RevenueIntelligence from '@/components/dashboard/RevenueIntelligence';
 import EnhancedActivityStream from '@/components/dashboard/EnhancedActivityStream';
+import TodaysScheduleWidget from '@/components/dashboard/TodaysScheduleWidget';
+import ActiveTimersWidget from '@/components/dashboard/ActiveTimersWidget';
+import PendingReviewsWidget from '@/components/dashboard/PendingReviewsWidget';
+import TeamWorkloadChart from '@/components/dashboard/TeamWorkloadChart';
+import RevenueComparisonChart from '@/components/dashboard/RevenueComparisonChart';
 
 export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);

@@ -1,9 +1,9 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Plus, FileText, Users, Calendar, Mail, AlertCircle } from "lucide-react";
+import { Plus, FileText, Users, Calendar, Mail, UserPlus, Send, Zap } from "lucide-react";
 
-export default function QuickActionsPanel({ urgentCount, onNewProject, onViewCalendar, onViewInbox }) {
+export default function QuickActionsPanel({ urgentCount, onNewProject, onNewContact, onComposeEmail, onViewCalendar, onViewInbox }) {
   const actions = [
     {
       icon: Plus,
@@ -11,6 +11,20 @@ export default function QuickActionsPanel({ urgentCount, onNewProject, onViewCal
       description: "Create project",
       onClick: onNewProject,
       variant: "default"
+    },
+    {
+      icon: UserPlus,
+      label: "New Contact",
+      description: "Add a person",
+      onClick: onNewContact,
+      variant: "outline"
+    },
+    {
+      icon: Send,
+      label: "Compose Email",
+      description: "Draft and send",
+      onClick: onComposeEmail,
+      variant: "outline"
     },
     {
       icon: Calendar,
@@ -39,7 +53,10 @@ export default function QuickActionsPanel({ urgentCount, onNewProject, onViewCal
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Quick Actions</CardTitle>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Zap className="h-4 w-4 text-yellow-500" />
+          Quick Actions
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
         {actions.map((action, idx) => {

@@ -10,15 +10,16 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import { 
-  RefreshCw, 
-  Plus, 
-  Search, 
+  RefreshCw,
+  Plus,
+  Search,
   Settings,
   Menu,
   X,
   ChevronDown,
   Link2,
-  Tag
+  Tag,
+  Clock
 } from "lucide-react";
 
 import { format, formatDistanceToNow, isToday } from "date-fns";
@@ -81,6 +82,8 @@ export default function EmailInboxMain() {
   const MAX_THREADS_TO_DISPLAY = 500;
   const containerRef = useRef(null);
   const sidebarScrollRef = useRef(null);
+  const searchContainerRef = useRef(null);
+  const [searchFocused, setSearchFocused] = useState(false);
 
   // Persist sidebar scroll position and clear selections on folder change
   useEffect(() => {
@@ -580,8 +583,8 @@ export default function EmailInboxMain() {
         if (thread) setSelectedThread(thread);
       }
 
-      // e = archive
-      if (e.key === 'e' && selectedMessages.size > 0 && filterView !== 'archived' && filterView !== 'deleted') {
+      // a or e = archive
+      if ((e.key === 'a' || e.key === 'e') && selectedMessages.size > 0 && filterView !== 'archived' && filterView !== 'deleted') {
         e.preventDefault();
         const accountIds = Array.from(new Set(
           Array.from(selectedMessages).map(msgId => {
@@ -629,15 +632,37 @@ export default function EmailInboxMain() {
          setShowCompose(true);
        }
 
-      // Shift+R = reply to selected/open thread
-       if (e.shiftKey && e.key === 'R' && !showCompose) {
+      // r or R = reply to selected/open thread
+       if ((e.key === 'r' || e.key === 'R') && !showCompose) {
          e.preventDefault();
          if (selectedThread) {
            setShowReply(true);
          } else if (selectedMessages.size === 1) {
            const threadId = Array.from(selectedMessages)[0];
            const thread = currentThreads.find(t => t.threadId === threadId);
-           if (thread) setSelectedThread(thread);
+           if (thread) {
+             setSelectedThread(thread);
+             // Open reply after thread loads
+             setTimeout(() => setShowReply(true), 100);
+           }
+         }
+       }
+
+       // / = focus search bar
+       if (e.key === '/' && !selectedThread) {
+         e.preventDefault();
+         const searchInput = searchContainerRef.current?.querySelector('input');
+         if (searchInput) searchInput.focus();
+       }
+
+       // x = toggle selection of current focused email
+       if (e.key === 'x' && !selectedThread) {
+         e.preventDefault();
+         if (selectedMessages.size === 1) {
+           // Already selected, keep it - allows further keyboard ops
+         } else if (currentFilteredThreads.length > 0) {
+           // Select the first one if nothing selected
+           setSelectedMessages(new Set([currentFilteredThreads[0].threadId]));
          }
        }
 
@@ -647,6 +672,8 @@ export default function EmailInboxMain() {
              setSelectedThread(null);
            } else if (searchQuery) {
              setSearchQuery('');
+           } else if (selectedMessages.size > 0) {
+             setSelectedMessages(new Set());
            }
          }
     };
@@ -861,8 +888,11 @@ export default function EmailInboxMain() {
             <div className="space-y-0.5 text-[8px]">
               <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">c</kbd> Compose</p>
               <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">j/k</kbd> Navigate</p>
-              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">e</kbd> Archive</p>
+              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">r</kbd> Reply</p>
+              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">a/e</kbd> Archive</p>
               <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">#</kbd> Delete</p>
+              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">/</kbd> Search</p>
+              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">Esc</kbd> Back / Clear</p>
             </div>
           </div>
         </div>
@@ -871,12 +901,26 @@ export default function EmailInboxMain() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0" ref={containerRef}>
         {selectedThread ? (
-          <EmailThreadViewer 
+          <EmailThreadViewer
             thread={selectedThread}
             account={emailAccounts.find(a => a.id === selectedThread.email_account_id) || selectedAccount}
             onBack={() => setSelectedThread(null)}
             currentView={filterView}
             emailAccounts={emailAccounts}
+            onNextThread={(() => {
+              const idx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
+              if (idx >= 0 && idx < filteredThreads.length - 1) {
+                return () => setSelectedThread(filteredThreads[idx + 1]);
+              }
+              return null;
+            })()}
+            onPrevThread={(() => {
+              const idx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
+              if (idx > 0) {
+                return () => setSelectedThread(filteredThreads[idx - 1]);
+              }
+              return null;
+            })()}
           />
         ) : (
           <>
@@ -917,12 +961,24 @@ export default function EmailInboxMain() {
                   <Menu className="h-4 w-4" />
                 </Button>
 
-                <div className="flex-1 relative max-w-lg">
+                <div className="flex-1 relative max-w-lg" ref={searchContainerRef}>
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
                   <Input
-                      placeholder="Search emails (from: to: subject: has:attachment label:)"
+                      placeholder="Search emails... (/ to focus)"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
+                      onFocus={() => setSearchFocused(true)}
+                      onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && searchQuery.trim()) {
+                          // Save to recent searches
+                          const recent = JSON.parse(localStorage.getItem('email-recent-searches') || '[]');
+                          const updated = [searchQuery.trim(), ...recent.filter(s => s !== searchQuery.trim())].slice(0, 8);
+                          localStorage.setItem('email-recent-searches', JSON.stringify(updated));
+                          setSearchFocused(false);
+                          e.target.blur();
+                        }
+                      }}
                       className="pl-9 pr-8 h-9 text-sm border-input/50 focus-visible:ring-1 bg-muted/40"
                      />
                      {searchQuery && (
@@ -934,6 +990,64 @@ export default function EmailInboxMain() {
                        >
                          <X className="h-3.5 w-3.5" />
                        </button>
+                     )}
+                     {/* Search hints dropdown */}
+                     {searchFocused && !searchQuery && (
+                       <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-lg shadow-lg z-50 p-3 space-y-3">
+                         {/* Recent searches */}
+                         {(() => {
+                           const recent = JSON.parse(localStorage.getItem('email-recent-searches') || '[]');
+                           if (recent.length > 0) return (
+                             <div>
+                               <div className="flex items-center justify-between mb-1.5">
+                                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Recent</p>
+                                 <button
+                                   onClick={() => { localStorage.removeItem('email-recent-searches'); }}
+                                   className="text-[10px] text-muted-foreground hover:text-foreground"
+                                 >Clear</button>
+                               </div>
+                               <div className="space-y-0.5">
+                                 {recent.map((q, i) => (
+                                   <button
+                                     key={i}
+                                     onMouseDown={(e) => { e.preventDefault(); setSearchQuery(q); setSearchFocused(false); }}
+                                     className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted/80 text-foreground/80 flex items-center gap-2"
+                                   >
+                                     <Clock className="h-3 w-3 text-muted-foreground/50 flex-shrink-0" />
+                                     <span className="truncate">{q}</span>
+                                   </button>
+                                 ))}
+                               </div>
+                             </div>
+                           );
+                           return null;
+                         })()}
+                         {/* Search operators */}
+                         <div>
+                           <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1.5">Search operators</p>
+                           <div className="grid grid-cols-2 gap-1">
+                             {[
+                               { op: 'from:', desc: 'Sender email' },
+                               { op: 'to:', desc: 'Recipient' },
+                               { op: 'subject:', desc: 'Subject line' },
+                               { op: 'label:', desc: 'Label name' },
+                               { op: 'has:attachment', desc: 'Has files' },
+                             ].map(({ op, desc }) => (
+                               <button
+                                 key={op}
+                                 onMouseDown={(e) => { e.preventDefault(); setSearchQuery(op); }}
+                                 className="text-left text-xs px-2 py-1.5 rounded hover:bg-muted/80 flex items-center gap-1.5"
+                               >
+                                 <code className="text-[10px] bg-muted px-1 rounded font-mono text-primary">{op}</code>
+                                 <span className="text-muted-foreground truncate">{desc}</span>
+                               </button>
+                             ))}
+                           </div>
+                         </div>
+                         <p className="text-[10px] text-muted-foreground/60 italic">
+                           Searches subject, sender, body text, labels, project names, and attachment filenames
+                         </p>
+                       </div>
                      )}
                 </div>
 

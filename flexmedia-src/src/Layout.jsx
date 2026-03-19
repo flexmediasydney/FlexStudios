@@ -26,7 +26,10 @@ import {
   FileBarChart,
   UserCheck,
   Clock,
-  ChevronDown
+  ChevronDown,
+  Sun,
+  Moon,
+  Monitor
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +42,7 @@ import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { canAccessRoute } from "@/components/lib/routeAccess";
 import { useNotifications } from "@/components/notifications/NotificationContext";
 import { useEntityList } from "@/components/hooks/useEntityData";
+import { useTheme } from "@/lib/ThemeContext";
 
 import { NotificationProvider } from "@/components/notifications/NotificationContext";
 import GlobalNotificationBar, { NotificationBell } from "@/components/notifications/GlobalNotificationBar";
@@ -48,10 +52,41 @@ import ChatPanel from "@/components/chat/ChatPanel";
 import { ActiveTimersProvider } from "@/components/utilization/ActiveTimersContext";
 
 
+function ThemeToggle() {
+  const { theme, setTheme, resolvedTheme } = useTheme();
+
+  const cycleTheme = () => {
+    const order = ["light", "dark", "system"];
+    const next = order[(order.indexOf(theme) + 1) % order.length];
+    setTheme(next);
+  };
+
+  const icon = theme === "system"
+    ? <Monitor className="h-3.5 w-3.5 flex-shrink-0" />
+    : resolvedTheme === "dark"
+      ? <Moon className="h-3.5 w-3.5 flex-shrink-0" />
+      : <Sun className="h-3.5 w-3.5 flex-shrink-0" />;
+
+  const label = theme === "system" ? "System" : theme === "dark" ? "Dark" : "Light";
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all duration-200 h-9 px-2 text-xs"
+      onClick={cycleTheme}
+      title={`Theme: ${label} (click to cycle)`}
+    >
+      {icon}
+      <span>{label}</span>
+    </Button>
+  );
+}
+
 const roleColors = {
-  master_admin: "bg-red-100 text-red-700",
-  employee: "bg-blue-100 text-blue-700",
-  contractor: "bg-amber-100 text-amber-700"
+  master_admin: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  employee: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  contractor: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
 };
 
 const roleLabels = {
@@ -433,7 +468,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
           </div>
 
           {/* Footer */}
-          <div className="p-3 border-t bg-muted/10 space-y-1.5">
+          <div className="p-3 border-t bg-muted/10 dark:bg-muted/5 space-y-1.5">
             {user && (
               <div className="px-2.5 py-2 rounded-lg bg-muted/50 border border-border/40 shadow-xs">
                 <div className="flex items-center gap-2 mb-1">
@@ -458,6 +493,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
               <span>Search</span>
               <kbd className="ml-auto text-[8px] bg-muted/40 px-1 py-0.5 rounded border border-border/30">⌘K</kbd>
             </Button>
+            <ThemeToggle />
             <Button
               variant="ghost"
               size="sm"

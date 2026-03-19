@@ -25,6 +25,43 @@ import { usePermissions } from '@/components/auth/PermissionGuard';
 // ── Constants ─────────────────────────────────────────────────────────────────
 const VIEWS = ['month', 'week', 'day'];
 const SLOT_HEIGHT = 56; // px per hour slot
+
+// Event type color coding: shoots=blue, meetings=green, personal=gray
+const EVENT_TYPE_COLORS = {
+  shoot:    { bg: '#3b82f6', light: '#eff6ff', text: '#1d4ed8', border: '#3b82f6' },
+  meeting:  { bg: '#10b981', light: '#ecfdf5', text: '#065f46', border: '#10b981' },
+  call:     { bg: '#10b981', light: '#ecfdf5', text: '#065f46', border: '#10b981' },
+  personal: { bg: '#6b7280', light: '#f9fafb', text: '#374151', border: '#6b7280' },
+  task:     { bg: '#8b5cf6', light: '#f5f3ff', text: '#6d28d9', border: '#8b5cf6' },
+  deadline: { bg: '#ef4444', light: '#fef2f2', text: '#991b1b', border: '#ef4444' },
+  email:    { bg: '#f59e0b', light: '#fffbeb', text: '#92400e', border: '#f59e0b' },
+  lunch:    { bg: '#ec4899', light: '#fdf2f8', text: '#be185d', border: '#ec4899' },
+  other:    { bg: '#6b7280', light: '#f9fafb', text: '#374151', border: '#6b7280' },
+};
+
+function getEventTypeColor(event) {
+  if (!event) return EVENT_TYPE_COLORS.other;
+  // Tonomo bookings / shoots
+  if (event.event_source === 'tonomo' || event.tonomo_appointment_id || event.link_source === 'tonomo_webhook') {
+    return EVENT_TYPE_COLORS.shoot;
+  }
+  // Activity type mapping
+  const aType = event.activity_type;
+  if (aType && EVENT_TYPE_COLORS[aType]) return EVENT_TYPE_COLORS[aType];
+  // Fallback: if title contains shoot/photo keywords, treat as shoot
+  const title = (event.title || '').toLowerCase();
+  if (title.includes('shoot') || title.includes('photo') || title.includes('session') || title.includes('booking')) {
+    return EVENT_TYPE_COLORS.shoot;
+  }
+  if (title.includes('meeting') || title.includes('call') || title.includes('standup') || title.includes('huddle')) {
+    return EVENT_TYPE_COLORS.meeting;
+  }
+  if (title.includes('lunch') || title.includes('personal') || title.includes('break') || title.includes('gym')) {
+    return EVENT_TYPE_COLORS.personal;
+  }
+  return EVENT_TYPE_COLORS.other;
+}
+
 const PERSON_COLORS = [
   { bg: '#3b82f6', light: '#eff6ff', text: '#1d4ed8', border: '#93c5fd' },
   { bg: '#f97316', light: '#fff7ed', text: '#c2410c', border: '#fdba74' },
@@ -374,6 +411,51 @@ export default function CalendarPage() {
     setDialogOpen(true);
   }, []);
 
+  // ── Keyboard shortcuts ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Don't trigger when typing in inputs
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable) return;
+      // Don't trigger when dialog is open
+      if (dialogOpen) return;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          e.preventDefault();
+          navigate(-1);
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          navigate(1);
+          break;
+        case 't':
+        case 'T':
+          e.preventDefault();
+          handleTodayClick();
+          break;
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          setView('month');
+          break;
+        case 'w':
+        case 'W':
+          e.preventDefault();
+          setView('week');
+          break;
+        case 'd':
+        case 'D':
+          e.preventDefault();
+          setView('day');
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [navigate, handleTodayClick, dialogOpen]);
+
   // Are we in lane mode?
   const isLaneMode = view !== "month" &&
     (selectedUserIds.includes("all") || selectedUserIds.length > 1);
@@ -522,6 +604,15 @@ export default function CalendarPage() {
             <CalendarIcon className="h-4 w-4 mr-1" /> Connections
             {eventsFetching && <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full animate-pulse" />}
           </Button>
+
+          {/* Keyboard shortcut hints */}
+          <div className="hidden lg:flex items-center gap-1 text-[10px] text-muted-foreground/50 ml-1" title="Keyboard shortcuts: Arrow keys to navigate, T for today, M/W/D for view modes">
+            <kbd className="px-1 py-0.5 rounded border bg-muted/50 font-mono">&larr;&rarr;</kbd>
+            <kbd className="px-1 py-0.5 rounded border bg-muted/50 font-mono">T</kbd>
+            <kbd className="px-1 py-0.5 rounded border bg-muted/50 font-mono">M</kbd>
+            <kbd className="px-1 py-0.5 rounded border bg-muted/50 font-mono">W</kbd>
+            <kbd className="px-1 py-0.5 rounded border bg-muted/50 font-mono">D</kbd>
+          </div>
         </div>
 
         {/* Person selector row */}
@@ -713,9 +804,7 @@ function MonthView({ currentDate, events, users, userColorMap, onCellClick, onEv
 }
 
 function MonthEventPill({ event, owners, userColorMap, users, onClick, title }) {
-   const actType = getActivityType(event.activity_type);
-   const primaryOwner = owners[0];
-   const color = primaryOwner ? userColorMap.get(primaryOwner) : null;
+   const typeColor = getEventTypeColor(event);
    const source = getEventSource(event);
    const sourceConfig = EVENT_SOURCE_CONFIG[source];
    const isOverdue = !event.is_done &&
@@ -723,21 +812,22 @@ function MonthEventPill({ event, owners, userColorMap, users, onClick, title }) 
      new Date(fixTimestamp(event.end_time)) < new Date() &&
      source === 'flexmedia';
 
+   const startTime = event.start_time ? format(new Date(fixTimestamp(event.start_time)), 'h:mm') : '';
+
    return (
      <div
-       className="rounded text-xs px-1.5 py-0.5 truncate cursor-pointer hover:opacity-80 hover:scale-105 transition-all duration-150 flex items-center gap-1"
+       className="rounded text-[11px] leading-tight px-1.5 py-0.5 cursor-pointer hover:opacity-80 hover:scale-[1.02] transition-all duration-150 flex items-center gap-1 min-w-0"
        style={{
-         backgroundColor: isOverdue ? '#fef2f2' : (color?.light || actType.bgColor),
-         color: isOverdue ? '#dc2626' : (color?.text || actType.color),
-         borderLeft: `3px solid ${isOverdue ? '#dc2626' : (color?.bg || actType.color)}`
+         backgroundColor: isOverdue ? '#fef2f2' : typeColor.light,
+         color: isOverdue ? '#dc2626' : typeColor.text,
+         borderLeft: `3px solid ${isOverdue ? '#dc2626' : typeColor.border}`
        }}
        onClick={onClick}
-       title={title || [event.title, isOverdue ? '⚠ Overdue' : null, sourceConfig?.tooltip].filter(Boolean).join(' • ')}
+       title={title || [event.title, startTime ? `at ${startTime}` : null, isOverdue ? 'Overdue' : null, sourceConfig?.tooltip].filter(Boolean).join(' - ')}
      >
-      {source === 'tonomo' && !color && <span className="text-[8px] opacity-60 flex-shrink-0">📅</span>}
       {owners.length > 1 && (
         <div className="flex -space-x-1 flex-shrink-0">
-          {owners.slice(0, 3).map(uid => {
+          {owners.slice(0, 2).map(uid => {
             const u = users.find(u => u.id === uid);
             const c = userColorMap.get(uid);
             return (
@@ -751,9 +841,12 @@ function MonthEventPill({ event, owners, userColorMap, users, onClick, title }) 
           })}
         </div>
       )}
-      {/* Gap fix: Show source badge on event + wrap text safely */}
-      <span className="truncate text-ellipsis">{event.is_done ? '✓ ' : ''}{event.tonomo_is_twilight ? '🌅 ' : ''}{event.title}</span>
-      {event.event_source === 'tonomo' && <span className="text-[7px] opacity-60">BOOKING</span>}
+      {/* Time + truncated title */}
+      <span className="truncate min-w-0">
+        {startTime && <span className="font-semibold opacity-70 mr-0.5">{startTime}</span>}
+        {event.is_done ? '✓ ' : ''}{event.title || 'Untitled'}
+      </span>
+      {event.event_source === 'tonomo' && <span className="text-[7px] opacity-50 flex-shrink-0 ml-auto">BK</span>}
     </div>
   );
 }
@@ -848,13 +941,15 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                       {users.map(u => (
                         <div
                           key={u.id}
-                          className="flex-1 border-r border-b last:border-r-0 hover:bg-muted/10 cursor-pointer relative"
+                          className="flex-1 border-r border-b last:border-r-0 hover:bg-muted/10 cursor-pointer relative group"
                           onClick={() => {
                             const dt = new Date(d);
                             dt.setHours(h, 0, 0, 0);
                             onCellClick(dt, u.id);
                           }}
-                        />
+                        >
+                          <span className="absolute inset-0 flex items-center justify-center text-[9px] text-muted-foreground/0 group-hover:text-muted-foreground/30 transition-all duration-200 pointer-events-none select-none">+</span>
+                        </div>
                       ))}
                     </div>
                   ))}
@@ -903,6 +998,22 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                     />
                    ));
                   })}
+
+                  {/* Current time indicator line (lane mode) */}
+                  {isToday(d) && (() => {
+                    const n = new Date();
+                    const nowMin = n.getHours() * 60 + n.getMinutes();
+                    const topPx = (nowMin / 60) * SLOT_HEIGHT;
+                    return (
+                      <div
+                        className="absolute left-0 right-0 z-20 pointer-events-none flex items-center"
+                        style={{ top: topPx }}
+                      >
+                        <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 flex-shrink-0" />
+                        <div className="flex-1 h-[2px] bg-red-500" />
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             ))}
@@ -913,12 +1024,19 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
   }
 
   // STANDARD mode (single user selected)
+  // Current time indicator state
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <div className="flex h-full">
       <div className="w-14 flex-shrink-0 border-r">
         <div className="border-b" style={{ height: 40 }} />
         {hours.map(h => (
-          <div key={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
+          <div key={h} data-hour={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
             <span className="text-xs text-muted-foreground">
               {h === 0 ? '' : format(new Date().setHours(h, 0), 'h a')}
             </span>
@@ -930,20 +1048,57 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
           const dayItems = events.filter(({ event }) =>
             event.start_time && !event.is_all_day && isSameDay(new Date(fixTimestamp(event.start_time)), d)
           );
+          const isTodayCol = isToday(d);
           return (
             <div key={di} className="border-r relative">
-              <div className={`border-b text-center py-1 sticky top-0 bg-background z-10 ${isToday(d) ? 'bg-primary/5' : ''}`} style={{ height: 40 }}>
+              <div className={`border-b text-center py-1 sticky top-0 bg-background z-10 ${isTodayCol ? 'bg-primary/5' : ''}`} style={{ height: 40 }}>
                 <div className="text-xs text-muted-foreground">{format(d, 'EEE')}</div>
-                <div className={`text-sm font-medium ${isToday(d) ? 'text-primary' : ''}`}>{format(d, 'd')}</div>
+                <div className={`text-sm font-medium ${isTodayCol ? 'text-primary' : ''}`}>{format(d, 'd')}</div>
               </div>
-              {hours.map(h => (
-                <div
-                  key={h}
-                  style={{ height: SLOT_HEIGHT }}
-                  className="border-b hover:bg-muted/10 cursor-pointer"
-                  onClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellClick(dt); }}
-                />
-              ))}
+              {hours.map(h => {
+                // Check if this slot has any events
+                const slotHasEvent = dayItems.some(({ event }) => {
+                  const s = new Date(fixTimestamp(event.start_time));
+                  const e = event.end_time ? new Date(fixTimestamp(event.end_time)) : new Date(s.getTime() + 3600000);
+                  const slotStart = h * 60;
+                  const slotEnd = (h + 1) * 60;
+                  const evStart = s.getHours() * 60 + s.getMinutes();
+                  const evEnd = e.getHours() * 60 + e.getMinutes() || 24 * 60;
+                  return evStart < slotEnd && evEnd > slotStart;
+                });
+                return (
+                  <div
+                    key={h}
+                    data-hour={h}
+                    style={{ height: SLOT_HEIGHT }}
+                    className="border-b hover:bg-muted/10 cursor-pointer group relative"
+                    onClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellClick(dt); }}
+                  >
+                    {/* Click to add hint on empty slots */}
+                    {!slotHasEvent && (
+                      <span className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground/0 group-hover:text-muted-foreground/40 transition-all duration-200 pointer-events-none select-none">
+                        + Click to add
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Current time indicator line */}
+              {isTodayCol && (() => {
+                const nowMin = now.getHours() * 60 + now.getMinutes();
+                const topPx = (nowMin / 60) * SLOT_HEIGHT;
+                return (
+                  <div
+                    className="absolute left-0 right-0 z-20 pointer-events-none flex items-center"
+                    style={{ top: topPx + 40 /* offset for header */ }}
+                  >
+                    <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 flex-shrink-0" />
+                    <div className="flex-1 h-[2px] bg-red-500" />
+                  </div>
+                );
+              })()}
+
               {/* Duration blocks */}
               {dayItems.map(({ event, owners }) => (
                 <StandardEventBlock
@@ -953,6 +1108,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   userColorMap={userColorMap}
                   allUsers={users}
                   slotHeight={SLOT_HEIGHT}
+                  headerOffset={40}
                   onClick={(e) => onEventClick(e, event)}
                 />
               ))}
@@ -1098,13 +1254,14 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
 // ── EVENT BLOCKS ──────────────────────────────────────────────────────────────
 
 // Proportional duration block for standard (non-lane) views
-function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight, isAllDay, userColor, onClick }) {
+function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight, isAllDay, userColor, headerOffset = 0, onClick }) {
+  const typeColor = getEventTypeColor(event);
+
   if (isAllDay) {
-    const actType = getActivityType(event.activity_type);
     return (
       <div
         className="rounded px-2 py-0.5 text-xs cursor-pointer hover:opacity-80 truncate"
-        style={{ backgroundColor: actType.bgColor, color: actType.color, borderLeft: `3px solid ${actType.color}` }}
+        style={{ backgroundColor: typeColor.light, color: typeColor.text, borderLeft: `3px solid ${typeColor.border}` }}
         onClick={onClick}
       >{event.title}</div>
     );
@@ -1118,34 +1275,34 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
   const startMinutes = start.getHours() * 60 + start.getMinutes();
   const durationMinutes = Math.max(15, differenceInMinutes(end, start));
 
-  const topPx = (startMinutes / 60) * slotHeight;
+  const topPx = (startMinutes / 60) * slotHeight + headerOffset;
   const heightPx = Math.max(20, (durationMinutes / 60) * slotHeight - 2);
-
-  // Colour: first owner's colour or activity type
-  const firstOwner = owners[0];
-  const color = userColor || (firstOwner ? userColorMap.get(firstOwner) : null);
-  const actType = getActivityType(event.activity_type);
 
   const ownerUsers = owners.map(uid => allUsers.find(u => u.id === uid)).filter(Boolean);
 
   return (
     <div
-      className="absolute left-0.5 right-0.5 rounded px-1.5 cursor-pointer hover:opacity-90 hover:shadow-md overflow-hidden z-10 flex flex-col transition-all duration-150"
+      className="absolute left-1 right-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:opacity-90 hover:shadow-lg overflow-hidden z-10 flex flex-col transition-all duration-150 border"
       style={{
         top: topPx,
         height: heightPx,
-        backgroundColor: color?.light || actType.bgColor,
-        borderLeft: `3px solid ${color?.bg || actType.color}`,
-        color: color?.text || actType.color,
+        backgroundColor: typeColor.light,
+        borderLeft: `4px solid ${typeColor.border}`,
+        borderColor: `${typeColor.border}40`,
+        borderLeftColor: typeColor.border,
+        color: typeColor.text,
       }}
       onClick={onClick}
-      title={`${event.title} (${format(start, 'h:mm a')} – ${format(end, 'h:mm a')})`}
+      title={`${event.title} (${format(start, 'h:mm a')} - ${format(end, 'h:mm a')})`}
     >
-      <p className="text-xs font-medium leading-tight truncate">{event.title}</p>
+      <p className="text-xs font-semibold leading-tight truncate">{event.title}</p>
       {heightPx > 30 && (
-        <p className="text-xs opacity-70 leading-tight">{format(start, 'h:mm')}–{format(end, 'h:mm a')}</p>
+        <p className="text-[11px] opacity-70 leading-tight">{format(start, 'h:mm')} - {format(end, 'h:mm a')}</p>
       )}
-      {heightPx > 44 && ownerUsers.length > 1 && (
+      {heightPx > 44 && event.location && (
+        <p className="text-[10px] opacity-50 leading-tight truncate">{event.location}</p>
+      )}
+      {heightPx > 54 && ownerUsers.length > 1 && (
         <div className="flex -space-x-1 mt-0.5">
           {ownerUsers.slice(0, 4).map(u => {
             const c = userColorMap.get(u.id);

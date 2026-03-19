@@ -25,40 +25,56 @@ export function FromHoverCard({ email, name, children }) {
   );
 }
 
-export function SubjectHoverCard({ subject, preview, labels = [], children }) {
+export function SubjectHoverCard({ subject, preview, labels = [], from, fromEmail, date, messageCount, attachmentCount, children }) {
   if (!subject && !preview) return children;
-  
+
   return (
-    <HoverCard openDelay={400} closeDelay={100}>
+    <HoverCard openDelay={500} closeDelay={150}>
       <HoverCardTrigger asChild>
         {children}
       </HoverCardTrigger>
-      <HoverCardContent side="right" className="w-80 p-3">
-        <div className="space-y-2.5">
-          {subject && (
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground">Subject</p>
-              <p className="text-sm font-medium line-clamp-3">{subject}</p>
+      <HoverCardContent side="bottom" align="start" className="w-96 p-0 overflow-hidden">
+        <div className="space-y-0">
+          {/* Header */}
+          <div className="px-4 pt-3 pb-2 bg-slate-50/80 border-b border-slate-100">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-sm font-bold text-foreground line-clamp-2 leading-snug flex-1">{subject || '(no subject)'}</p>
+              {messageCount > 1 && (
+                <span className="flex-shrink-0 text-[10px] font-bold text-slate-500 bg-slate-200 rounded-full px-1.5 py-0.5">{messageCount}</span>
+              )}
             </div>
-          )}
-          
+            {(from || fromEmail) && (
+              <p className="text-xs text-muted-foreground mt-1 truncate">
+                {from && <span className="font-medium text-foreground/80">{from}</span>}
+                {fromEmail && from && <span className="mx-1 text-muted-foreground/40">&middot;</span>}
+                {fromEmail && <span className="font-mono text-[11px]">{fromEmail}</span>}
+              </p>
+            )}
+            {date && (
+              <p className="text-[10px] text-muted-foreground/70 mt-0.5">{date}</p>
+            )}
+          </div>
+
+          {/* Body preview */}
           {preview && (
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground">Preview</p>
-              <p className="text-xs text-foreground/80 line-clamp-4 leading-relaxed">{preview}</p>
+            <div className="px-4 py-3">
+              <p className="text-xs text-foreground/75 line-clamp-5 leading-relaxed whitespace-pre-wrap">{preview}</p>
             </div>
           )}
-          
-          {labels.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground mb-1.5">Labels</p>
-              <div className="flex flex-wrap gap-1.5">
-                {labels.map((label) => (
-                  <Badge key={label} variant="secondary" className="text-[10px] h-5">
-                    {label}
-                  </Badge>
-                ))}
-              </div>
+
+          {/* Footer: labels + attachment count */}
+          {(labels.length > 0 || attachmentCount > 0) && (
+            <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/40 flex items-center gap-2 flex-wrap">
+              {labels.map((label) => (
+                <Badge key={label} variant="secondary" className="text-[10px] h-5">
+                  {label}
+                </Badge>
+              ))}
+              {attachmentCount > 0 && (
+                <span className="text-[10px] text-muted-foreground/70 flex items-center gap-1">
+                  📎 {attachmentCount} file{attachmentCount !== 1 ? 's' : ''}
+                </span>
+              )}
             </div>
           )}
         </div>

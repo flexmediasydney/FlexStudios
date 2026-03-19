@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Copy, Check, Clock, ExternalLink, RefreshCw } from "lucide-react";
+import { Copy, Check, Clock, ExternalLink, RefreshCw, TrendingUp, CheckCircle2, Clock4, Activity } from "lucide-react";
 import { toast } from "sonner";
 import { relativeTime, parseTS } from "@/components/tonomo/tonomoUtils";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
@@ -145,6 +145,63 @@ export default function SettingsTonomoIntegration() {
     refetchInterval: 30000
   });
 
+  const { data: bookingStats } = useQuery({
+    queryKey: ['tonomoBookingStats'],
+    queryFn: async () => {
+      const now = new Date();
+      const sydneyNow = new Date(now.toLocaleString("en-US", { timeZone: "Australia/Sydney" }));
+      const startOfWeek = new Date(sydneyNow);
+      startOfWeek.setDate(sydneyNow.getDate() - sydneyNow.getDay());
+      startOfWeek.setHours(0, 0, 0, 0);
+      const startOfMonth = new Date(sydneyNow.getFullYear(), sydneyNow.getMonth(), 1);
+
+      const allQueue = await base44.entities.TonomoProcessingQueue.list('-created_date', 500);
+      const allProjects = await base44.entities.Project.list('-created_date', 500);
+      const tonomoProjects = allProjects.filter(p => p.source === 'tonomo');
+
+      // Filter by time periods
+      const weekBookings = tonomoProjects.filter(p => {
+        const d = parseTS(p.created_date);
+        return d && d >= startOfWeek;
+      });
+      const monthBookings = tonomoProjects.filter(p => {
+        const d = parseTS(p.created_date);
+        return d && d >= startOfMonth;
+      });
+
+      // Auto-approved vs pending
+      const autoApproved = tonomoProjects.filter(p => p.auto_approved === true).length;
+      const pendingReview = tonomoProjects.filter(p => p.status === 'pending_review').length;
+
+      // Processing times from completed queue items
+      const completed = allQueue.filter(q => q.status === 'completed' && q.created_at && q.processed_at);
+      let avgProcessingMs = 0;
+      if (completed.length > 0) {
+        const totalMs = completed.reduce((sum, q) => {
+          const created = parseTS(q.created_at);
+          const processed = parseTS(q.processed_at);
+          return sum + (created && processed ? processed.getTime() - created.getTime() : 0);
+        }, 0);
+        avgProcessingMs = totalMs / completed.length;
+      }
+
+      // Success rate
+      const totalProcessed = allQueue.filter(q => q.status === 'completed' || q.status === 'failed' || q.status === 'dead_letter').length;
+      const successCount = allQueue.filter(q => q.status === 'completed').length;
+      const successRate = totalProcessed > 0 ? Math.round((successCount / totalProcessed) * 100) : 100;
+
+      return {
+        weekCount: weekBookings.length,
+        monthCount: monthBookings.length,
+        autoApproved,
+        pendingReview,
+        avgProcessingMs,
+        successRate,
+      };
+    },
+    refetchInterval: 30000,
+  });
+
   const { data: recentProcessing } = useQuery({
     queryKey: ['tonomoRecentProcessing'],
     queryFn: async () => {
@@ -232,6 +289,66 @@ export default function SettingsTonomoIntegration() {
         <h1 className="text-3xl font-bold">Tonomo Integration</h1>
         <p className="text-muted-foreground mt-1">Configure webhook processing and auto-approval rules</p>
       </div>
+
+      {bookingStats && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5" />
+              Booking Stats
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="rounded-lg border p-4 text-center space-y-1">
+                <div className="flex items-center justify-center gap-1.5 text-muted-foreground">
+                  <Activity className="h-3.5 w-3.5" />
+                  <p className="text-xs font-medium">This Week / Month</p>
+                </div>
+                <p className="text-2xl font-bold tabular-nums">
+                  {bookingStats.weekCount} <span className="text-base text-muted-foreground font-normal">/</span> {bookingStats.monthCount}
+                </p>
+              </div>
+              <div className="rounded-lg border p-4 text-center space-y-1">
+                <div className="flex items-center justify-center gap-1.5 text-muted-foreground">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <p className="text-xs font-medium">Auto-approved / Pending</p>
+                </div>
+                <p className="text-2xl font-bold tabular-nums">
+                  <span className="text-green-600">{bookingStats.autoApproved}</span>
+                  <span className="text-base text-muted-foreground font-normal"> / </span>
+                  <span className={bookingStats.pendingReview > 0 ? "text-amber-600" : ""}>{bookingStats.pendingReview}</span>
+                </p>
+              </div>
+              <div className="rounded-lg border p-4 text-center space-y-1">
+                <div className="flex items-center justify-center gap-1.5 text-muted-foreground">
+                  <Clock4 className="h-3.5 w-3.5" />
+                  <p className="text-xs font-medium">Avg Processing Time</p>
+                </div>
+                <p className="text-2xl font-bold tabular-nums">
+                  {bookingStats.avgProcessingMs < 1000
+                    ? `${Math.round(bookingStats.avgProcessingMs)}ms`
+                    : bookingStats.avgProcessingMs < 60000
+                    ? `${(bookingStats.avgProcessingMs / 1000).toFixed(1)}s`
+                    : `${(bookingStats.avgProcessingMs / 60000).toFixed(1)}m`}
+                </p>
+              </div>
+              <div className="rounded-lg border p-4 text-center space-y-1">
+                <div className="flex items-center justify-center gap-1.5 text-muted-foreground">
+                  <TrendingUp className="h-3.5 w-3.5" />
+                  <p className="text-xs font-medium">Success Rate</p>
+                </div>
+                <p className={`text-2xl font-bold tabular-nums ${
+                  bookingStats.successRate >= 95 ? 'text-green-600' :
+                  bookingStats.successRate >= 80 ? 'text-amber-600' : 'text-red-600'
+                }`}>
+                  {bookingStats.successRate}%
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

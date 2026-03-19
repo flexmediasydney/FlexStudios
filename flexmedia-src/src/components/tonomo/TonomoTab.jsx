@@ -6,8 +6,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle, ExternalLink, Zap, AlertCircle, XCircle } from "lucide-react";
-import { toSydney, parseTS } from "@/components/tonomo/tonomoUtils";
+import { CheckCircle, ExternalLink, Zap, AlertCircle, XCircle, Clock, ArrowRight } from "lucide-react";
+import { toSydney, parseTS, relativeTime, ACTION_COLORS } from "@/components/tonomo/tonomoUtils";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { validateProjectReadiness } from "@/components/lib/validateProjectReadiness";
 
@@ -54,6 +54,24 @@ export default function TonomoTab({ project }) {
       return match?.raw_payload || null;
     },
     enabled: !!project.tonomo_order_id
+  });
+
+  // Booking timeline: recent queue items for this order
+  const { data: bookingTimeline = [] } = useQuery({
+    queryKey: ['tonomoBookingTimeline', project.tonomo_order_id],
+    queryFn: async () => {
+      if (!project.tonomo_order_id) return [];
+      const allQueue = await base44.entities.TonomoProcessingQueue.list('-created_date', 200);
+      return allQueue
+        .filter(q => q.order_id === project.tonomo_order_id)
+        .sort((a, b) => {
+          const da = parseTS(a.created_at);
+          const db = parseTS(b.created_at);
+          return (db?.getTime() || 0) - (da?.getTime() || 0);
+        });
+    },
+    enabled: !!project.tonomo_order_id,
+    refetchInterval: 15000,
   });
 
   const handleApprove = async () => {
@@ -131,6 +149,12 @@ export default function TonomoTab({ project }) {
         <TabsList>
           {project.status === 'pending_review' && <TabsTrigger value="review">Review Panel</TabsTrigger>}
           <TabsTrigger value="brief">Order Brief</TabsTrigger>
+          <TabsTrigger value="timeline">
+            Timeline
+            {bookingTimeline.length > 0 && (
+              <span className="ml-1.5 text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full font-bold">{bookingTimeline.length}</span>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="audit">Audit Trail</TabsTrigger>
           <TabsTrigger value="payload">Raw Payload</TabsTrigger>
         </TabsList>
@@ -234,6 +258,78 @@ export default function TonomoTab({ project }) {
 
         <TabsContent value="brief" className="mt-4">
           <TonomoOrderBrief project={project} />
+        </TabsContent>
+
+        <TabsContent value="timeline" className="mt-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Clock className="h-4 w-4" />
+                Booking Timeline
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {bookingTimeline.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No processing events for this order</p>
+              ) : (
+                <div className="relative">
+                  {/* Vertical line */}
+                  <div className="absolute left-[11px] top-2 bottom-2 w-px bg-border" />
+                  <div className="space-y-3">
+                    {bookingTimeline.map((item, idx) => {
+                      const statusConfig = {
+                        completed: { dot: 'bg-green-500', bg: 'bg-green-50', text: 'text-green-700', label: 'Completed' },
+                        failed: { dot: 'bg-red-500', bg: 'bg-red-50', text: 'text-red-700', label: 'Failed' },
+                        dead_letter: { dot: 'bg-amber-500', bg: 'bg-amber-50', text: 'text-amber-700', label: 'Dead Letter' },
+                        processing: { dot: 'bg-blue-500', bg: 'bg-blue-50', text: 'text-blue-700', label: 'Processing' },
+                        pending: { dot: 'bg-slate-400', bg: 'bg-slate-50', text: 'text-slate-600', label: 'Pending' },
+                        superseded: { dot: 'bg-gray-400', bg: 'bg-gray-50', text: 'text-gray-500', label: 'Superseded' },
+                      };
+                      const cfg = statusConfig[item.status] || statusConfig.pending;
+                      const actionLabels = {
+                        scheduled: 'Booking received',
+                        rescheduled: 'Rescheduled',
+                        changed: 'Details changed',
+                        canceled: 'Cancelled',
+                        booking_created_or_changed: 'Order updated',
+                        booking_completed: 'Delivered',
+                        new_customer: 'New customer',
+                      };
+                      return (
+                        <div key={item.id} className="relative flex gap-3 pl-0">
+                          {/* Timeline dot */}
+                          <div className={`relative z-10 mt-1.5 h-[9px] w-[9px] rounded-full flex-shrink-0 ring-2 ring-background ${cfg.dot} ${item.status === 'processing' ? 'animate-pulse' : ''}`} style={{ marginLeft: '7px' }} />
+                          {/* Content */}
+                          <div className={`flex-1 rounded-lg border p-2.5 ${idx === 0 ? cfg.bg : 'bg-background'}`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${cfg.bg} ${cfg.text}`}>
+                                  {cfg.label}
+                                </span>
+                                <span className="text-sm font-medium">{actionLabels[item.action] || item.action}</span>
+                              </div>
+                              <span className="text-[11px] text-muted-foreground flex-shrink-0">
+                                {item.processed_at ? relativeTime(parseTS(item.processed_at)) :
+                                 item.created_at ? relativeTime(parseTS(item.created_at)) : '--'}
+                              </span>
+                            </div>
+                            {(item.result_summary || item.error_message) && (
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                {item.result_summary || item.error_message}
+                              </p>
+                            )}
+                            {item.retry_count > 0 && (
+                              <p className="text-[10px] text-amber-600 mt-1">Attempt {item.retry_count + 1}</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="audit" className="mt-4">

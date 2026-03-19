@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Bot, CheckCircle, AlertCircle, RefreshCw, Zap } from "lucide-react";
+import { Bot, CheckCircle, AlertCircle, RefreshCw, Zap, Trash2, RotateCcw, Play, ArrowRight } from "lucide-react";
 import { parseTS, toSydney, relativeTime } from "@/components/tonomo/tonomoUtils";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Link } from "react-router-dom";
@@ -170,6 +170,91 @@ export default function TonomoIntegrationDashboard() {
     onError: () => toast.error('Failed to load mappings'),
   });
 
+  // Processing health status
+  const processingHealth = useMemo(() => {
+    if (queue.length === 0) return { status: 'idle', color: 'bg-gray-400', label: 'No activity' };
+    const recent = queue.filter(q => {
+      const d = parseTS(q.processed_at || q.created_at);
+      return d && (Date.now() - d.getTime()) < 15 * 60 * 1000; // last 15 min
+    });
+    const recentFailed = recent.filter(q => q.status === 'failed' || q.status === 'dead_letter').length;
+    const recentCompleted = recent.filter(q => q.status === 'completed').length;
+    const pending = queue.filter(q => q.status === 'pending').length;
+    const processing = queue.filter(q => q.status === 'processing').length;
+
+    if (recentFailed > 2 || queue.filter(q => q.status === 'dead_letter').length > 3) {
+      return { status: 'error', color: 'bg-red-500', label: 'Errors detected', pulse: true };
+    }
+    if (pending > 10 || processing > 3) {
+      return { status: 'slow', color: 'bg-yellow-500', label: 'Queue backing up', pulse: true };
+    }
+    if (recentCompleted > 0 || pending === 0) {
+      return { status: 'healthy', color: 'bg-green-500', label: 'Healthy' };
+    }
+    return { status: 'idle', color: 'bg-gray-400', label: 'Idle' };
+  }, [queue]);
+
+  // Pipeline counts
+  const pipelineCounts = useMemo(() => ({
+    pending: queue.filter(q => q.status === 'pending').length,
+    processing: queue.filter(q => q.status === 'processing').length,
+    completed: queue.filter(q => q.status === 'completed').length,
+    failed: queue.filter(q => q.status === 'failed').length,
+    dead_letter: queue.filter(q => q.status === 'dead_letter').length,
+    superseded: queue.filter(q => q.status === 'superseded').length,
+  }), [queue]);
+
+  // Quick action mutations
+  const retryFailedMutation = useMutation({
+    mutationFn: async () => {
+      const stuck = queue.filter(q => q.status === 'failed');
+      if (stuck.length === 0) { toast.info('No failed items to retry'); return { count: 0 }; }
+      await Promise.all(stuck.map(q =>
+        base44.entities.TonomoProcessingQueue.update(q.id, {
+          status: 'pending',
+          retry_count: 0,
+          error_message: null,
+        })
+      ));
+      base44.functions.invoke('processTonomoQueue', { triggered_by: 'retry' }).catch(() => {});
+      return { count: stuck.length };
+    },
+    onSuccess: (data) => {
+      if (data.count > 0) toast.success(`Reset ${data.count} failed items for reprocessing`);
+      queryClient.invalidateQueries({ queryKey: ['tonomoQueue'] });
+    },
+    onError: (err) => toast.error(err?.message || 'Failed to retry'),
+  });
+
+  const clearDeadLettersMutation = useMutation({
+    mutationFn: async () => {
+      const dead = queue.filter(q => q.status === 'dead_letter');
+      if (dead.length === 0) { toast.info('No dead letter items to clear'); return { count: 0 }; }
+      await Promise.all(dead.map(q =>
+        base44.entities.TonomoProcessingQueue.delete(q.id)
+      ));
+      return { count: dead.length };
+    },
+    onSuccess: (data) => {
+      if (data.count > 0) toast.success(`Cleared ${data.count} dead letter items`);
+      queryClient.invalidateQueries({ queryKey: ['tonomoQueue'] });
+    },
+    onError: (err) => toast.error(err?.message || 'Failed to clear dead letters'),
+  });
+
+  const forceProcessMutation = useMutation({
+    mutationFn: async () => {
+      const res = await base44.functions.invoke('processTonomoQueue', { triggered_by: 'force_manual' });
+      return res.data || res;
+    },
+    onSuccess: (data) => {
+      toast.success(`Processed: ${data?.processed ?? 0} items, ${data?.failed ?? 0} failed`);
+      queryClient.invalidateQueries({ queryKey: ['tonomoQueue'] });
+      queryClient.invalidateQueries({ queryKey: ['pendingReviewProjects'] });
+    },
+    onError: (err) => toast.error(err?.message || 'Force process failed'),
+  });
+
   const deadLetters = useMemo(() => queue.filter(q => q.status === 'dead_letter'), [queue]);
   const mappingGaps = useMemo(() => mappings.filter(m => !m.is_confirmed).length, [mappings]);
 
@@ -188,7 +273,13 @@ export default function TonomoIntegrationDashboard() {
               <Bot className="h-8 w-8 text-primary" />
             </div>
             <div>
-              <h1 className="text-3xl font-bold">Bookings Engine</h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-3xl font-bold">Bookings Engine</h1>
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted/60 border">
+                  <div className={`h-2.5 w-2.5 rounded-full ${processingHealth.color} ${processingHealth.pulse ? 'animate-pulse' : ''}`} />
+                  <span className="text-xs font-medium text-muted-foreground">{processingHealth.label}</span>
+                </div>
+              </div>
               <p className="text-sm text-muted-foreground">Tonomo integration health and mapping management</p>
             </div>
           </div>
@@ -226,6 +317,79 @@ export default function TonomoIntegrationDashboard() {
 
         <TabsContent value="overview" className="space-y-6 mt-6">
           <MissedSchedulingPanel />
+
+          {/* Quick Actions */}
+          <div className="flex gap-3 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => retryFailedMutation.mutate()}
+              disabled={retryFailedMutation.isPending || pipelineCounts.failed === 0}
+              className="gap-2"
+            >
+              <RotateCcw className={`h-3.5 w-3.5 ${retryFailedMutation.isPending ? 'animate-spin' : ''}`} />
+              Retry Failed ({pipelineCounts.failed})
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => clearDeadLettersMutation.mutate()}
+              disabled={clearDeadLettersMutation.isPending || pipelineCounts.dead_letter === 0}
+              className="gap-2"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Clear Dead Letters ({pipelineCounts.dead_letter})
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => forceProcessMutation.mutate()}
+              disabled={forceProcessMutation.isPending}
+              className="gap-2"
+            >
+              <Play className={`h-3.5 w-3.5 ${forceProcessMutation.isPending ? 'animate-spin' : ''}`} />
+              {forceProcessMutation.isPending ? 'Processing...' : 'Force Process Queue'}
+            </Button>
+          </div>
+
+          {/* Queue Pipeline Visualization */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Queue Pipeline</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2 justify-between">
+                {[
+                  { label: 'Pending', count: pipelineCounts.pending, bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-200' },
+                  { label: 'Processing', count: pipelineCounts.processing, bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
+                  { label: 'Completed', count: pipelineCounts.completed, bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
+                  { label: 'Failed', count: pipelineCounts.failed, bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
+                  { label: 'Dead Letter', count: pipelineCounts.dead_letter, bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+                ].map((stage, i, arr) => (
+                  <div key={stage.label} className="flex items-center gap-2 flex-1">
+                    <div className={`flex-1 rounded-lg border ${stage.border} ${stage.bg} p-3 text-center`}>
+                      <p className={`text-2xl font-bold tabular-nums ${stage.text}`}>{stage.count}</p>
+                      <p className="text-[10px] font-medium text-muted-foreground mt-0.5">{stage.label}</p>
+                    </div>
+                    {i < arr.length - 1 && i !== 2 && (
+                      <ArrowRight className="h-4 w-4 text-muted-foreground/40 flex-shrink-0" />
+                    )}
+                    {i === 2 && (
+                      <div className="flex flex-col items-center flex-shrink-0">
+                        <ArrowRight className="h-3 w-3 text-muted-foreground/40 -mb-0.5" />
+                        <ArrowRight className="h-3 w-3 text-muted-foreground/40 -mt-0.5" />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {pipelineCounts.superseded > 0 && (
+                <p className="text-xs text-muted-foreground mt-2 text-center">
+                  + {pipelineCounts.superseded} superseded (skipped as newer events arrived)
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Pending Review Queue */}
           <Card>
