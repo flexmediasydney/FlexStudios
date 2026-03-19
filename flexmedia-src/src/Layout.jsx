@@ -76,6 +76,7 @@ function ThemeToggle() {
       className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all duration-200 h-9 px-2 text-xs"
       onClick={cycleTheme}
       title={`Theme: ${label} (click to cycle)`}
+      aria-label={`Switch theme, currently ${label}`}
     >
       {icon}
       <span>{label}</span>
@@ -449,8 +450,8 @@ function LayoutContent({ currentPageName, children, onBack }) {
                 <Camera className="h-4 w-4 text-primary-foreground" />
               </div>
               <div className="min-w-0 hidden sm:block">
-                <h1 className="font-bold text-sm leading-tight">Flex</h1>
-                <p className="text-[10px] text-muted-foreground font-semibold">CRM</p>
+                <span className="font-bold text-sm leading-tight block">Flex</span>
+                <span className="text-[10px] text-muted-foreground font-semibold block">CRM</span>
               </div>
             </Link>
             <Button
@@ -466,7 +467,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
           </div>
 
           {/* Navigation */}
-          <nav className="flex-1 p-3 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent">
+          <nav aria-label="Sidebar navigation" className="flex-1 p-3 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent">
             {navigationSections.map(section => (
               <NavSection key={section.id} section={section} />
             ))}
@@ -519,6 +520,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
                 }
               }}
               title="Sign out"
+              aria-label="Sign out of your account"
             >
               <LogOut className="h-3.5 w-3.5 flex-shrink-0" />
               <span>Sign Out</span>

@@ -79,7 +79,10 @@ function getInitials(name = '') {
 export default function CalendarPage() {
   const { isContractor, user: permUser } = usePermissions();
   
-  const [view, setView] = useState("week");
+  const [view, setView] = useState(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) return 'day';
+    return 'week';
+  });
   const [currentDate, setCurrentDate] = useState(new Date());
   const [filterType, setFilterType] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -675,11 +678,13 @@ export default function CalendarPage() {
 
       {showConnections && (
         <div className="p-4 border-b bg-muted/30">
-          <CalendarIntegration
-            onConnectionsChange={(conns) => {
-              if (conns.length > 0) queryClient.invalidateQueries({ queryKey: ["calendar-events-team"] });
-            }}
-          />
+          <ErrorBoundary fallbackLabel="Calendar Integration" compact>
+            <CalendarIntegration
+              onConnectionsChange={(conns) => {
+                if (conns.length > 0) queryClient.invalidateQueries({ queryKey: ["calendar-events-team"] });
+              }}
+            />
+          </ErrorBoundary>
         </div>
       )}
 

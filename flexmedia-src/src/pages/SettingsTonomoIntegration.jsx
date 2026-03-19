@@ -360,7 +360,7 @@ export default function SettingsTonomoIntegration() {
             <label className="text-sm font-medium mb-2 block">Webhook URL</label>
             <div className="flex gap-2">
               <Input value={webhookUrl} readOnly className="font-mono text-xs" />
-              <Button variant="outline" size="icon" onClick={handleCopy}>
+              <Button variant="outline" size="icon" onClick={handleCopy} aria-label={copied ? "Copied" : "Copy webhook URL"}>
                 {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>

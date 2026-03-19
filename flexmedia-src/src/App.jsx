@@ -265,7 +265,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="TeamPulsePage">
            <RouteGuard routeName="TeamPulsePage">
-             <TeamPulsePage />
+             <ErrorBoundary fallbackLabel="Team Pulse">
+               <TeamPulsePage />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -275,7 +277,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="BusinessIntelligence">
            <RouteGuard routeName="BusinessIntelligence">
-             <BusinessIntelligence />
+             <ErrorBoundary fallbackLabel="Business Intelligence">
+               <BusinessIntelligence />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -285,7 +289,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="Reports">
            <RouteGuard routeName="Reports">
-             <Reports />
+             <ErrorBoundary fallbackLabel="Reports">
+               <Reports />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -295,7 +301,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="SettingsTonomoMappings">
            <RouteGuard routeName="SettingsTonomoMappings">
-             <SettingsTonomoMappings />
+             <ErrorBoundary fallbackLabel="Tonomo Mappings">
+               <SettingsTonomoMappings />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        }
@@ -305,7 +313,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="SettingsSystemHealth">
            <RouteGuard routeName="SettingsSystemHealth">
-             <SettingsSystemHealth />
+             <ErrorBoundary fallbackLabel="System Health">
+               <SettingsSystemHealth />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        }

@@ -567,7 +567,7 @@ export default function Dashboard() {
 
           {/* Operational Widgets Row */}
           {!projectsLoading && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
               <TodaysScheduleWidget projects={projects} calendarEvents={calendarEvents} />
               <ActiveTimersWidget timeLogs={allTimeLogs} tasks={allTasks} />
               <PendingReviewsWidget projects={projects} />
@@ -576,23 +576,23 @@ export default function Dashboard() {
           )}
 
           {/* Charts Row 1 - Revenue Comparison + Stage Distribution */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-500" style={{animationDelay: '100ms'}}>
-            {projects.length > 0 ? <RevenueComparisonChart projects={projects} /> : <Card className="col-span-2 p-6 text-center text-muted-foreground text-sm">No revenue data</Card>}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '100ms'}}>
+            {projects.length > 0 ? <RevenueComparisonChart projects={projects} /> : <Card className="lg:col-span-2 p-6 text-center text-muted-foreground text-sm">No revenue data</Card>}
             {projects.length > 0 ? <StageDistributionChart projects={projects} /> : <Card className="p-6 text-center text-muted-foreground text-sm">No project data</Card>}
           </div>
 
           {/* Charts Row 2 */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
             <ProjectVelocityChart data={velocityData} />
-            <TopPerformersPanel 
-              topAgencies={topPerformers.topAgencies} 
+            <TopPerformersPanel
+              topAgencies={topPerformers.topAgencies}
               topAgents={topPerformers.topAgents}
               topUsers={topPerformers.topUsers}
             />
           </div>
 
           {/* Charts Row 3 */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
             <CashFlowForecast data={cashFlowData} forecastedRevenue={forecastedRevenue} />
             <ProjectHealthScore healthMetrics={healthMetrics} />
           </div>
@@ -610,7 +610,7 @@ export default function Dashboard() {
           )}
 
           {/* Quick Actions */}
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
             <QuickActionsPanel
               urgentCount={executiveMetrics.overdueItems}
               onNewProject={handleShowProjectForm}
