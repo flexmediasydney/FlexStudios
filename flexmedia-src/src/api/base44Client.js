@@ -328,7 +328,9 @@ async function invokeFunction(client, functionName, params = {}) {
     body: params,
   });
   if (error) throw new Error(error.message || `Function ${functionName} failed`);
-  return data;
+  // Wrap in { data } to match Base44's response format:
+  // Frontend code does: result.data.someField
+  return { data };
 }
 
 const functionsApi = {
