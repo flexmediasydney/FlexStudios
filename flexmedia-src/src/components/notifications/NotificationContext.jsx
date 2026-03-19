@@ -61,22 +61,20 @@ export function NotificationProvider({ children }) {
         if (event.data.user_id !== currentUser.id) return;
 
         setNotifications(prev => {
+          let updated;
           if (event.data.is_dismissed) {
-            // Remove dismissed notifications from list
-            return prev.filter(n => n.id !== event.id);
+            updated = prev.filter(n => n.id !== event.id);
+          } else {
+            updated = prev.map(n => n.id === event.id ? event.data : n);
           }
-          return prev.map(n => n.id === event.id ? event.data : n);
-        });
-        // Recalculate unread count
-        setNotifications(prev => {
-          setUnreadCount(prev.filter(n => !n.is_read && !n.is_dismissed).length);
-          return prev;
+          setUnreadCount(updated.filter(n => !n.is_read && !n.is_dismissed).length);
+          return updated;
         });
       } else if (event.type === 'delete') {
-        setNotifications(prev => prev.filter(n => n.id !== event.id));
         setNotifications(prev => {
-          setUnreadCount(prev.filter(n => !n.is_read && !n.is_dismissed).length);
-          return prev;
+          const updated = prev.filter(n => n.id !== event.id);
+          setUnreadCount(updated.filter(n => !n.is_read && !n.is_dismissed).length);
+          return updated;
         });
       }
     });

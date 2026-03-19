@@ -24,7 +24,6 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS delivery_link TEXT;
 -- Metadata columns
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal';
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS tonomo_is_twilight BOOLEAN DEFAULT false;
-ALTER TABLE projects ADD COLUMN IF NOT EXISTS created_date TIMESTAMPTZ;  -- legacy alias; trigger keeps in sync with created_at
 
 -- Fix the status CHECK constraint to include 'in_production' which is used
 -- by the kanban board and stage pipeline but was missing from the original schema.
@@ -85,8 +84,3 @@ CREATE INDEX IF NOT EXISTS idx_project_tasks_team ON project_tasks(assigned_to_t
 CREATE INDEX IF NOT EXISTS idx_task_time_logs_user ON task_time_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_task_time_logs_manual ON task_time_logs(is_manual) WHERE is_manual = true;
 CREATE INDEX IF NOT EXISTS idx_task_time_logs_task_deleted ON task_time_logs(task_deleted) WHERE task_deleted = true;
-
-
--- ── Backfill: set created_date = created_at for existing rows ───────────────
-
-UPDATE projects SET created_date = created_at WHERE created_date IS NULL;

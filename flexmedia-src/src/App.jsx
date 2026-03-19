@@ -38,7 +38,7 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout ?
   : <ErrorBoundary>{children}</ErrorBoundary>;
 
 function RouteGuard({ routeName, children }) {
-  const { data: user, isLoading } = useCurrentUser();
+  const { data: user, isLoading, error, refetch } = useCurrentUser();
 
   if (isLoading) {
     return (
@@ -46,6 +46,32 @@ function RouteGuard({ routeName, children }) {
         <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
       </div>
     );
+  }
+
+  // Surface non-auth errors instead of showing a blank page
+  if (error && !user) {
+    const isAuthError = error.message?.includes('Not authenticated') ||
+                        error.message?.includes('JWT') ||
+                        error.message?.includes('session');
+    if (!isAuthError) {
+      return (
+        <div className="flex items-center justify-center min-h-[60vh] p-8">
+          <div className="bg-red-50 border border-red-200 rounded-xl p-8 max-w-md text-center">
+            <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-4" />
+            <h2 className="text-lg font-semibold text-red-900 mb-2">Something went wrong</h2>
+            <p className="text-sm text-red-700 mb-4">
+              {error.message || 'Failed to load user information.'}
+            </p>
+            <button
+              onClick={() => refetch()}
+              className="text-sm text-red-600 underline hover:text-red-800"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      );
+    }
   }
 
   if (!user) return null; // Auth redirect handled by AuthenticatedApp

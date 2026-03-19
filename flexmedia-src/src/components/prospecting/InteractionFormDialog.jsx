@@ -25,7 +25,7 @@ export default function InteractionFormDialog({
   open,
   onOpenChange,
   prospect,
-  entityType = 'Prospect',
+  entityType = 'Agent',
   entityId = null,
   onSuccess = null
 }) {

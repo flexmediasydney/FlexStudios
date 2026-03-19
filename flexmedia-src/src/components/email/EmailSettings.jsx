@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -42,8 +42,15 @@ export default function EmailSettings({ onClose }) {
     queryFn: () => base44.entities.EmailTemplate.list("-created_date", 50)
   });
 
-  const [signatureHtml, setSignatureHtml] = useState(signature?.signature_html || "");
+  const [signatureHtml, setSignatureHtml] = useState("");
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
+
+  // Sync signature state once the query resolves
+  useEffect(() => {
+    if (signature?.signature_html && !signatureHtml) {
+      setSignatureHtml(signature.signature_html);
+    }
+  }, [signature?.signature_html]);
   const [templateName, setTemplateName] = useState("");
   const [templateSubject, setTemplateSubject] = useState("");
   const [templateBody, setTemplateBody] = useState("");
@@ -235,5 +242,6 @@ export default function EmailSettings({ onClose }) {
         </DialogContent>
       </Dialog>
     )}
+    </>
   );
 }

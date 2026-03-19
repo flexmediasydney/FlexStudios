@@ -6,7 +6,7 @@ import { formatDistanceToNow } from 'date-fns';
 import InteractionFormDialog from './InteractionFormDialog';
 import InteractionCard from './InteractionCard';
 
-export default function InteractionLogPanel({ prospect, interactions = [], entityType = 'Prospect', onCreated }) {
+export default function InteractionLogPanel({ prospect, interactions = [], entityType = 'Agent', onCreated }) {
   const [showNewInteractionDialog, setShowNewInteractionDialog] = useState(false);
 
   return (

@@ -41,7 +41,7 @@ import { useNotifications } from "@/components/notifications/NotificationContext
 import { useEntityList } from "@/components/hooks/useEntityData";
 
 import { NotificationProvider } from "@/components/notifications/NotificationContext";
-import GlobalNotificationBar from "@/components/notifications/GlobalNotificationBar";
+import GlobalNotificationBar, { NotificationBell } from "@/components/notifications/GlobalNotificationBar";
 import NotificationToast from "@/components/notifications/NotificationToast";
 import { ChatProvider, useChat } from "@/components/chat/ChatContext";
 import ChatPanel from "@/components/chat/ChatPanel";
@@ -341,6 +341,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
                >
                  <Search className="h-4 w-4" />
                </Button>
+               <NotificationBell />
              </div>
            </div>
          </header>
@@ -371,6 +372,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
              >
                <Search className="h-4 w-4" />
              </Button>
+             <NotificationBell />
            </div>
          </header>
 

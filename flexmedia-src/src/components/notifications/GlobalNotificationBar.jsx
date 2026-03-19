@@ -122,7 +122,11 @@ function NotificationItem({ n, onMarkRead, onDismiss, onNavigate }) {
   );
 }
 
-export default function GlobalNotificationBar() {
+/**
+ * NotificationBell — the bell icon + dropdown panel.
+ * Designed to be placed inside a header bar.
+ */
+export function NotificationBell() {
   const { notifications, unreadCount, criticalUnread, markRead, markAllRead, dismiss, refresh } =
     useNotifications();
   const [open, setOpen] = useState(false);
@@ -160,100 +164,119 @@ export default function GlobalNotificationBar() {
   const hasAny = notifications.length > 0;
 
   return (
-    <>
-      <CriticalBanner
-        notifications={criticalUnread}
-        onMarkRead={markRead}
-        onNavigate={handleNavigate}
-      />
+    <div className="relative" ref={dropdownRef}>
+      <button
+        className={`relative p-2 rounded-lg hover:bg-muted/80 transition-all ${
+          pulse ? "animate-bounce" : ""
+        } ${open ? "bg-muted" : ""}`}
+        onClick={() => { setOpen(v => !v); if (!open) refresh(); }}
+        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
+        title={unreadCount > 0 ? `${unreadCount} unread notifications` : "Notifications"}
+      >
+        <Bell className={`h-5 w-5 transition-colors ${unreadCount > 0 ? "text-foreground" : "text-muted-foreground"} ${open ? "text-primary" : ""}`} />
+        {unreadCount > 0 && (
+          <span className={`absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full
+            bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-md
+            ${pulse ? "ring-4 ring-red-300/50 ring-offset-1 animate-pulse" : ""}`}>
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
+      </button>
 
-      <div className="relative" ref={dropdownRef}>
-        <button
-          className={`relative p-2 rounded-lg hover:bg-muted/80 transition-all ${
-            pulse ? "animate-bounce" : ""
-          } ${open ? "bg-muted" : ""}`}
-          onClick={() => { setOpen(v => !v); if (!open) refresh(); }}
-          aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
-          title={unreadCount > 0 ? `${unreadCount} unread notifications` : "Notifications"}
-        >
-          <Bell className={`h-5 w-5 transition-colors ${unreadCount > 0 ? "text-foreground" : "text-muted-foreground"} ${open ? "text-primary" : ""}`} />
-          {unreadCount > 0 && (
-            <span className={`absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full
-              bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-md
-              ${pulse ? "ring-4 ring-red-300/50 ring-offset-1 animate-pulse" : ""}`}>
-              {unreadCount > 99 ? "99+" : unreadCount}
-            </span>
-          )}
-        </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-96 max-h-[540px] flex flex-col
+          bg-background border border-border rounded-xl shadow-xl z-50 overflow-hidden
+          animate-in slide-in-from-top-2 fade-in">
 
-        {open && (
-          <div className="absolute right-0 top-full mt-2 w-96 max-h-[540px] flex flex-col
-            bg-background border border-border rounded-xl shadow-xl z-50 overflow-hidden
-            animate-in slide-in-from-top-2 fade-in">
-            
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
-              <div className="flex items-center gap-2">
-                <Bell className="h-4 w-4 text-primary" />
-                <span className="font-semibold text-sm">Notifications</span>
-                {unreadCount > 0 && (
-                  <Badge className="bg-red-100 text-red-700 text-xs h-5 font-bold animate-pulse">{unreadCount} unread</Badge>
-                )}
-              </div>
-              <div className="flex items-center gap-1">
-                {unreadCount > 0 && (
-                  <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:bg-muted" onClick={markAllRead} title="Mark all as read">
-                    <CheckCheck className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Mark all read</span>
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            <div className="overflow-y-auto flex-1">
-              {!hasAny ? (
-                <div className="py-12 text-center text-muted-foreground">
-                  <CheckCheck className="h-10 w-10 mx-auto mb-3 text-green-500 opacity-50" />
-                  <p className="text-sm font-medium">You're all caught up</p>
-                  <p className="text-xs mt-1 opacity-70">No new notifications</p>
-                </div>
-              ) : (
-                Object.entries(groups).map(([label, items]) =>
-                  items.length > 0 ? (
-                    <div key={label}>
-                      <div className="px-4 py-2 text-xs font-bold text-muted-foreground bg-muted/40 uppercase tracking-wider sticky top-0 z-10 backdrop-blur-sm border-b border-border/30">
-                        {label}
-                      </div>
-                      {items.map(n => (
-                        <NotificationItem
-                          key={n.id}
-                          n={n}
-                          onMarkRead={markRead}
-                          onDismiss={dismiss}
-                          onNavigate={handleNavigate}
-                        />
-                      ))}
-                    </div>
-                  ) : null
-                )
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
+            <div className="flex items-center gap-2">
+              <Bell className="h-4 w-4 text-primary" />
+              <span className="font-semibold text-sm">Notifications</span>
+              {unreadCount > 0 && (
+                <Badge className="bg-red-100 text-red-700 text-xs h-5 font-bold animate-pulse">{unreadCount} unread</Badge>
               )}
             </div>
+            <div className="flex items-center gap-1">
+              {unreadCount > 0 && (
+                <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:bg-muted" onClick={markAllRead} title="Mark all as read">
+                  <CheckCheck className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Mark all read</span>
+                </Button>
+              )}
+            </div>
+          </div>
 
-            {hasAny && (
-              <div className="border-t border-border px-4 py-2.5 bg-muted/20">
-                <button
-                  className="text-sm text-primary hover:text-primary/80 font-semibold w-full text-center py-1 hover:bg-muted/50 rounded-md transition-colors"
-                  onClick={() => {
-                    navigate(createPageUrl("NotificationsPage"));
-                    setOpen(false);
-                  }}
-                >
-                  View all notifications →
-                </button>
+          <div className="overflow-y-auto flex-1">
+            {!hasAny ? (
+              <div className="py-12 text-center text-muted-foreground">
+                <CheckCheck className="h-10 w-10 mx-auto mb-3 text-green-500 opacity-50" />
+                <p className="text-sm font-medium">You're all caught up</p>
+                <p className="text-xs mt-1 opacity-70">No new notifications</p>
               </div>
+            ) : (
+              Object.entries(groups).map(([label, items]) =>
+                items.length > 0 ? (
+                  <div key={label}>
+                    <div className="px-4 py-2 text-xs font-bold text-muted-foreground bg-muted/40 uppercase tracking-wider sticky top-0 z-10 backdrop-blur-sm border-b border-border/30">
+                      {label}
+                    </div>
+                    {items.map(n => (
+                      <NotificationItem
+                        key={n.id}
+                        n={n}
+                        onMarkRead={markRead}
+                        onDismiss={dismiss}
+                        onNavigate={handleNavigate}
+                      />
+                    ))}
+                  </div>
+                ) : null
+              )
             )}
           </div>
-        )}
-      </div>
-    </>
+
+          {hasAny && (
+            <div className="border-t border-border px-4 py-2.5 bg-muted/20">
+              <button
+                className="text-sm text-primary hover:text-primary/80 font-semibold w-full text-center py-1 hover:bg-muted/50 rounded-md transition-colors"
+                onClick={() => {
+                  navigate(createPageUrl("NotificationsPage"));
+                  setOpen(false);
+                }}
+              >
+                View all notifications →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * GlobalNotificationBar — renders the critical banner at page top + the bell.
+ * Default export for backward compatibility.
+ * NOTE: The bell is now also exported separately as NotificationBell for
+ * placement inside header bars.
+ */
+export default function GlobalNotificationBar() {
+  const { criticalUnread, markRead } = useNotifications();
+  const navigate = useNavigate();
+
+  function handleNavigate(n) {
+    if (!n.cta_url) return;
+    try {
+      const params = n.cta_params ? JSON.parse(n.cta_params) : {};
+      navigate(createPageUrl(n.cta_url) + (params.id ? `?id=${params.id}` : ""));
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <CriticalBanner
+      notifications={criticalUnread}
+      onMarkRead={markRead}
+      onNavigate={handleNavigate}
+    />
   );
 }

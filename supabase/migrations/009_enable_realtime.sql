@@ -13,8 +13,8 @@
 --   - calendar_events         → Calendar page, ProjectCalendarEvents
 --   - email_messages          → EmailThreadViewer, EmailInboxMain
 --   - task_time_logs          → TaskTimeLoggerRobust, EffortTimersTab
---   - project_activity        → RealtimeActivityStream, ProjectActivityFeed
---   - team_activity_feed      → TeamPulsePage live feed
+--   - project_activities      → RealtimeActivityStream, ProjectActivityFeed
+--   - team_activity_feeds     → TeamPulsePage live feed
 -- ============================================================================
 
 ALTER PUBLICATION supabase_realtime ADD TABLE projects,

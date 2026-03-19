@@ -70,9 +70,22 @@ ALTER TABLE tonomo_booking_flow_tiers
   ADD COLUMN IF NOT EXISTS tonomo_flow_id    TEXT,
   ADD COLUMN IF NOT EXISTS tonomo_flow_name  TEXT,
   ADD COLUMN IF NOT EXISTS tonomo_flow_type  TEXT,
-  ADD COLUMN IF NOT EXISTS pricing_tier      TEXT CHECK (pricing_tier IN ('standard', 'premium')),
+  ADD COLUMN IF NOT EXISTS pricing_tier      TEXT,
   ADD COLUMN IF NOT EXISTS last_seen_at      TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS seen_count        INTEGER DEFAULT 0;
+
+-- Add CHECK constraint separately (safe if column already exists)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.constraint_column_usage
+    WHERE table_name = 'tonomo_booking_flow_tiers' AND column_name = 'pricing_tier'
+      AND constraint_name LIKE '%pricing_tier%'
+  ) THEN
+    ALTER TABLE tonomo_booking_flow_tiers
+      ADD CONSTRAINT tonomo_booking_flow_tiers_pricing_tier_check
+      CHECK (pricing_tier IN ('standard', 'premium'));
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_tonomo_booking_flow_tiers_flow_id
   ON tonomo_booking_flow_tiers(tonomo_flow_id);
@@ -130,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_calendar_events_tonomo_appointment_id
 -- ── projects (Tonomo-related fields used by the processor) ───────────────────
 -- Some of these may already exist from prior migrations; IF NOT EXISTS is safe.
 ALTER TABLE projects
+  ADD COLUMN IF NOT EXISTS source                    TEXT,
   ADD COLUMN IF NOT EXISTS tonomo_order_id           TEXT,
   ADD COLUMN IF NOT EXISTS tonomo_event_id           TEXT,
   ADD COLUMN IF NOT EXISTS tonomo_appointment_ids    TEXT,
@@ -180,13 +194,12 @@ ALTER TABLE project_activities
   ADD COLUMN IF NOT EXISTS tonomo_event_type TEXT;
 
 
--- ── notifications (idempotency key used by processor) ────────────────────────
-ALTER TABLE notifications
-  ADD COLUMN IF NOT EXISTS idempotency_key   TEXT,
-  ADD COLUMN IF NOT EXISTS source            TEXT,
-  ADD COLUMN IF NOT EXISTS project_id        UUID REFERENCES projects(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS project_name      TEXT,
-  ADD COLUMN IF NOT EXISTS cta_label         TEXT;
+-- ── notifications (relax source CHECK to allow Tonomo values) ────────────────
+-- The processor writes source='tonomo' and source='auto_approve' which the
+-- original CHECK constraint doesn't allow.
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_source_check;
+ALTER TABLE notifications ADD CONSTRAINT notifications_source_check
+  CHECK (source IN ('system','automation','user','tonomo','auto_approve','webhook'));
 
 CREATE INDEX IF NOT EXISTS idx_notifications_idempotency_key
   ON notifications(idempotency_key);

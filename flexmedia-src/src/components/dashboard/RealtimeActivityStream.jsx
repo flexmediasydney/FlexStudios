@@ -86,10 +86,34 @@ export default function RealtimeActivityStream({ maxItems = 10, autoRefresh = tr
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Initial fetch — load recent activity so the feed isn't empty on page load
   useEffect(() => {
-    // Subscribe to ProjectActivity changes
+    let cancelled = false;
+    async function loadRecent() {
+      try {
+        const recent = await base44.entities.ProjectActivity.list('-created_date', maxItems);
+        if (cancelled) return;
+        const mapped = (recent || []).map(row => ({
+          id: row.id,
+          title: row.description || 'Project Updated',
+          description: row.action,
+          type: row.action === 'delete' ? 'alert' : row.action === 'create' ? 'completed' : 'update',
+          user: row.user_name,
+          timestamp: row.created_date || new Date().toISOString(),
+          project: row.project_title,
+        }));
+        setActivities(mapped);
+      } catch { /* silent */ }
+      finally { if (!cancelled) setLoading(false); }
+    }
+    loadRecent();
+    return () => { cancelled = true; };
+  }, [maxItems]);
+
+  // Realtime subscription — push new events to the top of the feed
+  useEffect(() => {
     const unsubscribe = base44.entities.ProjectActivity.subscribe((event) => {
-      if (event.type === 'create') {
+      if (event.type === 'create' && event.data) {
         const newActivity = {
           id: event.id,
           title: event.data.description || 'Project Updated',
@@ -99,11 +123,14 @@ export default function RealtimeActivityStream({ maxItems = 10, autoRefresh = tr
           timestamp: new Date().toISOString(),
           project: event.data.project_title
         };
-        setActivities(prev => [newActivity, ...prev.slice(0, maxItems - 1)]);
+        setActivities(prev => {
+          // Avoid duplicates
+          if (prev.some(a => a.id === event.id)) return prev;
+          return [newActivity, ...prev.slice(0, maxItems - 1)];
+        });
       }
     });
 
-    setLoading(false);
     return unsubscribe;
   }, [maxItems]);
 
