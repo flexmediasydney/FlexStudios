@@ -272,7 +272,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
         to={createPageUrl(item.href)}
         onClick={() => setSidebarOpen(false)}
         className={cn(
-          "group flex items-center gap-2.5 px-3 py-2.5 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-95 min-h-10",
+          "group flex items-center gap-2.5 px-3 py-2.5 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-[0.98] min-h-[44px]",
           isActive 
             ? "bg-primary text-primary-foreground font-semibold shadow-md" 
             : "text-muted-foreground hover:bg-muted/50 hover:text-foreground font-medium",
@@ -312,7 +312,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
           <button
             onClick={() => toggleSection(section.id)}
             className={cn(
-              "w-full flex items-center gap-2 px-3 py-2.5 rounded-md font-semibold text-xs transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group",
+              "w-full flex items-center gap-2 px-3 py-2.5 rounded-md font-semibold text-xs transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group min-h-[44px]",
               isExpanded 
                 ? "bg-primary/10 text-primary hover:bg-primary/15" 
                 : "text-muted-foreground/60 hover:text-foreground hover:bg-muted/40"
@@ -352,13 +352,20 @@ function LayoutContent({ currentPageName, children, onBack }) {
     <>
       <GlobalNotificationBar />
       <NotificationToast />
+      {/* Skip to content link for keyboard navigation */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:text-sm focus:font-medium"
+      >
+        Skip to content
+      </a>
       <div className="min-h-screen bg-background">
         {/* Desktop Top Bar with Search */}
          <header className="hidden lg:block fixed top-0 left-64 right-0 h-16 bg-card border-b z-40 px-6 shadow-xs backdrop-blur-sm bg-card/97">
            <div className="h-full flex items-center justify-between gap-4">
              {canGoBack && (
-               <button onClick={onBack} className="text-muted-foreground hover:text-foreground transition-colors p-2 hover:bg-muted/50 rounded-lg" title="Go back">
-                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+               <button onClick={onBack} className="text-muted-foreground hover:text-foreground transition-colors p-2 hover:bg-muted/50 rounded-lg" title="Go back" aria-label="Go back to previous page">
+                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                  </svg>
                </button>
@@ -382,17 +389,17 @@ function LayoutContent({ currentPageName, children, onBack }) {
          </header>
 
          {/* Mobile Header */}
-         <header className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-card border-b z-40 shadow-xs backdrop-blur-sm bg-card/97">
-           <div className="h-full flex items-center justify-between px-3 gap-2">
-             <Button 
-              variant="ghost" 
+         <header className="lg:hidden fixed top-0 left-0 right-0 h-14 bg-card border-b z-40 shadow-xs backdrop-blur-sm bg-card/97">
+           <div className="h-full flex items-center justify-between px-2 gap-1.5">
+             <Button
+              variant="ghost"
               size="icon"
               onClick={() => setSidebarOpen(true)}
               title="Open menu"
               aria-label="Open navigation menu"
-              className="hover:bg-muted/60 transition-all duration-200 h-9 w-9"
+              className="hover:bg-muted/60 transition-all duration-200 min-h-[44px] min-w-[44px] h-11 w-11"
              >
-               <Menu className="h-4 w-4 transition-transform duration-150" />
+               <Menu className="h-5 w-5 transition-transform duration-150" />
              </Button>
              <div className="flex-1 min-w-0">
                <TopSearchBar />
@@ -402,27 +409,30 @@ function LayoutContent({ currentPageName, children, onBack }) {
                size="icon"
                onClick={() => setSearchOpen(true)}
                title="Global search (Ctrl+K)"
-               className="hover:bg-muted/60 transition-all duration-200 h-9 w-9"
+               className="hover:bg-muted/60 transition-all duration-200 min-h-[44px] min-w-[44px] h-11 w-11"
                aria-label="Global search"
              >
-               <Search className="h-4 w-4" />
+               <Search className="h-5 w-5" />
              </Button>
              <NotificationBell />
            </div>
          </header>
 
       {/* Mobile Sidebar Overlay */}
-      {sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 backdrop-blur-xs z-40 lg:hidden animate-in fade-in duration-150"
-          onClick={() => setSidebarOpen(false)}
-          role="presentation"
-        />
-      )}
+      <div
+        className={cn(
+          "fixed inset-0 bg-black/50 backdrop-blur-xs z-40 lg:hidden transition-opacity duration-300",
+          sidebarOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        )}
+        onClick={() => setSidebarOpen(false)}
+        role="presentation"
+      />
 
       {/* Sidebar */}
-      <aside className={cn(
-        "fixed top-0 left-0 h-full w-64 bg-card border-r z-50 transform transition-all duration-300 lg:translate-x-0 shadow-xl lg:shadow-none",
+      <aside
+        aria-label="Main navigation"
+        className={cn(
+        "fixed top-0 left-0 h-full w-[280px] max-w-[85vw] lg:w-64 bg-card border-r z-50 transform transition-transform duration-300 ease-out lg:translate-x-0 shadow-xl lg:shadow-none will-change-transform",
         sidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="flex flex-col h-full backdrop-blur-sm bg-card/95">
@@ -443,15 +453,15 @@ function LayoutContent({ currentPageName, children, onBack }) {
                 <p className="text-[10px] text-muted-foreground font-semibold">CRM</p>
               </div>
             </Link>
-            <Button 
-              variant="ghost" 
+            <Button
+              variant="ghost"
               size="icon"
-              className="lg:hidden hover:bg-muted/80 transition-colors duration-200 h-9 w-9"
+              className="lg:hidden hover:bg-muted/80 transition-colors duration-200 min-h-[44px] min-w-[44px] h-11 w-11"
               onClick={() => setSidebarOpen(false)}
               title="Close menu (Esc)"
               aria-label="Close navigation menu"
             >
-              <X className="h-4 w-4" />
+              <X className="h-5 w-5" />
             </Button>
           </div>
 
@@ -518,7 +528,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
       </aside>
 
         {/* Main Content */}
-        <main className="lg:ml-64 min-h-screen pt-16">
+        <main id="main-content" role="main" className="lg:ml-64 min-h-screen pt-14 lg:pt-16">
           {children}
         </main>
 

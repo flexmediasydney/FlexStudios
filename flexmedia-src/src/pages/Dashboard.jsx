@@ -77,6 +77,7 @@ export default function Dashboard() {
   const { data: allUsers = [] } = useEntityList("User");
   const { data: agencies = [] } = useEntityList("Agency");
   const { data: agents = [] } = useEntityList("Agent");
+  const { data: calendarEvents = [] } = useEntityList("CalendarEvent", "-start_time", 200);
 
   // Filter projects for contractors
   const projects = useMemo(() => 
@@ -434,7 +435,7 @@ export default function Dashboard() {
   }, [executiveMetrics, projects, navigate]);
 
   return (
-    <div className="p-6 lg:p-8 space-y-8">
+    <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 lg:space-y-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
          <div>
@@ -450,7 +451,7 @@ export default function Dashboard() {
            </p>
            <p className="text-muted-foreground mt-1">
              {projectsLoading ? (
-               <span className="inline-block h-4 w-48 bg-muted animate-pulse rounded" />
+               <Skeleton className="inline-block h-4 w-48" />
              ) : (
                `${projects.length} projects · ${analytics.activeProjectCount} active`
              )}
@@ -465,7 +466,7 @@ export default function Dashboard() {
       {/* Dashboard Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">
        <div className="sticky top-0 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
-         <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0">
+         <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap">
            <TabsTrigger 
              value="overview" 
              title="Main dashboard overview (Ctrl+1)" 
@@ -541,7 +542,7 @@ export default function Dashboard() {
 
         <TabsContent value="overview" className="space-y-6 mt-0 animate-in fade-in duration-200">
            {projectsLoading && (
-             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in duration-300">
+             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 animate-in fade-in duration-300">
                {Array(8).fill(0).map((_, i) => (
                  <div key={i} className="h-24 bg-muted animate-pulse rounded-xl" style={{animationDelay: `${i * 50}ms`}} />
                ))}
@@ -549,7 +550,7 @@ export default function Dashboard() {
            )}
            {/* Executive Metrics */}
            {!projectsLoading && (
-            <LivePulseBar projects={projects} tasks={allTasks} timeLogs={allTimeLogs} calendarEvents={[]} />
+            <LivePulseBar projects={projects} tasks={allTasks} timeLogs={allTimeLogs} calendarEvents={calendarEvents} />
            )}
 
            {!projectsLoading && (
@@ -564,9 +565,19 @@ export default function Dashboard() {
 
            {!projectsLoading && <ExecutiveMetricsGrid metrics={executiveMetrics} navigate={navigate} className="animate-in fade-in duration-500" />}
 
-          {/* Charts Row 1 */}
+          {/* Operational Widgets Row */}
+          {!projectsLoading && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
+              <TodaysScheduleWidget projects={projects} calendarEvents={calendarEvents} />
+              <ActiveTimersWidget timeLogs={allTimeLogs} tasks={allTasks} />
+              <PendingReviewsWidget projects={projects} />
+              <TeamWorkloadChart tasks={allTasks} users={allUsers} />
+            </div>
+          )}
+
+          {/* Charts Row 1 - Revenue Comparison + Stage Distribution */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-500" style={{animationDelay: '100ms'}}>
-            {revenueBreakdown.length > 0 ? <RevenueBreakdownChart data={revenueBreakdown} /> : <Card className="p-6 text-center text-muted-foreground text-sm">No revenue data</Card>}
+            {projects.length > 0 ? <RevenueComparisonChart projects={projects} /> : <Card className="col-span-2 p-6 text-center text-muted-foreground text-sm">No revenue data</Card>}
             {projects.length > 0 ? <StageDistributionChart projects={projects} /> : <Card className="p-6 text-center text-muted-foreground text-sm">No project data</Card>}
           </div>
 
@@ -600,9 +611,11 @@ export default function Dashboard() {
 
           {/* Quick Actions */}
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            <QuickActionsPanel 
+            <QuickActionsPanel
               urgentCount={executiveMetrics.overdueItems}
               onNewProject={handleShowProjectForm}
+              onNewContact={() => navigate(createPageUrl("People") + "?new=true")}
+              onComposeEmail={() => navigate(createPageUrl("Inbox") + "?compose=true")}
               onViewCalendar={() => navigate(createPageUrl("Calendar"))}
               onViewInbox={() => navigate(createPageUrl("Inbox"))}
             />

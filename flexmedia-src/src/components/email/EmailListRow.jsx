@@ -182,7 +182,8 @@ export default function EmailListRow({
       {columns.some(c => c.id === 'subject') && (() => {
         const col = columns.find(c => c.id === 'subject');
         const w = col?.width ?? 400;
-        const preview = stripHtml(thread.messages[0].body).substring(0, 120);
+        const bodyText = stripHtml(thread.messages[0].body);
+        const preview = bodyText.substring(0, 250);
         const cleanSubject = thread.subject?.replace(/^(Re:|Fwd?:)\s*/gi, '').trim();
         return (
           <div
@@ -210,7 +211,16 @@ export default function EmailListRow({
                   </ProjectHoverCard>
                 )}
               {/* Subject text */}
-              <SubjectHoverCard subject={cleanSubject} preview={preview} labels={labels}>
+              <SubjectHoverCard
+                subject={cleanSubject}
+                preview={preview}
+                labels={labels}
+                from={thread.from_name}
+                fromEmail={thread.from_email}
+                date={thread.lastMessage ? new Date(thread.lastMessage).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' }) : undefined}
+                messageCount={thread.messages.length}
+                attachmentCount={realAttachments.length}
+              >
                 <span className={cn(
                     "truncate text-[14px] leading-snug cursor-default min-w-0 block font-medium",
                     isUnread ? "font-bold text-foreground" : "text-foreground/80"

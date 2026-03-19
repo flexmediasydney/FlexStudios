@@ -358,7 +358,7 @@ export default function EmailComposeDialog({
       toast.success(`${file.name} attached`);
     } catch (error) {
       console.error('Attachment upload error:', error);
-      toast.error("Failed to attach file");
+      toast.error(error?.message || "Failed to attach file");
     }
   };
 

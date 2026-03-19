@@ -41,6 +41,10 @@ import ProjectDurationTimer from "@/components/projects/ProjectDurationTimer";
 import ProjectValidationBanner from "@/components/projects/ProjectValidationBanner";
 import ConcurrentEditDetector from "@/components/projects/ConcurrentEditDetector";
 import ProjectEffortSummaryV2 from "@/components/projects/ProjectEffortSummaryV2";
+import ProjectProgressBar from "@/components/projects/ProjectProgressBar";
+import TimeTrackingSummaryCard from "@/components/projects/TimeTrackingSummaryCard";
+import ProjectHealthIndicator from "@/components/projects/ProjectHealthIndicator";
+import QuickActionBar from "@/components/projects/QuickActionBar";
 import ProjectRevisionsTab from "@/components/revisions/ProjectRevisionsTab";
 import ProjectWeatherCard from "@/components/projects/ProjectWeatherCard";
 import ActiveTimersPanel from "@/components/projects/ActiveTimersPanel";
@@ -844,6 +848,10 @@ export default function ProjectDetails() {
               </span>
             </div>
           )}
+          {/* Project Health Indicator */}
+          <div className="mt-1.5">
+            <ErrorBoundary><ProjectHealthIndicator project={project} tasks={projectTasks} /></ErrorBoundary>
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
           {/* Live Presence */}
@@ -983,16 +991,37 @@ export default function ProjectDetails() {
         <ErrorBoundary><ProjectStaffBar project={project} canEdit={memoizedCanEdit} /></ErrorBoundary>
       )}
 
-      {/* Quick Actions — shown at top on mobile */}
-      {(isMasterAdmin || isEmployee) && (
-        <div className="flex flex-wrap gap-2 lg:hidden w-full">
-          <Button size="sm" variant="outline" onClick={() => setShowAssignDialog(true)} className="flex-1 min-w-max">Assign</Button>
-        </div>
-      )}
+      {/* Quick Action Bar */}
+      <ErrorBoundary>
+        <QuickActionBar
+          project={project}
+          canEdit={memoizedCanEdit}
+          onStartTimer={() => handleTabChange('effort')}
+          onAddNote={() => handleTabChange('notes')}
+          onChangeStatus={(newStatus) => {
+            if (updateStatusMutation.isPending) return;
+            const stages = PROJECT_STAGES.map(s => s.value);
+            const currentIdx = stages.indexOf(project.status);
+            const newIdx = stages.indexOf(newStatus);
+            if (newIdx < currentIdx) {
+              setPendingBackwardStage(newStatus);
+              return;
+            }
+            updateStatusMutation.mutate(newStatus);
+          }}
+          onOpenChat={user ? () => setShowProjectChat(true) : null}
+          onAssign={() => setShowAssignDialog(true)}
+          isMasterAdmin={isMasterAdmin}
+          isEmployee={isEmployee}
+        />
+      </ErrorBoundary>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
         {/* Main Content */}
         <div className="lg:col-span-2 space-y-4 lg:space-y-6">
+          {/* Project Progress Bar */}
+          <ErrorBoundary><ProjectProgressBar tasks={projectTasks} /></ErrorBoundary>
+
           {/* Active Timers — live, real-time */}
           <ErrorBoundary><ActiveTimersPanel projectId={projectId} tasks={projectTasks} /></ErrorBoundary>
 
@@ -1317,7 +1346,10 @@ export default function ProjectDetails() {
 
         {/* Sidebar */}
         <div className="space-y-4 lg:space-y-6">
-          {/* Project Effort Summary */}
+          {/* Time Tracking Summary */}
+          <ErrorBoundary><TimeTrackingSummaryCard projectId={projectId} project={project} /></ErrorBoundary>
+
+          {/* Project Effort Summary (detailed) */}
            <ErrorBoundary><ProjectEffortSummaryV2 projectId={projectId} project={project} /></ErrorBoundary>
 
            {/* Agent + Agency combined on mobile */}
@@ -1397,14 +1429,14 @@ export default function ProjectDetails() {
             </Card>
           )}
 
-          {/* Quick Actions — desktop only (shown at top on mobile) */}
+          {/* Quick Actions sidebar — email compose + additional actions */}
           <Card className="hidden lg:block">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base lg:text-lg">Quick Actions</CardTitle>
+              <CardTitle className="text-base lg:text-lg">Actions</CardTitle>
             </CardHeader>
             <CardContent className="pt-0 space-y-2">
               {user && (
-                <Button 
+                <Button
                   onClick={() => setShowProjectChat(true)}
                   className="w-full hover:shadow-md transition-shadow"
                   title="Open chat for this project"
@@ -1412,9 +1444,9 @@ export default function ProjectDetails() {
                   💬 Chat
                 </Button>
               )}
-              {(isMasterAdmin || isEmployee) && (
-                <Button className="w-full" variant="outline" onClick={() => setShowAssignDialog(true)} title="Assign team members to this project">
-                  👥 Assign
+              {memoizedCanEdit && (
+                <Button className="w-full" variant="outline" onClick={() => setShowEmailCompose(true)} title="Send email for this project">
+                  📧 Send Email
                 </Button>
               )}
             </CardContent>

@@ -461,13 +461,13 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         e.preventDefault();
         setShowForward(true);
       }
-      // N = Next thread
-      if (e.key === 'n' || e.key === 'N') {
+      // J or N = Next thread
+      if (e.key === 'j' || e.key === 'J' || e.key === 'n' || e.key === 'N') {
         e.preventDefault();
         onNextThread?.();
       }
-      // P = Previous thread
-      if (e.key === 'p' || e.key === 'P') {
+      // K or P = Previous thread
+      if (e.key === 'k' || e.key === 'K' || e.key === 'p' || e.key === 'P') {
         e.preventDefault();
         onPrevThread?.();
       }
@@ -548,11 +548,15 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           {/* Right: prev/next + shortcuts hint */}
           <div className="flex items-center gap-1 shrink-0">
             <span className="text-xs text-muted-foreground/50 hidden lg:inline mr-2">
+              <kbd className="bg-slate-100 px-1 rounded text-[10px]">J</kbd>/<kbd className="bg-slate-100 px-1 rounded text-[10px]">K</kbd> nav
+              <span className="mx-1">·</span>
               <kbd className="bg-slate-100 px-1 rounded text-[10px]">R</kbd> reply
               <span className="mx-1">·</span>
               <kbd className="bg-slate-100 px-1 rounded text-[10px]">F</kbd> fwd
               <span className="mx-1">·</span>
               <kbd className="bg-slate-100 px-1 rounded text-[10px]">A</kbd> archive
+              <span className="mx-1">·</span>
+              <kbd className="bg-slate-100 px-1 rounded text-[10px]">E</kbd> expand all
             </span>
             <Button
               variant="ghost"
@@ -776,148 +780,214 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
 
         {/* Message list */}
         <div className="flex-1 divide-y divide-slate-100 bg-white">
-          {freshThread.messages.map((msgItem, idx) => {
-            const isExpanded = expandedMessages.has(msgItem.id);
-            const isLatest = idx === freshThread.messages.length - 1;
-            const initial = (msgItem.from_name || msgItem.from || '?').charAt(0).toUpperCase();
-            // Deterministic avatar color based on sender
-            const avatarColors = [
-              'from-blue-400 to-blue-600', 'from-violet-400 to-violet-600',
-              'from-emerald-400 to-emerald-600', 'from-orange-400 to-orange-600',
-              'from-pink-400 to-pink-600', 'from-teal-400 to-teal-600',
-            ];
-            const avatarColor = avatarColors[(msgItem.from || '').length % avatarColors.length];
+          {(() => {
+            const msgs = freshThread.messages;
+            const collapsedCount = msgs.filter((m, i) => i < msgs.length - 1 && !expandedMessages.has(m.id)).length;
+            const elements = [];
 
-            return (
-              <div
-                key={msgItem.id}
-                ref={isLatest ? latestMessageRef : null}
-                className={cn(
-                  "transition-all duration-150",
-                  !isExpanded && "hover:bg-slate-50/80 cursor-pointer"
-                )}
-              >
-                {/* Message header row — always visible */}
-                <div
-                  className="flex items-center gap-3 px-5 py-3 cursor-pointer select-none"
-                  onClick={() => {
-                    if (!isExpanded) {
-                      setExpandedMessages(prev => new Set([...prev, msgItem.id]));
-                    } else if (!isLatest) {
-                      setExpandedMessages(prev => {
-                        const next = new Set(prev);
-                        next.delete(msgItem.id);
-                        return next;
-                      });
-                    }
-                  }}
-                  aria-expanded={isExpanded}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => e.key === 'Enter' && !isLatest && setExpandedMessages(prev => {
-                    const next = new Set(prev);
-                    isExpanded ? next.delete(msgItem.id) : next.add(msgItem.id);
-                    return next;
-                  })}
-                >
-                  {/* Avatar */}
-                  <div className={cn(
-                    "w-9 h-9 rounded-full bg-gradient-to-br flex items-center justify-center text-sm font-bold text-white flex-shrink-0 shadow-sm",
-                    avatarColor
-                  )}>
-                    {initial}
-                  </div>
+            msgs.forEach((msgItem, idx) => {
+              const isExpanded = expandedMessages.has(msgItem.id);
+              const isLatest = idx === msgs.length - 1;
+              const initial = (msgItem.from_name || msgItem.from || '?').charAt(0).toUpperCase();
+              const avatarColors = [
+                'from-blue-400 to-blue-600', 'from-violet-400 to-violet-600',
+                'from-emerald-400 to-emerald-600', 'from-orange-400 to-orange-600',
+                'from-pink-400 to-pink-600', 'from-teal-400 to-teal-600',
+              ];
+              const avatarColor = avatarColors[(msgItem.from || '').length % avatarColors.length];
 
-                  {/* Sender + preview */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-baseline gap-2">
-                      <span className={cn("text-sm truncate", isExpanded ? "font-bold text-slate-900" : "font-semibold text-slate-700")}>
-                        {msgItem.from_name || msgItem.from}
+              // Show "N collapsed messages" summary bar before the latest message
+              // when there are collapsed older messages
+              if (isLatest && collapsedCount > 0 && msgs.length > 2) {
+                const collapsedSenders = [...new Set(
+                  msgs.slice(0, -1)
+                    .filter(m => !expandedMessages.has(m.id))
+                    .map(m => m.from_name || m.from || 'Unknown')
+                )];
+
+                elements.push(
+                  <div
+                    key="collapsed-summary"
+                    className="flex items-center gap-3 px-5 py-2 bg-slate-50/80 border-y border-slate-100 cursor-pointer hover:bg-slate-100/80 transition-colors"
+                    onClick={() => {
+                      // Expand all collapsed older messages
+                      setExpandedMessages(new Set(msgs.map(m => m.id)));
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    title="Click to expand all older messages"
+                  >
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      {/* Stacked avatar dots */}
+                      <div className="flex -space-x-1.5">
+                        {collapsedSenders.slice(0, 3).map((sender, si) => {
+                          const sColor = avatarColors[(sender || '').length % avatarColors.length];
+                          return (
+                            <div
+                              key={si}
+                              className={cn(
+                                "w-6 h-6 rounded-full bg-gradient-to-br flex items-center justify-center text-[10px] font-bold text-white border-2 border-white",
+                                sColor
+                              )}
+                            >
+                              {sender.charAt(0).toUpperCase()}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <span className="text-xs text-slate-500 font-medium">
+                        {collapsedCount} older message{collapsedCount !== 1 ? 's' : ''}
+                        {collapsedSenders.length <= 3
+                          ? ` from ${collapsedSenders.join(', ')}`
+                          : ` from ${collapsedSenders.slice(0, 2).join(', ')} and ${collapsedSenders.length - 2} other${collapsedSenders.length - 2 !== 1 ? 's' : ''}`
+                        }
                       </span>
-                      {!isExpanded && (
-                        <span className="text-xs text-slate-400 truncate min-w-0 hidden sm:block">
-                          {msgItem.body ? msgItem.body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 80) : ''}
+                    </div>
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1 flex-shrink-0">
+                      <ChevronsUpDown className="h-3 w-3" />
+                      Expand all
+                    </span>
+                  </div>
+                );
+              }
+
+              elements.push(
+                <div
+                  key={msgItem.id}
+                  ref={isLatest ? latestMessageRef : null}
+                  className={cn(
+                    "transition-all duration-150",
+                    !isExpanded && !isLatest && "hover:bg-slate-50/80 cursor-pointer",
+                    isLatest && "bg-white"
+                  )}
+                >
+                  {/* Message header row — always visible */}
+                  <div
+                    className={cn(
+                      "flex items-center gap-3 px-5 py-3 cursor-pointer select-none",
+                      isLatest && !isExpanded && "bg-blue-50/30"
+                    )}
+                    onClick={() => {
+                      if (!isExpanded) {
+                        setExpandedMessages(prev => new Set([...prev, msgItem.id]));
+                      } else if (!isLatest) {
+                        setExpandedMessages(prev => {
+                          const next = new Set(prev);
+                          next.delete(msgItem.id);
+                          return next;
+                        });
+                      }
+                    }}
+                    aria-expanded={isExpanded}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === 'Enter' && !isLatest && setExpandedMessages(prev => {
+                      const next = new Set(prev);
+                      isExpanded ? next.delete(msgItem.id) : next.add(msgItem.id);
+                      return next;
+                    })}
+                  >
+                    {/* Avatar */}
+                    <div className={cn(
+                      "w-9 h-9 rounded-full bg-gradient-to-br flex items-center justify-center text-sm font-bold text-white flex-shrink-0 shadow-sm",
+                      avatarColor
+                    )}>
+                      {initial}
+                    </div>
+
+                    {/* Sender + preview */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-2">
+                        <span className={cn("text-sm truncate", isExpanded ? "font-bold text-slate-900" : "font-semibold text-slate-700")}>
+                          {msgItem.from_name || msgItem.from}
                         </span>
+                        {!isExpanded && (
+                          <span className="text-xs text-slate-400 truncate min-w-0 hidden sm:block">
+                            {msgItem.body ? msgItem.body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 80) : ''}
+                          </span>
+                        )}
+                      </div>
+                      {isExpanded && (
+                        <p className="text-xs text-slate-500 truncate">
+                          to {(msgItem.to || []).join(', ')}
+                        </p>
                       )}
                     </div>
-                    {isExpanded && (
-                      <p className="text-xs text-slate-500 truncate">
-                        to {(msgItem.to || []).join(', ')}
-                      </p>
-                    )}
+
+                    {/* Right: date + actions */}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs text-slate-400 font-medium whitespace-nowrap">
+                        {formatEmailDateTime(msgItem.received_at)}
+                      </span>
+                      {!isLatest && (
+                        isExpanded
+                          ? <ChevronUp className="h-4 w-4 text-slate-400" />
+                          : <ChevronDown className="h-4 w-4 text-slate-400" />
+                      )}
+                      {isExpanded && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); copyEmail(msgItem.from); }}
+                          className="p-1 hover:bg-slate-100 rounded-md transition-colors"
+                          title="Copy sender email"
+                          aria-label="Copy sender email"
+                        >
+                          <Copy className="h-3.5 w-3.5 text-slate-400" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Right: date + actions */}
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <span className="text-xs text-slate-400 font-medium whitespace-nowrap">
-                      {formatEmailDateTime(msgItem.received_at)}
-                    </span>
-                    {!isLatest && (
-                      isExpanded
-                        ? <ChevronUp className="h-4 w-4 text-slate-400" />
-                        : <ChevronDown className="h-4 w-4 text-slate-400" />
-                    )}
-                    {isExpanded && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); copyEmail(msgItem.from); }}
-                        className="p-1 hover:bg-slate-100 rounded-md transition-colors"
-                        title="Copy sender email"
-                        aria-label="Copy sender email"
-                      >
-                        <Copy className="h-3.5 w-3.5 text-slate-400" />
-                      </button>
-                    )}
-                  </div>
-                </div>
+                  {/* Expanded: full body */}
+                  {isExpanded && (
+                    <div className="px-5 pb-6">
+                      {/* Sandboxed email body */}
+                      <div
+                        className="prose prose-sm max-w-none text-slate-800 leading-relaxed overflow-x-auto"
+                        style={{ fontFamily: 'inherit' }}
+                        dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msgItem.body) }}
+                      />
 
-                {/* Expanded: full body */}
-                {isExpanded && (
-                  <div className="px-5 pb-6">
-                    {/* Sandboxed email body */}
-                    <div
-                      className="prose prose-sm max-w-none text-slate-800 leading-relaxed overflow-x-auto"
-                      style={{ fontFamily: 'inherit' }}
-                      dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msgItem.body) }}
-                    />
-
-                    {/* Attachments */}
-                    {msgItem.attachments && msgItem.attachments.length > 0 && (
-                      <div className="mt-5 pt-4 border-t border-slate-100">
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
-                          Attachments ({msgItem.attachments.length})
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {msgItem.attachments.map((att, aidx) => (
-                            <a
-                              key={aidx}
-                              href={att.file_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group max-w-xs"
-                            >
-                              <div className="w-8 h-8 bg-white rounded-lg border border-slate-200 flex items-center justify-center text-base flex-shrink-0">
-                                📄
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-bold text-slate-700 group-hover:text-blue-700 truncate leading-tight">
-                                  {att.filename}
-                                </p>
-                                {att.size && (
-                                  <p className="text-[10px] text-slate-400 font-medium mt-0.5">
-                                    {formatFileSize(att.size)}
+                      {/* Attachments */}
+                      {msgItem.attachments && msgItem.attachments.length > 0 && (
+                        <div className="mt-5 pt-4 border-t border-slate-100">
+                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                            Attachments ({msgItem.attachments.length})
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {msgItem.attachments.map((att, aidx) => (
+                              <a
+                                key={aidx}
+                                href={att.file_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group max-w-xs"
+                              >
+                                <div className="w-8 h-8 bg-white rounded-lg border border-slate-200 flex items-center justify-center text-base flex-shrink-0">
+                                  📄
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-bold text-slate-700 group-hover:text-blue-700 truncate leading-tight">
+                                    {att.filename}
                                   </p>
-                                )}
-                              </div>
-                            </a>
-                          ))}
+                                  {att.size && (
+                                    <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                      {formatFileSize(att.size)}
+                                    </p>
+                                  )}
+                                </div>
+                              </a>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            });
+
+            return elements;
+          })()}
         </div>
 
         {showProjectLink && (

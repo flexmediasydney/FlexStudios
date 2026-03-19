@@ -16,6 +16,7 @@ import NotificationsPage from './pages/NotificationsPage';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { canAccessRoute } from '@/components/lib/routeAccess';
 import { AlertCircle } from 'lucide-react';
+import InstallPrompt from '@/components/pwa/InstallPrompt';
 
 // Lazy-loaded heavy pages (code-split into separate chunks)
 const TonomoIntegrationDashboard = React.lazy(() => import('./pages/TonomoIntegrationDashboard'));
@@ -142,7 +143,9 @@ const AuthenticatedApp = () => {
       <Route path="/" element={
         <LayoutWrapper currentPageName={mainPageKey}>
           <RouteGuard routeName={mainPageKey}>
-            <MainPage />
+            <ErrorBoundary fallbackLabel={mainPageKey}>
+              <MainPage />
+            </ErrorBoundary>
           </RouteGuard>
         </LayoutWrapper>
       } />
@@ -153,7 +156,9 @@ const AuthenticatedApp = () => {
           element={
             <LayoutWrapper currentPageName={path}>
               <RouteGuard routeName={path}>
-                <Page />
+                <ErrorBoundary fallbackLabel={path}>
+                  <Page />
+                </ErrorBoundary>
               </RouteGuard>
             </LayoutWrapper>
           }
@@ -164,7 +169,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="TonomoIntegrationDashboard">
            <RouteGuard routeName="TonomoIntegrationDashboard">
-             <TonomoIntegrationDashboard />
+             <ErrorBoundary fallbackLabel="Tonomo Integration Dashboard">
+               <TonomoIntegrationDashboard />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -174,7 +181,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="TonomoPulse">
            <RouteGuard routeName="TonomoPulse">
-             <TonomoPulse />
+             <ErrorBoundary fallbackLabel="Tonomo Pulse">
+               <TonomoPulse />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        }
@@ -184,7 +193,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="Analytics">
            <RouteGuard routeName="Analytics">
-             <Analytics />
+             <ErrorBoundary fallbackLabel="Analytics">
+               <Analytics />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        }
@@ -194,7 +205,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="SettingsTonomoIntegration">
            <RouteGuard routeName="SettingsTonomoIntegration">
-             <SettingsTonomoIntegration />
+             <ErrorBoundary fallbackLabel="Tonomo Integration Settings">
+               <SettingsTonomoIntegration />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -204,7 +217,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="SettingsAutomationRules">
            <RouteGuard routeName="SettingsAutomationRules">
-             <SettingsAutomationRules />
+             <ErrorBoundary fallbackLabel="Automation Rules">
+               <SettingsAutomationRules />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -214,7 +229,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="NotificationsPage">
            <RouteGuard routeName="NotificationsPage">
-             <NotificationsPage />
+             <ErrorBoundary fallbackLabel="Notifications">
+               <NotificationsPage />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -224,7 +241,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="SettingsNotifications">
            <RouteGuard routeName="SettingsNotifications">
-             <SettingsNotifications />
+             <ErrorBoundary fallbackLabel="Notification Settings">
+               <SettingsNotifications />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -234,7 +253,9 @@ const AuthenticatedApp = () => {
        element={
          <LayoutWrapper currentPageName="NotificationsPulse">
            <RouteGuard routeName="NotificationsPulse">
-             <NotificationsPulse />
+             <ErrorBoundary fallbackLabel="Notifications Pulse">
+               <NotificationsPulse />
+             </ErrorBoundary>
            </RouteGuard>
          </LayoutWrapper>
        } 
@@ -312,6 +333,7 @@ function App() {
             <AuthenticatedApp />
           </Router>
           <Toaster />
+          <InstallPrompt />
         </QueryClientProvider>
       </AuthProvider>
     </ThemeProvider>

@@ -472,25 +472,49 @@ export default function EmailInboxMain() {
         const mainMessage = t.messages[0];
         try {
           // Operator filters
-          if (fromMatch && !t.from_email.toLowerCase().includes(fromMatch[1])) return false;
-          if (toMatch && !mainMessage.to?.some(email => email.toLowerCase().includes(toMatch[1]))) return false;
+          if (fromMatch) {
+            const fromTerm = fromMatch[1];
+            const anyFromMatch = t.messages.some(m =>
+              (m.from || '').toLowerCase().includes(fromTerm) ||
+              (m.from_name || '').toLowerCase().includes(fromTerm)
+            );
+            if (!anyFromMatch) return false;
+          }
+          if (toMatch) {
+            const toTerm = toMatch[1];
+            const anyToMatch = t.messages.some(m =>
+              m.to?.some(email => email.toLowerCase().includes(toTerm))
+            );
+            if (!anyToMatch) return false;
+          }
           if (subjectMatch && !t.subject.toLowerCase().includes(subjectMatch[1])) return false;
-          if (hasAttachment && (!mainMessage.attachments || mainMessage.attachments.length === 0)) return false;
-          if (labelMatch && !mainMessage.labels?.some(l => l.toLowerCase().includes(labelMatch[1]))) return false;
-          
-          // General text search (if cleanQuery exists)
+          if (hasAttachment) {
+            const hasAny = t.messages.some(m => m.attachments?.length > 0);
+            if (!hasAny) return false;
+          }
+          if (labelMatch) {
+            const labelTerm = labelMatch[1];
+            const hasLabel = t.messages.some(m => m.labels?.some(l => l.toLowerCase().includes(labelTerm)));
+            if (!hasLabel) return false;
+          }
+
+          // General text search across ALL messages in thread (if cleanQuery exists)
           if (cleanQuery) {
             const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return (
-              t.subject.toLowerCase().includes(escaped) ||
-              t.from.toLowerCase().includes(escaped) ||
-              mainMessage.body?.toLowerCase().includes(escaped) ||
-              (mainMessage.labels?.some(l => l.toLowerCase().includes(escaped))) ||
-              (t.project_title?.toLowerCase().includes(escaped)) ||
-              (mainMessage.attachments?.some(a => a.filename?.toLowerCase().includes(escaped)))
+            // Search subject
+            if (t.subject?.toLowerCase().includes(escaped)) return true;
+            // Search project title
+            if (t.project_title?.toLowerCase().includes(escaped)) return true;
+            // Search across all messages in thread: from, body, labels, attachments
+            return t.messages.some(m =>
+              (m.from || '').toLowerCase().includes(escaped) ||
+              (m.from_name || '').toLowerCase().includes(escaped) ||
+              m.body?.toLowerCase().includes(escaped) ||
+              m.labels?.some(l => l.toLowerCase().includes(escaped)) ||
+              m.attachments?.some(a => a.filename?.toLowerCase().includes(escaped))
             );
           }
-          
+
           return true;
         } catch {
           return false;

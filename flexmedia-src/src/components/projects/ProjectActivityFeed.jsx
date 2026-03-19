@@ -66,9 +66,15 @@ export default function ProjectActivityFeed({ projectId }) {
       </div>
 
       {filtered.length === 0 ? (
-        <p className="text-sm text-muted-foreground text-center py-8">No activity yet</p>
+        <div className="text-center py-12">
+          <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mx-auto mb-3">
+            <Search className="h-5 w-5 text-muted-foreground" />
+          </div>
+          <p className="text-sm text-muted-foreground">No activity yet</p>
+          <p className="text-xs text-muted-foreground mt-1">Activity will appear here as changes are made</p>
+        </div>
       ) : (
-        <div className="pt-2">
+        <div className="pt-2 relative">
           {filtered.map(activity => (
             <ActivityLogItem key={activity.id} activity={activity} />
           ))}

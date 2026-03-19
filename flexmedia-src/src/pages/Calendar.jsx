@@ -1235,9 +1235,13 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
           <div className="flex-1 relative overflow-y-auto">
             {hours.map(h => (
               <div key={h} style={{ height: SLOT_HEIGHT }}
-                className="border-b hover:bg-muted/10 cursor-pointer"
+                className="border-b hover:bg-muted/10 cursor-pointer group relative"
                 onClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellClick(dt); }}
-              />
+              >
+                <span className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground/0 group-hover:text-muted-foreground/40 transition-all duration-200 pointer-events-none select-none">
+                  + Click to add event
+                </span>
+              </div>
             ))}
             {timedItems.map(({ event, owners }) => (
               <StandardEventBlock key={event.id} event={event} owners={owners}
@@ -1337,7 +1341,7 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
   const laneWidth = 100 / totalUsers;
   const leftPct = userIdx * laneWidth;
 
-  const color = userColorMap.get(user.id);
+  const typeColor = getEventTypeColor(event);
   const ownerUsers = owners.map(uid => allUsers.find(u => u.id === uid)).filter(Boolean);
 
   // Privacy: show as opaque "Busy" block if event belongs to another user
@@ -1346,47 +1350,46 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
     event.owner_user_id &&
     event.owner_user_id !== currentUserId;
 
+  // Special Google event types override colors
+  const isOutOfOffice = event.google_event_type === 'outOfOffice';
+  const isFocusTime = event.google_event_type === 'focusTime';
+
+  const bgColor = isOutOfOffice
+    ? 'repeating-linear-gradient(45deg, #fef3c7, #fef3c7 4px, #fde68a 4px, #fde68a 8px)'
+    : isFocusTime ? '#f0f9ff'
+    : typeColor.light;
+  const borderColor = isOutOfOffice ? '#f59e0b' : isFocusTime ? '#0ea5e9' : typeColor.border;
+  const textColor = isOutOfOffice ? '#92400e' : isFocusTime ? '#0c4a6e' : typeColor.text;
+
   return (
     <div
-      className="absolute rounded px-1 cursor-pointer hover:opacity-90 hover:shadow-md overflow-hidden z-10 flex flex-col transition-all duration-150"
+      className="absolute rounded-md px-1 py-0.5 cursor-pointer hover:opacity-90 hover:shadow-lg overflow-hidden z-10 flex flex-col transition-all duration-150 border"
       style={{
         top: topPx,
         height: heightPx,
         left: `calc(${leftPct}% + 1px)`,
         width: `calc(${laneWidth}% - 2px)`,
-        // Out of Office: distinct striped pattern
-        backgroundColor: event.google_event_type === 'outOfOffice'
-          ? 'repeating-linear-gradient(45deg, #fef3c7, #fef3c7 4px, #fde68a 4px, #fde68a 8px)'
-          : event.google_event_type === 'focusTime'
-          ? '#f0f9ff'
-          : color?.light,
-        borderLeft: `3px solid ${
-          event.google_event_type === 'outOfOffice' ? '#f59e0b' :
-          event.google_event_type === 'focusTime'   ? '#0ea5e9' :
-          color?.bg
-        }`,
-        color: event.google_event_type === 'outOfOffice' ? '#92400e' :
-               event.google_event_type === 'focusTime'   ? '#0c4a6e' :
-               color?.text,
+        backgroundColor: bgColor,
+        borderLeft: `4px solid ${borderColor}`,
+        borderColor: `${borderColor}40`,
+        borderLeftColor: borderColor,
+        color: textColor,
       }}
       onClick={onClick}
-      title={`${event.title} · ${format(start, 'h:mm')}–${format(end, 'h:mm a')}`}
+      title={`${event.title} - ${format(start, 'h:mm')} - ${format(end, 'h:mm a')}`}
     >
-      {/* Twilight indicator */}
-      <p className="text-xs font-medium leading-tight truncate">
-        {isBusyBlock ? '⬛ Busy' :
-         event.google_event_type === 'outOfOffice' ? '🚫 Out of Office' :
-         event.google_event_type === 'focusTime'   ? '🎯 Focus Time' :
-         event.tonomo_is_twilight ? '🌅 ' : ''}{event.title}
+      <p className="text-xs font-semibold leading-tight truncate">
+        {isBusyBlock ? 'Busy' :
+         isOutOfOffice ? 'Out of Office' :
+         isFocusTime ? 'Focus Time' :
+         event.title}
       </p>
       {heightPx > 28 && (
-        <p className="text-xs opacity-70 leading-tight">{format(start, 'h:mm')}–{format(end, 'h:mm a')}</p>
+        <p className="text-[11px] opacity-70 leading-tight">{format(start, 'h:mm')} - {format(end, 'h:mm a')}</p>
       )}
-      {/* Property address — shown when block is tall enough */}
       {heightPx > 52 && event.location && (
-        <p className="text-xs opacity-60 leading-tight truncate mt-0.5">📍 {event.location}</p>
+        <p className="text-[10px] opacity-50 leading-tight truncate mt-0.5">{event.location}</p>
       )}
-      {/* Show attending dots if shared event */}
       {heightPx > 40 && ownerUsers.length > 1 && (
         <div className="flex -space-x-0.5 mt-0.5">
           {ownerUsers.filter(u => u.id !== user.id).slice(0, 3).map(u => {

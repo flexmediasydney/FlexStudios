@@ -33,6 +33,7 @@ import OverwriteConfirmation from "@/components/common/OverwriteConfirmation";
 import { useEscapeKeyWarning, EscapeKeyWarningBanner } from "@/components/common/EscapeKeyWarning";
 import CopyButton from "@/components/common/CopyFeedback";
 import NetworkErrorRetry from "@/components/common/NetworkErrorRetry";
+import { toast } from "sonner";
 
 export default function ProjectForm({ project, open, onClose, onSave }) {
   const { canSeePricing } = usePermissions();
@@ -238,12 +239,16 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
     // If no client record exists, auto-create one
     if (!clientId && agent) {
-      const newClient = await base44.entities.Client.create({
-        agent_name: agent.name,
-        agent_email: agent.email || "",
-        agency_name: agent.current_agency_name || "",
-      });
-      clientId = newClient.id;
+      try {
+        const newClient = await base44.entities.Client.create({
+          agent_name: agent.name,
+          agent_email: agent.email || "",
+          agency_name: agent.current_agency_name || "",
+        });
+        clientId = newClient.id;
+      } catch (err) {
+        toast.error(err?.message || "Failed to create client record");
+      }
     }
 
     setFormData(prev => {
@@ -578,12 +583,14 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
       setSaving(false);
       setUnsavedChanges(false);
+       toast.success(project ? 'Project saved successfully' : 'Project created successfully');
        announceToScreenReader(project ? 'Project saved successfully' : 'Project created successfully');
        onSave();
       } catch (err) {
        console.error('Failed to save project:', err);
        setSaving(false);
        setSaveError(err);
+       toast.error(err?.message || 'Failed to save project');
        announceToScreenReader('Failed to save project. Please try again.');
       }
       };

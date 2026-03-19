@@ -3,15 +3,42 @@ import { base44 } from "@/api/base44Client";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useEntityList, useEntityData } from "@/components/hooks/useEntityData";
-import { User, Users, ChevronDown, AlertCircle } from "lucide-react";
+import { User, Users, ChevronDown, AlertCircle, Camera, Video, ImageIcon, Film, PenTool, Compass, Crown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createNotification } from "@/components/notifications/createNotification";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useRoleMappings, projectHasCategoryFromMappings, isRoleRequiredForProject } from "@/components/hooks/useRoleMappings";
+
+const ROLE_ICONS = {
+  project_owner: Crown,
+  photographer: Camera,
+  videographer: Video,
+  image_editor: ImageIcon,
+  video_editor: Film,
+  floorplan_editor: PenTool,
+  drone_editor: Compass,
+};
+
+const ROLE_COLORS = {
+  project_owner: { bg: "bg-purple-100", text: "text-purple-700", badge: "bg-purple-500" },
+  photographer: { bg: "bg-blue-100", text: "text-blue-700", badge: "bg-blue-500" },
+  videographer: { bg: "bg-rose-100", text: "text-rose-700", badge: "bg-rose-500" },
+  image_editor: { bg: "bg-emerald-100", text: "text-emerald-700", badge: "bg-emerald-500" },
+  video_editor: { bg: "bg-orange-100", text: "text-orange-700", badge: "bg-orange-500" },
+  floorplan_editor: { bg: "bg-cyan-100", text: "text-cyan-700", badge: "bg-cyan-500" },
+  drone_editor: { bg: "bg-indigo-100", text: "text-indigo-700", badge: "bg-indigo-500" },
+};
+
+function getInitials(name) {
+  if (!name) return "?";
+  return name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+}
 
 // Re-export from the shared hook for backward compatibility
 export function projectHasCategory(project, allProducts, allPackages, categories) {
@@ -103,29 +130,44 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
   const isNotRequired = currentId === "not_required";
   const isSet = !!currentId && !isNotRequired;
 
+  const RoleIcon = ROLE_ICONS[roleKey] || User;
+  const roleColor = ROLE_COLORS[roleKey] || { bg: "bg-muted", text: "text-muted-foreground", badge: "bg-muted-foreground" };
+
   // If videographer is not required, show a static "Not required" pill
   if (disabled) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm bg-muted/40 border-border text-muted-foreground cursor-default opacity-70">
-        <User className="h-3.5 w-3.5 flex-shrink-0" />
-        <div className="text-left">
-          <p className="text-xs leading-none mb-0.5">{label}</p>
-          <p className="leading-none text-xs italic">{disabledLabel || "Not required"}</p>
-        </div>
-      </div>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg border text-sm bg-muted/40 border-border text-muted-foreground cursor-default opacity-60">
+              <div className="relative">
+                <Avatar className="h-8 w-8">
+                  <AvatarFallback className="bg-muted text-muted-foreground text-xs">
+                    <RoleIcon className="h-3.5 w-3.5" />
+                  </AvatarFallback>
+                </Avatar>
+              </div>
+              <div className="text-left">
+                <p className="text-[10px] text-muted-foreground leading-none mb-0.5 uppercase tracking-wider font-medium">{label}</p>
+                <p className="leading-none text-xs italic">{disabledLabel || "Not required"}</p>
+              </div>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>{label}: Not required for this project</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     );
   }
 
   return (
      <Popover open={open && canEdit} onOpenChange={(v) => canEdit && setOpen(v)}>
        <PopoverTrigger asChild>
-         {/* Issue #13: Staff selector missing focus states and accessibility attributes */}
          <button
            disabled={!canEdit}
            className={cn(
-             "flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-all outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary",
+             "flex items-center gap-2.5 px-3 py-2 rounded-lg border text-sm font-medium transition-all outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary",
              isSet
-               ? "bg-card border-border text-foreground hover:border-primary/50"
+               ? "bg-card border-border text-foreground hover:border-primary/50 hover:shadow-sm"
                : isNotRequired
                ? "bg-muted/40 border-border text-muted-foreground hover:border-muted-foreground/50"
                : "bg-amber-50 border-amber-300 text-amber-700 hover:border-amber-400",
@@ -134,20 +176,32 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
            title={canEdit ? `Click to assign ${label}` : "You don't have permission to edit"}
            aria-label={`${label}: ${isSet ? currentName : isNotRequired ? "Not required" : "Not assigned"}`}
          >
-          {isSet ? (
-            currentType === "team" ? (
-              <Users className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-            ) : (
-              <User className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-            )
-          ) : isNotRequired ? (
-            <User className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-          ) : (
-            <AlertCircle className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
-          )}
+          <div className="relative">
+            <Avatar className={cn("h-8 w-8", isSet ? "" : "opacity-60")}>
+              <AvatarFallback className={cn(
+                "text-xs font-semibold",
+                isSet ? roleColor.bg + " " + roleColor.text : "bg-muted text-muted-foreground"
+              )}>
+                {isSet ? (
+                  currentType === "team" ? <Users className="h-3.5 w-3.5" /> : getInitials(currentName)
+                ) : isNotRequired ? (
+                  <RoleIcon className="h-3.5 w-3.5" />
+                ) : (
+                  <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
+                )}
+              </AvatarFallback>
+            </Avatar>
+            {/* Role badge */}
+            <span className={cn(
+              "absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full flex items-center justify-center border-2 border-background",
+              roleColor.badge
+            )}>
+              <RoleIcon className="h-2.5 w-2.5 text-white" />
+            </span>
+          </div>
           <div className="text-left">
-            <p className="text-xs text-muted-foreground leading-none mb-0.5">{label}</p>
-            <p className={cn("leading-none", isSet ? "text-foreground" : isNotRequired ? "text-muted-foreground italic text-xs" : "text-amber-600 italic text-xs")}>
+            <p className="text-[10px] text-muted-foreground leading-none mb-0.5 uppercase tracking-wider font-medium">{label}</p>
+            <p className={cn("leading-none text-sm", isSet ? "text-foreground font-medium" : isNotRequired ? "text-muted-foreground italic text-xs" : "text-amber-600 italic text-xs")}>
               {isSet ? currentName : isNotRequired ? "Not required" : "Not assigned"}
             </p>
           </div>
@@ -231,7 +285,11 @@ export default function ProjectStaffBar({ project, canEdit }) {
    const legacyKeys = { photographer: "onsite_staff_1", videographer: "onsite_staff_2" };
 
    return (
-     <div className="border-t border-b bg-muted/30 -mx-6 px-6 py-3">
+     <div className="border-t border-b bg-gradient-to-r from-muted/40 to-muted/20 -mx-6 px-6 py-3">
+       <div className="flex items-center gap-2 mb-2">
+         <Users className="h-3.5 w-3.5 text-muted-foreground" />
+         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Team</p>
+       </div>
        <div className="flex flex-wrap gap-2">
          {mappings.map((mapping) => {
            const isNeeded = isRoleRequiredForProject(mapping, displayProject, allProducts, allPackages);

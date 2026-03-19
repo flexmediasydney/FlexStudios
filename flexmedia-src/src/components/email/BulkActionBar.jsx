@@ -134,15 +134,30 @@ export default function BulkActionBar({
   };
 
   return (
-    <div className="flex items-center justify-between gap-3 bg-primary/8 border border-primary/20 p-3 rounded-lg shadow-sm">
+    <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 p-3 rounded-lg shadow-sm animate-in slide-in-from-top-1 duration-200">
       <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold text-foreground">{selectedCount} selected</span>
-        <Button 
-          variant="ghost" 
+        <div className="flex items-center gap-1.5 bg-blue-100 px-2.5 py-1 rounded-full">
+          <span className="text-xs font-bold text-blue-800">{selectedCount}</span>
+          <span className="text-xs text-blue-600">selected</span>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            const allThreadIds = new Set(threads.map(t => t.threadId));
+            setSelectedMessages(allThreadIds);
+          }}
+          className="h-6 px-2 text-[10px] text-blue-600 hover:text-blue-800 hover:bg-blue-100"
+          title="Select all visible"
+        >
+          Select all ({threads.length})
+        </Button>
+        <Button
+          variant="ghost"
           size="icon"
           onClick={() => setSelectedMessages(new Set())}
-          className="h-5 w-5 ml-2"
-          title="Deselect all"
+          className="h-5 w-5"
+          title="Deselect all (Esc)"
         >
           <X className="h-3 w-3" />
         </Button>
