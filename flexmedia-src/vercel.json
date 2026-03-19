@@ -3,6 +3,7 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
+    { "source": "/api/functions/:path*", "destination": "https://rjzdznwkxnzfekgcdkei.supabase.co/functions/v1/:path*" },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
   ]
 }

@@ -3,7 +3,8 @@ import { useEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import {
   ChevronRight, ChevronDown, Building2, Users, User,
-  MoreVertical, Settings2, RotateCcw, Check
+  MoreVertical, Settings2, RotateCcw, Check,
+  Mail, Phone, FolderOpen
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -225,7 +226,7 @@ export default function HierarchyTableView({ agencies, teams, agents, onEdit, on
               {activeColumns.map(col => (
                 <th key={col.id} className="text-left px-3 py-2 font-medium text-muted-foreground whitespace-nowrap">{col.label}</th>
               ))}
-              <th className="w-8" />
+              <th className="w-28" />
             </tr>
           </thead>
           <tbody>
@@ -328,17 +329,33 @@ export default function HierarchyTableView({ agencies, teams, agents, onEdit, on
                                 <td key={col.id} className="px-3 py-1.5">{renderCell(col.id, agent, 'agent', aStats)}</td>
                               ))}
                               <td className="px-1 py-1" onClick={e => e.stopPropagation()}>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
-                                    <MoreVertical className="h-3 w-3" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem onClick={() => onEdit('agent', agent)}>Edit</DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => onDelete('agent', agent)} className="text-destructive">Delete</DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
+                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                {agent.email && (
+                                  <a href={`mailto:${agent.email}`} title={`Email ${agent.name}`}>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6"><Mail className="h-3 w-3 text-blue-600" /></Button>
+                                  </a>
+                                )}
+                                {agent.phone && (
+                                  <a href={`tel:${agent.phone}`} title={`Call ${agent.name}`}>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6"><Phone className="h-3 w-3 text-green-600" /></Button>
+                                  </a>
+                                )}
+                                <Button variant="ghost" size="icon" className="h-6 w-6" title="View projects"
+                                  onClick={() => navigate(createPageUrl('Projects') + `?agent=${agent.id}`)}>
+                                  <FolderOpen className="h-3 w-3 text-indigo-600" />
+                                </Button>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6">
+                                      <MoreVertical className="h-3 w-3" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem onClick={() => onEdit('agent', agent)}>Edit</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => onDelete('agent', agent)} className="text-destructive">Delete</DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
                               </td>
                               </tr>
                               );
@@ -363,17 +380,33 @@ export default function HierarchyTableView({ agencies, teams, agents, onEdit, on
                           <td key={col.id} className="px-3 py-1.5">{renderCell(col.id, agent, 'agent', aStats)}</td>
                         ))}
                         <td className="px-1 py-1" onClick={e => e.stopPropagation()}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
-                                <MoreVertical className="h-3 w-3" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => onEdit('agent', agent)}>Edit</DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => onDelete('agent', agent)} className="text-destructive">Delete</DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {agent.email && (
+                              <a href={`mailto:${agent.email}`} title={`Email ${agent.name}`}>
+                                <Button variant="ghost" size="icon" className="h-6 w-6"><Mail className="h-3 w-3 text-blue-600" /></Button>
+                              </a>
+                            )}
+                            {agent.phone && (
+                              <a href={`tel:${agent.phone}`} title={`Call ${agent.name}`}>
+                                <Button variant="ghost" size="icon" className="h-6 w-6"><Phone className="h-3 w-3 text-green-600" /></Button>
+                              </a>
+                            )}
+                            <Button variant="ghost" size="icon" className="h-6 w-6" title="View projects"
+                              onClick={() => navigate(createPageUrl('Projects') + `?agent=${agent.id}`)}>
+                              <FolderOpen className="h-3 w-3 text-indigo-600" />
+                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-6 w-6">
+                                  <MoreVertical className="h-3 w-3" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => onEdit('agent', agent)}>Edit</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => onDelete('agent', agent)} className="text-destructive">Delete</DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         </td>
                         </tr>
                         );

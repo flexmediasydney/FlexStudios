@@ -133,7 +133,7 @@ export default function EditTemplateModal({ template, onClose }) {
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g., Welcome to Flex Media"
+                placeholder="e.g., Welcome to FlexStudios"
               />
             </div>
             <div className="space-y-2">

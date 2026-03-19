@@ -341,6 +341,18 @@ function applyLimit(items, limit) {
  */
 export { resubscribe as resubscribeEntity };
 
+/**
+ * Pre-warm the entity list cache. Useful for route prefetching —
+ * if the cache is already fresh, this is a no-op.
+ */
+export { fetchEntityList as prefetchEntityList };
+
+/**
+ * Pre-warm the single-entity cache. Useful for route prefetching —
+ * resolves from list cache when possible, otherwise fetches from API.
+ */
+export { fetchSingleEntity as prefetchSingleEntity };
+
 /** Force-expire the list cache for an entity (triggers refetch on next access). */
 export function invalidateEntityCache(entityName) {
   entityCache.delete(entityName);

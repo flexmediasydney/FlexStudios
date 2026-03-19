@@ -4,6 +4,11 @@
  * Utilities for prefetching data on hover / intent so that navigation
  * to commonly visited routes feels instant.
  *
+ * These functions warm the custom entity cache used by useEntityList /
+ * useEntityData (in useEntityData.jsx), NOT the React Query cache.
+ * This ensures that when a component mounts after navigation, the data
+ * is already available and no HTTP request is needed.
+ *
  * Usage:
  *   import { usePrefetchProjectDetails, PrefetchOnHover } from '@/components/lib/prefetchRoutes';
  *
@@ -18,72 +23,52 @@
  */
 
 import { useCallback, useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
-import { queryKeys } from '@/components/lib/query-client';
+import {
+  prefetchSingleEntity,
+  prefetchEntityList,
+} from '@/components/hooks/useEntityData';
 
 
 // ─── Prefetch Project Details ───────────────────────────────────────────────
-// Warms the cache for the Project entity and its tasks so that navigating
-// to /ProjectDetails?id=X feels instant.
+// Warms the custom entity cache for the Project entity and its tasks so that
+// navigating to /ProjectDetails?id=X feels instant.
 
 export function usePrefetchProjectDetails() {
-  const queryClient = useQueryClient();
   const pendingRef = useRef(new Set());
 
   const prefetch = useCallback((projectId) => {
     if (!projectId || pendingRef.current.has(projectId)) return;
     pendingRef.current.add(projectId);
 
-    // Prefetch project detail
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.projects.detail(projectId),
-      queryFn: () => base44.entities.Project.get(projectId),
-      staleTime: 2 * 60 * 1000, // don't re-fetch if already fresh
-    });
+    // Warm the single-entity cache for this project
+    prefetchSingleEntity('Project', projectId).catch(() => {});
 
-    // Prefetch project tasks
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.tasks.byProject(projectId),
-      queryFn: () => base44.entities.ProjectTask.filter(
-        { project_id: projectId, is_deleted: false },
-        null,
-        200
-      ),
-      staleTime: 2 * 60 * 1000,
-    });
+    // Warm the task list cache (useEntityList reads from this)
+    prefetchEntityList('ProjectTask').catch(() => {});
 
     // Clean up the pending set after a short delay so future hovers re-trigger if needed
     setTimeout(() => pendingRef.current.delete(projectId), 30_000);
-  }, [queryClient]);
+  }, []);
 
   return { prefetch };
 }
 
 
 // ─── Prefetch Email Thread ──────────────────────────────────────────────────
-// Warms the cache for an email thread's messages before the user clicks.
+// Warms the custom entity cache for email messages before the user clicks.
 
 export function usePrefetchEmailThread() {
-  const queryClient = useQueryClient();
   const pendingRef = useRef(new Set());
 
-  const prefetch = useCallback((threadId, accountId) => {
+  const prefetch = useCallback((threadId) => {
     if (!threadId || pendingRef.current.has(threadId)) return;
     pendingRef.current.add(threadId);
 
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.emails.thread(threadId),
-      queryFn: () => base44.entities.EmailMessage.filter(
-        { gmail_thread_id: threadId, email_account_id: accountId },
-        'received_at',
-        50
-      ),
-      staleTime: 2 * 60 * 1000,
-    });
+    // Warm the email message list cache
+    prefetchEntityList('EmailMessage').catch(() => {});
 
     setTimeout(() => pendingRef.current.delete(threadId), 30_000);
-  }, [queryClient]);
+  }, []);
 
   return { prefetch };
 }

@@ -63,7 +63,7 @@ export default function SettingsTonomoIntegration() {
           urgent_review_hours: 24,
           auto_approve_on_imminent: true,
           imminent_threshold_hours: 2,
-          business_calendar_id: 'info@flexmedia.sydney'
+          business_calendar_id: 'info@flexstudios.app'
         });
       }
       return all[0];
@@ -704,7 +704,7 @@ function BusinessCalendarField({ settings, updateMutation }) {
         <Input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="e.g. info@flexmedia.sydney"
+          placeholder="e.g. info@flexstudios.app"
           className="font-mono text-sm"
         />
         <Button

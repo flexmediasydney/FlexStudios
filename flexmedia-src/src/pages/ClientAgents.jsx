@@ -27,6 +27,7 @@ import ContactActivityPanel from "@/components/clients/ContactActivityPanel";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePermissions } from '@/components/auth/PermissionGuard';
+import { Skeleton } from "@/components/ui/skeleton";
 
 function DeleteConfirmDialog({ item, onConfirm, onCancel }) {
   const [typed, setTyped] = useState('');
@@ -137,23 +138,34 @@ export default function ClientAgents() {
   }, [agents]);
 
   // When searching, filter agencies and show their complete sub-trees
+  // Searches across: agency name/email/phone, team name, agent name/email/phone/title/tags
   const filteredAgencies = useMemo(() => {
     if (!searchQuery) return agencies;
     const q = searchQuery.toLowerCase();
+    const qNoSpaces = q.replace(/\s/g, '');
     const matchingAgentAgencyIds = new Set(
       agents.filter(a =>
         a.name?.toLowerCase().includes(q) ||
         a.email?.toLowerCase().includes(q) ||
-        a.phone?.replace(/\s/g, '').includes(q.replace(/\s/g, '')) ||
+        a.phone?.replace(/\s/g, '').includes(qNoSpaces) ||
+        a.title?.toLowerCase().includes(q) ||
+        a.current_agency_name?.toLowerCase().includes(q) ||
         (Array.isArray(a.tags) && a.tags.some(t => t.toLowerCase().includes(q)))
       ).map(a => a.current_agency_id)
+    );
+    const matchingTeamAgencyIds = new Set(
+      teams.filter(t =>
+        t.name?.toLowerCase().includes(q)
+      ).map(t => t.agency_id)
     );
     return agencies.filter(a =>
       a.name?.toLowerCase().includes(q) ||
       a.email?.toLowerCase().includes(q) ||
-      matchingAgentAgencyIds.has(a.id)
+      a.phone?.replace(/\s/g, '').includes(qNoSpaces) ||
+      matchingAgentAgencyIds.has(a.id) ||
+      matchingTeamAgencyIds.has(a.id)
     );
-  }, [agencies, agents, searchQuery]);
+  }, [agencies, agents, teams, searchQuery]);
 
   const filteredAgencyIds = useMemo(() => new Set(filteredAgencies.map(a => a.id)), [filteredAgencies]);
 
@@ -330,6 +342,9 @@ export default function ClientAgents() {
     toggleSelectAgent: viewMode === 'grid' ? toggleSelectAgent : undefined,
     toggleSelectAll: viewMode === 'grid' ? toggleSelectAll : undefined,
     agentsFiltered: viewMode === 'grid' ? agentsFiltered : undefined,
+    agentProjectCounts,
+    agentRevenue,
+    onOpenActivityPanel: (agent) => setActivityPanelAgent(agent),
   };
 
   return (
@@ -412,7 +427,7 @@ export default function ClientAgents() {
               <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
                 <div className="relative flex-1 max-w-sm">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input placeholder="Search organisations…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 h-10" aria-label="Search organisations" />
+                  <Input placeholder="Search contacts…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 h-10" aria-label="Search contacts" />
                 </div>
                 {/* View mode switcher */}
                 <div className="flex items-center bg-muted rounded-lg p-1 gap-0.5">
@@ -541,11 +556,7 @@ export default function ClientAgents() {
                 )}
 
                 {isLoading ? (
-              <div className="space-y-3">
-                {Array(6).fill(0).map((_, i) => (
-                  <div key={i} className="h-16 bg-muted animate-pulse rounded-xl" />
-                ))}
-              </div>
+              <ClientAgentsSkeleton />
             ) : filteredAgencies.length === 0 ? (
               <Card className="p-12 text-center border-dashed bg-muted/20">
                 <Building className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
@@ -624,6 +635,50 @@ export default function ClientAgents() {
       <TeamForm team={editingItem && showTeamForm ? editingItem : null} open={showTeamForm} onClose={closeAllForms} preselectedAgencyId={preselectedAgencyId} />
       <AgentForm agent={editingItem && showAgentForm ? editingItem : null} open={showAgentForm} onClose={closeAllForms} preselectedAgencyId={preselectedAgencyId} preselectedTeamId={preselectedTeamId} />
       <DeleteConfirmDialog item={deletingItem} onConfirm={handleDelete} onCancel={() => setDeletingItem(null)} />
+
+      {/* Activity side panel */}
+      {activityPanelAgent && (
+        <div className="fixed inset-y-0 right-0 w-96 z-30 shadow-2xl">
+          <ContactActivityPanel
+            agent={activityPanelAgent}
+            onClose={() => setActivityPanelAgent(null)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClientAgentsSkeleton() {
+  return (
+    <div className="space-y-4 animate-in fade-in duration-300">
+      {/* Organisation cards */}
+      {Array(3).fill(0).map((_, i) => (
+        <Card key={i} className="p-4 space-y-3">
+          {/* Organisation header */}
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-10 w-10 rounded-lg" />
+            <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+            <Skeleton className="h-8 w-20 rounded-md" />
+          </div>
+          {/* Agent rows inside the organisation */}
+          <div className="ml-6 border-l-2 border-muted pl-4 space-y-2.5">
+            {Array(2 + i).fill(0).map((_, j) => (
+              <div key={j} className="flex items-center gap-3">
+                <Skeleton className="h-8 w-8 rounded-full" />
+                <div className="flex-1 space-y-1">
+                  <Skeleton className="h-3.5 w-32" />
+                  <Skeleton className="h-2.5 w-44" />
+                </div>
+                <Skeleton className="h-5 w-14 rounded-full" />
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
     </div>
   );
 }
