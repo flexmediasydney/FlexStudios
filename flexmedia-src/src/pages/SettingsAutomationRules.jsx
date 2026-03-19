@@ -232,7 +232,7 @@ function RuleBuilderModal({ open, onClose, initialRule, onSave }) {
                 {!["is_set", "is_empty", "date_is_today", "date_is_past"].includes(c.operator) && (
                   <Input className="flex-1 text-xs h-8" value={c.value || ""} onChange={e => updateCondition(i, "value", e.target.value)} placeholder="value" />
                 )}
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeCondition(i)}>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeCondition(i)} aria-label="Remove condition">
                   <XCircle className="h-4 w-4 text-muted-foreground" />
                 </Button>
               </div>
@@ -382,15 +382,15 @@ function RuleCard({ rule, onToggle, onEdit, onDelete }) {
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(rule)}>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(rule)} aria-label="Edit rule">
               <Edit2 className="h-3.5 w-3.5" />
             </Button>
             {!rule.is_system && (
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDelete(rule)}>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDelete(rule)} aria-label="Delete rule">
                 <Trash2 className="h-3.5 w-3.5 text-destructive" />
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(v => !v)}>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(v => !v)} aria-label={expanded ? "Collapse rule details" : "Expand rule details"}>
               {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             </Button>
           </div>
@@ -540,7 +540,7 @@ export default function SettingsAutomationRules() {
       <div className="p-6 lg:p-8 space-y-6 max-w-5xl">
         <div className="flex items-center gap-3">
           <Link to={createPageUrl("SettingsOrganisation")}>
-            <Button variant="ghost" size="icon"><ArrowLeft className="h-5 w-5" /></Button>
+            <Button variant="ghost" size="icon" aria-label="Back to settings"><ArrowLeft className="h-5 w-5" /></Button>
           </Link>
           <div className="flex-1">
             <h1 className="text-3xl font-bold tracking-tight">Automation Rules</h1>

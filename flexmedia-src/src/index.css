@@ -156,3 +156,56 @@
   width: 50px;
   height: 50px;
 }
+
+/* ── Mobile responsive utilities ───────────────────────────────────────────── */
+
+/* Hide scrollbar for tab strips and horizontal scroll areas */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Touch-friendly tap targets on mobile */
+@media (max-width: 767px) {
+  /* Ensure all interactive elements meet 44px minimum */
+  button,
+  a,
+  [role="button"],
+  [role="tab"],
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Compact inputs can be smaller height but keep width */
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-height: 24px;
+    min-width: 24px;
+  }
+
+  /* Badge and tiny indicators should not be forced to 44px */
+  .badge,
+  [data-slot="badge"],
+  span.rounded-full {
+    min-height: unset;
+    min-width: unset;
+  }
+
+  /* Smooth momentum scrolling for overflow containers */
+  .overflow-x-auto,
+  .overflow-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Make table containers swipeable on mobile */
+  .border.rounded-lg {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}

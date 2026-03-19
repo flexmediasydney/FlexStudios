@@ -24,6 +24,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useQuery } from "@tanstack/react-query";
 import { fixTimestamp, fmtTimestampCustom } from "@/components/utils/dateUtils";
+import { usePrefetchProjectDetails } from "@/components/lib/prefetchRoutes";
 
 const statusColumns = PROJECT_STAGES.map(s => ({ id: s.value, label: s.label, color: s.color }));
 

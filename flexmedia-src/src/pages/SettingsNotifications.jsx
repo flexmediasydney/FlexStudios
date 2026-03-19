@@ -431,7 +431,7 @@ export default function SettingsNotifications() {
     <div className="p-6 lg:p-8 space-y-6 max-w-4xl">
       <div className="flex items-center gap-3">
         <Link to={createPageUrl("SettingsOrganisation")}>
-          <Button variant="ghost" size="icon"><ArrowLeft className="h-5 w-5" /></Button>
+          <Button variant="ghost" size="icon" aria-label="Back to settings"><ArrowLeft className="h-5 w-5" /></Button>
         </Link>
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Notification Settings</h1>

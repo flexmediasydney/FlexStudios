@@ -45,6 +45,7 @@ import ActiveTimersWidget from '@/components/dashboard/ActiveTimersWidget';
 import PendingReviewsWidget from '@/components/dashboard/PendingReviewsWidget';
 import TeamWorkloadChart from '@/components/dashboard/TeamWorkloadChart';
 import RevenueComparisonChart from '@/components/dashboard/RevenueComparisonChart';
+import ErrorBoundary from '@/components/common/ErrorBoundary';
 
 export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);
@@ -541,38 +542,41 @@ export default function Dashboard() {
        </div>
 
         <TabsContent value="overview" className="space-y-6 mt-0 animate-in fade-in duration-200">
-           {projectsLoading && (
-             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 animate-in fade-in duration-300">
-               {Array(8).fill(0).map((_, i) => (
-                 <div key={i} className="h-24 bg-muted animate-pulse rounded-xl" style={{animationDelay: `${i * 50}ms`}} />
-               ))}
-             </div>
-           )}
+           {projectsLoading ? (
+             <DashboardSkeleton />
+           ) : (
+            <>
            {/* Executive Metrics */}
-           {!projectsLoading && (
-            <LivePulseBar projects={projects} tasks={allTasks} timeLogs={allTimeLogs} calendarEvents={calendarEvents} />
-           )}
+            <ErrorBoundary fallbackLabel="Live Pulse" compact>
+              <LivePulseBar projects={projects} tasks={allTasks} timeLogs={allTimeLogs} calendarEvents={calendarEvents} />
+            </ErrorBoundary>
 
-           {!projectsLoading && (
             <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6">
-              <NeedsAttentionPanel projects={projects} tasks={allTasks} users={allUsers} />
+              <ErrorBoundary fallbackLabel="Needs Attention" compact>
+                <NeedsAttentionPanel projects={projects} tasks={allTasks} users={allUsers} />
+              </ErrorBoundary>
               <Card className="overflow-hidden">
                 <div className="px-4 py-3 border-b"><span className="text-sm font-bold">Live activity</span></div>
-                <div className="p-4"><EnhancedActivityStream maxItems={8} compact /></div>
+                <div className="p-4">
+                  <ErrorBoundary fallbackLabel="Activity Stream" compact>
+                    <EnhancedActivityStream maxItems={8} compact />
+                  </ErrorBoundary>
+                </div>
               </Card>
             </div>
-           )}
 
-           {!projectsLoading && <ExecutiveMetricsGrid metrics={executiveMetrics} navigate={navigate} className="animate-in fade-in duration-500" />}
+           <ErrorBoundary fallbackLabel="Executive Metrics" compact>
+             <ExecutiveMetricsGrid metrics={executiveMetrics} navigate={navigate} className="animate-in fade-in duration-500" />
+           </ErrorBoundary>
 
           {/* Operational Widgets Row */}
-          {!projectsLoading && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
               <TodaysScheduleWidget projects={projects} calendarEvents={calendarEvents} />
               <ActiveTimersWidget timeLogs={allTimeLogs} tasks={allTasks} />
               <PendingReviewsWidget projects={projects} />
               <TeamWorkloadChart tasks={allTasks} users={allUsers} />
             </div>
+            </>
           )}
 
           {/* Charts Row 1 - Revenue Comparison + Stage Distribution */}
@@ -677,6 +681,88 @@ export default function Dashboard() {
           onSave={handleCloseProjectForm}
         />
       )}
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-6 animate-in fade-in duration-300">
+      {/* Skeleton: Pulse bar */}
+      <Card className="p-3">
+        <div className="flex items-center gap-4">
+          {Array(5).fill(0).map((_, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Skeleton className="h-3 w-3 rounded-full" />
+              <Skeleton className="h-3 w-16" />
+            </div>
+          ))}
+        </div>
+      </Card>
+      {/* Skeleton: Two-column panels */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6">
+        <Card className="p-5 space-y-4">
+          <Skeleton className="h-5 w-36" />
+          {Array(4).fill(0).map((_, i) => (
+            <div key={i} className="flex items-center gap-3">
+              <Skeleton className="h-4 w-4 rounded-full" />
+              <Skeleton className="h-4 flex-1" />
+              <Skeleton className="h-4 w-16" />
+            </div>
+          ))}
+        </Card>
+        <Card className="overflow-hidden">
+          <div className="px-4 py-3 border-b">
+            <Skeleton className="h-4 w-24" />
+          </div>
+          <div className="p-4 space-y-3">
+            {Array(5).fill(0).map((_, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <Skeleton className="h-8 w-8 rounded-full" />
+                <div className="flex-1 space-y-1">
+                  <Skeleton className="h-3 w-3/4" />
+                  <Skeleton className="h-2.5 w-1/2" />
+                </div>
+                <Skeleton className="h-3 w-12" />
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+      {/* Skeleton: Stats grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {Array(8).fill(0).map((_, i) => (
+          <Card key={i} className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-8 w-8 rounded-full" />
+            </div>
+            <Skeleton className="h-7 w-24 mb-1" />
+            <Skeleton className="h-3 w-16" />
+          </Card>
+        ))}
+      </div>
+      {/* Skeleton: Widgets row */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
+        {Array(4).fill(0).map((_, i) => (
+          <Card key={i} className="p-4 space-y-3">
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-20 w-full rounded-lg" />
+            <Skeleton className="h-3 w-20" />
+          </Card>
+        ))}
+      </div>
+      {/* Skeleton: Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
+        <Card className="lg:col-span-2 p-4">
+          <Skeleton className="h-5 w-36 mb-4" />
+          <Skeleton className="h-48 w-full rounded-lg" />
+        </Card>
+        <Card className="p-4">
+          <Skeleton className="h-5 w-28 mb-4" />
+          <Skeleton className="h-48 w-full rounded-lg" />
+        </Card>
+      </div>
     </div>
   );
 }

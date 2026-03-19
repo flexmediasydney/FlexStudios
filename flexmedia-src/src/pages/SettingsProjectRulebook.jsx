@@ -10,7 +10,7 @@ export default function SettingsProjectRulebook() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link to={createPageUrl("SettingsOrganisation")}>
-          <Button variant="ghost" size="icon">
+          <Button variant="ghost" size="icon" aria-label="Back to settings">
             <ArrowLeft className="h-5 w-5" />
           </Button>
         </Link>

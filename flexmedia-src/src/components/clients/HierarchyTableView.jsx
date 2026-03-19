@@ -9,19 +9,26 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import ContactHealthScore from "@/components/clients/ContactHealthScore";
+import { LastContactIndicator, NextFollowUpIndicator } from "@/components/clients/ContactIndicators";
+import { TagList } from "@/components/clients/ContactTags";
 
 const STORAGE_KEY = "hierarchy_table_cols_v2";
 
 const ALL_COLUMNS = [
-  { id: 'state',     label: 'State' },
-  { id: 'projects',  label: '# Projects' },
-  { id: 'team_size', label: 'Team Size' },
-  { id: 'revenue',   label: 'Revenue' },
-  { id: 'email',     label: 'Email' },
-  { id: 'phone',     label: 'Phone' },
+  { id: 'state',       label: 'State' },
+  { id: 'health',      label: 'Health' },
+  { id: 'last_contact',label: 'Last Contact' },
+  { id: 'follow_up',   label: 'Follow-up' },
+  { id: 'tags',        label: 'Tags' },
+  { id: 'projects',    label: '# Projects' },
+  { id: 'team_size',   label: 'Team Size' },
+  { id: 'revenue',     label: 'Revenue' },
+  { id: 'email',       label: 'Email' },
+  { id: 'phone',       label: 'Phone' },
 ];
 
-const DEFAULT_COLUMNS = ['state', 'projects', 'team_size', 'revenue'];
+const DEFAULT_COLUMNS = ['state', 'health', 'last_contact', 'projects', 'revenue'];
 
 const STATE_COLORS = {
   'Active':          'bg-green-100 text-green-700 border-green-200',
@@ -125,6 +132,32 @@ export default function HierarchyTableView({ agencies, teams, agents, onEdit, on
         const s = entity.relationship_state;
         return s
           ? <span className={cn("text-[10px] font-medium px-1.5 py-0.5 rounded border whitespace-nowrap", STATE_COLORS[s] || "bg-muted")}>{s}</span>
+          : <span className="text-muted-foreground/50">—</span>;
+      }
+      case 'health': {
+        if (type !== 'agent') return <span className="text-muted-foreground/50">—</span>;
+        return (
+          <ContactHealthScore
+            agent={entity}
+            projectCount={stats?.projects || 0}
+            totalRevenue={stats?.revenue || 0}
+            size="sm"
+          />
+        );
+      }
+      case 'last_contact': {
+        if (type !== 'agent') return <span className="text-muted-foreground/50">—</span>;
+        return <LastContactIndicator agent={entity} size="xs" />;
+      }
+      case 'follow_up': {
+        if (type !== 'agent') return <span className="text-muted-foreground/50">—</span>;
+        const indicator = <NextFollowUpIndicator agent={entity} size="xs" />;
+        return indicator || <span className="text-muted-foreground/50">—</span>;
+      }
+      case 'tags': {
+        if (type !== 'agent') return <span className="text-muted-foreground/50">—</span>;
+        return Array.isArray(entity.tags) && entity.tags.length > 0
+          ? <TagList tags={entity.tags} max={3} size="xs" />
           : <span className="text-muted-foreground/50">—</span>;
       }
       case 'projects':

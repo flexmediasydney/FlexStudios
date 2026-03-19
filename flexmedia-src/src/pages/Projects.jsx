@@ -15,6 +15,7 @@ import ProjectForm from "@/components/projects/ProjectForm";
 import ProjectStatusBadge from "@/components/dashboard/ProjectStatusBadge";
 import ProjectStatusTimer from "@/components/projects/ProjectStatusTimer";
 import KanbanBoard from "@/components/projects/KanbanBoard";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 import CardFieldsCustomizer, { CardFieldsCustomizerButton } from "@/components/projects/CardFieldsCustomizer";
 import ProjectFiltersSort from "@/components/projects/ProjectFiltersSort";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -437,7 +438,7 @@ export default function Projects() {
           </nav>
           <p className="text-muted-foreground mt-1">
             {isLoading ? (
-              <span className="inline-block w-24 h-4 bg-muted animate-pulse rounded" />
+              <Skeleton className="inline-block w-24 h-4" />
             ) : (
               <>
                 {filteredProjects.length} {filteredProjects.length === 1 ? 'project' : 'projects'}
@@ -677,10 +678,22 @@ export default function Projects() {
         isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {Array(9).fill(0).map((_, i) => (
-              <Card key={i} className="p-5">
-                <Skeleton className="h-5 w-3/4 mb-3" />
-                <Skeleton className="h-4 w-1/2 mb-2" />
-                <Skeleton className="h-4 w-full" />
+              <Card key={i} className="p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-5 w-3/5" />
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </div>
+                <Skeleton className="h-3.5 w-2/3" />
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-3 w-3 rounded-full" />
+                  <Skeleton className="h-3 w-24" />
+                </div>
+                <div className="flex items-center gap-2 pt-2 border-t">
+                  <Skeleton className="h-6 w-6 rounded-full" />
+                  <Skeleton className="h-3 w-28" />
+                  <Skeleton className="h-5 w-14 rounded-full ml-auto" />
+                </div>
               </Card>
             ))}
           </div>
@@ -719,13 +732,15 @@ export default function Projects() {
           </Card>
         ) : viewMode === "kanban" ? (
           <div className="animate-in fade-in duration-300">
-            <KanbanBoard
-              projects={filteredProjects}
-              clients={clients}
-              products={products}
-              packages={packages}
-              fitToScreen={fitToScreen}
-            />
+            <ErrorBoundary fallbackLabel="Kanban Board" compact>
+              <KanbanBoard
+                projects={filteredProjects}
+                clients={clients}
+                products={products}
+                packages={packages}
+                fitToScreen={fitToScreen}
+              />
+            </ErrorBoundary>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-max animate-in fade-in duration-300">

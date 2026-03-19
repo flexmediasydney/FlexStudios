@@ -692,7 +692,7 @@ export default function CalendarPage() {
 
       {/* ── Calendar grid ──────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-auto min-h-0">
-        <ErrorBoundary>
+        <ErrorBoundary fallbackLabel="Calendar View">
         {view === "month" && (
           <MonthView
             currentDate={currentDate}

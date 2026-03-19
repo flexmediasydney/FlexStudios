@@ -1357,7 +1357,7 @@ export default function ProjectDetails() {
             <CardHeader className="flex flex-row items-center justify-between pb-3">
               <CardTitle className="text-base lg:text-lg">Agent</CardTitle>
               {agent && memoizedCanEdit && (
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowAgentSelector(true)}>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowAgentSelector(true)} aria-label="Edit agent">
                   <Edit className="h-4 w-4" />
                 </Button>
               )}

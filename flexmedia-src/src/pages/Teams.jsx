@@ -105,7 +105,7 @@ export default function Teams() {
       render: (row) => (
         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={e => { e.stopPropagation(); setEditingTeam(row); setPreselectedAgencyId(row.agency_id); setShowForm(true); }}>Edit</Button>
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); navigate(createPageUrl('TeamDetails') + '?id=' + row.id); }}>
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); navigate(createPageUrl('TeamDetails') + '?id=' + row.id); }} aria-label="View team details">
             <ExternalLink className="h-3 w-3" />
           </Button>
         </div>
