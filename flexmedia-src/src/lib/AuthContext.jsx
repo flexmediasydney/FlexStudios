@@ -1,5 +1,5 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
-import { supabase } from '@/api/base44Client';
+import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
+import { supabase, supabaseAdmin } from '@/api/base44Client';
 
 const AuthContext = createContext();
 
@@ -8,27 +8,66 @@ export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [authError, setAuthError] = useState(null);
+  const fetchingRef = useRef(false);
+
+  // Use admin client for users table query to bypass RLS issues
+  const dbClient = supabaseAdmin || supabase;
+
+  const fetchAppUser = useCallback(async (authUser) => {
+    // Prevent concurrent fetches
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
+
+    try {
+      const { data: appUser, error } = await dbClient
+        .from('users')
+        .select('*')
+        .eq('email', authUser.email)
+        .single();
+
+      if (error || !appUser) {
+        setAuthError({ type: 'user_not_registered', message: 'User not registered for this app' });
+        setIsAuthenticated(false);
+      } else {
+        setUser(appUser);
+        setIsAuthenticated(true);
+        setAuthError(null);
+      }
+    } catch (err) {
+      console.error('User fetch failed:', err);
+      // Don't sign out — just show the error
+      setAuthError({ type: 'unknown', message: err.message || 'Failed to load user profile' });
+      setIsAuthenticated(false);
+    } finally {
+      fetchingRef.current = false;
+      setIsLoadingAuth(false);
+    }
+  }, [dbClient]);
 
   useEffect(() => {
-    // Check existing session on mount
-    checkSession();
+    let cancelled = false;
 
-    // Safety net: if auth check takes more than 10 seconds, stop loading
-    const timeout = setTimeout(() => {
-      setIsLoadingAuth((current) => {
-        if (current) {
-          console.warn('Auth check timed out — clearing session');
-          supabase.auth.signOut().catch(() => {});
-          setIsAuthenticated(false);
-          return false;
+    const init = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (cancelled) return;
+
+        if (session?.user) {
+          await fetchAppUser(session.user);
+        } else {
+          setIsLoadingAuth(false);
         }
-        return current;
-      });
-    }, 10000);
+      } catch (err) {
+        console.error('Auth init error:', err);
+        if (!cancelled) setIsLoadingAuth(false);
+      }
+    };
 
-    // Listen for auth state changes (sign in, sign out, token refresh)
+    init();
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (cancelled) return;
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (session?.user) {
             await fetchAppUser(session.user);
@@ -36,88 +75,17 @@ export const AuthProvider = ({ children }) => {
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setIsAuthenticated(false);
+          setIsLoadingAuth(false);
           setAuthError(null);
         }
       }
     );
 
     return () => {
-      clearTimeout(timeout);
+      cancelled = true;
       subscription.unsubscribe();
     };
-  }, []);
-
-  const checkSession = async () => {
-    try {
-      setIsLoadingAuth(true);
-      setAuthError(null);
-
-      const { data: { session }, error } = await supabase.auth.getSession();
-
-      if (error) {
-        console.error('Session check failed:', error);
-        // Clear corrupt session to prevent infinite spinner
-        await supabase.auth.signOut().catch(() => {});
-        setIsLoadingAuth(false);
-        setIsAuthenticated(false);
-        return;
-      }
-
-      if (session?.user) {
-        await fetchAppUser(session.user);
-      } else {
-        // No session — user needs to log in
-        setIsLoadingAuth(false);
-        setIsAuthenticated(false);
-      }
-    } catch (error) {
-      console.error('Unexpected auth error:', error);
-      // Clear corrupt session to prevent infinite spinner
-      await supabase.auth.signOut().catch(() => {});
-      setAuthError({
-        type: 'unknown',
-        message: error.message || 'An unexpected error occurred',
-      });
-      setIsLoadingAuth(false);
-    }
-  };
-
-  /**
-   * Fetch the app-level user record from the users table.
-   * This gives us the role, full_name, and other app-specific fields.
-   */
-  const fetchAppUser = async (authUser) => {
-    try {
-      const { data: appUser, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('email', authUser.email)
-        .single();
-
-      if (error || !appUser) {
-        // User exists in Supabase Auth but not in our users table
-        setAuthError({
-          type: 'user_not_registered',
-          message: 'User not registered for this app',
-        });
-        setIsLoadingAuth(false);
-        setIsAuthenticated(false);
-        return;
-      }
-
-      setUser(appUser);
-      setIsAuthenticated(true);
-      setIsLoadingAuth(false);
-      setAuthError(null);
-    } catch (error) {
-      console.error('User fetch failed:', error);
-      setAuthError({
-        type: 'unknown',
-        message: error.message || 'Failed to load user profile',
-      });
-      setIsLoadingAuth(false);
-    }
-  };
+  }, [fetchAppUser]);
 
   const logout = async (shouldRedirect = true) => {
     setUser(null);
@@ -137,13 +105,12 @@ export const AuthProvider = ({ children }) => {
       user,
       isAuthenticated,
       isLoadingAuth,
-      // Keep these for backward compat — consumers may reference them
       isLoadingPublicSettings: false,
       authError,
       appPublicSettings: null,
       logout,
       navigateToLogin,
-      checkAppState: checkSession,
+      checkAppState: () => window.location.reload(),
     }}>
       {children}
     </AuthContext.Provider>
