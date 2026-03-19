@@ -169,7 +169,7 @@ function DeliveryCard({ project, isNew }) {
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [lightbox, setLightbox] = useState(null);
 
-  const deliveredAt = project.tonomo_delivered_at;
+  const deliveredAt = project.tonomo_delivered_at || project.updated_date || project.created_date;
   const deliverableLink = project.tonomo_deliverable_link;
   const deliverablePath = project.tonomo_deliverable_path;
   const deliveredFiles = useMemo(() => { try { return JSON.parse(project.tonomo_delivered_files || '[]'); } catch { return []; } }, [project.tonomo_delivered_files]);
