@@ -88,7 +88,21 @@ import TeamDetails from './pages/TeamDetails';
 import Teams from './pages/Teams';
 import UserSettings from './pages/UserSettings';
 import Users from './pages/Users';
+import React from 'react';
 import __Layout from './Layout.jsx';
+
+// Lazy-loaded heavy pages (code-split into separate chunks)
+const BusinessIntelligence = React.lazy(() => import('./pages/BusinessIntelligence'));
+const EmployeeUtilization = React.lazy(() => import('./pages/EmployeeUtilization'));
+const Reports = React.lazy(() => import('./pages/Reports'));
+const SettingsTonomoIntegration = React.lazy(() => import('./pages/SettingsTonomoIntegration'));
+const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMappings'));
+const TonomoIntegrationDashboard = React.lazy(() => import('./pages/TonomoIntegrationDashboard'));
+const TonomoPulse = React.lazy(() => import('./pages/TonomoPulse'));
+const SettingsAutomationRules = React.lazy(() => import('./pages/SettingsAutomationRules'));
+const SettingsNotifications = React.lazy(() => import('./pages/SettingsNotifications'));
+const NotificationsPulse = React.lazy(() => import('./pages/NotificationsPulse'));
+const TeamPulsePage = React.lazy(() => import('./pages/TeamPulsePage'));
 
 
 export const PAGES = {
