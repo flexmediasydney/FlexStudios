@@ -106,8 +106,10 @@ function toTableName(entityName) {
 function applyFilters(query, filterObj) {
   if (!filterObj || typeof filterObj !== 'object') return query;
 
-  for (const [field, value] of Object.entries(filterObj)) {
+  const fieldMap = { created_date: 'created_at', updated_date: 'updated_at', received_date: 'received_at' };
+  for (const [rawField, value] of Object.entries(filterObj)) {
     if (value === null || value === undefined) continue;
+    const field = fieldMap[rawField] || rawField;
 
     if (typeof value === 'object' && !Array.isArray(value)) {
       // Operator object: { $in, $gte, $lte, ... }
@@ -166,11 +168,25 @@ function mapRow(row) {
   const mapped = { ...row };
   if ('created_at' in mapped) { mapped.created_date = mapped.created_at; }
   if ('updated_at' in mapped) { mapped.updated_date = mapped.updated_at; }
+  if ('received_at' in mapped) { mapped.received_date = mapped.received_at; }
   return mapped;
 }
 function mapRows(rows) {
   if (!Array.isArray(rows)) return rows;
   return rows.map(mapRow);
+}
+
+/**
+ * Map Base44-style field names to database names in input data.
+ * created_date → created_at, updated_date → updated_at
+ */
+function mapInput(data) {
+  if (!data || typeof data !== 'object') return data;
+  const mapped = { ...data };
+  if ('created_date' in mapped) { mapped.created_at = mapped.created_date; delete mapped.created_date; }
+  if ('updated_date' in mapped) { mapped.updated_at = mapped.updated_date; delete mapped.updated_date; }
+  if ('received_date' in mapped) { mapped.received_at = mapped.received_date; delete mapped.received_date; }
+  return mapped;
 }
 
 // ─── Entity proxy builder ────────────────────────────────────────────────────
@@ -231,7 +247,7 @@ function createEntityApi(entityName, client) {
     async create(data) {
       const { data: result, error } = await client
         .from(table)
-        .insert(data)
+        .insert(mapInput(data))
         .select()
         .single();
       if (error) throw new Error(error.message);
@@ -245,7 +261,7 @@ function createEntityApi(entityName, client) {
     async update(id, data) {
       const { data: result, error } = await client
         .from(table)
-        .update(data)
+        .update(mapInput(data))
         .eq('id', id)
         .select()
         .single();
@@ -286,16 +302,13 @@ function createEntityApi(entityName, client) {
 
             if (!eventType) return;
 
-            const record = payload.new && Object.keys(payload.new).length > 0
-              ? payload.new
-              : payload.old;
+            const hasNew = payload.new && Object.keys(payload.new).length > 0;
+            const record = hasNew ? mapRow(payload.new) : mapRow(payload.old);
 
             callback({
               id: record?.id ?? payload.old?.id,
               type: eventType,
-              data: payload.new && Object.keys(payload.new).length > 0
-                ? payload.new
-                : null,
+              data: hasNew ? record : null,
             });
           }
         )

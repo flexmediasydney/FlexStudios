@@ -69,7 +69,7 @@ export default function EmailSettings({ onClose }) {
     },
     onError: (err) => {
       toast.error(err?.message || "Failed to save signature");
-    }
+    },
     onSuccess: () => {
       toast.success("Signature updated");
       queryClient.invalidateQueries(["user-signature"]);

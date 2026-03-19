@@ -81,6 +81,7 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
  * Check if an entity matches the filter criteria
  */
 function matchesFilter(entity, filter) {
+  if (!entity || typeof entity !== 'object') return false;
   for (const [key, value] of Object.entries(filter)) {
     if (Array.isArray(value)) {
       if (!value.includes(entity[key])) return false;

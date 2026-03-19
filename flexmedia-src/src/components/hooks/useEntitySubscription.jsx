@@ -13,8 +13,9 @@ export function useEntitySubscription(entityName, entityId, initialData = null) 
 
     // Subscribe to all changes for this entity type
     const unsubscribe = base44.entities[entityName].subscribe((event) => {
+      if (!event) return;
       // If this is the entity we're watching, update state
-      if (event.id === entityId) {
+      if (event.id === entityId && event.data) {
         setData(event.data);
       }
     });
@@ -36,10 +37,11 @@ export function useEntityCollectionSubscription(entityName, filter = {}, initial
     if (!entityName) return;
 
     const unsubscribe = base44.entities[entityName].subscribe((event) => {
+      if (!event) return;
       setData((prevData) => {
-        if (event.type === 'create') {
+        if (event.type === 'create' && event.data) {
           return [...prevData, event.data];
-        } else if (event.type === 'update') {
+        } else if (event.type === 'update' && event.data) {
           return prevData.map((item) =>
             item.id === event.id ? event.data : item
           );
