@@ -1,0 +1,314 @@
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.20';
+
+async function _canNotify(base44: any, userId: string, type: string, category: string): Promise<boolean> {
+  try {
+    const prefs = await base44.asServiceRole.entities.NotificationPreference.filter(
+      { user_id: userId }, null, 50
+    );
+    const typePref = prefs.find((p: any) => p.notification_type === type);
+    if (typePref !== undefined) return typePref.in_app_enabled !== false;
+    const catPref = prefs.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
+    if (catPref !== undefined) return catPref.in_app_enabled !== false;
+    return true;
+  } catch { return true; }
+}
+
+// The role slots we manage — canonical fields only, legacy aliases written separately
+const ROLE_SLOTS = [
+  { role: 'project_owner',    idField: 'project_owner_id',    nameField: 'project_owner_name',    typeField: 'project_owner_type' },
+  { role: 'photographer',     idField: 'photographer_id',     nameField: 'photographer_name',     typeField: null },
+  { role: 'videographer',     idField: 'videographer_id',     nameField: 'videographer_name',     typeField: null },
+  { role: 'image_editor',     idField: 'image_editor_id',     nameField: 'image_editor_name',     typeField: null },
+  { role: 'video_editor',     idField: 'video_editor_id',     nameField: 'video_editor_name',     typeField: null },
+  { role: 'floorplan_editor', idField: 'floorplan_editor_id', nameField: 'floorplan_editor_name', typeField: null },
+  { role: 'drone_editor',     idField: 'drone_editor_id',     nameField: 'drone_editor_name',     typeField: null },
+];
+
+// Map each role to its fallback tier
+const ROLE_FALLBACK_TIER = {
+  project_owner:    'owner',
+  photographer:     'onsite',
+  videographer:     'onsite',
+  image_editor:     'editing',
+  video_editor:     'editing',
+  floorplan_editor: 'editing',
+  drone_editor:     'editing',
+};
+
+Deno.serve(async (req) => {
+  try {
+    const base44 = createClientFromRequest(req);
+    const body = await req.json().catch(() => ({}));
+
+    if (body?._health_check) {
+      return Response.json({ _version: 'v2.0', _fn: 'applyProjectRoleDefaults', _ts: '2026-03-17' });
+    }
+
+    const { project_id, skip_task_generation } = body;
+
+    if (!project_id) {
+      return Response.json({ error: 'project_id required' }, { status: 400 });
+    }
+
+    // ── Load project ──────────────────────────────────────────────────────────
+    const project = await base44.asServiceRole.entities.Project.get(project_id);
+    if (!project) {
+      return Response.json({ error: 'Project not found' }, { status: 404 });
+    }
+
+    // ── Load role defaults ────────────────────────────────────────────────────
+    const defaultsList = await base44.asServiceRole.entities.TonomoRoleDefaults
+      .list('-created_date', 1).catch(() => []);
+    const defaults = defaultsList?.[0] || {};
+
+    // ── Load all users for name denormalization ──────────────────────────────
+    const allUsers = await base44.asServiceRole.entities.User
+      .list('-created_date', 500).catch(() => []);
+    const usersById = new Map(allUsers.map((u) => [u.id, u]));
+
+    // Load teams if we have any fallback team configured
+    const hasFallbackTeams = defaults.owner_fallback_team_id ||
+      defaults.onsite_fallback_team_id || defaults.editing_fallback_team_id;
+
+    let usersByTeam = new Map();
+    if (hasFallbackTeams) {
+      allUsers.forEach((u) => {
+        if (!u.internal_team_id) return;
+        const members = usersByTeam.get(u.internal_team_id) || [];
+        members.push(u);
+        usersByTeam.set(u.internal_team_id, members);
+      });
+    }
+
+    // Get fallback team ID for a given tier
+    const getFallbackTeamId = (tier) => {
+      if (tier === 'owner')   return defaults.owner_fallback_team_id   || null;
+      if (tier === 'onsite')  return defaults.onsite_fallback_team_id  || null;
+      if (tier === 'editing') return defaults.editing_fallback_team_id || null;
+      return null;
+    };
+
+    const updates = {};
+    const applied = [];
+    const skipped = [];
+
+    for (const slot of ROLE_SLOTS) {
+      const currentId = project[slot.idField];
+      if (currentId) {
+        // Slot already filled — just ensure name is denormalized
+        const user = usersById.get(currentId);
+        const resolvedName = user?.full_name || user?.email || null;
+        if (slot.nameField && resolvedName && project[slot.nameField] !== resolvedName) {
+          updates[slot.nameField] = resolvedName;
+        }
+        skipped.push(slot.role);
+        continue;
+      }
+
+      // Slot is empty — look for a fallback
+      const tier = ROLE_FALLBACK_TIER[slot.role];
+      const fallbackTeamId = getFallbackTeamId(tier);
+
+      if (!fallbackTeamId) {
+        // No fallback configured for this tier
+        skipped.push(slot.role);
+        continue;
+      }
+
+      // Assign at team level — set the team ID, leave the user ID empty for human to fill
+      // For project_owner we also accept a team (project_owner_type = 'team')
+      if (slot.role === 'project_owner') {
+        updates.project_owner_id   = fallbackTeamId;
+        updates.project_owner_type = 'team';
+        updates.project_owner_name = '(Fallback team — assign individual)';
+        applied.push(slot.role);
+      } else {
+        // For photographer/videographer/editors: record which fallback team applies
+        // but leave the id field null — the project will show "unassigned" until human fixes
+        // We log the fallback intent in the activity log
+        applied.push(`${slot.role} (team fallback pending)`);
+      }
+    }
+
+    // Sync legacy onsite_staff aliases from canonical fields
+    const photographerId = project.photographer_id || updates.photographer_id || null;
+    const videographerId = project.videographer_id || updates.videographer_id || null;
+    if (photographerId && !project.onsite_staff_1_id) {
+      updates.onsite_staff_1_id = photographerId;
+    }
+    if (videographerId && !project.onsite_staff_2_id) {
+      updates.onsite_staff_2_id = videographerId;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await base44.asServiceRole.entities.Project.update(project_id, updates);
+    }
+
+    // If photographer changed, update CalendarEvent owner for Tonomo-linked events
+    const newPhotographerId = updates.photographer_id || updates.onsite_staff_1_id;
+    if (newPhotographerId && newPhotographerId !== project.photographer_id) {
+      try {
+        const linkedEvents = await base44.asServiceRole.entities.CalendarEvent.filter(
+          { project_id }, null, 50
+        );
+        const tonomoEvents = linkedEvents.filter((ev: any) =>
+          ev.event_source === 'tonomo' || ev.tonomo_appointment_id
+        );
+        for (const ev of tonomoEvents) {
+          await base44.asServiceRole.entities.CalendarEvent.update(ev.id, {
+            owner_user_id: newPhotographerId,
+          }).catch(() => {});
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // Activity log
+    if (applied.length > 0 || Object.keys(updates).length > 0) {
+      await base44.asServiceRole.entities.ProjectActivity.create({
+        project_id,
+        project_title: project.title || project.property_address || '',
+        action: 'system_roles_applied',
+        description: applied.length > 0
+          ? `Role defaults applied: ${applied.join(', ')}.`
+          : 'Role defaults checked — all roles already assigned.',
+        actor_type: 'system',
+        actor_source: 'applyProjectRoleDefaults',
+        user_name: 'System',
+        user_email: 'system@flexmedia',
+        metadata: JSON.stringify({ roles_applied: applied, roles_skipped: skipped }),
+      }).catch(() => {});
+    }
+
+    // Notify newly assigned users (non-blocking)
+    const projectName = project.title || project.property_address || 'Project';
+    const newAssignments = [
+      { field: 'project_owner_id', role: 'Project Owner' },
+      { field: 'photographer_id', role: 'Photographer' },
+      { field: 'videographer_id', role: 'Videographer' },
+    ];
+    for (const a of newAssignments) {
+      const userId = updates[a.field] || project[a.field];
+      if (userId && typeof userId === 'string') {
+        const notifType = `${a.field.replace('_id', '')}_assigned`;
+        const allowed = await _canNotify(base44, userId, notifType, 'project');
+        if (allowed) {
+          base44.asServiceRole.entities.Notification.create({
+            user_id: userId,
+            type: notifType,
+            category: 'project',
+            severity: 'info',
+            title: `You've been assigned as ${a.role}`,
+            message: `You have been assigned as ${a.role} on ${projectName}.${
+              project.shoot_date
+                ? ` Shoot date: ${new Date(project.shoot_date).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}${project.shoot_time ? ` at ${project.shoot_time}` : ''}.`
+                : ''
+            }`,
+            project_id: project_id,
+            project_name: projectName,
+            cta_label: 'View Project',
+            is_read: false,
+            is_dismissed: false,
+            source: 'role_defaults',
+            idempotency_key: `${a.field}:${project_id}:${userId}`,
+          }).catch(() => {});
+        }
+      }
+    }
+
+    // Trigger task generation
+    const hasProducts = (project.products?.length > 0) || (project.packages?.length > 0);
+    const shouldGenerateTasks = !skip_task_generation && hasProducts &&
+                                project.status !== 'pending_review';
+
+    const taskResults = { skipped: true, reason: 'no products or pending review' };
+
+    if (shouldGenerateTasks) {
+      try {
+        const taskResult = await base44.asServiceRole.functions.invoke(
+          'syncProjectTasksFromProducts', { project_id }
+        );
+        taskResults.invoked = true;
+        taskResults.result = taskResult;
+
+        // Notify on task generation success
+        if (project.project_owner_id && await _canNotify(base44, project.project_owner_id, 'tasks_auto_generated', 'task')) {
+          base44.asServiceRole.entities.Notification.create({
+            user_id: project.project_owner_id,
+            type: 'tasks_auto_generated',
+            category: 'task',
+            severity: 'info',
+            title: `Tasks generated for ${projectName}`,
+            message: `Task templates have been automatically applied to this project.`,
+            project_id: project_id,
+            project_name: projectName,
+            cta_label: 'View Project',
+            is_read: false,
+            is_dismissed: false,
+            source: 'task_generation',
+            idempotency_key: `tasks_generated:${project_id}`,
+          }).catch(() => {});
+        }
+      } catch (taskErr) {
+        taskResults.error = taskErr.message;
+        console.error('Task generation failed (non-fatal):', taskErr.message);
+
+        // Notify admins on task generation failure
+        base44.asServiceRole.entities.User.list('-created_date', 200)
+          .then(users => {
+            const adminIds = users
+              .filter((u: any) => u.role === 'master_admin' || u.role === 'admin')
+              .map((u: any) => u.id);
+            for (const adminId of adminIds) {
+              base44.asServiceRole.entities.Notification.create({
+                user_id: adminId,
+                type: 'task_generation_failed',
+                category: 'task',
+                severity: 'warning',
+                title: `Task generation failed — ${projectName}`,
+                message: `Auto task generation failed: ${taskErr.message}. Manual task creation may be needed.`,
+                project_id: project_id,
+                project_name: projectName,
+                cta_label: 'View Project',
+                is_read: false,
+                is_dismissed: false,
+                source: 'task_generation',
+                idempotency_key: `tasks_failed:${project_id}:${Date.now().toString().slice(0,-4)}:${adminId}`,
+              }).catch(() => {});
+            }
+          }).catch(() => {});
+      }
+
+      // Sync onsite effort tasks
+      try {
+        await base44.asServiceRole.functions.invoke('syncOnsiteEffortTasks', { project_id });
+      } catch (e) {
+        console.error('Onsite effort sync failed (non-fatal):', e.message);
+      }
+
+      // Server-side pricing recalculation — calculates price from matrix
+      // and writes calculated_price + price back to project.
+      // Fires after tasks so pricing reflects final product set.
+      try {
+        await base44.asServiceRole.functions.invoke(
+          'recalculateProjectPricingServerSide',
+          { project_id }
+        );
+      } catch (pricingErr: any) {
+        console.error('Server-side pricing recalculation failed (non-fatal):', pricingErr.message);
+      }
+    }
+
+    return Response.json({
+      success: true,
+      project_id,
+      roles_applied: applied,
+      roles_skipped: skipped,
+      fields_updated: Object.keys(updates).length,
+      task_generation: taskResults,
+    });
+
+  } catch (err) {
+    console.error('applyProjectRoleDefaults error:', err.message);
+    return Response.json({ error: err.message }, { status: 200 });
+  }
+});

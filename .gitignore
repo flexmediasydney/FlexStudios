@@ -1,0 +1,33 @@
+# Environment
+.env
+.env.*
+.env.local
+.env.production
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.vercel/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Supabase local
+supabase/.temp/
+supabase/.branches/
+
+# IDE
+.vscode/
+.idea/
+
+# Archive
+*.zip
+
+# Test files
+test_conn.py
+
+# Claude config
+.claude/

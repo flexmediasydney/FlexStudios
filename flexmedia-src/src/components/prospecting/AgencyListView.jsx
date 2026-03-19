@@ -1,0 +1,48 @@
+import React from 'react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Building2 } from 'lucide-react';
+
+const stateColors = {
+  'Prospecting': 'bg-orange-100 text-orange-800',
+  'Active': 'bg-green-100 text-green-800',
+  'Dormant': 'bg-gray-100 text-gray-800'
+};
+
+export default function AgencyListView({ agencies, interactions }) {
+  if (!agencies.length) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-lg font-semibold">Agencies ({agencies.length})</h2>
+      <div className="grid grid-cols-1 gap-3">
+        {agencies.map((agency) => (
+          <Card key={agency.id} className="hover:shadow-lg transition-shadow">
+            <CardContent className="p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3 flex-1 min-w-0">
+                  <Building2 className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold">{agency.name}</h3>
+                    <p className="text-sm text-muted-foreground">{agency.email}</p>
+                    {agency.address && (
+                      <p className="text-sm text-muted-foreground">{agency.address}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <Badge className={stateColors[agency.relationship_state] || 'bg-gray-100 text-gray-800'}>
+                    {agency.relationship_state}
+                  </Badge>
+                  <p className="text-xs text-muted-foreground mt-2">{agency.interactionCount} interactions</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}

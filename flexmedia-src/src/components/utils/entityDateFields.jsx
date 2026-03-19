@@ -1,0 +1,30 @@
+export const DATE_FIELD_REGISTRY = {
+  dateOnly: {
+    Project:         ['shoot_date', 'delivery_date'],
+    ProjectTask:     ['due_date'],
+    Agent:           ['became_active_date', 'became_dormant_date', 'last_contact_date', 'next_follow_up_date', 'onboarding_date'],
+    RevisionRequest: ['due_date', 'requested_date'],
+    PriceMatrix:     ['snapshot_date'],
+  },
+  timestamp: {
+    Project:           ['created_date', 'updated_date', 'last_status_change', 'shooting_started_at'],
+    ProjectTask:       ['created_date', 'updated_date'],
+    TaskTimeLog:       ['created_date', 'start_time', 'end_time', 'pause_time'],
+    ProjectStageTimer: ['created_date', 'entry_time', 'exit_time'],
+    Agent:             ['created_date', 'updated_date'],
+    Agency:            ['created_date', 'updated_date'],
+    Team:              ['created_date', 'updated_date'],
+    OrgNote:           ['created_date', 'updated_date'],
+    InteractionLog:    ['created_date', 'date_time'],
+    RevisionRequest:   ['created_date', 'updated_date'],
+    CalendarEvent:     ['created_date', 'start_time', 'end_time'],
+    PriceMatrix:       ['created_date', 'updated_date'],
+    PriceMatrixLog:    ['created_date'],
+    Product:           ['created_date', 'updated_date'],
+    Package:           ['created_date', 'updated_date'],
+    OrgActivityLog:    ['created_date', 'timestamp'],
+    ProjectNote:       ['created_date'],
+    PermissionLog:     ['created_date'],
+    MediaConfig:       ['created_date', 'updated_date', 'last_viewed'],
+  }
+};

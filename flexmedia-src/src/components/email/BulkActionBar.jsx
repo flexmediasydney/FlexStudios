@@ -1,0 +1,335 @@
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Eye,
+  Archive,
+  Trash2,
+  RefreshCw,
+  Lock,
+  Users,
+  ChevronDown,
+  Tag,
+  X,
+} from "lucide-react";
+import { base44 } from "@/api/base44Client";
+import { toast } from "sonner";
+import LabelSelectorRobust from "./LabelSelectorRobust";
+import { getAccountIdsFromThreads } from "./threadUtils";
+
+export default function BulkActionBar({
+  selectedCount,
+  filteredCount,
+  filterView,
+  threads,
+  selectedMessages,
+  emailAccounts,
+  user,
+  onRefetch,
+  setSelectedMessages,
+}) {
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [labelPopoverOpen, setLabelPopoverOpen] = useState(false);
+
+  const getAccountIds = () => getAccountIdsFromThreads(selectedMessages, threads);
+
+  const handleMarkAsRead = async (allVisible = false) => {
+    setIsProcessing(true);
+    try {
+      const ids = allVisible 
+        ? filteredCount 
+        : selectedCount;
+      const threadIds = allVisible
+        ? threads.map(t => t.threadId)
+        : Array.from(selectedMessages);
+      const accountIds = getAccountIds();
+
+      await Promise.all(accountIds.map(accId =>
+        base44.functions.invoke('markEmailsAsRead', {
+          threadIds,
+          emailAccountId: accId
+        })
+      ));
+      toast.success(`Marked ${ids} email${ids !== 1 ? 's' : ''} as read`);
+      setSelectedMessages(new Set());
+      onRefetch();
+    } catch {
+      toast.error("Failed to mark as read");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleVisibility = async (visibility) => {
+    setIsProcessing(true);
+    try {
+      const accountIds = getAccountIds();
+      await Promise.all(accountIds.map(accId =>
+        base44.functions.invoke('setEmailVisibility', {
+          threadIds: Array.from(selectedMessages),
+          emailAccountId: accId,
+          visibility
+        })
+      ));
+      toast.success(`Changed to ${visibility}`);
+      setSelectedMessages(new Set());
+      onRefetch();
+    } catch {
+      toast.error("Failed to change visibility");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleArchive = async () => {
+    setIsProcessing(true);
+    try {
+      const accountIds = getAccountIds();
+      await Promise.all(accountIds.map(accId =>
+        base44.functions.invoke('archiveEmails', {
+          threadIds: Array.from(selectedMessages),
+          emailAccountId: accId
+        })
+      ));
+      toast.success("Archived");
+      setSelectedMessages(new Set());
+      onRefetch();
+    } catch {
+      toast.error("Failed to archive");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    setIsProcessing(true);
+    try {
+      const accountIds = getAccountIds();
+      await Promise.all(accountIds.map(accId =>
+        base44.functions.invoke('restoreEmails', {
+          threadIds: Array.from(selectedMessages),
+          emailAccountId: accId
+        })
+      ));
+      toast.success("Restored to inbox");
+      setSelectedMessages(new Set());
+      onRefetch();
+    } catch {
+      toast.error("Failed to restore");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3 bg-primary/8 border border-primary/20 p-3 rounded-lg shadow-sm">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold text-foreground">{selectedCount} selected</span>
+        <Button 
+          variant="ghost" 
+          size="icon"
+          onClick={() => setSelectedMessages(new Set())}
+          className="h-5 w-5 ml-2"
+          title="Deselect all"
+        >
+          <X className="h-3 w-3" />
+        </Button>
+      </div>
+
+      <div className="flex gap-1 flex-wrap">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="gap-1.5 h-8 text-xs"
+              disabled={isProcessing}
+              title="Mark emails as read/unread"
+            >
+              <Eye className="h-3.5 w-3.5" />
+              Mark
+              <ChevronDown className="h-3 w-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => handleMarkAsRead(false)} disabled={isProcessing}>
+              Mark selected as read
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleMarkAsRead(true)} disabled={isProcessing}>
+              Mark all visible as read
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={async () => {
+              setIsProcessing(true);
+              try {
+                const accountIds = getAccountIds();
+                await Promise.all(accountIds.map(accId =>
+                  base44.functions.invoke('markEmailsAsUnread', {
+                    threadIds: Array.from(selectedMessages),
+                    emailAccountId: accId
+                  })
+                ));
+                toast.success("Marked as unread");
+                setSelectedMessages(new Set());
+                onRefetch();
+              } catch {
+                toast.error("Failed to mark as unread");
+              } finally {
+                setIsProcessing(false);
+              }
+            }} disabled={isProcessing}>
+              Mark selected as unread
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="gap-1.5 h-8 text-xs"
+              disabled={isProcessing}
+              title="Change email visibility"
+            >
+              <Eye className="h-3.5 w-3.5" />
+              Visibility
+              <ChevronDown className="h-3 w-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => handleVisibility('private')} disabled={isProcessing}>
+              <Lock className="h-4 w-4 mr-2" />
+              Private
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleVisibility('shared')} disabled={isProcessing}>
+              <Users className="h-4 w-4 mr-2" />
+              Shared
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <Popover open={labelPopoverOpen} onOpenChange={setLabelPopoverOpen}>
+           <PopoverTrigger asChild>
+             <Button 
+               variant="outline" 
+               size="sm" 
+               className="gap-1.5 h-8 text-xs"
+               disabled={selectedCount !== 1 || isProcessing}
+               title="Manage labels (select one email)"
+             >
+               <Tag className="h-3.5 w-3.5" />
+               Labels
+               <ChevronDown className="h-3 w-3" />
+             </Button>
+           </PopoverTrigger>
+           <PopoverContent align="end" className="w-72 p-0" onOpenAutoFocus={(e) => e.preventDefault()}>
+            {selectedCount === 1 ? (
+              <>
+                {Array.from(selectedMessages).map(threadId => {
+                  const thread = threads.find(t => t.threadId === threadId);
+                  const account = emailAccounts.find(a => a.id === thread?.email_account_id);
+                  if (!thread || !thread.messages || thread.messages.length === 0 || !account) return null;
+
+                  return (
+                    <div key={threadId} className="p-3">
+                      <LabelSelectorRobust
+                        emailAccountId={account.id}
+                        selectedLabels={thread.messages[0]?.labels || []}
+                        onLabelsChange={(labels) => {
+                          Promise.all(
+                            thread.messages.map(m =>
+                              base44.entities.EmailMessage.update(m.id, { labels })
+                            )
+                          ).then(() => {
+                            toast.success("Labels updated");
+                            setLabelPopoverOpen(false);
+                          }).catch(() => {
+                            toast.error("Failed to update labels");
+                          });
+                        }}
+                        isAdmin={user?.role === "master_admin"}
+                        compact={true}
+                      />
+                    </div>
+                  );
+                })}
+              </>
+            ) : (
+              <div className="p-3 text-xs text-muted-foreground">
+                Select one email to manage labels
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
+
+        {filterView !== 'deleted' && (
+          <Button 
+            variant="outline" 
+            size="sm"
+            className="gap-2 h-8"
+            onClick={filterView === 'archived' ? handleRestore : handleArchive}
+            disabled={isProcessing}
+            title={filterView === 'archived' ? 'Restore to inbox' : 'Move to archive'}
+          >
+            {filterView === 'archived' ? (
+              <>
+                <RefreshCw className={`h-3.5 w-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
+                Restore
+              </>
+            ) : (
+              <>
+                <Archive className="h-3.5 w-3.5" />
+                Archive
+              </>
+            )}
+          </Button>
+        )}
+
+        <Button 
+          variant="outline"
+          size="sm"
+          className="gap-1.5 h-8 text-xs"
+          onClick={() => {
+            if (filterView === 'deleted') {
+              toast.error("Cannot permanently delete from deleted folder");
+              return;
+            }
+            const isConfirmed = confirm(`Delete ${selectedCount} email${selectedCount !== 1 ? 's' : ''}?`);
+            if (!isConfirmed) return;
+            setIsProcessing(true);
+            const accountIds = getAccountIds();
+            Promise.all(accountIds.map(accId =>
+              base44.functions.invoke('deleteEmails', {
+                threadIds: Array.from(selectedMessages),
+                emailAccountId: accId,
+                permanently: false
+              })
+            )).then(() => {
+              toast.success("Deleted");
+              setSelectedMessages(new Set());
+              onRefetch();
+            }).catch(() => toast.error("Failed to delete"))
+            .finally(() => setIsProcessing(false));
+          }}
+          disabled={isProcessing}
+          title="Move to deleted folder"
+        >
+          <Trash2 className={`h-3.5 w-3.5 ${isProcessing ? 'animate-pulse' : ''}`} />
+          Delete ({selectedCount})
+        </Button>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,246 @@
+import React, { useState, useEffect, useMemo } from "react";
+import { Cloud, Sun, CloudRain, CloudSnow, Wind, Thermometer, Droplets, Sunrise } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import WeatherHourlyBreakdown from "./WeatherHourlyBreakdown";
+
+// WMO weather code to description + icon
+function getWeatherInfo(code) {
+  if (code === 0) return { label: "Clear sky", icon: Sun, color: "text-yellow-500" };
+  if (code <= 2) return { label: "Partly cloudy", icon: Cloud, color: "text-blue-400" };
+  if (code <= 3) return { label: "Overcast", icon: Cloud, color: "text-gray-400" };
+  if (code <= 49) return { label: "Foggy", icon: Cloud, color: "text-gray-400" };
+  if (code <= 59) return { label: "Drizzle", icon: CloudRain, color: "text-blue-400" };
+  if (code <= 69) return { label: "Rain", icon: CloudRain, color: "text-blue-500" };
+  if (code <= 79) return { label: "Snow", icon: CloudSnow, color: "text-blue-200" };
+  if (code <= 84) return { label: "Rain showers", icon: CloudRain, color: "text-blue-500" };
+  if (code <= 94) return { label: "Thunderstorm", icon: CloudRain, color: "text-purple-500" };
+  return { label: "Stormy", icon: Wind, color: "text-gray-600" };
+}
+
+function extractSuburb(address) {
+   if (!address) return null;
+   // Extract suburb and state from address
+   const STATE_RE = /^(NSW|VIC|QLD|SA|WA|ACT|TAS|NT)(\s+\d{4})?$/i;
+   const POSTCODE_RE = /^\d{4}$/;
+
+   const parts = address.split(",").map(s => s.trim());
+   let suburb = null;
+   let state = null;
+
+   // Work backwards; first non-state/postcode part is the suburb
+   for (let i = parts.length - 1; i >= 0; i--) {
+     const part = parts[i];
+     // Check if this part contains state code
+     const stateMatch = part.match(/\b(NSW|VIC|QLD|SA|WA|ACT|TAS|NT)\b/i);
+     if (stateMatch) {
+       state = stateMatch[1].toUpperCase();
+       // Remove state from part to get suburb
+       const cleaned = part.replace(/\s+(NSW|VIC|QLD|SA|WA|ACT|TAS|NT)(\s+\d{4})?$/i, "").trim();
+       if (cleaned.length > 0 && !POSTCODE_RE.test(cleaned)) {
+         suburb = cleaned;
+       }
+       break;
+     }
+   }
+
+   // If no state found, still extract suburb
+   if (!suburb) {
+     for (let i = parts.length - 1; i >= 0; i--) {
+       const part = parts[i];
+       const cleaned = part.replace(/\s+\d{4}$/, "").trim();
+       if (cleaned.length > 0 && !STATE_RE.test(cleaned) && !POSTCODE_RE.test(cleaned)) {
+         suburb = cleaned;
+         break;
+       }
+     }
+   }
+
+   return { suburb, state };
+ }
+
+function formatSunsetTime(isoString) {
+  if (!isoString) return null;
+  const date = new Date(isoString);
+  return date.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", hour12: true });
+}
+
+export default function ProjectWeatherCard({ project, products = [], packages = [] }) {
+  const [weather, setWeather] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [showHourly, setShowHourly] = useState(false);
+
+  // Detect if project has dusk/twilight products
+  const hasDusk = React.useMemo(() => {
+    const allProducts = [...(products || []), ...(packages || [])];
+    return allProducts.some(p => {
+      const name = (p.product_name || p.name || "").toLowerCase();
+      return p.dusk_only || name.includes("dusk") || name.includes("twilight") || name.includes("sunset");
+    });
+  }, [products, packages]);
+
+  const { suburb, state: addressState } = extractSuburb(project?.property_address) || { suburb: null, state: null };
+  // Open-Meteo forecast only supports ±16 days; fall back to today outside that range
+  const shootDate = React.useMemo(() => {
+    const raw = project?.shoot_date;
+    if (!raw) return new Date().toISOString().split("T")[0];
+    const d = new Date(raw);
+    const today = new Date();
+    const diffDays = (d - today) / 86400000;
+    if (diffDays > 15 || diffDays < -2) return today.toISOString().split("T")[0];
+    return raw;
+  }, [project?.shoot_date]);
+
+  useEffect(() => {
+    if (!suburb) {
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function fetchWeather() {
+      setLoading(true);
+      setError(null);
+      try {
+        // Step 1: Geocode suburb
+        const geoRes = await fetch(
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(suburb)}&count=5&language=en&format=json`
+        );
+        const geoData = await geoRes.json();
+
+        // Filter for Australian results, prefer matching state if provided
+        const results = geoData.results || [];
+        let auResult = results.find(r => r.country_code === "AU" && r.admin1 === addressState);
+        if (!auResult) {
+          auResult = results.find(r => r.country_code === "AU");
+        }
+        if (!auResult) {
+          auResult = results[0];
+        }
+
+        if (!auResult) {
+          if (!cancelled) { setError("Location not found"); setLoading(false); }
+          return;
+        }
+
+        const { latitude, longitude, name, admin1 } = auResult;
+
+        // Step 2: Fetch weather for shoot date
+         const weatherRes = await fetch(
+           `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+           `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,sunset` +
+           `&timezone=Australia%2FSydney&start_date=${shootDate}&end_date=${shootDate}`
+         );
+         const weatherData = await weatherRes.json();
+
+         if (!cancelled && weatherData.daily) {
+           const d = weatherData.daily;
+           setWeather({
+             suburb: name,
+             state: admin1,
+             latitude,
+             longitude,
+             code: d.weather_code[0],
+             tempMax: Math.round(d.temperature_2m_max[0]),
+             tempMin: Math.round(d.temperature_2m_min[0]),
+             rain: d.precipitation_sum[0],
+             wind: Math.round(d.wind_speed_10m_max[0]),
+             sunset: d.sunset[0],
+           });
+         }
+      } catch (e) {
+        if (!cancelled) setError("Weather unavailable");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    fetchWeather();
+    return () => { cancelled = true; };
+  }, [suburb, shootDate]);
+
+  if (!suburb) return null;
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 p-3 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-600 animate-pulse">
+        <Cloud className="h-4 w-4" />
+        Loading weather for {suburb}...
+      </div>
+    );
+  }
+
+  if (error || !weather) {
+    return (
+      <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-50 border border-gray-200 text-xs text-gray-400">
+        <Cloud className="h-4 w-4" />
+        Weather unavailable for {suburb}
+      </div>
+    );
+  }
+
+  const { icon: WeatherIcon, label: weatherLabel, color: iconColor } = getWeatherInfo(weather.code);
+  const sunsetTime = formatSunsetTime(weather.sunset);
+
+  return (
+    <Card className={`${hasDusk ? "bg-orange-50 border-orange-200" : "bg-sky-50 border-sky-200"}`}>
+      <CardContent className="p-4 space-y-3">
+        {/* Summary row */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <WeatherIcon className={`h-5 w-5 flex-shrink-0 ${iconColor}`} />
+            <div className="min-w-0">
+              <span className="font-semibold text-gray-800">{weather.suburb}{weather.state ? `, ${weather.state}` : ""}</span>
+              <span className="text-gray-500 ml-1.5 text-xs">{weatherLabel}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
+            <div className="flex items-center gap-1">
+              <Thermometer className="h-3.5 w-3.5 text-red-400" />
+              <span className="font-medium">{weather.tempMax}°</span>
+              <span className="text-gray-400">/ {weather.tempMin}°C</span>
+            </div>
+
+            {weather.rain > 0 && (
+              <div className="flex items-center gap-1">
+                <Droplets className="h-3.5 w-3.5 text-blue-400" />
+                <span>{weather.rain}mm</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1">
+              <Wind className="h-3.5 w-3.5 text-gray-400" />
+              <span>{weather.wind} km/h</span>
+            </div>
+
+            {hasDusk && sunsetTime && (
+              <div className="flex items-center gap-1 font-semibold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">
+                <Sunrise className="h-3.5 w-3.5" />
+                Sunset {sunsetTime}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Hourly breakdown toggle & content */}
+        <div className="border-t pt-3">
+          <button
+            onClick={() => setShowHourly(!showHourly)}
+            className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors mb-2"
+          >
+            {showHourly ? "▼ Hide" : "▶ Show"} Hourly Breakdown
+          </button>
+          {showHourly && (
+            <WeatherHourlyBreakdown
+              latitude={weather.latitude}
+              longitude={weather.longitude}
+              shootDate={shootDate}
+            />
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
