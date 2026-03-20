@@ -37,28 +37,22 @@ Deno.serve(async (req) => {
       return errorResponse('Access denied', 403);
     }
 
-    // Safe fetch with explicit user filter
-    const emails = await entities.EmailMessage.filter({
-      email_account_id,
-      is_deleted: false
-    }, '-received_at', limit);
+    // Safe fetch — use admin client directly so we can use .or() for null/false is_deleted
+    const { data: emails, error: fetchError } = await admin
+      .from('email_messages')
+      .select('id, from, from_name, to, subject, received_at, is_unread, is_starred, project_id, priority')
+      .eq('email_account_id', email_account_id)
+      .or('is_deleted.is.null,is_deleted.eq.false')
+      .order('received_at', { ascending: false })
+      .limit(limit);
 
-    // Sanitize response: strip sensitive fields
-    const sanitized = emails.map((email: any) => ({
-      id: email.id,
-      from: email.from,
-      from_name: email.from_name,
-      to: email.to,
-      subject: email.subject,
-      received_at: email.received_at,
-      is_unread: email.is_unread,
-      is_starred: email.is_starred,
-      project_id: email.project_id,
-      priority: email.priority,
-      // DO NOT INCLUDE: body (potential XSS), refresh_token, access_token
-    }));
+    if (fetchError) {
+      console.error('Error fetching emails:', fetchError);
+      return errorResponse('Failed to fetch emails', 500);
+    }
 
-    return jsonResponse({ success: true, emails: sanitized });
+    // Response is already sanitized via explicit select() — no body, tokens, etc.
+    return jsonResponse({ success: true, emails: emails || [] });
   } catch (error: any) {
     console.error('Error reading emails:', error);
     return errorResponse('Internal server error');

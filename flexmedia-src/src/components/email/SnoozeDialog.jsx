@@ -23,8 +23,32 @@ export default function SnoozeDialog({ open, onOpenChange, onSnooze }) {
     { label: "In 1 week", minutes: 10080 },
   ];
 
+  const computeSnoozeTime = (option) => {
+    const now = new Date();
+    if (option.minutes) {
+      return new Date(now.getTime() + option.minutes * 60 * 1000).toISOString();
+    }
+    if (option.type === 'tomorrow_9am') {
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(9, 0, 0, 0);
+      return tomorrow.toISOString();
+    }
+    if (option.type === 'next_monday_9am') {
+      const nextMonday = new Date(now);
+      const dayOfWeek = nextMonday.getDay();
+      const daysUntilMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+      nextMonday.setDate(nextMonday.getDate() + daysUntilMonday);
+      nextMonday.setHours(9, 0, 0, 0);
+      return nextMonday.toISOString();
+    }
+    // Fallback: 1 hour from now
+    return new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  };
+
   const handleSnooze = (option) => {
-    onSnooze(option);
+    const snoozeUntil = computeSnoozeTime(option);
+    onSnooze({ ...option, snooze_until: snoozeUntil });
     setSelectedOption(null);
     onOpenChange(false);
   };

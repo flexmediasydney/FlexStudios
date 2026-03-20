@@ -413,7 +413,10 @@ export default function EmailInboxMain() {
           email_account_id: msg.email_account_id,
           subject: msg.subject,
           from: msg.from_name || msg.from,
+          from_name: msg.from_name,
           from_email: msg.from,
+          agent_name: msg.agent_name,
+          agency_name: msg.agency_name,
           lastMessage: msg.received_at,
           unreadCount: msg.is_unread ? 1 : 0,
           is_starred: msg.is_starred,
@@ -427,7 +430,7 @@ export default function EmailInboxMain() {
     });
     
     return Array.from(threadMap.values());
-  }, [messages]);
+  }, [messages, userAccountIds]);
 
   // Update selectedThread reference if it exists in threads (after subscription updates)
   useEffect(() => {
@@ -487,7 +490,7 @@ export default function EmailInboxMain() {
             );
             if (!anyToMatch) return false;
           }
-          if (subjectMatch && !t.subject.toLowerCase().includes(subjectMatch[1])) return false;
+          if (subjectMatch && !(t.subject || '').toLowerCase().includes(subjectMatch[1])) return false;
           if (hasAttachment) {
             const hasAny = t.messages.some(m => m.attachments?.length > 0);
             if (!hasAny) return false;
@@ -546,7 +549,7 @@ export default function EmailInboxMain() {
         case 'sender':
           return (a.from_name || a.from).localeCompare(b.from_name || b.from);
         case 'subject':
-          return a.subject.localeCompare(b.subject);
+          return (a.subject || '').localeCompare(b.subject || '');
         case 'unread':
           return b.unreadCount - a.unreadCount;
         case 'newest':
@@ -782,9 +785,9 @@ export default function EmailInboxMain() {
             <FolderButton
               folder={FOLDER_FILTERS.draft}
               isActive={filterView === "draft"}
-              count={threads.filter(t => t.messages[0]?.is_draft).length}
+              count={filterView === "draft" ? threads.length : null}
               onClick={() => applyFolderFilter('draft', {
-                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel, 
+                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Drafts"
@@ -792,9 +795,9 @@ export default function EmailInboxMain() {
             <FolderButton
               folder={FOLDER_FILTERS.sent}
               isActive={filterView === "sent"}
-              count={threads.filter(t => t.messages[0]?.is_sent).length}
+              count={filterView === "sent" ? threads.length : null}
               onClick={() => applyFolderFilter('sent', {
-                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel, 
+                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Sent"
@@ -802,9 +805,9 @@ export default function EmailInboxMain() {
             <FolderButton
               folder={FOLDER_FILTERS.archived}
               isActive={filterView === "archived"}
-              count={threads.filter(t => t.is_archived).length}
+              count={filterView === "archived" ? threads.length : null}
               onClick={() => applyFolderFilter('archived', {
-                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel, 
+                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Archived"
@@ -812,9 +815,9 @@ export default function EmailInboxMain() {
             <FolderButton
               folder={FOLDER_FILTERS.deleted}
               isActive={filterView === "deleted"}
-              count={threads.filter(t => t.is_deleted).length}
+              count={filterView === "deleted" ? threads.length : null}
               onClick={() => applyFolderFilter('deleted', {
-                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel, 
+                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Deleted"
@@ -1179,9 +1182,9 @@ export default function EmailInboxMain() {
                   setSelectedThread(thread);
                   // Auto-mark as read when opening
                   if (thread.unreadCount > 0) {
-                    const unreadMsgs = thread.messages.filter(m => !m.is_read);
+                    const unreadMsgs = thread.messages.filter(m => m.is_unread);
                     unreadMsgs.forEach(msg => {
-                      updateMessageMutation.mutate({ messageId: msg.id, updates: { is_read: true } });
+                      updateMessageMutation.mutate({ messageId: msg.id, updates: { is_unread: false } });
                     });
                   }
                 }}

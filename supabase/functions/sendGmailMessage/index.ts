@@ -14,8 +14,8 @@ Deno.serve(async (req) => {
       return errorResponse('Forbidden: insufficient role', 403);
     }
 
-    const { emailAccountId, to, cc, bcc, subject, body, inReplyTo, threadId,
-        attachmentUrls = [], idempotency_key, projectId } = await req.json();
+    const { emailAccountId, to, cc, bcc, subject, body = '', inReplyTo, threadId,
+        attachments = [], attachmentUrls = [], idempotency_key, projectId, isPrivate } = await req.json();
 
     // Validate required fields
     if (!emailAccountId) {
@@ -95,29 +95,102 @@ Deno.serve(async (req) => {
       is_default: true
     });
 
-    let finalBody = body;
+    let finalBody = body || '';
     if (signatures.length > 0) {
       finalBody += `\n${signatures[0].signature_html}`;
     }
 
     // Build email with proper From header and In-Reply-To for threading
-    const fromHeader = account.display_name
-      ? `${account.display_name} <${account.email_address}>`
+    // Encode display name per RFC 2047 if it contains special characters
+    const safeName = account.display_name
+      ? ((/[^\x20-\x7E]|[",;]/).test(account.display_name)
+          ? `=?UTF-8?B?${btoa(Array.from(new TextEncoder().encode(account.display_name), (b) => String.fromCharCode(b)).join(''))}?=`
+          : `"${account.display_name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
+        : '';
+    const fromHeader = safeName
+      ? `${safeName} <${account.email_address}>`
       : account.email_address;
 
-    const email = [
+    // Build MIME message — headers first, then the mandatory blank-line separator, then body
+    const headerLines: string[] = [
       `From: ${fromHeader}`,
       `To: ${to}`,
-      cc ? `Cc: ${cc}` : '',
-      bcc ? `Bcc: ${bcc}` : '',
-      inReplyTo ? `In-Reply-To: ${inReplyTo}` : '',
-      inReplyTo ? `References: ${inReplyTo}` : '',
-      `Subject: ${subject}`,
-      'Content-Type: text/html; charset="UTF-8"',
-      'MIME-Version: 1.0',
-      '',
-      finalBody
-    ].filter(Boolean).join('\r\n');
+    ];
+    if (cc) headerLines.push(`Cc: ${cc}`);
+    if (bcc) headerLines.push(`Bcc: ${bcc}`);
+    if (inReplyTo) {
+      headerLines.push(`In-Reply-To: ${inReplyTo}`);
+      headerLines.push(`References: ${inReplyTo}`);
+    }
+    headerLines.push(`Subject: ${subject}`);
+    headerLines.push('MIME-Version: 1.0');
+
+    // Merge both attachment formats: legacy `attachmentUrls` and new `attachments` from compose dialog
+    // `attachments` items have { file_url, filename, mime_type, size }
+    // `attachmentUrls` items are either strings or { url, filename, mimeType }
+    const allAttachments: Array<{ url: string; filename: string; mimeType: string }> = [];
+    for (const att of attachmentUrls) {
+      if (typeof att === 'string') {
+        allAttachments.push({ url: att, filename: att.split('/').pop() || 'attachment', mimeType: 'application/octet-stream' });
+      } else {
+        allAttachments.push({ url: att.url, filename: att.filename || 'attachment', mimeType: att.mimeType || 'application/octet-stream' });
+      }
+    }
+    for (const att of attachments) {
+      if (att.file_url) {
+        allAttachments.push({ url: att.file_url, filename: att.filename || 'attachment', mimeType: att.mime_type || 'application/octet-stream' });
+      }
+    }
+
+    // If attachments are provided, build a multipart/mixed MIME message
+    let email: string;
+    if (allAttachments.length > 0) {
+      const boundary = `boundary_${crypto.randomUUID().replace(/-/g, '')}`;
+      headerLines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+
+      const parts: string[] = [];
+
+      // HTML body part
+      parts.push(
+        `--${boundary}\r\n` +
+        `Content-Type: text/html; charset="UTF-8"\r\n` +
+        `Content-Transfer-Encoding: base64\r\n\r\n` +
+        btoa(Array.from(new TextEncoder().encode(finalBody), (b) => String.fromCharCode(b)).join(''))
+      );
+
+      // Attachment parts — download each URL and inline as base64
+      for (const att of allAttachments) {
+        try {
+          const { url, filename, mimeType } = att;
+
+          const attResponse = await fetch(url);
+          if (!attResponse.ok) {
+            console.warn(`Failed to download attachment: ${url} (${attResponse.status})`);
+            continue;
+          }
+          const attBytes = new Uint8Array(await attResponse.arrayBuffer());
+          const attBase64 = btoa(Array.from(attBytes, (b) => String.fromCharCode(b)).join(''));
+
+          parts.push(
+            `--${boundary}\r\n` +
+            `Content-Type: ${mimeType}; name="${filename}"\r\n` +
+            `Content-Disposition: attachment; filename="${filename}"\r\n` +
+            `Content-Transfer-Encoding: base64\r\n\r\n` +
+            attBase64
+          );
+        } catch (attErr: any) {
+          console.warn(`Failed to process attachment:`, attErr?.message);
+        }
+      }
+
+      parts.push(`--${boundary}--`);
+
+      email = headerLines.join('\r\n') + '\r\n\r\n' + parts.join('\r\n');
+    } else {
+      // Simple single-part HTML message
+      headerLines.push('Content-Type: text/html; charset="UTF-8"');
+      email = headerLines.join('\r\n') + '\r\n\r\n' + finalBody;
+    }
 
     // Encode to base64url — use TextEncoder for proper UTF-8 support
     const emailBytes = new TextEncoder().encode(email);
@@ -159,13 +232,16 @@ Deno.serve(async (req) => {
         gmail_thread_id: result.threadId,
         from: account.email_address,
         from_name: account.display_name,
-        to: [to],
-        cc: cc ? [cc] : [],
+        to: to.split(',').map((e: string) => e.trim()).filter(Boolean),
+        cc: cc ? cc.split(',').map((e: string) => e.trim()).filter(Boolean) : [],
+        bcc: bcc ? bcc.split(',').map((e: string) => e.trim()).filter(Boolean) : [],
         subject,
         body: finalBody,
         is_sent: true,
         received_at: new Date().toISOString(),
         idempotency_key: idempotency_key || null,
+        visibility: isPrivate === false ? 'shared' : 'private',
+        ...(allAttachments.length > 0 ? { attachments: attachments } : {}),
         ...(projectId ? { project_id: projectId } : {}),
       });
     } catch (createErr: any) {

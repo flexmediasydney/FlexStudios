@@ -1,0 +1,233 @@
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.20';
+
+const APP_TIMEZONE = 'Australia/Sydney';
+
+async function refreshAccessToken(clientId: string, clientSecret: string, refreshToken: string): Promise<string> {
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token'
+    })
+  });
+  const data = await res.json();
+  if (!data.access_token) throw new Error(`Token refresh failed: ${data.error || 'unknown'}`);
+  return data.access_token;
+}
+
+function toGoogleDateTime(isoString: string | null, isAllDay: boolean) {
+  if (!isoString) return {};
+  if (isAllDay) return { date: isoString.slice(0, 10) };
+  return { dateTime: isoString, timeZone: APP_TIMEZONE };
+}
+
+Deno.serve(async (req) => {
+  try {
+    const base44 = createClientFromRequest(req);
+    const user = await base44.auth.me();
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!['master_admin', 'employee'].includes(user.role)) {
+      return Response.json({ error: 'Forbidden: insufficient role' }, { status: 403 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const { calendar_event_id } = body;
+    if (!calendar_event_id) {
+      return Response.json({ error: 'calendar_event_id is required' }, { status: 400 });
+    }
+
+    // Load the CalendarEvent
+    const calEvent = await base44.entities.CalendarEvent.get(calendar_event_id);
+    if (!calEvent) return Response.json({ error: 'CalendarEvent not found' }, { status: 404 });
+
+    // ── SECURITY GATE 1: Source check ────────────────────────────────────────
+    // Hard reject: Tonomo and Google-source events are NEVER pushed by this function.
+    // Only Tonomo itself may modify Tonomo events. Google events are read-only here.
+    const eventSource = calEvent.event_source || 'flexmedia';
+    if (eventSource === 'tonomo') {
+      return Response.json({
+        error: 'Tonomo booking events cannot be modified from FlexMedia. Edit in Tonomo.',
+        code: 'TONOMO_EVENT_IMMUTABLE'
+      }, { status: 403 });
+    }
+    if (eventSource === 'google') {
+      return Response.json({
+        error: 'Google Calendar events are read-only in FlexMedia. Edit in Google Calendar.',
+        code: 'GOOGLE_EVENT_READONLY'
+      }, { status: 403 });
+    }
+
+    // ── SECURITY GATE 2: Ownership check ─────────────────────────────────────
+    // Only the event's creator may push it to Google Calendar.
+    // This prevents User A from triggering a write to User B's calendar.
+    if (calEvent.created_by_user_id && calEvent.created_by_user_id !== user.id) {
+      return Response.json({
+        error: 'You can only push your own events to Google Calendar.',
+        code: 'NOT_EVENT_OWNER'
+      }, { status: 403 });
+    }
+
+    // ── SECURITY GATE 3: Calendar connection belongs to this user ─────────────
+    // Only fetch connections owned by the calling user.
+    // This ensures writes go to the caller's own Google Calendar only.
+    const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
+    const clientSecret = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      return Response.json({ error: 'Google OAuth not configured' }, { status: 500 });
+    }
+
+    const connections = await base44.entities.CalendarConnection.filter({
+      created_by: user.email,
+      is_enabled: true,
+    }, null, 10);
+
+    if (connections.length === 0) {
+      return Response.json({ skipped: true, reason: 'No connected Google Calendar for this user' });
+    }
+
+    const connection = connections[0];
+    if (!connection.refresh_token) {
+      return Response.json({ skipped: true, reason: 'Calendar connection has no refresh token — please reconnect' });
+    }
+
+    // Get a fresh access token
+    let accessToken: string;
+    try {
+      accessToken = await refreshAccessToken(clientId, clientSecret, connection.refresh_token);
+      await base44.entities.CalendarConnection.update(connection.id, { access_token: accessToken });
+    } catch (err: any) {
+      return Response.json({ error: `Token refresh failed: ${err.message}` }, { status: 401 });
+    }
+
+    const isAllDay = calEvent.is_all_day || false;
+
+    // Enrich description with project context if linked
+    let enrichedDescription = calEvent.description || '';
+    if (calEvent.project_id) {
+      try {
+        const project = await base44.entities.Project.get(calEvent.project_id);
+        if (project) {
+          const appUrl = Deno.env.get('BASE44_APP_URL') || 'https://flexstudios.app';
+          const projectLink = `${appUrl}/ProjectDetails?id=${project.id}`;
+          const contextLines = [
+            `📁 Project: ${project.title || project.property_address || 'Untitled'}`,
+            project.property_address ? `📍 ${project.property_address}` : null,
+            project.shoot_date ? `📅 Shoot: ${project.shoot_date}` : null,
+            `🔗 View in FlexMedia: ${projectLink}`,
+          ].filter(Boolean).join('\n');
+          enrichedDescription = enrichedDescription
+            ? `${enrichedDescription}\n\n──────────────\n${contextLines}`
+            : contextLines;
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    const gEventPayload: Record<string, any> = {
+      summary: calEvent.title || 'FlexMedia Activity',
+      description: enrichedDescription,
+      location: calEvent.location || '',
+      start: toGoogleDateTime(calEvent.start_time, isAllDay),
+      end: toGoogleDateTime(calEvent.end_time || calEvent.start_time, isAllDay),
+    };
+
+    // Attendees: only include explicitly listed attendees, never auto-add team members
+    if (calEvent.attendees) {
+      try {
+        const attendeeList = JSON.parse(calEvent.attendees);
+        if (Array.isArray(attendeeList) && attendeeList.length > 0) {
+          gEventPayload.attendees = attendeeList
+            .filter((a: any) => a.email)
+            .map((a: any) => ({ email: a.email, displayName: a.name || undefined }));
+        }
+      } catch { /* ignore malformed attendees */ }
+    }
+
+    let gEventId = calEvent.google_event_id || '';
+    let operation: 'created' | 'updated' = 'created';
+
+    if (gEventId) {
+      // UPDATE existing Google event
+      const updateRes = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events/${gEventId}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(gEventPayload),
+        }
+      );
+
+      if (updateRes.status === 404) {
+        // Deleted in Google — fall through to create
+        gEventId = '';
+      } else if (!updateRes.ok) {
+        const errBody = await updateRes.text();
+        return Response.json({ error: `Google Calendar update failed: ${errBody}` }, { status: 502 });
+      } else {
+        const updated = await updateRes.json();
+        gEventId = updated.id;
+        operation = 'updated';
+      }
+    }
+
+    if (!gEventId) {
+      // CREATE new Google event
+      const createRes = await fetch(
+        'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(gEventPayload),
+        }
+      );
+
+      if (!createRes.ok) {
+        const errBody = await createRes.text();
+        return Response.json({ error: `Google Calendar create failed: ${errBody}` }, { status: 502 });
+      }
+
+      const created = await createRes.json();
+      gEventId = created.id;
+      operation = 'created';
+    }
+
+    // Write google_event_id back — but ONLY update calendar metadata fields,
+    // never touch event_source, title, times, or ownership fields.
+    await base44.entities.CalendarEvent.update(calendar_event_id, {
+      google_event_id: gEventId,
+      google_html_link: `https://www.google.com/calendar/event?eid=${gEventId}`,
+      is_synced: true,
+      calendar_account: connection.account_email,
+    });
+
+    return Response.json({
+      success: true,
+      operation,
+      google_event_id: gEventId,
+      calendar_account: connection.account_email,
+    });
+
+  } catch (error: any) {
+    console.error('writeCalendarEventToGoogle error:', error);
+    // Fix 4d — persist sync failure state so UI can surface it
+    const bodyForError = await req.json().catch(() => ({}));
+    const eventIdForError = bodyForError?.calendar_event_id;
+    if (eventIdForError) {
+      try {
+        const base44Err = createClientFromRequest(req);
+        await base44Err.entities.CalendarEvent.update(eventIdForError, {
+          is_synced: false,
+        }).catch(() => {});
+      } catch { /* ignore */ }
+    }
+    return Response.json({ error: error.message }, { status: 500 });
+  }
+});

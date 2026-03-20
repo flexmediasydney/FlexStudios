@@ -80,7 +80,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const queryClient = useQueryClient();
   const latestMessageRef = useRef(null);
   const containerRef = useRef(null);
-  
+
   // Auto-scroll to latest message on thread open
   useEffect(() => {
     if (latestMessageRef.current) {
@@ -95,6 +95,15 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   // Subscribe to real-time updates for all messages in this thread
   const messageIds = thread.messages.map(m => m.id);
   const [liveMessages, setLiveMessages] = useState(thread.messages);
+
+  // Reset state when navigating between threads (J/K keys)
+  useEffect(() => {
+    setExpandedMessages(new Set([thread.messages[thread.messages.length - 1]?.id]));
+    setLiveMessages(thread.messages);
+    setReplyExpanded(false);
+    setShowForward(false);
+    setShowRaw(false);
+  }, [thread.threadId]);
 
   useEffect(() => {
     // Verify user owns this account (critical security check)
@@ -1143,6 +1152,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       {showForward && (
         <EmailComposeDialog
           email={msg}
+          account={account}
           type="forward"
           onClose={() => setShowForward(false)}
           onSent={() => {

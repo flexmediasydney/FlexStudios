@@ -34,11 +34,13 @@ const GMAIL_RATE_LIMIT_DELAY = 100;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const retryFetch = async (url: string, options: any, retries = MAX_RETRIES) => {
+const retryFetch = async (url: string, options: any, retries = MAX_RETRIES): Promise<Response> => {
+  let lastResponse: Response | undefined;
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetch(url, options);
       if (response.status === 429) {
+        lastResponse = response;
         const retryAfter = parseInt(response.headers.get('retry-after') || '5') * 1000;
         await sleep(retryAfter);
         continue;
@@ -49,6 +51,8 @@ const retryFetch = async (url: string, options: any, retries = MAX_RETRIES) => {
       await sleep(RETRY_DELAY_MS * Math.pow(2, i));
     }
   }
+  if (lastResponse) return lastResponse;
+  throw new Error('retryFetch: all retries exhausted with no response');
 };
 
 const extractEmailBody = (payload: any) => {
@@ -89,8 +93,8 @@ const extractEmailBody = (payload: any) => {
 
 const extractAttachments = (payload: any) => {
   const attachments: any[] = [];
-  if (!payload.parts) return attachments;
-  for (const part of payload.parts) {
+  const walkParts = (part: any) => {
+    if (!part) return;
     if (part.filename && part.body?.attachmentId) {
       attachments.push({
         filename: part.filename,
@@ -99,7 +103,13 @@ const extractAttachments = (payload: any) => {
         attachment_id: part.body.attachmentId
       });
     }
-  }
+    if (part.parts) {
+      for (const child of part.parts) {
+        walkParts(child);
+      }
+    }
+  };
+  walkParts(payload);
   return attachments;
 };
 
@@ -113,7 +123,7 @@ const parseHeaders = (headers: any[]) => {
 
 const fetchMessageDetails = async (accessToken: string, messageId: string) => {
   const response = await retryFetch(
-    `https://www.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=full`,
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=full`,
     { headers: { 'Authorization': `Bearer ${accessToken}` } }
   );
   if (!response.ok) {
@@ -251,6 +261,378 @@ const saveMessage = async (entities: any, account: any, fullMsg: any, headers: a
   }
 };
 
+// --- Full sync: list messages via query, fetch new ones ---
+async function fullSyncAccount(
+  accessToken: string,
+  account: any,
+  entities: any,
+  admin: any,
+  results: any,
+): Promise<{ synced: number; latestHistoryId: string | null }> {
+  let accountSynced = 0;
+  let latestHistoryId: string | null = null;
+
+  const query = getMessageQuery(account);
+
+  let messageIds: any[] = [];
+  let pageToken: string | null = null;
+  const MAX_MESSAGES_PER_SYNC = 500;
+
+  do {
+    const url = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
+    url.searchParams.append('q', query);
+    url.searchParams.append('maxResults', '100');
+    if (pageToken) url.searchParams.append('pageToken', pageToken);
+
+    const listResponse = await retryFetch(
+      url.toString(),
+      { headers: { 'Authorization': `Bearer ${accessToken}` } }
+    );
+
+    if (!listResponse || !listResponse.ok) {
+      const errorText = listResponse ? await listResponse.text() : 'no response';
+      throw new Error(`Gmail API list error: ${listResponse?.status} - ${errorText}`);
+    }
+
+    const data = await listResponse.json();
+    const newMessages = data.messages || [];
+    messageIds = messageIds.concat(newMessages);
+    pageToken = data.nextPageToken;
+
+    if (messageIds.length >= MAX_MESSAGES_PER_SYNC) {
+      messageIds = messageIds.slice(0, MAX_MESSAGES_PER_SYNC);
+      break;
+    }
+
+    if (pageToken) await sleep(GMAIL_RATE_LIMIT_DELAY * 2);
+  } while (pageToken);
+
+  // Get historyId from the first (most recent) message or from profile
+  if (messageIds.length > 0) {
+    const firstMsgResponse = await retryFetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageIds[0].id}?format=metadata&metadataHeaders=Subject`,
+      { headers: { 'Authorization': `Bearer ${accessToken}` } }
+    );
+    if (firstMsgResponse && firstMsgResponse.ok) {
+      const firstMsg = await firstMsgResponse.json();
+      latestHistoryId = firstMsg.historyId || null;
+    }
+  } else {
+    const profileResponse = await retryFetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/profile`,
+      { headers: { 'Authorization': `Bearer ${accessToken}` } }
+    );
+    if (profileResponse && profileResponse.ok) {
+      const profile = await profileResponse.json();
+      latestHistoryId = profile.historyId || null;
+    }
+  }
+
+  const processedIds = new Set();
+
+  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    const batch = messageIds.slice(i, i + BATCH_SIZE);
+
+    for (const msg of batch) {
+      if (processedIds.has(msg.id)) continue;
+      processedIds.add(msg.id);
+
+      try {
+        const exists = await messageExists(entities, account, msg.id);
+
+        if (!exists) {
+          const fullMsg = await fetchMessageDetails(accessToken, msg.id);
+          const hdrs = parseHeaders(fullMsg.payload.headers || []);
+
+          const saved = await saveMessage(entities, account, fullMsg, hdrs, admin);
+          if (saved) {
+            accountSynced++;
+          }
+        }
+
+        await sleep(GMAIL_RATE_LIMIT_DELAY);
+      } catch (error: any) {
+        results.errors.push(`Message ${msg.id}: ${error.message}`);
+      }
+    }
+  }
+
+  return { synced: accountSynced, latestHistoryId };
+}
+
+// --- Incremental sync via Gmail History API ---
+async function syncViaHistory(
+  accessToken: string,
+  account: any,
+  entities: any,
+  admin: any,
+  results: any,
+): Promise<{ synced: number; latestHistoryId: string | null; fallbackToFull: boolean }> {
+  let synced = 0;
+  let latestHistoryId: string | null = account.history_id;
+
+  const url = new URL('https://gmail.googleapis.com/gmail/v1/users/me/history');
+  url.searchParams.append('startHistoryId', account.history_id);
+  url.searchParams.append('historyTypes', 'messageAdded');
+  url.searchParams.append('historyTypes', 'messageDeleted');
+  url.searchParams.append('historyTypes', 'labelAdded');
+  url.searchParams.append('historyTypes', 'labelRemoved');
+  url.searchParams.append('maxResults', '500');
+
+  const historyResponse = await retryFetch(
+    url.toString(),
+    { headers: { 'Authorization': `Bearer ${accessToken}` } }
+  );
+
+  if (!historyResponse) {
+    return { synced: 0, latestHistoryId: null, fallbackToFull: true };
+  }
+
+  // 404 means the historyId is too old — fall back to full sync
+  if (historyResponse.status === 404) {
+    console.log(`History ID ${account.history_id} expired for account ${account.email_address}, falling back to full sync`);
+    return { synced: 0, latestHistoryId: null, fallbackToFull: true };
+  }
+
+  if (!historyResponse.ok) {
+    throw new Error(`Gmail History API error: ${historyResponse.status}`);
+  }
+
+  const historyData = await historyResponse.json();
+  latestHistoryId = historyData.historyId || latestHistoryId;
+
+  const historyRecords = historyData.history || [];
+
+  if (historyRecords.length === 0) {
+    return { synced: 0, latestHistoryId, fallbackToFull: false };
+  }
+
+  // Collect all message IDs that were added, deleted, or had label changes
+  const addedMessageIds = new Set<string>();
+  const deletedMessageIds = new Set<string>();
+  const labelChangedMessageIds = new Set<string>();
+
+  for (const record of historyRecords) {
+    if (record.messagesAdded) {
+      for (const added of record.messagesAdded) {
+        addedMessageIds.add(added.message.id);
+      }
+    }
+    if (record.messagesDeleted) {
+      for (const deleted of record.messagesDeleted) {
+        deletedMessageIds.add(deleted.message.id);
+      }
+    }
+    if (record.labelsAdded) {
+      for (const changed of record.labelsAdded) {
+        labelChangedMessageIds.add(changed.message.id);
+      }
+    }
+    if (record.labelsRemoved) {
+      for (const changed of record.labelsRemoved) {
+        labelChangedMessageIds.add(changed.message.id);
+      }
+    }
+  }
+
+  // Remove from "added" if also deleted
+  for (const id of deletedMessageIds) {
+    addedMessageIds.delete(id);
+  }
+
+  // Process new messages
+  const addedList = [...addedMessageIds];
+  for (let i = 0; i < addedList.length; i += BATCH_SIZE) {
+    const batch = addedList.slice(i, i + BATCH_SIZE);
+    for (const msgId of batch) {
+      try {
+        const exists = await messageExists(entities, account, msgId);
+        if (!exists) {
+          const fullMsg = await fetchMessageDetails(accessToken, msgId);
+          const hdrs = parseHeaders(fullMsg.payload.headers || []);
+          const saved = await saveMessage(entities, account, fullMsg, hdrs, admin);
+          if (saved) synced++;
+        }
+        await sleep(GMAIL_RATE_LIMIT_DELAY);
+      } catch (error: any) {
+        results.errors.push(`Message ${msgId}: ${error.message}`);
+      }
+    }
+  }
+
+  // Process deleted messages
+  if (deletedMessageIds.size > 0) {
+    for (const msgId of deletedMessageIds) {
+      try {
+        const existing = await entities.EmailMessage.filter({
+          gmail_message_id: msgId,
+          email_account_id: account.id
+        }, null, 1);
+        if (existing.length > 0) {
+          await entities.EmailMessage.update(existing[0].id, { is_deleted: true });
+        }
+      } catch (error: any) {
+        console.error(`Error marking message ${msgId} as deleted:`, error);
+      }
+    }
+  }
+
+  // Process label changes (read/unread, starred, etc.)
+  const labelOnlyIds = [...labelChangedMessageIds].filter(id => !addedMessageIds.has(id) && !deletedMessageIds.has(id));
+  for (const msgId of labelOnlyIds) {
+    try {
+      const msgResponse = await retryFetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=metadata&metadataHeaders=Subject`,
+        { headers: { 'Authorization': `Bearer ${accessToken}` } }
+      );
+      if (msgResponse && msgResponse.ok) {
+        const msgData = await msgResponse.json();
+        const labels = msgData.labelIds || [];
+
+        const existing = await entities.EmailMessage.filter({
+          gmail_message_id: msgId,
+          email_account_id: account.id
+        }, null, 1);
+
+        if (existing.length > 0) {
+          await entities.EmailMessage.update(existing[0].id, {
+            is_unread: labels.includes('UNREAD'),
+            is_starred: labels.includes('STARRED'),
+            is_draft: labels.includes('DRAFT'),
+            is_sent: labels.includes('SENT'),
+          });
+        }
+      }
+      await sleep(GMAIL_RATE_LIMIT_DELAY);
+    } catch (error: any) {
+      console.error(`Error updating labels for message ${msgId}:`, error);
+    }
+  }
+
+  // Paginate history if needed
+  let nextPageToken = historyData.nextPageToken;
+  while (nextPageToken) {
+    const pageUrl = new URL('https://gmail.googleapis.com/gmail/v1/users/me/history');
+    pageUrl.searchParams.append('startHistoryId', account.history_id);
+    pageUrl.searchParams.append('historyTypes', 'messageAdded');
+    pageUrl.searchParams.append('historyTypes', 'messageDeleted');
+    pageUrl.searchParams.append('historyTypes', 'labelAdded');
+    pageUrl.searchParams.append('historyTypes', 'labelRemoved');
+    pageUrl.searchParams.append('maxResults', '500');
+    pageUrl.searchParams.append('pageToken', nextPageToken);
+
+    const pageResponse = await retryFetch(
+      pageUrl.toString(),
+      { headers: { 'Authorization': `Bearer ${accessToken}` } }
+    );
+
+    if (!pageResponse || !pageResponse.ok) break;
+
+    const pageData = await pageResponse.json();
+    latestHistoryId = pageData.historyId || latestHistoryId;
+
+    for (const record of (pageData.history || [])) {
+      if (record.messagesAdded) {
+        for (const added of record.messagesAdded) {
+          try {
+            const exists = await messageExists(entities, account, added.message.id);
+            if (!exists) {
+              const fullMsg = await fetchMessageDetails(accessToken, added.message.id);
+              const hdrs = parseHeaders(fullMsg.payload.headers || []);
+              const saved = await saveMessage(entities, account, fullMsg, hdrs, admin);
+              if (saved) synced++;
+            }
+            await sleep(GMAIL_RATE_LIMIT_DELAY);
+          } catch (error: any) {
+            results.errors.push(`Message ${added.message.id}: ${error.message}`);
+          }
+        }
+      }
+      if (record.messagesDeleted) {
+        for (const deleted of record.messagesDeleted) {
+          try {
+            const existing = await entities.EmailMessage.filter({
+              gmail_message_id: deleted.message.id,
+              email_account_id: account.id
+            }, null, 1);
+            if (existing.length > 0) {
+              await entities.EmailMessage.update(existing[0].id, { is_deleted: true });
+            }
+          } catch { /* non-fatal */ }
+        }
+      }
+    }
+
+    nextPageToken = pageData.nextPageToken;
+  }
+
+  return { synced, latestHistoryId, fallbackToFull: false };
+}
+
+// --- Upsert email_conversations summary table ---
+async function upsertConversations(admin: any, accountId: string) {
+  try {
+    const { data: threadMessages } = await admin
+      .from('email_messages')
+      .select('gmail_thread_id, subject, from, from_name, is_unread, is_starred, received_at, attachments, project_id, project_title, agent_id, agency_id, to, cc')
+      .eq('email_account_id', accountId)
+      .or('is_deleted.is.null,is_deleted.eq.false')  // Exclude deleted messages (include null and false)
+      .order('received_at', { ascending: false });
+
+    if (threadMessages && threadMessages.length > 0) {
+      const threads = new Map<string, any[]>();
+      for (const msg of threadMessages) {
+        const tid = msg.gmail_thread_id;
+        if (!threads.has(tid)) threads.set(tid, []);
+        threads.get(tid)!.push(msg);
+      }
+
+      const conversationRows: any[] = [];
+      for (const [threadId, msgs] of threads) {
+        const latest = msgs[0];
+        const oldest = msgs[msgs.length - 1];
+        const participantSet = new Set<string>();
+        let hasAttachments = false;
+        for (const m of msgs) {
+          if (m.from) participantSet.add(m.from);
+          if (Array.isArray(m.to)) m.to.forEach((e: string) => participantSet.add(e));
+          if (Array.isArray(m.cc)) m.cc.forEach((e: string) => participantSet.add(e));
+          if (m.attachments && Array.isArray(m.attachments) && m.attachments.length > 0) hasAttachments = true;
+        }
+        const linkedMsg = msgs.find((m: any) => m.project_id);
+        conversationRows.push({
+          email_account_id: accountId,
+          gmail_thread_id: threadId,
+          subject: latest.subject,
+          snippet: (latest.subject || '').substring(0, 200),
+          first_message_at: oldest.received_at,
+          last_message_at: latest.received_at,
+          message_count: msgs.length,
+          unread_count: msgs.filter((m: any) => m.is_unread).length,
+          participant_count: participantSet.size,
+          participants: JSON.stringify([...participantSet]),
+          is_starred: msgs.some((m: any) => m.is_starred),
+          has_attachments: hasAttachments,
+          last_sender: latest.from,
+          last_sender_name: latest.from_name,
+          project_id: linkedMsg?.project_id || null,
+          project_title: linkedMsg?.project_title || null,
+          agent_id: linkedMsg?.agent_id || null,
+          agency_id: linkedMsg?.agency_id || null,
+        });
+      }
+      for (let i = 0; i < conversationRows.length; i += 50) {
+        const batch = conversationRows.slice(i, i + 50);
+        await admin
+          .from('email_conversations')
+          .upsert(batch, { onConflict: 'email_account_id,gmail_thread_id' });
+      }
+    }
+  } catch (convError: any) {
+    console.error('Error upserting email_conversations:', convError?.message);
+  }
+}
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
@@ -312,6 +694,7 @@ Deno.serve(async (req) => {
 
     for (const account of emailAccounts) {
       let accountSynced = 0;
+      let syncMode = 'full';
 
       try {
         if (!account.refresh_token) {
@@ -324,134 +707,42 @@ Deno.serve(async (req) => {
           entities.EmailAccount.update(account.id, { access_token: accessToken })
         );
 
-        const query = getMessageQuery(account);
+        let latestHistoryId: string | null = null;
 
-        let messageIds: any[] = [];
-        let pageToken: string | null = null;
-        const MAX_MESSAGES_PER_SYNC = 500;
+        // --- Decide: incremental (History API) vs full sync ---
+        if (account.history_id) {
+          syncMode = 'incremental';
+          console.log(`Using History API for ${account.email_address} (historyId: ${account.history_id})`);
 
-        do {
-          const url = new URL('https://www.googleapis.com/gmail/v1/users/me/messages');
-          url.searchParams.append('q', query);
-          url.searchParams.append('maxResults', '100');
-          if (pageToken) url.searchParams.append('pageToken', pageToken);
+          const historyResult = await syncViaHistory(accessToken, account, entities, admin, results);
 
-          const listResponse = await retryFetch(
-            url.toString(),
-            { headers: { 'Authorization': `Bearer ${accessToken}` } }
-          );
-
-          if (!listResponse.ok) {
-            const errorText = await listResponse.text();
-            throw new Error(`Gmail API list error: ${listResponse.status} - ${errorText}`);
+          if (historyResult.fallbackToFull) {
+            console.log(`Falling back to full sync for ${account.email_address}`);
+            syncMode = 'full_fallback';
+            const fullResult = await fullSyncAccount(accessToken, account, entities, admin, results);
+            accountSynced = fullResult.synced;
+            latestHistoryId = fullResult.latestHistoryId;
+          } else {
+            accountSynced = historyResult.synced;
+            latestHistoryId = historyResult.latestHistoryId;
           }
-
-          const data = await listResponse.json();
-          const newMessages = data.messages || [];
-          messageIds = messageIds.concat(newMessages);
-          pageToken = data.nextPageToken;
-
-          if (messageIds.length >= MAX_MESSAGES_PER_SYNC) {
-            messageIds = messageIds.slice(0, MAX_MESSAGES_PER_SYNC);
-            break;
-          }
-
-          if (pageToken) await sleep(GMAIL_RATE_LIMIT_DELAY * 2);
-        } while (pageToken);
-
-        const processedIds = new Set();
-
-        for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
-          const batch = messageIds.slice(i, i + BATCH_SIZE);
-
-          for (const msg of batch) {
-            if (processedIds.has(msg.id)) continue;
-            processedIds.add(msg.id);
-
-            try {
-              const exists = await messageExists(entities, account, msg.id);
-
-              if (!exists) {
-                const fullMsg = await fetchMessageDetails(accessToken, msg.id);
-                const hdrs = parseHeaders(fullMsg.payload.headers || []);
-
-                const saved = await saveMessage(entities, account, fullMsg, hdrs, admin);
-                if (saved) {
-                  accountSynced++;
-                }
-              }
-
-              await sleep(GMAIL_RATE_LIMIT_DELAY);
-            } catch (error: any) {
-              results.errors.push(`Message ${msg.id}: ${error.message}`);
-            }
-          }
+        } else {
+          // No history_id stored — first sync or migration, do full sync
+          console.log(`Full sync for ${account.email_address} (no history_id stored)`);
+          const fullResult = await fullSyncAccount(accessToken, account, entities, admin, results);
+          accountSynced = fullResult.synced;
+          latestHistoryId = fullResult.latestHistoryId;
         }
 
-        // ─── Upsert email_conversations summary table ───────────────────────
-        try {
-          const { data: threadMessages } = await admin
-            .from('email_messages')
-            .select('gmail_thread_id, subject, from, from_name, is_unread, is_starred, received_at, attachments, project_id, project_title, agent_id, agency_id, to, cc')
-            .eq('email_account_id', account.id)
-            .order('received_at', { ascending: false });
+        // Upsert email_conversations summary table
+        await upsertConversations(admin, account.id);
 
-          if (threadMessages && threadMessages.length > 0) {
-            const threads = new Map<string, any[]>();
-            for (const msg of threadMessages) {
-              const tid = msg.gmail_thread_id;
-              if (!threads.has(tid)) threads.set(tid, []);
-              threads.get(tid)!.push(msg);
-            }
-
-            const conversationRows: any[] = [];
-            for (const [threadId, msgs] of threads) {
-              const latest = msgs[0];
-              const oldest = msgs[msgs.length - 1];
-              const participantSet = new Set<string>();
-              let hasAttachments = false;
-              for (const m of msgs) {
-                if (m.from) participantSet.add(m.from);
-                if (Array.isArray(m.to)) m.to.forEach((e: string) => participantSet.add(e));
-                if (Array.isArray(m.cc)) m.cc.forEach((e: string) => participantSet.add(e));
-                if (m.attachments && Array.isArray(m.attachments) && m.attachments.length > 0) hasAttachments = true;
-              }
-              const linkedMsg = msgs.find((m: any) => m.project_id);
-              conversationRows.push({
-                email_account_id: account.id,
-                gmail_thread_id: threadId,
-                subject: latest.subject,
-                snippet: (latest.subject || '').substring(0, 200),
-                first_message_at: oldest.received_at,
-                last_message_at: latest.received_at,
-                message_count: msgs.length,
-                unread_count: msgs.filter((m: any) => m.is_unread).length,
-                participant_count: participantSet.size,
-                participants: JSON.stringify([...participantSet]),
-                is_starred: msgs.some((m: any) => m.is_starred),
-                has_attachments: hasAttachments,
-                last_sender: latest.from,
-                last_sender_name: latest.from_name,
-                project_id: linkedMsg?.project_id || null,
-                project_title: linkedMsg?.project_title || null,
-                agent_id: linkedMsg?.agent_id || null,
-                agency_id: linkedMsg?.agency_id || null,
-              });
-            }
-            for (let i = 0; i < conversationRows.length; i += 50) {
-              const batch = conversationRows.slice(i, i + 50);
-              await admin
-                .from('email_conversations')
-                .upsert(batch, { onConflict: 'email_account_id,gmail_thread_id' });
-            }
-          }
-        } catch (convError: any) {
-          console.error('Error upserting email_conversations:', convError?.message);
-        }
-
+        // Update account metadata
         await retryWithBackoff(() =>
           entities.EmailAccount.update(account.id, {
-            last_sync: new Date().toISOString()
+            last_sync: new Date().toISOString(),
+            // Store the latest historyId for next incremental sync
+            ...(latestHistoryId ? { history_id: latestHistoryId } : {}),
           })
         );
 
@@ -460,6 +751,7 @@ Deno.serve(async (req) => {
         results.accountDetails.push({
           email: account.email_address,
           synced: accountSynced,
+          syncMode,
           status: 'success'
         });
 
@@ -467,6 +759,7 @@ Deno.serve(async (req) => {
         results.accountDetails.push({
           email: account.email_address,
           synced: 0,
+          syncMode,
           status: 'error',
           error: error.message
         });

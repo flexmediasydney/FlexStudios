@@ -20,15 +20,32 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 
-export const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-};
+const ALLOWED_ORIGINS = [
+  'https://flexstudios.app',
+  'https://www.flexstudios.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
+function getCorsOrigin(req?: Request): string {
+  const origin = req?.headers?.get('origin') || '';
+  return ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+}
+
+export function getCorsHeaders(req?: Request) {
+  return {
+    'Access-Control-Allow-Origin': getCorsOrigin(req),
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+  };
+}
+
+/** @deprecated Use getCorsHeaders(req) for origin-aware CORS. Defaults to production origin. */
+export const corsHeaders = getCorsHeaders();
 
 export function handleCors(req: Request): Response | null {
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', { headers: getCorsHeaders(req) });
   }
   return null;
 }
@@ -252,13 +269,13 @@ export async function fireNotif(params: {
 
 // ─── Response helpers ─────────────────────────────────────────────────────────
 
-export function jsonResponse(data: any, status = 200): Response {
+export function jsonResponse(data: any, status = 200, req?: Request): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
   });
 }
 
-export function errorResponse(message: string, status = 500): Response {
-  return jsonResponse({ error: message }, status);
+export function errorResponse(message: string, status = 500, req?: Request): Response {
+  return jsonResponse({ error: message }, status, req);
 }

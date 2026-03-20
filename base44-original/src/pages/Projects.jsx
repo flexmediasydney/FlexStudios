@@ -1,0 +1,763 @@
+import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
+import { useEntityList } from "@/components/hooks/useEntityData";
+import { Plus, Search, LayoutGrid, List, Columns3, X, Camera } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import ProjectCard from "@/components/dashboard/ProjectCard";
+import ProjectForm from "@/components/projects/ProjectForm";
+import ProjectStatusBadge from "@/components/dashboard/ProjectStatusBadge";
+import ProjectStatusTimer from "@/components/projects/ProjectStatusTimer";
+import KanbanBoard from "@/components/projects/KanbanBoard";
+import CardFieldsCustomizer, { CardFieldsCustomizerButton } from "@/components/projects/CardFieldsCustomizer";
+import ProjectFiltersSort from "@/components/projects/ProjectFiltersSort";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+import { Link } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
+import { fixTimestamp } from "@/components/utils/dateUtils";
+import { useCardFields } from "@/components/projects/useCardFields";
+import { ProjectFieldValue } from "@/components/projects/ProjectCardFields";
+import EntityDataTable from "@/components/common/EntityDataTable";
+import QuickStatsBar from "@/components/common/QuickStatsBar";
+import KeyboardShortcutsModal from "@/components/common/KeyboardShortcutsModal";
+
+
+
+export default function Projects() {
+  const [showProjectForm, setShowProjectForm] = useState(false);
+  const [editingProject, setEditingProject] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState("kanban");
+  const [fitToScreen, setFitToScreen] = useState(false);
+  const [showFieldCustomizer, setShowFieldCustomizer] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [filters, setFilters] = useState({});
+  const [showArchived, setShowArchived] = useState(false);
+  const [sortBy, setSortBy] = useState("last_status_change");
+  const [shootDateFrom, setShootDateFrom] = useState('');
+  const [shootDateTo, setShootDateTo] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState('all');
+  const { isContractor, canAccessProject, canSeePricing } = usePermissions();
+  const { enabledFields } = useCardFields();
+  const { data: currentUser } = useCurrentUser();
+
+  // Memoize callbacks before useEffect (Fix #13)
+  const handleCreateNew = useCallback(() => {
+    setEditingProject(null);
+    setShowProjectForm(true);
+  }, []);
+
+  // Keyboard shortcuts: Esc to clear search, Ctrl+N for new project, Ctrl+K/G/L for view modes, ? for help
+  React.useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape' && searchQuery) {
+        e.preventDefault();
+        setSearchQuery('');
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+        e.preventDefault();
+        handleCreateNew();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setViewMode('kanban');
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
+        e.preventDefault();
+        setViewMode('grid');
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+        e.preventDefault();
+        setViewMode('list');
+      }
+      if ((e.shiftKey) && e.key === 'F') {
+        e.preventDefault();
+        if (viewMode === 'kanban') setFitToScreen(!fitToScreen);
+      }
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcuts(true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [searchQuery, viewMode, fitToScreen, handleCreateNew]);
+
+  // Load essential entities first batch to avoid rate limiting
+   const { data: allProjects = [], loading: projectsLoading } = useEntityList("Project", "-created_date", 200);
+   const { data: products = [], loading: productsLoading } = useEntityList("Product", "-created_date", 200);
+   const { data: packages = [], loading: packagesLoading } = useEntityList("Package", "-created_date", 200);
+   const { data: clients = [], loading: clientsLoading } = useEntityList("Client", null, 100);
+   
+   // Secondary batch: loaded but not blocking
+   const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 300);
+   const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog", null, 50);
+   const { data: agents = [], loading: agentsLoading } = useEntityList("Agent", null, 50);
+   const { data: agencies = [], loading: agenciesLoading } = useEntityList("Agency", null, 50);
+   const { data: teams = [], loading: teamsLoading } = useEntityList("InternalTeam", null, 30);
+   const { data: allUsers = [] } = useEntityList("User", null, 30);
+   const { data: allEmployeeRoles = [] } = useEntityList("EmployeeRole", null, 100);
+   const allInternalTeams = teams;
+
+   const isLoading = projectsLoading || clientsLoading || productsLoading || packagesLoading;
+
+  // Current user's internal team memberships (via EmployeeRole) - Memoized (Fix #11)
+  const myTeamIds = useMemo(() => {
+    if (!currentUser) return [];
+    return allEmployeeRoles
+      .filter(er => er.user_id === currentUser.id && er.team_id)
+      .map(er => er.team_id);
+  }, [currentUser?.id, allEmployeeRoles]);
+
+  // All user IDs that share an internal team with the current user - Memoized (Fix #11)
+  const myTeamMemberUserIds = useMemo(() => {
+    if (!myTeamIds.length) return new Set();
+    const ids = new Set();
+    allEmployeeRoles.forEach(er => {
+      if (er.team_id && myTeamIds.includes(er.team_id) && er.user_id) {
+        ids.add(er.user_id);
+      }
+    });
+    return ids;
+  }, [myTeamIds]);
+
+  // Filter projects for contractors
+  const projects = useMemo(() => 
+    isContractor 
+      ? allProjects.filter(p => canAccessProject(p))
+      : allProjects,
+    [isContractor, allProjects, canAccessProject]
+  );
+
+  // Memoize filtered projects to prevent excessive recalculation (Fix #10)
+  const filteredProjects = useMemo(() => {
+    return projects
+    .filter(project => {
+      // Hide archived unless toggled on
+      if (!showArchived && project.is_archived) return false;
+
+      const matchesSearch = 
+        project.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        project.property_address?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        project.client_name?.toLowerCase().includes(searchQuery.toLowerCase());
+
+      if (!matchesSearch) return false;
+
+      // Helper: all user IDs that are nominally assigned to this project at any level
+      const projectAssignedUserIds = new Set([
+        project.project_owner_id,
+        project.onsite_staff_1_id,
+        project.onsite_staff_2_id,
+        project.image_editor_id,
+        project.video_editor_id,
+        ...(project.assigned_users || [])
+      ].filter(Boolean));
+
+      // Helper: all internal team IDs assigned to this project at any level
+      const projectAssignedTeamIds = new Set([
+        project.project_owner_type === 'team' ? project.project_owner_id : null,
+        project.onsite_staff_1_type === 'team' ? project.onsite_staff_1_id : null,
+        project.onsite_staff_2_type === 'team' ? project.onsite_staff_2_id : null,
+        project.image_editor_type === 'team' ? project.image_editor_id : null,
+        project.video_editor_type === 'team' ? project.video_editor_id : null,
+      ].filter(Boolean));
+
+      // Task-level assignments for this project
+      const projectTasksForProject = allTasks.filter(t => t.project_id === project.id);
+
+      // "My Projects": current user is assigned at project-role level OR has a task assigned
+      if (filters.assigned_to_me && currentUser) {
+        const assignedViaRole = projectAssignedUserIds.has(currentUser.id);
+        // Tasks store assigned_to as either user ID or email — check both
+        const assignedViaTask = projectTasksForProject.some(
+          t => t.assigned_to === currentUser.id ||
+               t.assigned_to === currentUser.email ||
+               t.assigned_to_name === currentUser.full_name
+        );
+        if (!assignedViaRole && !assignedViaTask) return false;
+      }
+
+      // "My Team": any team member is assigned at project-role level OR has a task assigned
+      if (filters.assigned_to_my_team) {
+        if (myTeamMemberUserIds.size === 0) return false;
+        const teamMemberEmails = new Set(
+          allEmployeeRoles
+            .filter(er => er.team_id && myTeamIds.includes(er.team_id))
+            .map(er => er.user_email)
+            .filter(Boolean)
+        );
+        const teamAssignedViaRole = [...projectAssignedUserIds].some(uid => myTeamMemberUserIds.has(uid));
+        const teamAssignedViaTask = projectTasksForProject.some(
+          t => myTeamMemberUserIds.has(t.assigned_to) || teamMemberEmails.has(t.assigned_to)
+        );
+        const teamAssignedViaTeamRole = [...projectAssignedTeamIds].some(tid => myTeamIds.includes(tid));
+        if (!teamAssignedViaRole && !teamAssignedViaTask && !teamAssignedViaTeamRole) return false;
+      }
+
+      // Product filter
+      if (filters.products?.length > 0) {
+        const hasProduct = project.products?.some(p => filters.products.includes(p.product_id));
+        if (!hasProduct) return false;
+      }
+      
+      // Package filter
+      if (filters.packages?.length > 0) {
+        const hasPackage = project.packages?.some(p => filters.packages.includes(p.package_id));
+        if (!hasPackage) return false;
+      }
+      
+      // Agent filter
+      if (filters.agents?.length > 0 && !filters.agents.includes(project.agent_id)) {
+        return false;
+      }
+      
+      // Agency filter
+      if (filters.agencies?.length > 0 && !filters.agencies.includes(project.agency_id)) {
+        return false;
+      }
+      
+      // Client Team filter
+      if (filters.teams?.length > 0) {
+        const hasTeamMember = (project.assigned_users || []).some(u => filters.teams.includes(u));
+        if (!hasTeamMember) return false;
+      }
+
+      // Internal Users filter: user assigned at any project role level OR has a task assigned
+      if (filters.internal_users?.length > 0) {
+        const matchesRole = filters.internal_users.some(uid => projectAssignedUserIds.has(uid));
+        const matchesTask = projectTasksForProject.some(
+          t => filters.internal_users.includes(t.assigned_to)
+        );
+        if (!matchesRole && !matchesTask) return false;
+      }
+
+      // Internal Teams filter: team assigned at any project role level
+      if (filters.internal_teams?.length > 0) {
+        const matchesTeamRole = filters.internal_teams.some(tid => projectAssignedTeamIds.has(tid));
+        if (!matchesTeamRole) return false;
+      }
+
+      // Shoot date range filter
+      if (shootDateFrom) {
+        if (!project.shoot_date || project.shoot_date < shootDateFrom) return false;
+      }
+      if (shootDateTo) {
+        if (!project.shoot_date || project.shoot_date > shootDateTo) return false;
+      }
+
+      // Priority filter
+      if (priorityFilter !== 'all') {
+        if (project.priority !== priorityFilter) return false;
+      }
+
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortBy === "task_deadline") {
+        const aTask = allTasks.filter(t => t.project_id === a.id).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
+        const bTask = allTasks.filter(t => t.project_id === b.id).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
+        if (!aTask && !bTask) return 0;
+        if (!aTask) return 1;
+        if (!bTask) return -1;
+        return new Date(fixTimestamp(aTask.due_date)) - new Date(fixTimestamp(bTask.due_date));
+      } else if (sortBy === "next_activity") {
+        return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
+      } else if (sortBy === "created_date") {
+        return new Date(fixTimestamp(b.created_date)) - new Date(fixTimestamp(a.created_date));
+      } else if (sortBy === "shoot_date_asc") {
+        return new Date(a.shoot_date || '9999') - new Date(b.shoot_date || '9999');
+      } else if (sortBy === "shoot_date_desc") {
+        return new Date(b.shoot_date || '0000') - new Date(a.shoot_date || '0000');
+      }
+      return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
+    });
+  }, [projects, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
+
+  // Pre-compute maps so table cells don't need O(n) filter per row
+  const tasksByProject = useMemo(() => {
+    const map = {};
+    allTasks.forEach(t => {
+      if (!t.parent_task_id) {
+        if (!map[t.project_id]) map[t.project_id] = [];
+        map[t.project_id].push(t);
+      }
+    });
+    return map;
+  }, [allTasks]);
+
+  const timeLogsByProject = useMemo(() => {
+    const map = {};
+    allTimeLogs.forEach(l => {
+      if (!map[l.project_id]) map[l.project_id] = [];
+      map[l.project_id].push(l);
+    });
+    return map;
+  }, [allTimeLogs]);
+
+  // Column definitions for EntityDataTable (list view)
+  const tableColumns = useMemo(() => {
+    const fieldLabels = {
+      agency_name: "Agency",
+      agent_name: "Agent",
+      shoot_date: "Shoot Date",
+      shoot_time: "Time",
+      delivery_date: "Delivery",
+      price: "Price",
+      invoiced_amount: "Invoiced",
+      priority: "Priority",
+      property_type: "Type",
+      products: "Products",
+      packages: "Packages",
+      outcome: "Outcome",
+      payment_status: "Payment",
+      notes: "Notes",
+      delivery_link: "Link",
+      effort: "Effort",
+    };
+
+    const cols = [
+      {
+        key: "title",
+        label: "Project",
+        sortable: true,
+        width: "260px",
+        render: (project) => (
+          <div className="min-w-0">
+            <Link
+               to={createPageUrl("ProjectDetails") + `?id=${project.id}`}
+               className="font-medium text-sm hover:text-primary hover:underline leading-tight block truncate max-w-[240px] transition-colors"
+               onClick={(e) => e.stopPropagation()}
+               title={project.title}
+             >
+               {project.title}
+             </Link>
+             {project.property_address && (
+               <TooltipProvider>
+                 <Tooltip>
+                   <TooltipTrigger asChild>
+                     <p className="text-xs text-muted-foreground truncate max-w-[240px] mt-0.5 cursor-help">
+                       {project.property_address}
+                     </p>
+                   </TooltipTrigger>
+                   <TooltipContent className="max-w-xs">{project.property_address}</TooltipContent>
+                 </Tooltip>
+               </TooltipProvider>
+             )}
+           </div>
+         ),
+        sortValue: (r) => r.title ?? "",
+      },
+      {
+        key: "status",
+        label: "Status",
+        sortable: true,
+        width: "160px",
+        render: (project) => (
+          <div className="space-y-0.5">
+            <ProjectStatusBadge status={project.status} lastStatusChange={project.last_status_change} />
+            {enabledFields.includes("status_timer") && project.last_status_change && (
+              <ProjectStatusTimer lastStatusChange={project.last_status_change} />
+            )}
+          </div>
+        ),
+        sortValue: (r) => r.status ?? "",
+      },
+    ];
+
+    // Dynamic columns from card fields config (skip status_timer as it's merged into status col)
+    enabledFields.forEach(fieldId => {
+      if (fieldId === "status_timer") return;
+      if (fieldId === "price" && !canSeePricing) return;
+      if (!fieldLabels[fieldId]) return;
+
+      cols.push({
+        key: fieldId,
+        label: fieldLabels[fieldId],
+        sortable: ["agency_name", "agent_name", "shoot_date", "delivery_date", "price", "priority", "outcome", "payment_status", "property_type"].includes(fieldId),
+        render: (project) => {
+          const tasks = tasksByProject[project.id] || [];
+          const timeLogs = timeLogsByProject[project.id] || [];
+          return (
+            <ProjectFieldValue
+              fieldId={fieldId}
+              project={project}
+              products={products}
+              packages={packages}
+              tasks={tasks}
+              timeLogs={timeLogs}
+            />
+          );
+        },
+        sortValue: (r) => {
+          if (fieldId === "shoot_date") return r.shoot_date ?? "";
+          if (fieldId === "delivery_date") return r.delivery_date ?? "";
+          if (fieldId === "price") return r.calculated_price ?? r.price ?? 0;
+          if (fieldId === "invoiced_amount") return r.invoiced_amount ?? null;
+          return r[fieldId] ?? "";
+        },
+      });
+    });
+
+    return cols;
+  }, [enabledFields, canSeePricing, products, packages, tasksByProject, timeLogsByProject]);
+
+  // Memoize callbacks (Fix #13)
+  const handleEdit = useCallback((project) => {
+    setEditingProject(project);
+    setShowProjectForm(true);
+  }, []);
+
+  return (
+    <div className="p-6 lg:p-8 space-y-6">
+      {/* Quick Stats */}
+      <QuickStatsBar projects={filteredProjects} tasks={allTasks.filter(t => filteredProjects.some(p => p.id === t.project_id) && !t.parent_task_id)} />
+
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            Projects
+            {isLoading && (
+              <div className="h-5 w-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" role="status" aria-label="Loading projects" />
+            )}
+          </h1>
+          {/* Breadcrumb */}
+          <nav className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5" aria-label="Breadcrumb">
+            <Link to={createPageUrl("Dashboard")} className="hover:text-foreground hover:underline transition-colors focus:ring-1 focus:ring-primary px-1 rounded" title="Back to Dashboard">Dashboard</Link>
+            <span aria-hidden="true">›</span>
+            <span className="text-foreground font-medium">Projects</span>
+          </nav>
+          <p className="text-muted-foreground mt-1">
+            {isLoading ? (
+              <span className="inline-block w-24 h-4 bg-muted animate-pulse rounded" />
+            ) : (
+              <>
+                {filteredProjects.length} {filteredProjects.length === 1 ? 'project' : 'projects'}
+                {searchQuery && ` matching "${searchQuery}"`}
+                {(Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all') && !searchQuery && " with active filters"}
+              </>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+            <Button onClick={handleCreateNew} className={cn("gap-2 shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-10", filteredProjects.length === 0 && !searchQuery && Object.keys(filters).length === 0 && "ring-2 ring-primary/30")} title="Create a new project (Ctrl+N)" aria-label="New project button - keyboard shortcut Ctrl+N">
+             <Plus className="h-4 w-4" />
+             <span className="hidden sm:inline">New Project</span>
+             <span className="sm:hidden">New</span>
+             <kbd className="hidden lg:inline-flex ml-1 text-[9px] bg-primary-foreground/20 px-1.5 py-0.5 rounded">⌘N</kbd>
+           </Button>
+         </div>
+      </div>
+
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <Input
+          placeholder="Search projects, addresses, clients... (Esc to clear)"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-10 pr-20 h-10 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 transition-all"
+          title="Search by project title, address, or client name (Esc to clear)"
+          autoComplete="off"
+          spellCheck="false"
+          aria-label="Search projects by title, address, or client"
+        />
+        {searchQuery && (
+         <>
+           <span className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 font-medium tabular-nums">{searchQuery.length}</span>
+           <button
+            onClick={() => setSearchQuery("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full p-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+            title="Clear search (Esc)"
+            aria-label="Clear search"
+           >
+            <X className="h-4 w-4" />
+           </button>
+         </>
+        )}
+      </div>
+
+      {/* Filters & Sort */}
+      <div className="space-y-4">
+      <ProjectFiltersSort
+          products={products}
+          packages={packages}
+          agents={agents}
+          agencies={agencies}
+          teams={teams}
+          internalUsers={allUsers}
+          internalTeams={allInternalTeams}
+          activeFilters={filters}
+          activeSort={sortBy}
+          onFiltersChange={setFilters}
+          onSortChange={setSortBy}
+        />
+
+        {/* Date range + Priority filters */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Quick date presets */}
+          {[
+            { label: 'Today', days: 0 },
+            { label: 'Next 7 days', days: 7, future: true },
+            { label: 'This month', month: true },
+          ].map(preset => {
+            const today = new Date().toISOString().slice(0, 10);
+            const isActive = (() => {
+              if (preset.days === 0) return shootDateFrom === today && shootDateTo === today;
+              if (preset.month) {
+                const start = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+                const end = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().slice(0, 10);
+                return shootDateFrom === start && shootDateTo === end;
+              }
+              if (preset.future) {
+                const end = new Date(Date.now() + preset.days * 86400000).toISOString().slice(0, 10);
+                return shootDateFrom === today && shootDateTo === end;
+              }
+              const start = new Date(Date.now() - preset.days * 86400000).toISOString().slice(0, 10);
+              return shootDateFrom === start && shootDateTo === today;
+            })();
+            return (
+              <button
+                key={preset.label}
+                onClick={() => {
+                  const today = new Date().toISOString().slice(0, 10);
+                  if (isActive) {
+                    setShootDateFrom(''); setShootDateTo('');
+                  } else if (preset.days === 0) {
+                    setShootDateFrom(today); setShootDateTo(today);
+                  } else if (preset.month) {
+                    const start = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+                    const end = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().slice(0, 10);
+                    setShootDateFrom(start); setShootDateTo(end);
+                  } else if (preset.future) {
+                    const end = new Date(Date.now() + preset.days * 86400000).toISOString().slice(0, 10);
+                    setShootDateFrom(today); setShootDateTo(end);
+                  }
+                }}
+                className={`text-xs px-2.5 py-1.5 rounded-lg border transition-all h-9 focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-none ${
+                   isActive
+                     ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                     : 'border-border text-muted-foreground hover:bg-muted hover:border-primary/30'
+                 }`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+
+          {/* Manual date inputs */}
+          <input
+           type="date"
+           value={shootDateFrom}
+           onChange={e => setShootDateFrom(e.target.value)}
+           className="h-10 text-sm border border-border rounded-lg px-3 bg-background focus:ring-2 focus:ring-primary focus:outline-none transition-all"
+           title="Shoot date from"
+           aria-label="Shoot date from"
+          />
+          <span className="text-xs text-muted-foreground mx-1">–</span>
+          <input
+           type="date"
+           value={shootDateTo}
+           onChange={e => setShootDateTo(e.target.value)}
+           className="h-10 text-sm border border-border rounded-lg px-3 bg-background focus:ring-2 focus:ring-primary focus:outline-none transition-all"
+           title="Shoot date to"
+           aria-label="Shoot date to"
+          />
+
+          {/* Priority filter */}
+          <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+            <SelectTrigger className="h-10 w-[140px] text-sm focus:ring-2 focus:ring-primary">
+              <SelectValue placeholder="Priority" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All priorities</SelectItem>
+              <SelectItem value="urgent">Urgent</SelectItem>
+              <SelectItem value="high">High</SelectItem>
+              <SelectItem value="normal">Normal</SelectItem>
+              <SelectItem value="low">Low</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Clear date filters */}
+          {(shootDateFrom || shootDateTo || priorityFilter !== 'all') && (
+            <button
+              onClick={() => { setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); }}
+              className="text-xs text-muted-foreground hover:text-foreground px-2"
+            >
+              Clear
+            </button>
+          )}
+
+          {/* Show/Hide Archived */}
+          <Button
+            variant={showArchived ? "default" : "outline"}
+            size="sm"
+            className="text-xs gap-1.5"
+            onClick={() => setShowArchived(v => !v)}
+          >
+            {showArchived ? "Hide archived" : "Show archived"}
+            {allProjects.filter(p => p.is_archived).length > 0 && (
+              <Badge variant="secondary" className="text-[9px] h-4 px-1">{allProjects.filter(p => p.is_archived).length}</Badge>
+            )}
+          </Button>
+          </div>
+          </div>
+
+      {/* View Controls */}
+       <div className="flex gap-2 justify-between items-center flex-wrap">
+         <div className="flex items-center gap-2">
+           <CardFieldsCustomizerButton onClick={() => setShowFieldCustomizer(true)} title="Customize card fields and columns" />
+           {(Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all') && (
+             <Button variant="ghost" size="sm" onClick={() => {setSearchQuery(""); setFilters({}); setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all');}} className="text-xs text-muted-foreground hover:text-foreground h-9 focus:ring-2 focus:ring-primary" title="Clear all active filters">
+               <X className="h-4 w-4 mr-1" />Clear All
+             </Button>
+           )}
+         </div>
+        <div className="flex gap-2 items-center">
+          {viewMode === "kanban" && (
+            <Button
+              variant={fitToScreen ? "default" : "outline"}
+              size="sm"
+              onClick={() => setFitToScreen(!fitToScreen)}
+              className="hidden sm:flex shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9"
+              title={fitToScreen ? "Fitted to screen - click to disable" : "Click to fit columns to screen width (Shift+F)"}
+              aria-label={fitToScreen ? "Disable fit to screen" : "Enable fit to screen - Shift+F"}
+            >
+              {fitToScreen ? "📌 Fitted" : "↔ Fit"}
+            </Button>
+          )}
+          <Tabs value={viewMode} onValueChange={setViewMode} className="hidden sm:block">
+           <TabsList className="bg-muted/60 hover:bg-muted/80 transition-colors duration-200">
+             <TabsTrigger value="kanban" title="Kanban board view (Ctrl+K)" className="gap-1.5 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9" aria-label="Kanban view">
+               <Columns3 className="h-4 w-4" />
+               <span className="hidden lg:inline text-xs">Kanban</span>
+               <kbd className="hidden xl:inline-flex ml-1 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘K</kbd>
+             </TabsTrigger>
+             <TabsTrigger value="grid" title="Grid card view (Ctrl+G)" className="gap-1.5 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9" aria-label="Grid view">
+               <LayoutGrid className="h-4 w-4" />
+               <span className="hidden lg:inline text-xs">Grid</span>
+               <kbd className="hidden xl:inline-flex ml-1 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘G</kbd>
+             </TabsTrigger>
+             <TabsTrigger value="list" title="Table list view (Ctrl+L)" className="gap-1.5 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9" aria-label="List view">
+               <List className="h-4 w-4" />
+               <span className="hidden lg:inline text-xs">List</span>
+               <kbd className="hidden xl:inline-flex ml-1 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘L</kbd>
+             </TabsTrigger>
+           </TabsList>
+          </Tabs>
+        </div>
+      </div>
+
+      {/* List view — EntityDataTable owns its own loading skeleton, empty state, sorting & pagination */}
+      {viewMode === "list" && (
+        <EntityDataTable
+          columns={tableColumns}
+          data={filteredProjects}
+          loading={isLoading}
+          onRowClick={handleEdit}
+          pageSize={75}
+          emptyMessage={
+            searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0)
+              ? "No projects match your filters"
+              : "No projects yet — create your first project above"
+          }
+        />
+      )}
+
+      {/* Kanban + Grid views */}
+      {viewMode !== "list" && (
+        isLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Array(9).fill(0).map((_, i) => (
+              <Card key={i} className="p-5">
+                <Skeleton className="h-5 w-3/4 mb-3" />
+                <Skeleton className="h-4 w-1/2 mb-2" />
+                <Skeleton className="h-4 w-full" />
+              </Card>
+            ))}
+          </div>
+        ) : filteredProjects.length === 0 ? (
+          <Card className="p-12 text-center border-2 border-dashed bg-muted/30 shadow-sm">
+            <div className="max-w-md mx-auto">
+              {searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) ? (
+                <>
+                  <div className="relative inline-block">
+                    <Search className="h-12 w-12 mx-auto mb-3 text-muted-foreground/30" />
+                    <div className="absolute inset-0 blur-xl bg-muted/20 rounded-full" />
+                  </div>
+                  <h3 className="text-lg font-semibold mb-2">No projects found</h3>
+                  <p className="text-muted-foreground mb-4 text-sm">
+                    Try adjusting your search or filters to see more results
+                  </p>
+                  <Button variant="outline" size="sm" onClick={() => { setSearchQuery(""); setFilters({}); }} className="shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9">
+                    <X className="h-4 w-4 mr-1.5" />
+                    Clear All Filters
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Camera className="h-12 w-12 mx-auto mb-3 text-primary/50 animate-pulse" />
+                  <h3 className="text-lg font-semibold mb-2">No projects yet</h3>
+                  <p className="text-muted-foreground mb-4 text-sm">
+                    Create your first project to get started
+                  </p>
+                  <Button onClick={handleCreateNew} className="shadow-sm hover:shadow-lg ring-2 ring-primary/30 hover:ring-primary/50 transition-all focus:ring-primary focus:ring-offset-2 h-10">
+                    <Plus className="h-4 w-4 mr-1.5" />
+                    New Project
+                  </Button>
+                </>
+              )}
+            </div>
+          </Card>
+        ) : viewMode === "kanban" ? (
+          <div className="animate-in fade-in duration-300">
+            <KanbanBoard
+              projects={filteredProjects}
+              clients={clients}
+              products={products}
+              packages={packages}
+              fitToScreen={fitToScreen}
+            />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-max animate-in fade-in duration-300">
+             {filteredProjects.map(project => {
+               const projectTasks = tasksByProject[project.id] || [];
+               const projectTimeLogs = timeLogsByProject[project.id] || [];
+               return (
+                 <div key={project.id} className="cursor-pointer hover:opacity-90 transition-opacity" onClick={() => handleEdit(project)}>
+                   <ProjectCard project={project} products={products} packages={packages} tasks={projectTasks} timeLogs={projectTimeLogs} />
+                 </div>
+               );
+             })}
+           </div>
+        )
+      )}
+
+      <CardFieldsCustomizer open={showFieldCustomizer} onClose={() => setShowFieldCustomizer(false)} />
+
+      <ProjectForm
+        project={editingProject}
+        open={showProjectForm}
+        onClose={() => {
+          setShowProjectForm(false);
+          setEditingProject(null);
+        }}
+        onSave={() => {
+          setShowProjectForm(false);
+          setEditingProject(null);
+        }}
+      />
+
+      <KeyboardShortcutsModal open={showShortcuts} onOpenChange={setShowShortcuts} />
+    </div>
+  );
+}

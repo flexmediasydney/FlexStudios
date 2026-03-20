@@ -247,7 +247,7 @@ export default function LabelSelectorRobust({
                   placeholder="Label name"
                   value={newLabelName}
                   onChange={(e) => setNewLabelName(e.target.value)}
-                  onKeyPress={(e) => e.key === "Enter" && handleAddLabel()}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddLabel()}
                   className="h-8 text-sm"
                 />
                 <div className="flex gap-2 items-center">

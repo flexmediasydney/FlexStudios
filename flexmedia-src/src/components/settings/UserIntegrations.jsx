@@ -38,13 +38,13 @@ export default function UserIntegrations({ user }) {
       setSelectedTeamId("");
       setIsConnecting(false);
       setIsReconnecting(null);
-      queryClient.invalidateQueries({ queryKey: ["my-email-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["my-email-accounts", user?.id] });
     } else if (event.data?.type === 'gmail_auth_error') {
       toast.error(event.data.error || "Failed to connect Gmail");
       setIsConnecting(false);
       setIsReconnecting(null);
     }
-  }, [queryClient]);
+  }, [queryClient, user?.id]);
 
   useEffect(() => {
     window.addEventListener('message', handleAuthMessage);
@@ -100,12 +100,12 @@ export default function UserIntegrations({ user }) {
   };
 
   const removeAccountMutation = useMutation({
-    mutationFn: (accountId) => base44.entities.EmailAccount.delete(accountId),
+    mutationFn: (accountId) => base44.entities.EmailAccount.update(accountId, { is_active: false }),
     onSuccess: () => {
-      toast.success("Email account removed");
-      queryClient.invalidateQueries({ queryKey: ["my-email-accounts"] });
+      toast.success("Email account disconnected");
+      queryClient.invalidateQueries({ queryKey: ["my-email-accounts", user?.id] });
     },
-    onError: (err) => toast.error(err?.message || 'Failed to remove account'),
+    onError: (err) => toast.error(err?.message || 'Failed to disconnect account'),
   });
 
   return (

@@ -1,0 +1,112 @@
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { base44 } from "@/api/base44Client";
+import { useCurrentUser } from "@/components/auth/PermissionGuard";
+
+const NotificationContext = createContext(null);
+
+const POLL_INTERVAL_MS = 30_000;
+const MAX_DISPLAY = 50;
+
+export function NotificationProvider({ children }) {
+  const { data: currentUser } = useCurrentUser();
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [lastFetched, setLastFetched] = useState(null);
+  const pollRef = useRef(null);
+
+  const fetchNotifications = useCallback(async (silent = false) => {
+    if (!currentUser?.id) return;
+    if (!silent) setLoading(true);
+    try {
+      // Filter server-side by user_id so the limit applies per-user, not globally
+      const mine = await base44.entities.Notification.filter(
+        { user_id: currentUser.id, is_dismissed: false },
+        "-created_date",
+        MAX_DISPLAY
+      );
+      setNotifications(mine);
+      setUnreadCount(mine.filter(n => !n.is_read).length);
+      setLastFetched(new Date());
+    } catch { /* silent fail */ }
+    finally { if (!silent) setLoading(false); }
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (currentUser?.id) fetchNotifications();
+  }, [currentUser?.id, fetchNotifications]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    pollRef.current = setInterval(() => fetchNotifications(true), POLL_INTERVAL_MS);
+    return () => clearInterval(pollRef.current);
+  }, [currentUser?.id, fetchNotifications]);
+
+  const markRead = useCallback(async (notificationId) => {
+    setNotifications(prev =>
+      prev.map(n => n.id === notificationId ? { ...n, is_read: true } : n)
+    );
+    setUnreadCount(prev => Math.max(0, prev - 1));
+    try {
+      await base44.entities.Notification.update(notificationId, {
+        is_read: true,
+        read_at: new Date().toISOString(),
+      });
+    } catch { fetchNotifications(true); }
+  }, [fetchNotifications]);
+
+  const markAllRead = useCallback(async () => {
+    const unread = notifications.filter(n => !n.is_read);
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    setUnreadCount(0);
+    try {
+      await Promise.all(
+        unread.map(n =>
+          base44.entities.Notification.update(n.id, {
+            is_read: true,
+            read_at: new Date().toISOString(),
+          })
+        )
+      );
+    } catch { fetchNotifications(true); }
+  }, [notifications, fetchNotifications]);
+
+  const dismiss = useCallback(async (notificationId) => {
+    setNotifications(prev => prev.filter(n => n.id !== notificationId));
+    setUnreadCount(prev => {
+      const wasUnread = notifications.find(n => n.id === notificationId && !n.is_read);
+      return wasUnread ? Math.max(0, prev - 1) : prev;
+    });
+    try {
+      await base44.entities.Notification.update(notificationId, { is_dismissed: true });
+    } catch { fetchNotifications(true); }
+  }, [notifications, fetchNotifications]);
+
+  const refresh = useCallback(() => fetchNotifications(false), [fetchNotifications]);
+
+  const criticalUnread = notifications.filter(
+    n => n.severity === 'critical' && !n.is_read && !n.is_dismissed
+  );
+
+  return (
+    <NotificationContext.Provider value={{
+      notifications,
+      unreadCount,
+      criticalUnread,
+      loading,
+      lastFetched,
+      markRead,
+      markAllRead,
+      dismiss,
+      refresh,
+    }}>
+      {children}
+    </NotificationContext.Provider>
+  );
+}
+
+export function useNotifications() {
+  const ctx = useContext(NotificationContext);
+  if (!ctx) throw new Error("useNotifications must be used inside NotificationProvider");
+  return ctx;
+}

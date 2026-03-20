@@ -13,11 +13,12 @@ import { Badge } from "@/components/ui/badge";
 import { Search, Link2, X } from "lucide-react";
 import { toast } from "sonner";
 
-export default function ProjectLinkDialogForInbox({ 
-  thread, 
-  open, 
+export default function ProjectLinkDialogForInbox({
+  thread,
+  open,
   onOpenChange,
-  account
+  account,
+  onLinked,
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const queryClient = useQueryClient();
@@ -67,7 +68,7 @@ export default function ProjectLinkDialogForInbox({
         }
       });
       sessionStorage.setItem('emailUndoStack', JSON.stringify(undoStack));
-      
+
       toast.success("Email linked to project", {
         description: "Set visibility to Shared in your inbox if you want team members to see it.",
         duration: 5000
@@ -76,6 +77,7 @@ export default function ProjectLinkDialogForInbox({
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       queryClient.invalidateQueries({ queryKey: ["threads"] });
       queryClient.invalidateQueries({ queryKey: ["projects-search"] });
+      onLinked?.();
       onOpenChange(false);
       setSearchQuery("");
     },

@@ -1,4 +1,5 @@
-import { useState, useRef } from "react";
+import { useRef, useCallback, useEffect } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import EmailListHeader from "./EmailListHeader";
 import EmailListRow from "./EmailListRow";
 import EmailListEmpty from "./EmailListEmpty";
@@ -25,6 +26,22 @@ export default function EmailListContainer({
 }) {
   const allSelected =
     selectedMessages.size === filteredThreads.length && filteredThreads.length > 0;
+
+  const parentRef = useRef(null);
+
+  const rowVirtualizer = useVirtualizer({
+    count: filteredThreads.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 57, // 56px row height + 1px border
+    overscan: 10,
+  });
+
+  // Reset scroll position when switching folders/views
+  useEffect(() => {
+    if (parentRef.current) {
+      parentRef.current.scrollTop = 0;
+    }
+  }, [filterView]);
 
   if (messagesLoading) {
     return (
@@ -76,26 +93,50 @@ export default function EmailListContainer({
         />
       </div>
 
-      {/* Scroll body */}
+      {/* Virtualized scroll body */}
       <div
-        className="flex-1 overflow-y-auto overflow-x-auto min-h-0 divide-y"
+        ref={parentRef}
+        className="flex-1 overflow-y-auto overflow-x-auto min-h-0"
         role="list"
       >
-        {filteredThreads.map((thread) => (
-          <EmailListRow
-            key={thread.threadId}
-            thread={thread}
-            columns={columns}
-            isSelected={selectedMessages.has(thread.threadId)}
-            onSelect={onSelectThread}
-            onOpen={onOpenThread}
-            labelData={labelData}
-            onLinkProject={onLinkProject}
-            onToggleVisibility={onToggleVisibility}
-            onToggleStar={onToggleStar}
-            onContextMenu={onContextMenu}
-          />
-        ))}
+        <div
+          style={{
+            height: `${rowVirtualizer.getTotalSize()}px`,
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const thread = filteredThreads[virtualRow.index];
+            return (
+              <div
+                key={thread.threadId}
+                data-index={virtualRow.index}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: `${virtualRow.size}px`,
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <EmailListRow
+                  thread={thread}
+                  columns={columns}
+                  isSelected={selectedMessages.has(thread.threadId)}
+                  onSelect={onSelectThread}
+                  onOpen={onOpenThread}
+                  labelData={labelData}
+                  onLinkProject={onLinkProject}
+                  onToggleVisibility={onToggleVisibility}
+                  onToggleStar={onToggleStar}
+                  onContextMenu={onContextMenu}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Count footer */}

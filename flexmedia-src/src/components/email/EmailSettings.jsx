@@ -78,8 +78,17 @@ export default function EmailSettings({ onClose }) {
     },
     onSuccess: () => {
       toast.success("Signature updated");
-      queryClient.invalidateQueries(["user-signature"]);
+      queryClient.invalidateQueries({ queryKey: ["user-signature"] });
     }
+  });
+
+  const deleteTemplateMutation = useMutation({
+    mutationFn: (id) => base44.entities.EmailTemplate.delete(id),
+    onSuccess: () => {
+      toast.success("Template deleted");
+      queryClient.invalidateQueries({ queryKey: ["email-templates"] });
+    },
+    onError: () => toast.error("Failed to delete template"),
   });
 
   const createTemplateMutation = useMutation({
@@ -96,7 +105,7 @@ export default function EmailSettings({ onClose }) {
       setTemplateSubject("");
       setTemplateBody("");
       setShowTemplateDialog(false);
-      queryClient.invalidateQueries(["email-templates"]);
+      queryClient.invalidateQueries({ queryKey: ["email-templates"] });
     }
   });
 
@@ -177,7 +186,13 @@ export default function EmailSettings({ onClose }) {
                       <h4 className="font-medium">{template.name}</h4>
                       <p className="text-sm text-muted-foreground truncate">{template.subject}</p>
                     </div>
-                    <Button variant="ghost" size="sm" className="gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-2 text-destructive hover:text-destructive"
+                      onClick={() => deleteTemplateMutation.mutate(template.id)}
+                      disabled={deleteTemplateMutation.isPending}
+                    >
                       <X className="h-4 w-4" />
                     </Button>
                   </div>

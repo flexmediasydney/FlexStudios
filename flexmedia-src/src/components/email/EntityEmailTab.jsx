@@ -53,7 +53,7 @@ export default function EntityEmailTab({
     return filters;
   }, [entityType, entityId]);
 
-  const { data: messages = [], loading: messagesLoading } = useQuery({
+  const { data: messages = [], isLoading: messagesLoading } = useQuery({
     queryKey: ['emails', entityType, entityId],
     queryFn: async () => {
       const filters = buildEmailFilters();
@@ -68,7 +68,9 @@ export default function EntityEmailTab({
     messages.forEach(msg => {
       const key = `${msg.email_account_id}|||${msg.gmail_thread_id}`;
       if (threadMap.has(key)) {
-        threadMap.get(key).messages.push(msg);
+        const existing = threadMap.get(key);
+        existing.messages.push(msg);
+        if (msg.is_unread) existing.unreadCount += 1;
       } else {
         threadMap.set(key, {
           threadId: msg.gmail_thread_id,
@@ -97,9 +99,9 @@ export default function EntityEmailTab({
     if (!searchQuery.trim()) return threads;
     const q = searchQuery.toLowerCase();
     return threads.filter(t =>
-      t.subject.toLowerCase().includes(q) ||
-      t.from.toLowerCase().includes(q) ||
-      t.from_email.toLowerCase().includes(q)
+      (t.subject || '').toLowerCase().includes(q) ||
+      (t.from || '').toLowerCase().includes(q) ||
+      (t.from_email || '').toLowerCase().includes(q)
     );
   }, [threads, searchQuery]);
 

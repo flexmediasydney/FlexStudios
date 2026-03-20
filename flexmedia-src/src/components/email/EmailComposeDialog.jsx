@@ -173,13 +173,25 @@ function getFileIcon(filename, mimeType) {
 /**
  * Build the quoted-text HTML block used when replying.
  */
+/**
+ * Escape HTML special characters to prevent XSS in quoted text metadata.
+ * The body is rendered through ReactQuill which handles its own sanitization,
+ * but sender names, subjects, and other metadata must be escaped.
+ */
+function escapeHtml(str) {
+  if (!str) return "";
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function buildQuotedReplyHtml(msg) {
   if (!msg) return "";
-  const sender = msg.from_name || msg.from || "unknown";
+  const sender = escapeHtml(msg.from_name || msg.from || "unknown");
   const date = msg.received_at
     ? new Date(msg.received_at).toLocaleString("en-AU", { timeZone: "Australia/Sydney" })
     : "";
-  return `<br/><br/><div style="border-left: 2px solid #ccc; padding-left: 12px; margin-left: 4px; color: #666;"><p>On ${date}, ${sender} wrote:</p>${msg.body || ""}</div>`;
+  // Body is already HTML from the original email — it passes through ReactQuill's
+  // sanitization layer, so we don't double-escape it here.
+  return `<br/><br/><div style="border-left: 2px solid #ccc; padding-left: 12px; margin-left: 4px; color: #666;"><p>On ${escapeHtml(date)}, ${sender} wrote:</p>${msg.body || ""}</div>`;
 }
 
 export default function EmailComposeDialog({
@@ -214,7 +226,7 @@ export default function EmailComposeDialog({
     : "";
   const [subject, setSubject] = useState(initialSubject);
 
-  const [cc, setCc] = useState(type === "replyAll" ? (email?.cc?.join(", ") || "") : "");
+  const [cc, setCc] = useState(type === "replyAll" ? (Array.isArray(email?.cc) ? email.cc.join(", ") : (email?.cc || "")) : "");
   const [bcc, setBcc] = useState("");
   const [showCc, setShowCc] = useState(type === "replyAll");
   const [showBcc, setShowBcc] = useState(false);
@@ -235,7 +247,7 @@ export default function EmailComposeDialog({
   const [templateName, setTemplateName] = useState("");
 
   // Draft autosave — persists to sessionStorage so it survives accidental closes
-  const DRAFT_KEY = `compose-draft-${type}-${email?.id || 'new'}`;
+  const DRAFT_KEY = `compose-draft-${type}-${email?.id || email?.gmail_message_id || email?.subject || 'new'}`;
   React.useEffect(() => {
     const saved = sessionStorage.getItem(DRAFT_KEY);
     if (saved) {
@@ -314,10 +326,10 @@ export default function EmailComposeDialog({
 <br/><br/>
 <div style="border-left:2px solid #ccc; padding-left:12px; color:#666; font-size:13px;">
   <p><strong>---------- Forwarded message ----------</strong></p>
-  <p><strong>From:</strong> ${email.from || ''}</p>
-  <p><strong>Date:</strong> ${email.received_at ? new Date(email.received_at).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' }) : ''}</p>
-  <p><strong>Subject:</strong> ${email.subject || ''}</p>
-  <p><strong>To:</strong> ${email.to || ''}</p>
+  <p><strong>From:</strong> ${escapeHtml(email.from || '')}</p>
+  <p><strong>Date:</strong> ${escapeHtml(email.received_at ? new Date(email.received_at).toLocaleString('en-AU', { timeZone: 'Australia/Sydney' }) : '')}</p>
+  <p><strong>Subject:</strong> ${escapeHtml(email.subject || '')}</p>
+  <p><strong>To:</strong> ${escapeHtml(Array.isArray(email.to) ? email.to.join(', ') : (email.to || ''))}</p>
   <br/>
   ${email.body || ''}
 </div>`;
@@ -530,9 +542,11 @@ export default function EmailComposeDialog({
   };
 
   const getRecipientsFromEmail = () => {
-    if (type === "reply" || type === "forward") return email?.from || "";
+    if (type === "reply") return email?.from || "";
+    if (type === "forward") return ""; // forward: user picks a new recipient
     if (type === "replyAll") {
-      const all = [email?.from, ...email?.cc || []].filter(Boolean).join(", ");
+      const ccList = Array.isArray(email?.cc) ? email.cc : (email?.cc ? [email.cc] : []);
+      const all = [email?.from, ...ccList].filter(Boolean).join(", ");
       return all;
     }
     return "";

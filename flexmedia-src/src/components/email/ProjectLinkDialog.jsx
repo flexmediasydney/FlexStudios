@@ -41,8 +41,8 @@ export default function ProjectLinkDialog({ thread, onClose }) {
   });
 
   const filteredProjects = projects.filter(p =>
-    p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.property_address.toLowerCase().includes(searchQuery.toLowerCase())
+    (p.title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (p.property_address || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (

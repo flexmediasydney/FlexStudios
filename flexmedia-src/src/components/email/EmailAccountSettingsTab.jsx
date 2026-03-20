@@ -176,7 +176,7 @@ export default function EmailAccountSettingsTab() {
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, []);
+  }, [queryClient, user?.id]);
 
   const createSignatureMutation = useMutation({
     mutationFn: (data) => base44.entities.UserSignature.create(data),
@@ -385,8 +385,10 @@ export default function EmailAccountSettingsTab() {
                         onValueChange={(val) => {
                           const teamId = val === "__none__" ? null : val;
                           const team = teams.find((t) => t.id === teamId);
-                          handleFieldSave("team_id", teamId);
-                          handleFieldSave("team_name", team?.name || "");
+                          updateAccountMutation.mutate({
+                            team_id: teamId,
+                            team_name: team?.name || "",
+                          });
                         }}
                       >
                         <SelectTrigger>
