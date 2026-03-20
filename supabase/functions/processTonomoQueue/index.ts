@@ -979,7 +979,16 @@ async function handleRescheduled(entities: any, orderId: string, p: any) {
   const eventId = p.id;
   const startTime = p.when?.start_time ? p.when.start_time * 1000 : null;
   const project = await findProjectByOrderId(entities, orderId);
-  if (!project) return handleScheduled(entities, orderId, p, 'rescheduled');
+  if (!project) {
+    // STRICT: Reschedule events should only UPDATE existing projects, never create new ones.
+    // If no project exists, this is an orphan event — skip it.
+    await writeAudit(entities, {
+      action: 'rescheduled', entity_type: 'Project', entity_id: null, operation: 'skipped',
+      tonomo_order_id: orderId, tonomo_event_id: eventId,
+      notes: 'Orphan event — no existing project for this order. Reschedule events do not create projects.',
+    });
+    return { summary: `Skipped reschedule for unknown order ${orderId} — no project exists`, skipped: true };
+  }
 
   const overriddenFields = JSON.parse(project.manually_overridden_fields || '[]');
   const updates: Record<string, any> = {};
@@ -1063,7 +1072,16 @@ async function handleChanged(entities: any, orderId: string, p: any) {
   const photographers = p.photographers || [];
   const agent = p.order?.listingAgents?.[0] || p.listingAgents?.[0] || null;
   const project = await findProjectByOrderId(entities, orderId);
-  if (!project) return handleScheduled(entities, orderId, p, 'changed');
+  if (!project) {
+    // STRICT: Change events (photographer reassignment, service updates) should only UPDATE
+    // existing projects. If no project exists, this is an orphan event — skip it.
+    await writeAudit(entities, {
+      action: 'changed', entity_type: 'Project', entity_id: null, operation: 'skipped',
+      tonomo_order_id: orderId,
+      notes: `Orphan event — no existing project for this order. Change events do not create projects. Photographers: ${photographers.map((ph: any) => ph.name).join(', ') || 'none'}`,
+    });
+    return { summary: `Skipped change for unknown order ${orderId} — no project exists`, skipped: true };
+  }
 
   if (project.status === 'cancelled') {
     await writeAudit(entities, { action: 'changed', entity_type: 'Project', entity_id: project.id, operation: 'skipped', tonomo_order_id: orderId, notes: 'Skipped — project already cancelled' });
@@ -1310,11 +1328,22 @@ async function handleOrderUpdate(entities: any, orderId: string, p: any) {
   const project = await findProjectByOrderId(entities, orderId);
 
   if (!project) {
+    // STRICT: Only create a project from booking_created_or_changed if the payload has
+    // sufficient data indicating this is a genuine new booking — not just a metadata update.
     const orderName = p.order?.orderName || p.orderName || null;
     const address = p.address?.formatted_address || p.location || p.order?.property_address?.formatted_address || null;
-    if (!orderName && !address) {
-      await writeAudit(entities, { action: 'booking_created_or_changed', entity_type: 'Project', entity_id: null, operation: 'skipped', tonomo_order_id: orderId, notes: 'Payload too sparse to create project' });
-      return { summary: `Skipped sparse order update for order ${orderId}`, skipped: true };
+    const hasServices = (p.order?.services_a_la_cart || p.services_a_la_cart || p.order?.services || p.services || []).length > 0;
+    const hasBookingFlow = !!(p.order?.bookingFlow || p.bookingFlow);
+    const hasAppointment = !!(p.when?.start_time);
+
+    // Require address/name AND at least one of: services, booking flow, or appointment time
+    if ((!orderName && !address) || (!hasServices && !hasBookingFlow && !hasAppointment)) {
+      await writeAudit(entities, {
+        action: 'booking_created_or_changed', entity_type: 'Project', entity_id: null,
+        operation: 'skipped', tonomo_order_id: orderId,
+        notes: `Insufficient data to create project. name=${!!orderName}, address=${!!address}, services=${hasServices}, flow=${hasBookingFlow}, appointment=${hasAppointment}`,
+      });
+      return { summary: `Skipped order update for ${orderId} — insufficient data to create project`, skipped: true };
     }
     return handleScheduled(entities, orderId, p, 'booking_created_or_changed');
   }

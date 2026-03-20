@@ -25,7 +25,10 @@ Deno.serve(async (req) => {
     const orphanedCategories = new Set<string>();
     products.forEach((product: any) => {
       if (product.category) {
-        const cat = categories.find((c: any) => c.name === product.category);
+        const cat = categories.find((c: any) =>
+          c.name === product.category ||
+          c.name?.toLowerCase().replace(/\s+/g, '_') === product.category
+        );
         if (!cat) {
           orphanedCategories.add(product.category);
           issues.push({
