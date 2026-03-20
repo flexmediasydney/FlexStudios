@@ -57,7 +57,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
       const stillEnabled = connections.filter(c => c.is_enabled);
       if (stillEnabled.length === 0) return;
       try {
-        await base44.functions.invoke('syncGoogleCalendar', {
+        await base44.asServiceRole.functions.invoke('syncGoogleCalendar', {
           targetUserEmail: selectedUserEmail || null,
           syncAll: !selectedUserEmail,
           incremental: true,
@@ -188,7 +188,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
     setSyncing(true);
     setSyncResult(null);
     try {
-      const result = await base44.functions.invoke('syncGoogleCalendar', {
+      const result = await base44.asServiceRole.functions.invoke('syncGoogleCalendar', {
         targetUserEmail: selectedUserEmail || null,
         syncAll: !selectedUserEmail, // sync all team if no specific user targeted
       });
