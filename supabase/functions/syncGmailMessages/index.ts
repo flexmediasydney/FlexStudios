@@ -1,7 +1,7 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
-// --- Agent lookup cache (per sync cycle) ---
-const agentCache = new Map<string, any>();
+// --- Agent lookup cache (per sync cycle, scoped per request to avoid leaking between concurrent requests) ---
+let agentCache = new Map<string, any>();
 
 async function findAgentByEmail(adminClient: any, email: string) {
   const key = email.toLowerCase();
@@ -148,7 +148,7 @@ const getMessageQuery = (account: any) => {
   return `after:${timestamp}`;
 };
 
-const refreshAccessToken = async (clientId: string, clientSecret: string, refreshToken: string) => {
+const refreshAccessToken = async (clientId: string, clientSecret: string, refreshToken: string): Promise<{ access_token: string; refresh_token?: string }> => {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -163,7 +163,8 @@ const refreshAccessToken = async (clientId: string, clientSecret: string, refres
   if (!data.access_token) {
     throw new Error(`Token refresh failed: ${data.error || 'unknown error'}`);
   }
-  return data.access_token;
+  // Google may rotate the refresh token — if a new one is returned, we must store it
+  return { access_token: data.access_token, refresh_token: data.refresh_token || undefined };
 };
 
 const messageExists = async (entities: any, account: any, gmailMessageId: string, retriesLeft = 2): Promise<boolean> => {
@@ -561,6 +562,39 @@ async function syncViaHistory(
           } catch { /* non-fatal */ }
         }
       }
+      // Process label changes on paginated pages too
+      if (record.labelsAdded || record.labelsRemoved) {
+        const changedIds = new Set<string>();
+        for (const changed of (record.labelsAdded || [])) changedIds.add(changed.message.id);
+        for (const changed of (record.labelsRemoved || [])) changedIds.add(changed.message.id);
+        for (const msgId of changedIds) {
+          if (record.messagesAdded?.some((a: any) => a.message.id === msgId)) continue;
+          if (record.messagesDeleted?.some((d: any) => d.message.id === msgId)) continue;
+          try {
+            const msgResponse = await retryFetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=metadata&metadataHeaders=Subject`,
+              { headers: { 'Authorization': `Bearer ${accessToken}` } }
+            );
+            if (msgResponse && msgResponse.ok) {
+              const msgData = await msgResponse.json();
+              const labels = msgData.labelIds || [];
+              const existing = await entities.EmailMessage.filter({
+                gmail_message_id: msgId,
+                email_account_id: account.id
+              }, null, 1);
+              if (existing.length > 0) {
+                await entities.EmailMessage.update(existing[0].id, {
+                  is_unread: labels.includes('UNREAD'),
+                  is_starred: labels.includes('STARRED'),
+                  is_draft: labels.includes('DRAFT'),
+                  is_sent: labels.includes('SENT'),
+                });
+              }
+            }
+            await sleep(GMAIL_RATE_LIMIT_DELAY);
+          } catch { /* non-fatal */ }
+        }
+      }
     }
 
     nextPageToken = pageData.nextPageToken;
@@ -627,6 +661,24 @@ async function upsertConversations(admin: any, accountId: string) {
           .from('email_conversations')
           .upsert(batch, { onConflict: 'email_account_id,gmail_thread_id' });
       }
+
+      // Clean up stale conversations for threads where all messages have been deleted
+      const activeThreadIds = [...threads.keys()];
+      if (activeThreadIds.length > 0) {
+        const { data: existingConvos } = await admin
+          .from('email_conversations')
+          .select('id, gmail_thread_id')
+          .eq('email_account_id', accountId);
+        if (existingConvos) {
+          const activeSet = new Set(activeThreadIds);
+          const staleIds = existingConvos
+            .filter((c: any) => !activeSet.has(c.gmail_thread_id))
+            .map((c: any) => c.id);
+          if (staleIds.length > 0) {
+            await admin.from('email_conversations').delete().in('id', staleIds);
+          }
+        }
+      }
     }
   } catch (convError: any) {
     console.error('Error upserting email_conversations:', convError?.message);
@@ -638,7 +690,8 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    agentCache.clear(); // Clear agent lookup cache for this sync cycle
+    // Create a fresh agent lookup cache for this sync cycle
+    agentCache = new Map<string, any>();
     const user = await getUserFromReq(req);
 
     if (!user) {
@@ -701,10 +754,14 @@ Deno.serve(async (req) => {
           throw new Error('No refresh token stored for this account — user must reconnect their Gmail account');
         }
 
-        let accessToken = await refreshAccessToken(clientId, clientSecret, account.refresh_token);
+        const tokenResult = await refreshAccessToken(clientId, clientSecret, account.refresh_token);
+        let accessToken = tokenResult.access_token;
 
         await retryWithBackoff(() =>
-          entities.EmailAccount.update(account.id, { access_token: accessToken })
+          entities.EmailAccount.update(account.id, {
+            access_token: accessToken,
+            ...(tokenResult.refresh_token ? { refresh_token: tokenResult.refresh_token } : {}),
+          })
         );
 
         let latestHistoryId: string | null = null;
@@ -717,8 +774,12 @@ Deno.serve(async (req) => {
           const historyResult = await syncViaHistory(accessToken, account, entities, admin, results);
 
           if (historyResult.fallbackToFull) {
+            // History expired — clear stale history_id FIRST to prevent infinite 404 loop
             console.log(`Falling back to full sync for ${account.email_address}`);
             syncMode = 'full_fallback';
+            await retryWithBackoff(() =>
+              entities.EmailAccount.update(account.id, { history_id: null })
+            );
             const fullResult = await fullSyncAccount(accessToken, account, entities, admin, results);
             accountSynced = fullResult.synced;
             latestHistoryId = fullResult.latestHistoryId;
@@ -737,10 +798,16 @@ Deno.serve(async (req) => {
         // Upsert email_conversations summary table
         await upsertConversations(admin, account.id);
 
-        // Update account metadata
+        // Update account metadata with rich sync metrics
         await retryWithBackoff(() =>
           entities.EmailAccount.update(account.id, {
             last_sync: new Date().toISOString(),
+            last_sync_at: new Date().toISOString(),
+            last_sync_message_count: accountSynced,
+            total_synced_count: (account.total_synced_count || 0) + accountSynced,
+            sync_error_count: 0,
+            last_sync_error: null,
+            sync_health: 'ok',
             // Store the latest historyId for next incremental sync
             ...(latestHistoryId ? { history_id: latestHistoryId } : {}),
           })
@@ -756,6 +823,18 @@ Deno.serve(async (req) => {
         });
 
       } catch (error: any) {
+        // Update error metrics on sync failure (match syncGmailMessagesForAccount behavior)
+        try {
+          const newErrorCount = (account.sync_error_count || 0) + 1;
+          await retryWithBackoff(() =>
+            entities.EmailAccount.update(account.id, {
+              last_sync_error: error?.message || 'Unknown sync error',
+              sync_error_count: newErrorCount,
+              sync_health: newErrorCount >= 3 ? 'error' : 'warning',
+            })
+          );
+        } catch { /* non-fatal */ }
+
         results.accountDetails.push({
           email: account.email_address,
           synced: 0,

@@ -226,7 +226,19 @@ export default function EmailComposeDialog({
     : "";
   const [subject, setSubject] = useState(initialSubject);
 
-  const [cc, setCc] = useState(type === "replyAll" ? (Array.isArray(email?.cc) ? email.cc.join(", ") : (email?.cc || "")) : "");
+  const [cc, setCc] = useState(() => {
+    if (type !== "replyAll") return "";
+    const ccList = Array.isArray(email?.cc) ? email.cc : (email?.cc ? email.cc.split(",").map(s => s.trim()) : []);
+    // Dedup CC — final sender-email exclusion happens in getRecipientsFromEmail
+    // but we also remove duplicates here
+    const seen = new Set();
+    return ccList.filter(addr => {
+      const normalized = addr.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    }).join(", ");
+  });
   const [bcc, setBcc] = useState("");
   const [showCc, setShowCc] = useState(type === "replyAll");
   const [showBcc, setShowBcc] = useState(false);
@@ -239,7 +251,18 @@ export default function EmailComposeDialog({
   const [isPrivate, setIsPrivate] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
-  const [attachments, setAttachments] = useState([]);
+  const [attachments, setAttachments] = useState(() => {
+    // Forward: carry over original email's attachments so they're included
+    if (type === "forward" && Array.isArray(email?.attachments) && email.attachments.length > 0) {
+      return email.attachments.map(att => ({
+        filename: att.filename || att.name || 'attachment',
+        mime_type: att.mime_type || att.mimeType || 'application/octet-stream',
+        size: att.size || 0,
+        file_url: att.file_url || att.url || '',
+      })).filter(att => att.file_url);
+    }
+    return [];
+  });
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null); // null | 'uploading' | 'done'
   const fileInputRef = React.useRef(null);
@@ -247,7 +270,9 @@ export default function EmailComposeDialog({
   const [templateName, setTemplateName] = useState("");
 
   // Draft autosave — persists to sessionStorage so it survives accidental closes
-  const DRAFT_KEY = `compose-draft-${type}-${email?.id || email?.gmail_message_id || email?.subject || 'new'}`;
+  // Use a stable instance ID for new composes to avoid collisions between multiple open dialogs
+  const [instanceId] = useState(() => email?.id || email?.gmail_message_id || email?.subject || `new_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  const DRAFT_KEY = `compose-draft-${type}-${instanceId}`;
   React.useEffect(() => {
     const saved = sessionStorage.getItem(DRAFT_KEY);
     if (saved) {
@@ -545,9 +570,22 @@ export default function EmailComposeDialog({
     if (type === "reply") return email?.from || "";
     if (type === "forward") return ""; // forward: user picks a new recipient
     if (type === "replyAll") {
-      const ccList = Array.isArray(email?.cc) ? email.cc : (email?.cc ? [email.cc] : []);
-      const all = [email?.from, ...ccList].filter(Boolean).join(", ");
-      return all;
+      // Collect all original To recipients + the sender (From)
+      const toList = Array.isArray(email?.to) ? email.to : (email?.to ? [email.to] : []);
+      const allTo = [email?.from, ...toList].filter(Boolean);
+
+      // CC stays in the CC field (handled separately in useState init)
+      // Deduplicate and exclude sender's own email address
+      const currentAccountEmail = emailAccounts.find(a => a.id === selectedAccount)?.email_address?.toLowerCase();
+      const seen = new Set();
+      const deduped = allTo.filter(addr => {
+        const normalized = addr.trim().toLowerCase();
+        if (seen.has(normalized)) return false;
+        if (currentAccountEmail && normalized === currentAccountEmail) return false;
+        seen.add(normalized);
+        return true;
+      });
+      return deduped.join(", ");
     }
     return "";
   };
@@ -557,6 +595,31 @@ export default function EmailComposeDialog({
       setRecipients(getRecipientsFromEmail());
     }
   }, [type, email, recipients]);
+
+  // Once email accounts load, strip the sender's own email from To/CC (reply-all)
+  // and remove CC addresses that duplicate To addresses
+  React.useEffect(() => {
+    if (type !== "replyAll" || !selectedAccount) return;
+    const ownEmail = emailAccounts.find(a => a.id === selectedAccount)?.email_address?.toLowerCase();
+    if (!ownEmail) return;
+
+    // Refresh To to exclude self
+    if (email) {
+      const newTo = getRecipientsFromEmail();
+      if (newTo !== recipients) setRecipients(newTo);
+
+      // Clean CC: remove self + any addresses already in To
+      if (cc) {
+        const toAddrs = new Set(newTo.split(",").map(s => s.trim().toLowerCase()));
+        const cleaned = cc.split(",").map(s => s.trim()).filter(addr => {
+          const lower = addr.toLowerCase();
+          return lower !== ownEmail && !toAddrs.has(lower) && lower.length > 0;
+        }).join(", ");
+        if (cleaned !== cc) setCc(cleaned);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccount, emailAccounts.length]);
 
   const selectedProjectData = projects.find((p) => p.id === linkedProject);
   const filteredProjects = projects.filter((p) =>

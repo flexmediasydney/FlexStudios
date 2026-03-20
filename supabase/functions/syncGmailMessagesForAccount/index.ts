@@ -1,7 +1,7 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
-// --- Agent lookup cache (per sync cycle) ---
-const agentCache = new Map<string, any>();
+// --- Agent lookup cache (per sync cycle, scoped per request to avoid leaking between concurrent requests) ---
+let agentCache = new Map<string, any>();
 
 async function findAgentByEmail(adminClient: any, email: string) {
   const key = email.toLowerCase();
@@ -103,7 +103,7 @@ const parseHeaders = (headers: any[]) => {
   return parsed;
 };
 
-const refreshAccessToken = async (clientId: string, clientSecret: string, refreshToken: string) => {
+const refreshAccessToken = async (clientId: string, clientSecret: string, refreshToken: string): Promise<{ access_token: string; refresh_token?: string }> => {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -111,7 +111,8 @@ const refreshAccessToken = async (clientId: string, clientSecret: string, refres
   });
   const data = await response.json();
   if (!data.access_token) throw new Error(`Token refresh failed: ${data.error || 'unknown error'}`);
-  return data.access_token;
+  // Google may rotate the refresh token — if a new one is returned, we must store it
+  return { access_token: data.access_token, refresh_token: data.refresh_token || undefined };
 };
 
 // --- Fetch and save a single Gmail message (shared by full sync and history sync) ---
@@ -264,17 +265,37 @@ async function fullSync(
     query = `after:${Math.floor(thirtyDaysAgo.getTime() / 1000)}`;
   }
 
-  const listResponse = await retryFetch(
-    `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=100`,
-    { headers: { 'Authorization': `Bearer ${accessToken}` } }
-  );
+  const MAX_MESSAGES_PER_SYNC = 500;
+  let messageIds: any[] = [];
+  let pageToken: string | null = null;
 
-  if (!listResponse || !listResponse.ok) {
-    throw new Error(`Gmail API error: ${listResponse?.status}`);
-  }
+  do {
+    const listUrl = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
+    listUrl.searchParams.append('q', query);
+    listUrl.searchParams.append('maxResults', '100');
+    if (pageToken) listUrl.searchParams.append('pageToken', pageToken);
 
-  const data = await listResponse.json();
-  const messageIds = data.messages || [];
+    const listResponse = await retryFetch(
+      listUrl.toString(),
+      { headers: { 'Authorization': `Bearer ${accessToken}` } }
+    );
+
+    if (!listResponse || !listResponse.ok) {
+      throw new Error(`Gmail API error: ${listResponse?.status}`);
+    }
+
+    const data = await listResponse.json();
+    const newMessages = data.messages || [];
+    messageIds = messageIds.concat(newMessages);
+    pageToken = data.nextPageToken || null;
+
+    if (messageIds.length >= MAX_MESSAGES_PER_SYNC) {
+      messageIds = messageIds.slice(0, MAX_MESSAGES_PER_SYNC);
+      break;
+    }
+
+    if (pageToken) await sleep(GMAIL_RATE_LIMIT_DELAY * 2);
+  } while (pageToken);
 
   // Get the latest historyId from the first message (most recent)
   // We need to fetch at least one message to get a historyId
@@ -517,6 +538,40 @@ async function syncViaHistory(
           } catch { /* non-fatal */ }
         }
       }
+      // Process label changes on paginated pages too
+      if (record.labelsAdded || record.labelsRemoved) {
+        const changedIds = new Set<string>();
+        for (const changed of (record.labelsAdded || [])) changedIds.add(changed.message.id);
+        for (const changed of (record.labelsRemoved || [])) changedIds.add(changed.message.id);
+        // Skip messages already handled as added or deleted above
+        for (const msgId of changedIds) {
+          if (record.messagesAdded?.some((a: any) => a.message.id === msgId)) continue;
+          if (record.messagesDeleted?.some((d: any) => d.message.id === msgId)) continue;
+          try {
+            const msgResponse = await retryFetch(
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=metadata&metadataHeaders=Subject`,
+              { headers: { 'Authorization': `Bearer ${accessToken}` } }
+            );
+            if (msgResponse && msgResponse.ok) {
+              const msgData = await msgResponse.json();
+              const labels = msgData.labelIds || [];
+              const existing = await entities.EmailMessage.filter({
+                gmail_message_id: msgId,
+                email_account_id: account.id
+              }, null, 1);
+              if (existing.length > 0) {
+                await entities.EmailMessage.update(existing[0].id, {
+                  is_unread: labels.includes('UNREAD'),
+                  is_starred: labels.includes('STARRED'),
+                  is_draft: labels.includes('DRAFT'),
+                  is_sent: labels.includes('SENT'),
+                });
+              }
+            }
+            await sleep(GMAIL_RATE_LIMIT_DELAY);
+          } catch { /* non-fatal */ }
+        }
+      }
     }
 
     nextPageToken = pageData.nextPageToken;
@@ -583,6 +638,25 @@ async function upsertConversations(admin: any, accountId: string) {
           .from('email_conversations')
           .upsert(batch, { onConflict: 'email_account_id,gmail_thread_id' });
       }
+
+      // Clean up stale conversations for threads where all messages have been deleted
+      const activeThreadIds = [...threads.keys()];
+      if (activeThreadIds.length > 0) {
+        // Delete conversation rows that no longer have any active (non-deleted) messages
+        const { data: existingConvos } = await admin
+          .from('email_conversations')
+          .select('id, gmail_thread_id')
+          .eq('email_account_id', accountId);
+        if (existingConvos) {
+          const activeSet = new Set(activeThreadIds);
+          const staleIds = existingConvos
+            .filter((c: any) => !activeSet.has(c.gmail_thread_id))
+            .map((c: any) => c.id);
+          if (staleIds.length > 0) {
+            await admin.from('email_conversations').delete().in('id', staleIds);
+          }
+        }
+      }
     }
   } catch (convError: any) {
     console.error('Error upserting email_conversations:', convError?.message);
@@ -596,21 +670,29 @@ Deno.serve(async (req) => {
     const entities = createEntities(admin);
     const { accountId, userId } = await req.json();
 
-    // Clear agent lookup cache for this sync cycle
-    agentCache.clear();
+    // Create a fresh agent lookup cache for this sync cycle
+    // (avoids cross-request contamination if Deno reuses the isolate for concurrent requests)
+    agentCache = new Map<string, any>();
 
     if (!accountId || !userId) {
       return errorResponse('Missing accountId or userId', 400);
     }
 
-    // Verify user authentication
-    const user = await getUserFromReq(req);
-    if (!user || user.id !== userId) {
-      return errorResponse('Unauthorized', 403);
-    }
+    // Check if this is a service-role invocation (from syncAllEmails scheduler)
+    const authHeader = req.headers.get('Authorization') || '';
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+    const isServiceRole = authHeader === `Bearer ${serviceRoleKey}`;
 
-    if (!['master_admin', 'employee'].includes(user.role)) {
-      return errorResponse('Forbidden: insufficient permissions', 403);
+    if (!isServiceRole) {
+      // Verify user authentication for direct user calls
+      const user = await getUserFromReq(req);
+      if (!user || user.id !== userId) {
+        return errorResponse('Unauthorized', 403);
+      }
+
+      if (!['master_admin', 'employee'].includes(user.role)) {
+        return errorResponse('Forbidden: insufficient permissions', 403);
+      }
     }
 
     // Get the specific email account (verify ownership)
@@ -640,10 +722,14 @@ Deno.serve(async (req) => {
         throw new Error('No refresh token stored — user must reconnect their Gmail account');
       }
 
-      const accessToken = await refreshAccessToken(clientId, clientSecret, account.refresh_token);
+      const tokenResult = await refreshAccessToken(clientId, clientSecret, account.refresh_token);
+      const accessToken = tokenResult.access_token;
 
-      // Write refreshed token back to entity
-      await entities.EmailAccount.update(account.id, { access_token: accessToken });
+      // Write refreshed token back to entity (and rotated refresh token if Google issued one)
+      await entities.EmailAccount.update(account.id, {
+        access_token: accessToken,
+        ...(tokenResult.refresh_token ? { refresh_token: tokenResult.refresh_token } : {}),
+      });
 
       let latestHistoryId: string | null = null;
 
@@ -656,9 +742,10 @@ Deno.serve(async (req) => {
         const historyResult = await syncViaHistory(accessToken, account, entities, admin);
 
         if (historyResult.fallbackToFull) {
-          // History expired, do full sync
+          // History expired — clear stale history_id FIRST to prevent infinite 404 loop
           console.log(`Falling back to full sync for ${account.email_address}`);
           syncMode = 'full_fallback';
+          await entities.EmailAccount.update(account.id, { history_id: null });
           const fullResult = await fullSync(accessToken, account, entities, admin);
           synced = fullResult.synced;
           latestHistoryId = fullResult.latestHistoryId;

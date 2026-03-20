@@ -48,21 +48,27 @@ export default function BulkActionBar({
   const handleMarkAsRead = async (allVisible = false) => {
     setIsProcessing(true);
     try {
-      const ids = allVisible 
-        ? filteredCount 
-        : selectedCount;
       const threadIds = allVisible
         ? threads.map(t => t.threadId)
         : Array.from(selectedMessages);
-      const accountIds = getAccountIds();
+      const count = threadIds.length;
+      // When marking all visible, derive account IDs from the visible threads (not just selected)
+      const accountIds = allVisible
+        ? Array.from(new Set(threads.map(t => t.email_account_id).filter(Boolean)))
+        : getAccountIds();
 
-      await Promise.all(accountIds.map(accId =>
+      const results = await Promise.allSettled(accountIds.map(accId =>
         base44.functions.invoke('markEmailsAsRead', {
           threadIds,
           emailAccountId: accId
         })
       ));
-      toast.success(`Marked ${ids} email${ids !== 1 ? 's' : ''} as read`);
+      const failures = results.filter(r => r.status === 'rejected').length;
+      if (failures > 0) {
+        toast.warning(`Marked as read with ${failures} account error${failures !== 1 ? 's' : ''}`);
+      } else {
+        toast.success(`Marked ${count} email${count !== 1 ? 's' : ''} as read`);
+      }
       setSelectedMessages(new Set());
       onRefetch();
     } catch {
@@ -76,14 +82,19 @@ export default function BulkActionBar({
     setIsProcessing(true);
     try {
       const accountIds = getAccountIds();
-      await Promise.all(accountIds.map(accId =>
+      const results = await Promise.allSettled(accountIds.map(accId =>
         base44.functions.invoke('setEmailVisibility', {
           threadIds: Array.from(selectedMessages),
           emailAccountId: accId,
           visibility
         })
       ));
-      toast.success(`Changed to ${visibility}`);
+      const failures = results.filter(r => r.status === 'rejected').length;
+      if (failures > 0) {
+        toast.warning(`Changed visibility with ${failures} error${failures !== 1 ? 's' : ''}`);
+      } else {
+        toast.success(`Changed to ${visibility}`);
+      }
       setSelectedMessages(new Set());
       onRefetch();
     } catch {
@@ -97,13 +108,18 @@ export default function BulkActionBar({
     setIsProcessing(true);
     try {
       const accountIds = getAccountIds();
-      await Promise.all(accountIds.map(accId =>
+      const results = await Promise.allSettled(accountIds.map(accId =>
         base44.functions.invoke('archiveEmails', {
           threadIds: Array.from(selectedMessages),
           emailAccountId: accId
         })
       ));
-      toast.success("Archived");
+      const failures = results.filter(r => r.status === 'rejected').length;
+      if (failures > 0) {
+        toast.warning(`Archived with ${failures} account error${failures !== 1 ? 's' : ''}`);
+      } else {
+        toast.success("Archived");
+      }
       setSelectedMessages(new Set());
       onRefetch();
     } catch {
@@ -117,13 +133,18 @@ export default function BulkActionBar({
     setIsProcessing(true);
     try {
       const accountIds = getAccountIds();
-      await Promise.all(accountIds.map(accId =>
+      const results = await Promise.allSettled(accountIds.map(accId =>
         base44.functions.invoke('restoreEmails', {
           threadIds: Array.from(selectedMessages),
           emailAccountId: accId
         })
       ));
-      toast.success("Restored to inbox");
+      const failures = results.filter(r => r.status === 'rejected').length;
+      if (failures > 0) {
+        toast.warning(`Restored with ${failures} account error${failures !== 1 ? 's' : ''}`);
+      } else {
+        toast.success("Restored to inbox");
+      }
       setSelectedMessages(new Set());
       onRefetch();
     } catch {
@@ -189,13 +210,18 @@ export default function BulkActionBar({
               setIsProcessing(true);
               try {
                 const accountIds = getAccountIds();
-                await Promise.all(accountIds.map(accId =>
+                const results = await Promise.allSettled(accountIds.map(accId =>
                   base44.functions.invoke('markEmailsAsUnread', {
                     threadIds: Array.from(selectedMessages),
                     emailAccountId: accId
                   })
                 ));
-                toast.success("Marked as unread");
+                const failures = results.filter(r => r.status === 'rejected').length;
+                if (failures > 0) {
+                  toast.warning(`Marked as unread with ${failures} error${failures !== 1 ? 's' : ''}`);
+                } else {
+                  toast.success("Marked as unread");
+                }
                 setSelectedMessages(new Set());
                 onRefetch();
               } catch {
@@ -325,14 +351,19 @@ export default function BulkActionBar({
             if (!isConfirmed) return;
             setIsProcessing(true);
             const accountIds = getAccountIds();
-            Promise.all(accountIds.map(accId =>
+            Promise.allSettled(accountIds.map(accId =>
               base44.functions.invoke('deleteEmails', {
                 threadIds: Array.from(selectedMessages),
                 emailAccountId: accId,
                 permanently: false
               })
-            )).then(() => {
-              toast.success("Deleted");
+            )).then((results) => {
+              const failures = results.filter(r => r.status === 'rejected').length;
+              if (failures > 0) {
+                toast.warning(`Deleted with ${failures} account error${failures !== 1 ? 's' : ''}`);
+              } else {
+                toast.success("Deleted");
+              }
               setSelectedMessages(new Set());
               onRefetch();
             }).catch(() => toast.error("Failed to delete"))

@@ -78,13 +78,19 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
 }
 
 /**
- * Check if an entity matches the filter criteria
+ * Check if an entity matches the filter criteria.
+ * Treats null/undefined as equivalent to false for boolean filters
+ * (e.g., is_deleted: false should match entities where is_deleted is null/undefined).
  */
 function matchesFilter(entity, filter) {
   if (!entity || typeof entity !== 'object') return false;
   for (const [key, value] of Object.entries(filter)) {
     if (Array.isArray(value)) {
       if (!value.includes(entity[key])) return false;
+    } else if (typeof value === 'boolean') {
+      // For boolean filters, treat null/undefined as false
+      const entityVal = entity[key] == null ? false : entity[key];
+      if (entityVal !== value) return false;
     } else if (entity[key] !== value) {
       return false;
     }

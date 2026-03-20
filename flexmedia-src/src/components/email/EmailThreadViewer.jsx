@@ -115,22 +115,35 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       return;
     }
 
-    // Subscribe to EmailMessage updates
+    // Subscribe to EmailMessage updates — handle both updates to existing
+    // messages AND new messages arriving in this thread (e.g., new reply)
     const unsubscribe = base44.entities.EmailMessage.subscribe((event) => {
-      if (messageIds.includes(event.id)) {
-        setLiveMessages(prevMessages =>
-          prevMessages.map(m => m.id === event.id ? event.data : m)
-        );
-      }
+      if (!event.data) return;
+      const data = event.data;
+
+      setLiveMessages(prevMessages => {
+        const existingIndex = prevMessages.findIndex(m => m.id === event.id);
+        if (existingIndex >= 0) {
+          // Update existing message
+          const updated = [...prevMessages];
+          updated[existingIndex] = data;
+          return updated;
+        }
+        // New message — add it if it belongs to this thread and account
+        if (data.gmail_thread_id === thread.threadId && data.email_account_id === thread.email_account_id) {
+          return [...prevMessages, data];
+        }
+        return prevMessages;
+      });
     });
 
     return unsubscribe;
-  }, [messageIds.join(','), user?.id, account?.assigned_to_user_id]);
+  }, [thread.threadId, thread.email_account_id, user?.id, account?.assigned_to_user_id]);
 
-  // Use live messages, sorted by received_at
+  // Use live messages, sorted by received_at (slice to avoid mutating state)
   const freshThread = {
     ...thread,
-    messages: liveMessages.sort((a, b) => new Date(a.received_at) - new Date(b.received_at))
+    messages: [...liveMessages].sort((a, b) => new Date(a.received_at) - new Date(b.received_at))
   };
 
   // Use the latest message as the canonical source for labels, priority, visibility, and actions.
@@ -949,10 +962,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                   {/* Expanded: full body */}
                   {isExpanded && (
                     <div className="px-5 pb-6">
-                      {/* Sandboxed email body */}
+                      {/* Sandboxed email body — cap height for very large emails with scroll */}
                       <div
-                        className="prose prose-sm max-w-none text-slate-800 leading-relaxed overflow-x-auto"
-                        style={{ fontFamily: 'inherit' }}
+                        className="prose prose-sm max-w-none text-slate-800 leading-relaxed overflow-x-auto overflow-y-auto"
+                        style={{ fontFamily: 'inherit', maxHeight: '80vh' }}
                         dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msgItem.body) }}
                       />
 

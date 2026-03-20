@@ -96,8 +96,8 @@ Deno.serve(async (req) => {
     });
 
     let finalBody = body || '';
-    if (signatures.length > 0) {
-      finalBody += `\n${signatures[0].signature_html}`;
+    if (signatures.length > 0 && signatures[0].signature_html) {
+      finalBody += `<br/><br/>${signatures[0].signature_html}`;
     }
 
     // Build email with proper From header and In-Reply-To for threading
@@ -142,6 +142,9 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Helper: split base64 into 76-char lines per RFC 2045
+    const wrapBase64 = (b64: string): string => b64.replace(/.{1,76}/g, '$&\r\n').trimEnd();
+
     // If attachments are provided, build a multipart/mixed MIME message
     let email: string;
     if (allAttachments.length > 0) {
@@ -151,11 +154,12 @@ Deno.serve(async (req) => {
       const parts: string[] = [];
 
       // HTML body part
+      const bodyBase64 = wrapBase64(btoa(Array.from(new TextEncoder().encode(finalBody), (b) => String.fromCharCode(b)).join('')));
       parts.push(
         `--${boundary}\r\n` +
         `Content-Type: text/html; charset="UTF-8"\r\n` +
         `Content-Transfer-Encoding: base64\r\n\r\n` +
-        btoa(Array.from(new TextEncoder().encode(finalBody), (b) => String.fromCharCode(b)).join(''))
+        bodyBase64
       );
 
       // Attachment parts — download each URL and inline as base64
@@ -171,12 +175,19 @@ Deno.serve(async (req) => {
           const attBytes = new Uint8Array(await attResponse.arrayBuffer());
           const attBase64 = btoa(Array.from(attBytes, (b) => String.fromCharCode(b)).join(''));
 
+          // RFC 2047 encode filename if it contains non-ASCII characters
+          const hasNonAscii = /[^\x20-\x7E]/.test(filename);
+          const encodedFilename = hasNonAscii
+            ? `=?UTF-8?B?${btoa(Array.from(new TextEncoder().encode(filename), (b) => String.fromCharCode(b)).join(''))}?=`
+            : `"${filename.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+          const rawFilename = hasNonAscii ? encodedFilename : `"${filename.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
           parts.push(
             `--${boundary}\r\n` +
-            `Content-Type: ${mimeType}; name="${filename}"\r\n` +
-            `Content-Disposition: attachment; filename="${filename}"\r\n` +
+            `Content-Type: ${mimeType}; name=${rawFilename}\r\n` +
+            `Content-Disposition: attachment; filename=${rawFilename}\r\n` +
             `Content-Transfer-Encoding: base64\r\n\r\n` +
-            attBase64
+            wrapBase64(attBase64)
           );
         } catch (attErr: any) {
           console.warn(`Failed to process attachment:`, attErr?.message);

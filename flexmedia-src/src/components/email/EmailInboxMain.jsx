@@ -267,11 +267,12 @@ export default function EmailInboxMain() {
         }
       });
       // Push clean, serializable action to undo stack
+      // Store ALL account IDs so undo restores across all accounts in multi-account selections
       const threadIds = Array.from(selectedMessages);
       const accountIds = getAccountIdsFromThreads(threadIds, threads);
-      setUndoStack(prev => [...prev, { 
-        type: 'delete', 
-        data: { threadIds, emailAccountId: accountIds[0] } 
+      setUndoStack(prev => [...prev, {
+        type: 'delete',
+        data: { threadIds, accountIds }
       }]);
       setSelectedMessages(new Set());
       setRedoStack([]);
@@ -289,11 +290,14 @@ export default function EmailInboxMain() {
     
     // Reverse the action
     if (lastAction.type === 'delete') {
-      // Restore deleted emails
-      await base44.functions.invoke('restoreEmails', {
-        threadIds: lastAction.data.threadIds,
-        emailAccountId: lastAction.data.emailAccountId
-      });
+      // Restore deleted emails across all affected accounts
+      const acctIds = lastAction.data.accountIds || [lastAction.data.emailAccountId];
+      await Promise.allSettled(acctIds.map(accId =>
+        base44.functions.invoke('restoreEmails', {
+          threadIds: lastAction.data.threadIds,
+          emailAccountId: accId
+        })
+      ));
     } else if (lastAction.type === 'archive') {
       // Unarchive
       await Promise.all(
@@ -502,19 +506,20 @@ export default function EmailInboxMain() {
           }
 
           // General text search across ALL messages in thread (if cleanQuery exists)
+          // Use plain .includes() for literal matching — no regex escaping needed.
+          // This correctly handles emoji, special characters (., *, [), etc.
           if (cleanQuery) {
-            const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             // Search subject
-            if (t.subject?.toLowerCase().includes(escaped)) return true;
+            if (t.subject?.toLowerCase().includes(cleanQuery)) return true;
             // Search project title
-            if (t.project_title?.toLowerCase().includes(escaped)) return true;
+            if (t.project_title?.toLowerCase().includes(cleanQuery)) return true;
             // Search across all messages in thread: from, body, labels, attachments
             return t.messages.some(m =>
-              (m.from || '').toLowerCase().includes(escaped) ||
-              (m.from_name || '').toLowerCase().includes(escaped) ||
-              m.body?.toLowerCase().includes(escaped) ||
-              m.labels?.some(l => l.toLowerCase().includes(escaped)) ||
-              m.attachments?.some(a => a.filename?.toLowerCase().includes(escaped))
+              (m.from || '').toLowerCase().includes(cleanQuery) ||
+              (m.from_name || '').toLowerCase().includes(cleanQuery) ||
+              m.body?.toLowerCase().includes(cleanQuery) ||
+              m.labels?.some(l => l.toLowerCase().includes(cleanQuery)) ||
+              m.attachments?.some(a => a.filename?.toLowerCase().includes(cleanQuery))
             );
           }
 
@@ -752,10 +757,21 @@ export default function EmailInboxMain() {
   }
 
   return (
-    <div className="flex h-full bg-background">
+    <div className="flex h-full bg-background relative">
+      {/* Mobile sidebar backdrop overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/30 z-20 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
       {/* Sidebar - Optimized for modern compact layout */}
       <aside className={cn(
          "w-60 border-r bg-card flex flex-col transition-all duration-300 flex-shrink-0 shadow-sm",
+         // On mobile: fixed overlay sidebar with z-index above backdrop
+         "lg:relative lg:z-auto",
+         sidebarOpen && "fixed inset-y-0 left-0 z-30 lg:relative lg:inset-auto",
          !sidebarOpen && "w-0 overflow-hidden"
        )}>
          <div ref={sidebarScrollRef} className="p-3 space-y-3 flex-1 overflow-y-auto">

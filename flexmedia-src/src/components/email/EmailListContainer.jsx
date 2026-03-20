@@ -36,12 +36,12 @@ export default function EmailListContainer({
     overscan: 10,
   });
 
-  // Reset scroll position when switching folders/views
+  // Reset scroll position when switching folders/views, or when search/filter changes reduce the list
   useEffect(() => {
     if (parentRef.current) {
       parentRef.current.scrollTop = 0;
     }
-  }, [filterView]);
+  }, [filterView, searchQuery, filterUnread, filteredThreads.length]);
 
   if (messagesLoading) {
     return (
