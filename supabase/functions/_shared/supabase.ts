@@ -87,6 +87,21 @@ export async function getUserFromReq(req: Request): Promise<any | null> {
   const token = authHeader.replace('Bearer ', '');
   if (!token) return null;
 
+  // Service-role key bypass: treat as master_admin (used by cron, cross-function calls, and admin scripts)
+  // Check both direct comparison AND JWT payload for service_role
+  if (token === SUPABASE_SERVICE_ROLE_KEY) {
+    return { id: '__service_role__', email: 'system@flexstudios.app', role: 'master_admin', full_name: 'System' };
+  }
+  try {
+    const payloadB64 = token.split('.')[1];
+    if (payloadB64) {
+      const payload = JSON.parse(atob(payloadB64));
+      if (payload.role === 'service_role') {
+        return { id: '__service_role__', email: 'system@flexstudios.app', role: 'master_admin', full_name: 'System' };
+      }
+    }
+  } catch (_) { /* not a JWT or invalid — continue to normal auth */ }
+
   const admin = getAdminClient();
   const { data: { user: authUser }, error } = await admin.auth.getUser(token);
   if (error || !authUser) return null;
