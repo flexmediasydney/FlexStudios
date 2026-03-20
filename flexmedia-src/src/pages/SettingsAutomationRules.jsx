@@ -85,7 +85,8 @@ function groupConfig(g) {
 
 function relTime(ts) {
   if (!ts) return "Never";
-  const diff = Date.now() - new Date(ts + (ts.endsWith("Z") ? "" : "Z")).getTime();
+  const safe = (ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) ? ts : ts + "Z";
+  const diff = Date.now() - new Date(safe).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 2) return "Just now";
   if (m < 60) return `${m}m ago`;

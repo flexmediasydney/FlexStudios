@@ -8,7 +8,8 @@ import { useNotifications } from "./NotificationContext";
 
 function relTime(ts) {
   if (!ts) return "";
-  const ms = Date.now() - new Date(ts.endsWith("Z") ? ts : ts + "Z").getTime();
+  const safe = (ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) ? ts : ts + "Z";
+  const ms = Date.now() - new Date(safe).getTime();
   const m = Math.floor(ms / 60000);
   if (m < 1) return "Just now";
   if (m < 60) return `${m}m ago`;
@@ -22,7 +23,8 @@ function groupByDay(notifications) {
   const yesterday = new Date(Date.now() - 86400000).toDateString();
   const groups = { Today: [], Yesterday: [], Older: [] };
   for (const n of notifications) {
-    const d = new Date(n.created_date?.endsWith("Z") ? n.created_date : (n.created_date + "Z")).toDateString();
+    const ts = n.created_date || "";
+    const d = new Date((ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) ? ts : ts + "Z").toDateString();
     if (d === today) groups.Today.push(n);
     else if (d === yesterday) groups.Yesterday.push(n);
     else groups.Older.push(n);

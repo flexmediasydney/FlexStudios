@@ -41,7 +41,7 @@ export default function TonomoPulse() {
     return logs.map(log => ({
       record: log,
       parsed: parsePayload(log.raw_payload || "{}"),
-      receivedDate: parseTS(log.received_at) || parseTS(log.created_date) || parseTS(log.created_at)
+      receivedDate: parseTS(log.received_at) || parseTS(log.received_date) || parseTS(log.created_date) || parseTS(log.created_at)
     }));
   }, [logs]);
 

@@ -28,7 +28,12 @@ const SYDNEY_TZ = "Australia/Sydney";
 
 export function parseTS(str) {
   if (!str) return null;
-  const s = typeof str === "string" && !str.endsWith("Z") ? str + "Z" : str;
+  // Supabase returns timestamptz as ISO 8601 with offset (e.g. "+00:00").
+  // Only append "Z" for bare datetime strings that have no timezone indicator.
+  let s = str;
+  if (typeof str === "string" && !str.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(str)) {
+    s = str + "Z";
+  }
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
 }

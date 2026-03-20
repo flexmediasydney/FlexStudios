@@ -329,7 +329,9 @@ function NotificationLogTab() {
     unread: notifs.filter(n => !n.is_read).length,
     critical: notifs.filter(n => n.severity === "critical").length,
     today: notifs.filter(n => {
-      const d = new Date(n.created_date?.endsWith("Z") ? n.created_date : (n.created_date + "Z"));
+      const ts = n.created_date || "";
+      const safe = (ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) ? ts : ts + "Z";
+      const d = new Date(safe);
       return d.toDateString() === new Date().toDateString();
     }).length,
   }), [notifs]);
@@ -407,7 +409,7 @@ function NotificationLogTab() {
               </div>
             </div>
             <span className="text-muted-foreground shrink-0">
-              {new Date(n.created_date?.endsWith("Z") ? n.created_date : (n.created_date + "Z"))
+              {(() => { const ts = n.created_date || ""; const safe = (ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) ? ts : ts + "Z"; return new Date(safe); })()
                 .toLocaleString("en-AU", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}
             </span>
           </div>

@@ -152,10 +152,9 @@ function applySort(query, sortBy) {
   if (!sortBy || typeof sortBy !== 'string') return query;
   const desc = sortBy.startsWith('-');
   const field = desc ? sortBy.slice(1) : sortBy;
-  // Map old field names: created_date → created_at, updated_date → updated_at
-  const mapped = field === 'created_date' ? 'created_at'
-    : field === 'updated_date' ? 'updated_at'
-    : field;
+  // Map old field names: created_date → created_at, updated_date → updated_at, received_date → received_at
+  const sortFieldMap = { created_date: 'created_at', updated_date: 'updated_at', received_date: 'received_at' };
+  const mapped = sortFieldMap[field] || field;
   return query.order(mapped, { ascending: !desc });
 }
 
@@ -181,14 +180,29 @@ function mapRows(rows) {
 
 /**
  * Map Base44-style field names to database names in input data.
- * created_date → created_at, updated_date → updated_at
+ * created_date → created_at, updated_date → updated_at, received_date → received_at
+ *
+ * Also strips server-managed fields (created_at, updated_at, id) that Supabase
+ * rejects or ignores on INSERT/UPDATE. This prevents errors when callers pass a
+ * full mapRow'd record (which has both created_at and created_date) back to
+ * create() or update().
  */
 function mapInput(data) {
   if (!data || typeof data !== 'object') return data;
   const mapped = { ...data };
+
+  // Translate Base44 alias field names → DB column names
   if ('created_date' in mapped) { mapped.created_at = mapped.created_date; delete mapped.created_date; }
   if ('updated_date' in mapped) { mapped.updated_at = mapped.updated_date; delete mapped.updated_date; }
   if ('received_date' in mapped) { mapped.received_at = mapped.received_date; delete mapped.received_date; }
+
+  // Strip server-managed columns to avoid Supabase errors when a full record is
+  // passed back (e.g. ActivityFeed undo restoring previous_state).
+  // 'id' is passed as a separate argument to update(); removing it from data is safe.
+  delete mapped.id;
+  delete mapped.created_at;
+  delete mapped.updated_at;
+
   return mapped;
 }
 

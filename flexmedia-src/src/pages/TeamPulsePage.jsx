@@ -42,7 +42,8 @@ const SEVERITY_CONFIG = {
 // ── Helpers ───────────────────────────────────────────────────────────────
 const normalizeTimestamp = (ts) => {
   if (!ts) return null;
-  return ts.endsWith("Z") ? ts : ts + "Z";
+  if (ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) return ts;
+  return ts + "Z";
 };
 
 function relTime(ts) {

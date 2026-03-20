@@ -30,7 +30,8 @@ const SEVERITY_CONFIG = {
 
 function relTime(ts) {
   if (!ts) return "";
-  const ms = Date.now() - new Date(ts.endsWith("Z") ? ts : ts + "Z").getTime();
+  const safe = (ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) ? ts : ts + "Z";
+  const ms = Date.now() - new Date(safe).getTime();
   const m = Math.floor(ms / 60000);
   if (m < 1) return "Just now";
   if (m < 60) return `${m}m ago`;
