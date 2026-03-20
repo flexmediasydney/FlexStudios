@@ -164,7 +164,7 @@ export default function EmailListRow({
         return (
         <div style={{ width: `${w}px`, minWidth: `${w}px` }} className="flex-shrink-0 px-2 text-left overflow-hidden">
            <FromHoverCard email={thread.from_email} name={thread.from_name}>
-             <div 
+             <div
                className={cn(
                  "truncate text-[14px] cursor-help leading-tight font-medium",
                  isUnread ? "font-bold text-foreground" : "text-foreground/75"
@@ -174,6 +174,14 @@ export default function EmailListRow({
                {thread.from_name || thread.from_email}
              </div>
            </FromHoverCard>
+           {thread.agent_name && (
+             <span
+               className="inline-flex items-center gap-0.5 mt-0.5 text-[10px] font-medium text-violet-700 bg-violet-50 rounded px-1.5 py-0 leading-4 truncate max-w-full"
+               title={thread.agency_name ? `${thread.agent_name} @ ${thread.agency_name}` : thread.agent_name}
+             >
+               {thread.agent_name}{thread.agency_name ? ` \u00b7 ${thread.agency_name}` : ''}
+             </span>
+           )}
         </div>
         );
       })()}

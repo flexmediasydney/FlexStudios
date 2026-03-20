@@ -42,14 +42,13 @@ export default function EntityEmailTab({
   const buildEmailFilters = useCallback(() => {
     const filters = {};
     if (entityType === 'agency') {
-      filters.visibility = 'shared'; // Only shared emails for agencies
+      filters.agency_id = entityId;
     } else if (entityType === 'team') {
       // Team emails: from team members or linked to org
       // For now, filter by shared visibility + search in related projects
       filters.visibility = 'shared';
     } else if (entityType === 'agent') {
-      // Agent emails: from/to this agent
-      filters.from = entityId; // Would need email matching logic
+      filters.agent_id = entityId;
     }
     return filters;
   }, [entityType, entityId]);
@@ -83,6 +82,10 @@ export default function EntityEmailTab({
           messages: [msg],
           project_id: msg.project_id,
           project_title: msg.project_title,
+          agent_id: msg.agent_id,
+          agent_name: msg.agent_name,
+          agency_id: msg.agency_id,
+          agency_name: msg.agency_name,
         });
       }
     });

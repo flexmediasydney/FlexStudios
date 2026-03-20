@@ -1,5 +1,31 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
+// --- Agent lookup cache (per sync cycle) ---
+const agentCache = new Map<string, any>();
+
+async function findAgentByEmail(adminClient: any, email: string) {
+  const key = email.toLowerCase();
+  if (agentCache.has(key)) return agentCache.get(key);
+  try {
+    const { data } = await adminClient
+      .from('agents')
+      .select('id, name, current_agency_id, current_agency_name')
+      .ilike('email', key)
+      .limit(1)
+      .single();
+    agentCache.set(key, data || null);
+    return data || null;
+  } catch {
+    agentCache.set(key, null);
+    return null;
+  }
+}
+
+function extractEmailAddress(fromHeader: string): string {
+  const match = fromHeader.match(/<([^>]+)>/);
+  return (match ? match[1] : fromHeader).trim().toLowerCase();
+}
+
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 const BATCH_SIZE = 10;
@@ -83,6 +109,9 @@ Deno.serve(async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
     const { accountId, userId } = await req.json();
+
+    // Clear agent lookup cache for this sync cycle
+    agentCache.clear();
 
     if (!accountId || !userId) {
       return errorResponse('Missing accountId or userId', 400);
@@ -191,6 +220,10 @@ Deno.serve(async (req) => {
                 const headers = parseHeaders(fullMsg.payload.headers || []);
                 const isSent = fullMsg.labelIds?.includes('SENT');
 
+                // Agent/agency auto-linking
+                const fromEmail = extractEmailAddress(headers['From'] || '');
+                const agentMatch = fromEmail ? await findAgentByEmail(admin, fromEmail) : null;
+
                 // Save message with proper visibility field
                 const savedMessage = await entities.EmailMessage.create({
                   email_account_id: account.id,
@@ -213,6 +246,12 @@ Deno.serve(async (req) => {
                     project_id: threadProjectLink.project_id,
                     project_title: threadProjectLink.project_title,
                     visibility: 'shared'
+                  } : {}),
+                  ...(agentMatch ? {
+                    agent_id: agentMatch.id,
+                    agent_name: agentMatch.name,
+                    agency_id: agentMatch.current_agency_id || null,
+                    agency_name: agentMatch.current_agency_name || null,
                   } : {})
                 });
 
@@ -262,6 +301,67 @@ Deno.serve(async (req) => {
             console.error(`Error processing message ${msg.id}:`, error);
           }
         }
+      }
+
+      // ─── Upsert email_conversations summary table ─────────────────────────
+      try {
+        const { data: threadMessages } = await admin
+          .from('email_messages')
+          .select('gmail_thread_id, subject, from, from_name, is_unread, is_starred, received_at, attachments, project_id, project_title, agent_id, agency_id, to, cc')
+          .eq('email_account_id', account.id)
+          .order('received_at', { ascending: false });
+
+        if (threadMessages && threadMessages.length > 0) {
+          const threads = new Map<string, any[]>();
+          for (const msg of threadMessages) {
+            const tid = msg.gmail_thread_id;
+            if (!threads.has(tid)) threads.set(tid, []);
+            threads.get(tid)!.push(msg);
+          }
+
+          const conversationRows: any[] = [];
+          for (const [threadId, msgs] of threads) {
+            const latest = msgs[0];
+            const oldest = msgs[msgs.length - 1];
+            const participantSet = new Set<string>();
+            let hasAttachments = false;
+            for (const m of msgs) {
+              if (m.from) participantSet.add(m.from);
+              if (Array.isArray(m.to)) m.to.forEach((e: string) => participantSet.add(e));
+              if (Array.isArray(m.cc)) m.cc.forEach((e: string) => participantSet.add(e));
+              if (m.attachments && Array.isArray(m.attachments) && m.attachments.length > 0) hasAttachments = true;
+            }
+            const linkedMsg = msgs.find((m: any) => m.project_id);
+            conversationRows.push({
+              email_account_id: account.id,
+              gmail_thread_id: threadId,
+              subject: latest.subject,
+              snippet: (latest.subject || '').substring(0, 200),
+              first_message_at: oldest.received_at,
+              last_message_at: latest.received_at,
+              message_count: msgs.length,
+              unread_count: msgs.filter((m: any) => m.is_unread).length,
+              participant_count: participantSet.size,
+              participants: JSON.stringify([...participantSet]),
+              is_starred: msgs.some((m: any) => m.is_starred),
+              has_attachments: hasAttachments,
+              last_sender: latest.from,
+              last_sender_name: latest.from_name,
+              project_id: linkedMsg?.project_id || null,
+              project_title: linkedMsg?.project_title || null,
+              agent_id: linkedMsg?.agent_id || null,
+              agency_id: linkedMsg?.agency_id || null,
+            });
+          }
+          for (let i = 0; i < conversationRows.length; i += 50) {
+            const batch = conversationRows.slice(i, i + 50);
+            await admin
+              .from('email_conversations')
+              .upsert(batch, { onConflict: 'email_account_id,gmail_thread_id' });
+          }
+        }
+      } catch (convError: any) {
+        console.error('Error upserting email_conversations:', convError?.message);
       }
 
       // Update account metadata with rich sync metrics (Email-04)

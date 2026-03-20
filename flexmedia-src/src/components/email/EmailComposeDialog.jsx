@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { base44, supabase } from "@/api/base44Client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,11 @@ import {
   AlertTriangle,
   Clock,
   Search,
+  FileText,
+  Image as ImageIcon,
+  FileArchive,
+  File as FileGenericIcon,
+  Upload,
 } from "lucide-react";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import FieldInsertMenu from "./FieldInsertMenu";
@@ -138,38 +143,94 @@ const formats = [
   "code-block",
 ];
 
+// ─── Attachment helpers ─────────────────────────────────────────────────────
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024;   // 10 MB per file
+const MAX_TOTAL_SIZE = 25 * 1024 * 1024;  // 25 MB total
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return (bytes / Math.pow(k, i)).toFixed(i > 0 ? 1 : 0) + " " + sizes[i];
+}
+
+function getFileIcon(filename, mimeType) {
+  const ext = filename?.split(".").pop()?.toLowerCase();
+  const mime = (mimeType || "").toLowerCase();
+  if (mime.includes("pdf") || ext === "pdf") return { Icon: FileText, color: "text-red-500" };
+  if (mime.includes("image") || ["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(ext))
+    return { Icon: ImageIcon, color: "text-blue-500" };
+  if (mime.includes("zip") || mime.includes("compressed") || ["zip", "rar", "7z", "tar", "gz"].includes(ext))
+    return { Icon: FileArchive, color: "text-amber-500" };
+  if (["doc", "docx", "odt", "rtf"].includes(ext)) return { Icon: FileText, color: "text-blue-600" };
+  if (["xls", "xlsx", "csv"].includes(ext)) return { Icon: FileText, color: "text-green-600" };
+  if (["ppt", "pptx"].includes(ext)) return { Icon: FileText, color: "text-orange-500" };
+  return { Icon: FileGenericIcon, color: "text-gray-500" };
+}
+
+/**
+ * Build the quoted-text HTML block used when replying.
+ */
+function buildQuotedReplyHtml(msg) {
+  if (!msg) return "";
+  const sender = msg.from_name || msg.from || "unknown";
+  const date = msg.received_at
+    ? new Date(msg.received_at).toLocaleString("en-AU", { timeZone: "Australia/Sydney" })
+    : "";
+  return `<br/><br/><div style="border-left: 2px solid #ccc; padding-left: 12px; margin-left: 4px; color: #666;"><p>On ${date}, ${sender} wrote:</p>${msg.body || ""}</div>`;
+}
+
 export default function EmailComposeDialog({
-  email,
-  type = "compose",
+  // Primary props
+  email: emailProp,
+  originalMessage,
+  type: typeProp,
+  mode: modeProp,
   onClose,
   onSent,
   projectId,
   defaultTo = "",
   defaultProjectId,
   defaultProjectTitle,
+  // Backward-compat: simple compose passes account object directly
+  account: accountProp,
 }) {
+  // Normalise aliases so callers can use either name
+  const email = emailProp || originalMessage || null;
+  const rawType = modeProp || typeProp || "compose";
+  const type = rawType === "reply-all" ? "replyAll" : rawType;
+
   const { data: user } = useCurrentUser();
   const queryClient = useQueryClient();
-  const [selectedAccount, setSelectedAccount] = useState("");
+  const [selectedAccount, setSelectedAccount] = useState(accountProp?.id || "");
   const [recipients, setRecipients] = useState(defaultTo || "");
-  const [subject, setSubject] = useState(
-    type === "forward"
-      ? `Fwd: ${email?.subject || ""}`
-      : (type === "reply" || type === "replyAll")
-      ? `Re: ${email?.subject || ""}`
-      : ""
-  );
+
+  const initialSubject = type === "forward"
+    ? `Fwd: ${email?.subject || ""}`
+    : (type === "reply" || type === "replyAll")
+    ? (email?.subject?.startsWith("Re:") ? email.subject : `Re: ${email?.subject || ""}`)
+    : "";
+  const [subject, setSubject] = useState(initialSubject);
+
   const [cc, setCc] = useState(type === "replyAll" ? (email?.cc?.join(", ") || "") : "");
   const [bcc, setBcc] = useState("");
   const [showCc, setShowCc] = useState(type === "replyAll");
   const [showBcc, setShowBcc] = useState(false);
-  const [body, setBody] = useState("");
+
+  // For reply / replyAll, insert quoted original message
+  const initialBody = (type === "reply" || type === "replyAll") ? buildQuotedReplyHtml(email) : "";
+  const [body, setBody] = useState(initialBody);
   const [linkedProject, setLinkedProject] = useState(defaultProjectId || projectId || "");
   const [linkedProjectTitle, setLinkedProjectTitle] = useState(defaultProjectTitle || "");
   const [isPrivate, setIsPrivate] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
   const [attachments, setAttachments] = useState([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null); // null | 'uploading' | 'done'
+  const fileInputRef = React.useRef(null);
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [templateName, setTemplateName] = useState("");
 
@@ -329,36 +390,106 @@ export default function EmailComposeDialog({
     },
   });
 
-  const handleAttachFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // ── Attachment upload logic ──────────────────────────────────────────────
+  // NOTE: The Supabase Storage bucket "email-attachments" must exist.
+  //       Create it via the Supabase dashboard or SQL:
+  //         INSERT INTO storage.buckets (id, name, public)
+  //         VALUES ('email-attachments', 'email-attachments', true);
+
+  const currentTotalSize = useMemo(
+    () => attachments.reduce((sum, a) => sum + (a.size || 0), 0),
+    [attachments]
+  );
+
+  const addFiles = async (files) => {
+    if (!files || files.length === 0) return;
+    const fileList = Array.from(files);
+
+    // Validate per-file size
+    for (const file of fileList) {
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error(`"${file.name}" exceeds the 10 MB per-file limit (${formatFileSize(file.size)})`);
+        return;
+      }
+    }
+
+    // Validate total size
+    const newTotal = currentTotalSize + fileList.reduce((s, f) => s + f.size, 0);
+    if (newTotal > MAX_TOTAL_SIZE) {
+      toast.error(`Total attachments would exceed the 25 MB limit (${formatFileSize(newTotal)})`);
+      return;
+    }
+
+    setUploadProgress('uploading');
+    const uploaded = [];
 
     try {
-      // Upload to Supabase Storage (email-attachments bucket)
-      const supabase = base44._supabase;
-      const filePath = `${selectedAccount}/${Date.now()}-${file.name}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('email-attachments')
-        .upload(filePath, file);
-      if (uploadError) throw uploadError;
+      const userId = user?.id || 'anonymous';
+      const ts = Date.now();
 
-      const { data: urlData } = supabase.storage
-        .from('email-attachments')
-        .getPublicUrl(uploadData.path);
+      for (const file of fileList) {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const filePath = `${userId}/${ts}_${safeName}`;
 
-      setAttachments([
-        ...attachments,
-        {
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('email-attachments')
+          .upload(filePath, file);
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('email-attachments')
+          .getPublicUrl(uploadData.path);
+
+        uploaded.push({
           filename: file.name,
           mime_type: file.type,
           size: file.size,
           file_url: urlData.publicUrl,
-        },
-      ]);
-      toast.success(`${file.name} attached`);
+        });
+      }
+
+      setAttachments((prev) => [...prev, ...uploaded]);
+      toast.success(
+        uploaded.length === 1
+          ? `${uploaded[0].filename} attached`
+          : `${uploaded.length} files attached`
+      );
     } catch (error) {
       console.error('Attachment upload error:', error);
-      toast.error(error?.message || "Failed to attach file");
+      toast.error(error?.message || "Failed to upload attachment");
+    } finally {
+      setUploadProgress(null);
+    }
+  };
+
+  const handleAttachFile = (e) => {
+    addFiles(e.target.files);
+    // Reset input so the same file can be re-selected
+    if (e.target) e.target.value = '';
+  };
+
+  const removeAttachment = (idx) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // ── Drag & drop handlers ──────────────────────────────────────────────────
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  };
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    if (e.dataTransfer?.files?.length) {
+      addFiles(e.dataTransfer.files);
     }
   };
 
@@ -575,8 +706,13 @@ export default function EmailComposeDialog({
                   }} />
                 </div>
 
-                {/* Rich Text Editor */}
-                <div className="space-y-2 flex-1 flex flex-col">
+                {/* Rich Text Editor — also acts as drag & drop zone */}
+                <div
+                  className={`space-y-2 flex-1 flex flex-col relative ${isDragOver ? 'ring-2 ring-blue-400 ring-offset-2 rounded-lg' : ''}`}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
                   <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
                     Message
                   </label>
@@ -588,6 +724,18 @@ export default function EmailComposeDialog({
                     placeholder="Write your message..."
                     className="bg-white rounded border-2 border-slate-200 flex-1 [&>.ql-container]:h-full [&>.ql-toolbar]:border-b-2 [&>.ql-toolbar]:border-slate-200"
                   />
+
+                  {/* Drag overlay */}
+                  {isDragOver && (
+                    <div className="absolute inset-0 bg-blue-50/80 border-2 border-dashed border-blue-400 rounded-lg flex items-center justify-center z-20 pointer-events-none">
+                      <div className="flex flex-col items-center gap-2 text-blue-600">
+                        <Upload className="h-8 w-8" />
+                        <span className="text-sm font-semibold">Drop files to attach</span>
+                        <span className="text-xs text-blue-500">Max 10 MB per file, 25 MB total</span>
+                      </div>
+                    </div>
+                  )}
+
                   {body && /\{\{[^}]+\}\}/.test(body) && (
                     <div className="bg-amber-50 border border-amber-200 rounded p-3 flex gap-2 text-xs text-amber-800">
                       <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
@@ -599,31 +747,50 @@ export default function EmailComposeDialog({
                   )}
                 </div>
 
-                 {/* Attachments List */}
+                {/* Upload progress indicator */}
+                {uploadProgress === 'uploading' && (
+                  <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 font-medium animate-in fade-in duration-200">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Uploading files...
+                  </div>
+                )}
+
+                {/* Attachments List — enhanced with type icons, sizes, and remove */}
                 {attachments.length > 0 && (
                   <div className="space-y-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
-                    <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block">
-                      Attachments ({attachments.length})
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block">
+                        Attachments ({attachments.length})
+                      </label>
+                      <span className="text-xs text-muted-foreground">
+                        {formatFileSize(currentTotalSize)} / 25 MB
+                      </span>
+                    </div>
                     <div className="flex flex-wrap gap-2">
-                      {attachments.map((att, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs font-medium hover:border-blue-300 transition-colors"
-                        >
-                          <Paperclip className="h-3.5 w-3.5 text-blue-600" />
-                          <span className="truncate max-w-xs">{att.filename}</span>
-                          <button
-                            onClick={() =>
-                              setAttachments(attachments.filter((_, i) => i !== idx))
-                            }
-                            className="text-muted-foreground hover:text-red-600 transition-colors"
-                            title="Remove attachment"
+                      {attachments.map((att, idx) => {
+                        const { Icon, color } = getFileIcon(att.filename, att.mime_type);
+                        return (
+                          <div
+                            key={idx}
+                            className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs font-medium hover:border-blue-300 transition-colors group"
                           >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      ))}
+                            <Icon className={`h-4 w-4 flex-shrink-0 ${color}`} />
+                            <span className="truncate max-w-[160px]" title={att.filename}>
+                              {att.filename}
+                            </span>
+                            <span className="text-muted-foreground/60 flex-shrink-0">
+                              {formatFileSize(att.size)}
+                            </span>
+                            <button
+                              onClick={() => removeAttachment(idx)}
+                              className="text-muted-foreground hover:text-red-600 transition-colors opacity-60 group-hover:opacity-100"
+                              title="Remove attachment"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -632,33 +799,45 @@ export default function EmailComposeDialog({
               {/* Bottom Action Bar */}
               <div className="border-t bg-gradient-to-r from-white to-slate-50 px-6 py-4 flex items-center justify-between shadow-sm">
                 <div className="flex items-center gap-2">
-                  <label htmlFor="attach-file" title="Attach file">
+                  <label htmlFor="attach-file" title="Attach files (max 10 MB each, 25 MB total)">
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-9 w-9 hover:bg-slate-100 rounded-full transition-all active:scale-95"
                       asChild
+                      disabled={uploadProgress === 'uploading'}
                     >
                       <span>
-                        <Paperclip className="h-4.5 w-4.5 text-blue-600" />
+                        {uploadProgress === 'uploading' ? (
+                          <Loader2 className="h-4.5 w-4.5 text-blue-600 animate-spin" />
+                        ) : (
+                          <Paperclip className="h-4.5 w-4.5 text-blue-600" />
+                        )}
                       </span>
                     </Button>
                   </label>
                   <input
                     id="attach-file"
+                    ref={fileInputRef}
                     type="file"
+                    multiple
                     onChange={handleAttachFile}
                     className="hidden"
-                    aria-label="Attach file"
+                    aria-label="Attach files"
                   />
+                  {attachments.length > 0 && (
+                    <span className="text-xs text-muted-foreground">
+                      {attachments.length} file{attachments.length !== 1 ? 's' : ''} ({formatFileSize(currentTotalSize)})
+                    </span>
+                  )}
                 </div>
 
                 <Button
                   onClick={() => {
-                    if (sendMutation.isPending || isLoading) return;
+                    if (sendMutation.isPending || isLoading || uploadProgress === 'uploading') return;
                     sendMutation.mutate();
                   }}
-                  disabled={isLoading || sendMutation.isPending || !recipients.trim() || !subject.trim()}
+                  disabled={isLoading || sendMutation.isPending || uploadProgress === 'uploading' || !recipients.trim() || !subject.trim()}
                   className="bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md hover:shadow-lg active:scale-95 transition-all"
                   size="lg"
                 >
