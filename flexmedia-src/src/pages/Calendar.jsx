@@ -391,12 +391,15 @@ export default function CalendarPage() {
       }
 
       if (calendarMode === "flex") {
-        // Show: Tonomo bookings (any origin), project-linked events, webhook events
+        // Show: Tonomo bookings, project-linked events, shoot-related Google events
         const isTonomoEvent = event.event_source === 'tonomo' ||
           event.link_source === 'tonomo_webhook' ||
           event.tonomo_appointment_id;
         const isProjectLinked = !!event.project_id || event.auto_linked;
-        if (!isTonomoEvent && !isProjectLinked) {
+        // Google events that are clearly shoots (synced from Tonomo via personal calendars)
+        const isShootFromGoogle = event.event_source === 'google' &&
+          (event.title || '').toLowerCase().includes('flex media shoot');
+        if (!isTonomoEvent && !isProjectLinked && !isShootFromGoogle) {
           return false;
         }
       }
