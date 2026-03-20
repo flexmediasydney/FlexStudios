@@ -996,14 +996,14 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
     return map;
   }, [isLaneMode, events, users, days]);
 
-  // Lane mode: scrollable horizontal layout for any number of users
+  // Tonomo-style week view: full-width day columns with color-coded events per user
+  // (Not sub-lanes — that's too cramped for 7 days. Color-coding by user is clearer.)
   if (isLaneMode && users.length > 0) {
-    // LANE MODE: columns = days, sub-columns = users
     return (
       <div className="flex h-full">
         {/* Time gutter */}
         <div className="w-14 flex-shrink-0 border-r">
-          <div className="border-b" style={{ height: 56 }} />
+          <div className="border-b" style={{ height: 44 }} />
           {hours.map(h => (
             <div key={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
               <span className="text-xs text-muted-foreground">
@@ -1013,168 +1013,122 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
           ))}
         </div>
 
-        {/* Day columns, each split into user lanes */}
-        <div className="flex-1 overflow-x-auto overflow-y-auto">
-          <div className="flex" style={{ minWidth: days.length * users.length * 80 }}>
-            {days.map((d, di) => (
-              <div key={di} className="flex-1 border-r min-w-0">
+        {/* Day columns with color-coded events */}
+        <div className="flex-1 grid overflow-y-auto" style={{ gridTemplateColumns: `repeat(7, 1fr)` }}>
+          {days.map((d, di) => {
+            const dayItems = events.filter(({ event }) =>
+              event.start_time && !event.is_all_day && isSameDay(new Date(fixTimestamp(event.start_time)), d)
+            );
+            const isTodayCol = isToday(d);
+            return (
+              <div key={di} className="border-r relative">
                 {/* Day header */}
-                <div
-                  className={`border-b text-center py-1 sticky top-0 bg-background z-10 ${isToday(d) ? 'bg-primary/5' : ''}`}
-                  style={{ height: 56 }}
-                >
+                <div className={`border-b text-center py-1.5 sticky top-0 bg-background z-10 ${isTodayCol ? 'bg-primary/5' : ''}`} style={{ height: 44 }}>
                   <div className="text-xs text-muted-foreground">{format(d, 'EEE')}</div>
-                  <div className={`text-sm font-medium ${isToday(d) ? 'text-primary' : ''}`}>{format(d, 'd MMM')}</div>
-                  {/* User lane headers with availability */}
-                  <div className="flex border-t mt-0.5">
-                    {users.map(u => {
-                      const color = userColorMap.get(u.id);
-                      const booked = bookedHoursMap.get(`${u.id}-${di}`) || 0;
-                      const avail = 8;
-                      const pct = Math.min(100, Math.round((booked / avail) * 100));
-                      return (
-                        <div key={u.id} className="flex-1 flex flex-col items-center gap-0 py-0.5 border-r last:border-r-0">
-                          <span
-                            className="w-4 h-4 rounded-full text-white text-[8px] font-bold flex items-center justify-center"
-                            style={{ backgroundColor: color?.bg }}
-                          >
-                            {getInitials(u.full_name || u.email)[0]}
-                          </span>
-                          <span className={`text-[7px] leading-none ${booked >= avail ? 'text-red-500 font-semibold' : 'text-muted-foreground'}`} title={`${booked}h booked / ${avail}h available`}>
-                            {booked}/{avail}h
-                          </span>
-                        </div>
-                      );
-                    })}
+                  <div className={`text-sm font-semibold ${isTodayCol ? 'text-primary' : ''}`}>{format(d, 'd')}</div>
+                </div>
+
+                {/* Hour slots */}
+                {hours.map(h => (
+                  <div key={h} data-hour={h} style={{ height: SLOT_HEIGHT }}
+                    className="border-b hover:bg-muted/10 cursor-pointer group relative"
+                    onDoubleClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellDoubleClick(dt); }}
+                    onClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellClick(dt); }}
+                  >
+                    <span className="absolute inset-0 flex items-center justify-center text-[9px] text-muted-foreground/0 group-hover:text-muted-foreground/30 transition-opacity pointer-events-none select-none">+</span>
                   </div>
+                ))}
+
+                {/* Working hours end boundary */}
+                <div className="absolute left-0 right-0 z-15 pointer-events-none" style={{ top: 44 + (19 * SLOT_HEIGHT) }}>
+                  <div className="h-[2px] bg-red-400/40" />
                 </div>
 
-                {/* Hour slots — split into user lanes */}
-                <div className="relative">
-                  {hours.map(h => (
-                    <div key={h} className="flex" style={{ height: SLOT_HEIGHT }}>
-                      {users.map(u => (
-                        <div
-                          key={u.id}
-                          className="flex-1 border-r border-b last:border-r-0 hover:bg-muted/10 cursor-pointer relative group"
-                          onDoubleClick={() => {
-                            const dt = new Date(d);
-                            dt.setHours(h, 0, 0, 0);
-                            onCellDoubleClick(dt, u.id);
-                          }}
-                          onClick={() => {
-                            const dt = new Date(d);
-                            dt.setHours(h, 0, 0, 0);
-                            onCellClick(dt, u.id);
-                          }}
-                        >
-                          <span className="absolute inset-0 flex items-center justify-center text-[9px] text-muted-foreground/0 group-hover:text-muted-foreground/30 transition-all duration-200 pointer-events-none select-none">+</span>
-                        </div>
-                      ))}
+                {/* Current time indicator */}
+                {isTodayCol && (() => {
+                  const nowMin = now.getHours() * 60 + now.getMinutes();
+                  const topPx = (nowMin / 60) * SLOT_HEIGHT + 44;
+                  return (
+                    <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
+                      <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 flex-shrink-0" />
+                      <div className="flex-1 h-[2px] bg-red-500" />
                     </div>
-                  ))}
+                  );
+                })()}
 
-                  {/* Unavailable time shading */}
-                  {users.map((u, uIdx) => {
-                    const ranges = getUnavailableRanges(u.id, d);
-                    const laneWidth = 100 / users.length;
-                    const leftPct = uIdx * laneWidth;
-                    return ranges.map((range, rIdx) => {
-                      const topPx = (range.start / 60) * SLOT_HEIGHT;
-                      const heightPx = ((range.end - range.start) / 60) * SLOT_HEIGHT;
-                      return (
-                        <div
-                          key={`${u.id}-${rIdx}`}
-                          className="absolute bg-muted/30 pointer-events-none"
-                          style={{
-                            top: topPx,
-                            height: heightPx,
-                            left: `${leftPct}%`,
-                            width: `${laneWidth}%`,
-                          }}
-                        />
-                      );
-                    });
-                  })}
+                {/* Color-coded event blocks by user */}
+                {dayItems.map(({ event, owners }) => {
+                  // Find the primary owner for coloring
+                  const primaryOwner = owners[0] ? users.find(u => u.id === owners[0]) : users[0];
+                  const ownerIdx = primaryOwner ? users.indexOf(primaryOwner) : 0;
 
-                  {/* Availability stripes: green=free working hours, red=busy event times */}
-                  {users.map((u, uIdx) => {
-                    const laneW = 100 / users.length;
-                    const leftP = uIdx * laneW;
-                    const userDayEvs = events
-                      .filter(({ owners }) => owners.includes(u.id))
-                      .filter(({ event }) => event.start_time && !event.is_all_day && isSameDay(new Date(fixTimestamp(event.start_time)), d));
-                    const workStart = 9 * 60, workEnd = 17 * 60;
-                    const greenTop = (workStart / 60) * SLOT_HEIGHT;
-                    const greenH = ((workEnd - workStart) / 60) * SLOT_HEIGHT;
-                    return (
-                      <div key={`avail-${u.id}`}>
-                        <div className="absolute pointer-events-none" style={{
-                          top: greenTop, height: greenH,
-                          left: `${leftP}%`, width: `${laneW}%`,
-                          background: 'rgba(34,197,94,0.04)',
-                        }} />
-                        {userDayEvs.map(({ event: ev }) => {
-                          const s = new Date(fixTimestamp(ev.start_time));
-                          const e = ev.end_time ? new Date(fixTimestamp(ev.end_time)) : new Date(s.getTime() + 3600000);
-                          const sMin = s.getHours() * 60 + s.getMinutes();
-                          const eMin = e.getHours() * 60 + e.getMinutes() || 24 * 60;
-                          const t = (sMin / 60) * SLOT_HEIGHT;
-                          const h = ((eMin - sMin) / 60) * SLOT_HEIGHT;
-                          return (
-                            <div key={`busy-${ev.id}-${u.id}`} className="absolute pointer-events-none" style={{
-                              top: t, height: Math.max(h, 4),
-                              left: `${leftP}%`, width: `${laneW}%`,
-                              background: 'rgba(239,68,68,0.06)',
-                            }} />
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
+                  // If multiple users own this event, we render it once with the primary color
+                  // but show co-owner avatars
+                  const start = new Date(fixTimestamp(event.start_time));
+                  const end = event.end_time ? new Date(fixTimestamp(event.end_time)) : new Date(start.getTime() + 3600000);
+                  const startMin = start.getHours() * 60 + start.getMinutes();
+                  const durMin = Math.max(15, differenceInMinutes(end, start));
+                  const topPx = (startMin / 60) * SLOT_HEIGHT + 44;
+                  const heightPx = Math.max(22, (durMin / 60) * SLOT_HEIGHT - 2);
 
-                  {/* Events rendered as positioned blocks */}
-                  {users.map((u, uIdx) => {
-                   const userEvents = events.filter(({ owners }) => owners.includes(u.id))
-                     .filter(({ event }) => event.start_time && !event.is_all_day && isSameDay(new Date(fixTimestamp(event.start_time)), d));
+                  const userColor = primaryOwner ? userColorMap.get(primaryOwner.id) : PERSON_COLORS[0];
+                  const isTonomo = event.event_source === 'tonomo' || event.tonomo_appointment_id;
+                  const isExternal = event.event_source === 'google' && !isTonomo;
 
-                   return userEvents.map(({ event, owners }) => (
-                    <LaneEventBlock
-                      key={`${event.id}-${u.id}`}
-                      event={event}
-                      owners={owners}
-                      user={u}
-                      userIdx={uIdx}
-                      totalUsers={users.length}
-                      userColorMap={userColorMap}
-                      allUsers={users}
-                      slotHeight={SLOT_HEIGHT}
-                      currentUserId={currentUserId}
-                      hasConflict={conflictSet.has(event.id)}
+                  // Overlapping event offset: find concurrent events and position side-by-side
+                  const concurrent = dayItems.filter(({ event: other }) => {
+                    if (other.id === event.id || !other.start_time) return false;
+                    const oStart = new Date(fixTimestamp(other.start_time));
+                    const oEnd = other.end_time ? new Date(fixTimestamp(other.end_time)) : new Date(oStart.getTime() + 3600000);
+                    return start < oEnd && end > oStart;
+                  });
+                  const myIdx = concurrent.filter(({ event: o }) => o.id < event.id).length;
+                  const totalConcurrent = concurrent.length + 1;
+                  const widthPct = totalConcurrent > 1 ? (100 / totalConcurrent) : 100;
+                  const leftPct = totalConcurrent > 1 ? (myIdx * widthPct) : 0;
+
+                  return (
+                    <div
+                      key={event.id}
+                      className="absolute rounded-md px-1.5 py-0.5 cursor-pointer hover:brightness-110 hover:shadow-lg overflow-hidden z-10 flex flex-col transition-all duration-150"
+                      style={{
+                        top: topPx,
+                        height: heightPx,
+                        left: `calc(${leftPct}% + 1px)`,
+                        width: `calc(${widthPct}% - 2px)`,
+                        backgroundColor: isExternal ? `${userColor?.bg}50` : userColor?.bg,
+                        borderLeft: `3px solid ${userColor?.bg}`,
+                        color: isExternal ? userColor?.text : '#fff',
+                      }}
                       onClick={(e) => onEventClick(e, event)}
-                    />
-                   ));
-                  })}
-
-                  {/* Current time indicator line (lane mode) */}
-                  {isToday(d) && (() => {
-                    const n = new Date();
-                    const nowMin = n.getHours() * 60 + n.getMinutes();
-                    const topPx = (nowMin / 60) * SLOT_HEIGHT;
-                    return (
-                      <div
-                        className="absolute left-0 right-0 z-20 pointer-events-none flex items-center"
-                        style={{ top: topPx }}
-                      >
-                        <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 flex-shrink-0" />
-                        <div className="flex-1 h-[2px] bg-red-500" />
-                      </div>
-                    );
-                  })()}
-                </div>
+                      title={`${event.title}\n${format(start, 'h:mm a')} - ${format(end, 'h:mm a')}${event.location ? '\n' + event.location : ''}`}
+                    >
+                      <p className="text-[11px] font-bold leading-tight truncate">{event.title || 'Untitled'}</p>
+                      {heightPx > 26 && (
+                        <p className="text-[10px] leading-tight" style={{ opacity: 0.75 }}>{format(start, 'h:mm')} - {format(end, 'h:mm')}</p>
+                      )}
+                      {heightPx > 40 && owners.length > 1 && (
+                        <div className="flex -space-x-1 mt-0.5">
+                          {owners.slice(0, 3).map(uid => {
+                            const u = users.find(u => u.id === uid);
+                            const c = userColorMap.get(uid);
+                            return (
+                              <span key={uid}
+                                className="w-3 h-3 rounded-full border border-white/50 text-white flex items-center justify-center text-[7px] font-bold"
+                                style={{ backgroundColor: c?.bg }}
+                              >
+                                {getInitials(u?.full_name || '?')[0]}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -1277,6 +1231,15 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
 
 function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, allAvailability, currentUserId, conflictSet, onCellClick, onCellDoubleClick, onEventClick }) {
   const hours = Array.from({ length: 24 }, (_, i) => i);
+  const dayLaneRef = useRef(null);
+
+  // Auto-scroll to working hours (7am) on mount
+  useEffect(() => {
+    if (dayLaneRef.current) {
+      const scrollTarget = 7 * SLOT_HEIGHT; // 7am
+      dayLaneRef.current.scrollTop = scrollTarget;
+    }
+  }, [currentDate]);
 
   const getUnavailableRanges = (userId, date) => {
     const dayOfWeek = date.getDay();
@@ -1329,74 +1292,118 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
         </div>
 
         {isLaneMode && users.length > 1 ? (
-          /* Lane mode: each user gets a column */
-          <div className="flex flex-1 overflow-y-auto">
+          /* Tonomo-style lane mode: each user gets a full column */
+          <div className="flex flex-1 overflow-y-auto" ref={dayLaneRef}>
             {users.map((u, uIdx) => {
               const color = userColorMap.get(u.id);
               const userItems = timedItems.filter(({ owners }) => owners.includes(u.id));
+              const HEADER_H = 52;
+              // Calculate booked hours
+              let totalMin = 0;
+              for (const { event: ev } of userItems) {
+                const s = new Date(fixTimestamp(ev.start_time));
+                const e = ev.end_time ? new Date(fixTimestamp(ev.end_time)) : new Date(s.getTime() + 3600000);
+                totalMin += Math.max(0, differenceInMinutes(e, s));
+              }
+              const booked = Math.round(totalMin / 60 * 10) / 10;
               return (
-                <div key={u.id} className="flex-1 border-r relative">
-                  {/* User header with availability */}
-                  <div className="sticky top-0 bg-background border-b z-10 flex flex-col items-center py-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="w-6 h-6 rounded-full text-white text-xs font-bold flex items-center justify-center"
+                <div key={u.id} className="flex-1 border-r last:border-r-0 relative min-w-[140px]">
+                  {/* Tonomo-style lane header: colored top bar + name + avatar */}
+                  <div className="sticky top-0 z-10" style={{ height: HEADER_H }}>
+                    <div className="h-1" style={{ backgroundColor: color?.bg }} />
+                    <div className="bg-background border-b flex items-center justify-center gap-2 py-2">
+                      <span className="w-7 h-7 rounded-full text-white text-xs font-bold flex items-center justify-center shadow-sm"
                         style={{ backgroundColor: color?.bg }}>
                         {getInitials(u.full_name || u.email)}
                       </span>
-                      <span className="text-xs font-medium">{u.full_name?.split(' ')[0]}</span>
-                    </div>
-                    {(() => {
-                      let totalMin = 0;
-                      for (const { event } of userItems) {
-                        const s = new Date(fixTimestamp(event.start_time));
-                        const e = event.end_time ? new Date(fixTimestamp(event.end_time)) : new Date(s.getTime() + 3600000);
-                        totalMin += Math.max(0, differenceInMinutes(e, s));
-                      }
-                      const booked = Math.round(totalMin / 60 * 10) / 10;
-                      return (
-                        <span className={`text-[9px] ${booked >= 8 ? 'text-red-500 font-semibold' : 'text-muted-foreground'}`}>
-                          {booked}/8h booked
+                      <div className="flex flex-col">
+                        <span className="text-sm font-semibold leading-tight">{u.full_name || u.email}</span>
+                        <span className={`text-[10px] leading-tight ${booked >= 8 ? 'text-red-500 font-semibold' : 'text-muted-foreground'}`}>
+                          {userItems.length} booking{userItems.length !== 1 ? 's' : ''} · {booked}h
                         </span>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Hour grid slots */}
+                  <div className="relative">
+                    {hours.map(h => (
+                      <div key={h} style={{ height: SLOT_HEIGHT }}
+                        className="border-b hover:bg-muted/10 cursor-pointer group"
+                        onDoubleClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellDoubleClick(dt, u.id); }}
+                        onClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellClick(dt, u.id); }}
+                      >
+                        <span className="absolute inset-0 flex items-center justify-center text-[9px] text-muted-foreground/0 group-hover:text-muted-foreground/30 transition-opacity pointer-events-none select-none">+</span>
+                      </div>
+                    ))}
+
+                    {/* Unavailable time shading */}
+                    {getUnavailableRanges(u.id, currentDate).map((range, rIdx) => {
+                      const topPx = (range.start / 60) * SLOT_HEIGHT;
+                      const heightPx = ((range.end - range.start) / 60) * SLOT_HEIGHT;
+                      return (
+                        <div
+                          key={rIdx}
+                          className="absolute left-0 right-0 pointer-events-none"
+                          style={{ top: topPx, height: heightPx, background: 'repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(0,0,0,0.03) 4px, rgba(0,0,0,0.03) 8px)' }}
+                        />
+                      );
+                    })}
+
+                    {/* Working hours end boundary (red line like Tonomo) */}
+                    {(() => {
+                      const dayOfWeek = currentDate.getDay();
+                      const userAvail = allAvailability.find(a => a.user_id === u.id && a.day_of_week === dayOfWeek);
+                      if (userAvail && userAvail.is_available && userAvail.end_time) {
+                        const [eh, em] = userAvail.end_time.split(':').map(Number);
+                        const endMin = eh * 60 + (em || 0);
+                        const linePx = (endMin / 60) * SLOT_HEIGHT;
+                        return (
+                          <div className="absolute left-0 right-0 z-15 pointer-events-none" style={{ top: linePx }}>
+                            <div className="h-[2px] bg-red-400/60" />
+                          </div>
+                        );
+                      }
+                      // Default: show line at 19:00 (7pm)
+                      const defaultEnd = (19 * 60 / 60) * SLOT_HEIGHT;
+                      return (
+                        <div className="absolute left-0 right-0 z-15 pointer-events-none" style={{ top: defaultEnd }}>
+                          <div className="h-[2px] bg-red-400/40" />
+                        </div>
                       );
                     })()}
+
+                    {/* Current time indicator */}
+                    {isToday(currentDate) && (() => {
+                      const n = new Date();
+                      const nowMin = n.getHours() * 60 + n.getMinutes();
+                      const topPx = (nowMin / 60) * SLOT_HEIGHT;
+                      return (
+                        <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
+                          <div className="w-2.5 h-2.5 rounded-full bg-red-500 -ml-1 flex-shrink-0 shadow-sm" />
+                          <div className="flex-1 h-[2px] bg-red-500" />
+                        </div>
+                      );
+                    })()}
+
+                    {/* Event blocks */}
+                    {userItems.map(({ event, owners }) => (
+                     <LaneEventBlock
+                       key={event.id}
+                       event={event}
+                       owners={owners}
+                       user={u}
+                       userIdx={0}
+                       totalUsers={1}
+                       userColorMap={userColorMap}
+                       allUsers={users}
+                       slotHeight={SLOT_HEIGHT}
+                       currentUserId={currentUserId}
+                       hasConflict={conflictSet.has(event.id)}
+                       onClick={(e) => onEventClick(e, event)}
+                       dayMode={true}
+                     />
+                    ))}
                   </div>
-                  {hours.map(h => (
-                    <div key={h} style={{ height: SLOT_HEIGHT }}
-                      className="border-b hover:bg-muted/10 cursor-pointer"
-                      onDoubleClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellDoubleClick(dt, u.id); }}
-                      onClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellClick(dt, u.id); }}
-                    />
-                  ))}
-
-                  {/* Unavailable time shading */}
-                  {getUnavailableRanges(u.id, currentDate).map((range, rIdx) => {
-                    const topPx = (range.start / 60) * SLOT_HEIGHT;
-                    const heightPx = ((range.end - range.start) / 60) * SLOT_HEIGHT;
-                    return (
-                      <div
-                        key={rIdx}
-                        className="absolute left-0 right-0 bg-muted/30 pointer-events-none"
-                        style={{ top: topPx, height: heightPx }}
-                      />
-                    );
-                  })}
-
-                  {userItems.map(({ event, owners }) => (
-                   <LaneEventBlock
-                     key={event.id}
-                     event={event}
-                     owners={owners}
-                     user={u}
-                     userIdx={uIdx}
-                     totalUsers={users.length}
-                     userColorMap={userColorMap}
-                     allUsers={users}
-                     slotHeight={SLOT_HEIGHT}
-                     currentUserId={currentUserId}
-                     hasConflict={conflictSet.has(event.id)}
-                     onClick={(e) => onEventClick(e, event)}
-                   />
-                  ))}
                 </div>
               );
             })}
@@ -1506,8 +1513,8 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
   );
 }
 
-// Block for lane (team) view — positioned within a specific user's sub-column
-function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap, allUsers, slotHeight, onClick, currentUserId, hasConflict }) {
+// Block for lane (team) view — Tonomo-style solid colored blocks
+function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap, allUsers, slotHeight, onClick, currentUserId, hasConflict, dayMode }) {
   const start = new Date(fixTimestamp(event.start_time));
   const end = event.end_time
     ? new Date(fixTimestamp(event.end_time))
@@ -1516,76 +1523,99 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
   const startMinutes = start.getHours() * 60 + start.getMinutes();
   const durationMinutes = Math.max(15, differenceInMinutes(end, start));
   const topPx = (startMinutes / 60) * slotHeight;
-  const heightPx = Math.max(20, (durationMinutes / 60) * slotHeight - 2);
+  const heightPx = Math.max(24, (durationMinutes / 60) * slotHeight - 2);
 
-  // Position within the day column based on user index
-  const laneWidth = 100 / totalUsers;
-  const leftPct = userIdx * laneWidth;
+  // In day mode (full lane), use full width. In week sub-lane mode, position by user index.
+  const laneWidth = dayMode ? 100 : (100 / totalUsers);
+  const leftPct = dayMode ? 0 : (userIdx * laneWidth);
 
-  const typeColor = getEventTypeColor(event);
+  const userColor = userColorMap.get(user.id);
   const ownerUsers = owners.map(uid => allUsers.find(u => u.id === uid)).filter(Boolean);
 
-  // Privacy: show as opaque "Busy" block if event belongs to another user
-  // and their connection has show_busy_only policy
+  // Privacy: show as opaque "Busy" block
   const isBusyBlock = event.connection_visibility_policy === 'show_busy_only' &&
     event.owner_user_id &&
     event.owner_user_id !== currentUserId;
 
-  // Special Google event types override colors
+  // Special Google event types
   const isOutOfOffice = event.google_event_type === 'outOfOffice';
   const isFocusTime = event.google_event_type === 'focusTime';
+  const isTonomo = event.event_source === 'tonomo' || event.tonomo_appointment_id || event.link_source === 'tonomo_webhook';
+  const isExternal = event.event_source === 'google' || (event.is_synced && !isTonomo);
 
-  const bgColor = isOutOfOffice
-    ? 'repeating-linear-gradient(45deg, #fef3c7, #fef3c7 4px, #fde68a 4px, #fde68a 8px)'
-    : isFocusTime ? '#f0f9ff'
-    : typeColor.light;
-  const borderColor = isOutOfOffice ? '#f59e0b' : isFocusTime ? '#0ea5e9' : typeColor.border;
-  const textColor = isOutOfOffice ? '#92400e' : isFocusTime ? '#0c4a6e' : typeColor.text;
+  // Tonomo-style: solid colored blocks
+  // Shoots/Tonomo: user's assigned color (solid, dark)
+  // External/Google: lighter version of user's color
+  // Out of office / Focus time: special patterns
+  let bgColor, textColor, borderColor;
+  if (isOutOfOffice) {
+    bgColor = 'repeating-linear-gradient(45deg, #fef3c7, #fef3c7 4px, #fde68a 4px, #fde68a 8px)';
+    textColor = '#92400e';
+    borderColor = '#f59e0b';
+  } else if (isFocusTime) {
+    bgColor = '#dbeafe';
+    textColor = '#1e40af';
+    borderColor = '#3b82f6';
+  } else if (isBusyBlock) {
+    bgColor = '#e5e7eb';
+    textColor = '#6b7280';
+    borderColor = '#9ca3af';
+  } else if (isExternal) {
+    // External events: lighter/muted version of user color
+    bgColor = userColor?.bg ? `${userColor.bg}50` : '#e5e7eb';
+    textColor = userColor?.text || '#374151';
+    borderColor = userColor?.bg || '#9ca3af';
+  } else {
+    // Shoots and FlexMedia events: solid user color (Tonomo-style)
+    bgColor = userColor?.bg || '#3b82f6';
+    textColor = '#ffffff';
+    borderColor = userColor?.bg || '#3b82f6';
+  }
+
+  const displayTitle = isBusyBlock ? 'Busy'
+    : isOutOfOffice ? 'Out of Office'
+    : isFocusTime ? 'Focus Time'
+    : isExternal ? (event.title || 'External')
+    : event.title || 'Untitled';
 
   return (
     <div
-      className="absolute rounded-md px-1 py-0.5 cursor-pointer hover:opacity-90 hover:shadow-lg overflow-hidden z-10 flex flex-col transition-all duration-150 border"
+      className="absolute rounded-lg px-2 py-1 cursor-pointer hover:brightness-110 hover:shadow-xl overflow-hidden z-10 flex flex-col transition-all duration-150"
       style={{
         top: topPx,
         height: heightPx,
-        left: `calc(${leftPct}% + 1px)`,
-        width: `calc(${laneWidth}% - 2px)`,
-        backgroundColor: bgColor,
+        left: dayMode ? '2px' : `calc(${leftPct}% + 1px)`,
+        width: dayMode ? 'calc(100% - 4px)' : `calc(${laneWidth}% - 2px)`,
+        background: bgColor,
         borderLeft: `4px solid ${borderColor}`,
-        borderColor: `${borderColor}40`,
-        borderLeftColor: borderColor,
         color: textColor,
       }}
       onClick={onClick}
-      title={`${event.title} - ${format(start, 'h:mm')} - ${format(end, 'h:mm a')}`}
+      title={`${event.title || 'Untitled'}\n${format(start, 'h:mm a')} - ${format(end, 'h:mm a')}${event.location ? '\n' + event.location : ''}`}
     >
-      <div className="flex items-center gap-0.5">
-        <p className="text-xs font-semibold leading-tight truncate flex-1">
-          {isBusyBlock ? 'Busy' :
-           isOutOfOffice ? 'Out of Office' :
-           isFocusTime ? 'Focus Time' :
-           event.title}
-        </p>
-        {hasConflict && <AlertTriangle className="h-2.5 w-2.5 text-orange-500 flex-shrink-0" title="Scheduling conflict" />}
+      <div className="flex items-center gap-1 min-w-0">
+        <p className="text-xs font-bold leading-tight truncate flex-1">{displayTitle}</p>
+        {hasConflict && <AlertTriangle className="h-3 w-3 text-orange-400 flex-shrink-0" />}
+        {isTonomo && <span className="text-[8px] opacity-60 flex-shrink-0 font-medium">BK</span>}
       </div>
+      {heightPx > 36 && event.location && (
+        <p className="text-[11px] leading-tight truncate mt-0.5" style={{ opacity: 0.85 }}>{event.location}</p>
+      )}
       {heightPx > 28 && (
-        <p className="text-[11px] opacity-70 leading-tight">{format(start, 'h:mm')} - {format(end, 'h:mm a')}</p>
+        <p className="text-[11px] leading-tight mt-auto" style={{ opacity: 0.75 }}>{format(start, 'h:mm')} - {format(end, 'h:mm')}</p>
       )}
       {heightPx > 28 && event.travel_time_minutes > 0 && (
-        <span className="inline-flex items-center gap-0.5 text-[8px] bg-blue-100 text-blue-700 rounded px-0.5 py-0 w-fit">
-          <Clock className="h-2 w-2" />{event.travel_time_minutes}m
+        <span className="inline-flex items-center gap-0.5 text-[8px] rounded px-0.5 py-0 w-fit" style={{ opacity: 0.7 }}>
+          <Clock className="h-2 w-2" />{event.travel_time_minutes}m travel
         </span>
       )}
-      {heightPx > 52 && event.location && (
-        <p className="text-[10px] opacity-50 leading-tight truncate mt-0.5">{event.location}</p>
-      )}
-      {heightPx > 40 && ownerUsers.length > 1 && (
-        <div className="flex -space-x-0.5 mt-0.5">
-          {ownerUsers.filter(u => u.id !== user.id).slice(0, 3).map(u => {
+      {heightPx > 50 && ownerUsers.length > 1 && (
+        <div className="flex -space-x-1 mt-0.5">
+          {ownerUsers.map(u => {
             const c = userColorMap.get(u.id);
             return (
               <span key={u.id}
-                className="w-3 h-3 rounded-full border border-white text-white flex items-center justify-center text-[7px] font-bold"
+                className="w-4 h-4 rounded-full border-2 border-white/50 text-white flex items-center justify-center text-[8px] font-bold"
                 style={{ backgroundColor: c?.bg }}
                 title={u.full_name}
               >

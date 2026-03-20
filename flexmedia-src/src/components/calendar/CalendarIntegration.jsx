@@ -222,11 +222,11 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
     return (
       <div className="flex items-center gap-2">
         {connections.map(c => (
-          <Badge key={c.id} variant="outline" className="text-xs gap-1">
-            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color || '#3b82f6' }} />
-            {c.account_email}
+          <Badge key={c.id} variant={c.account_email === 'info@flexmedia.sydney' ? 'default' : 'outline'} className={`text-xs gap-1 ${c.account_email === 'info@flexmedia.sydney' ? 'bg-blue-600 text-white' : ''}`}>
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.account_email === 'info@flexmedia.sydney' ? '#fff' : (c.color || '#3b82f6') }} />
+            {c.account_email === 'info@flexmedia.sydney' ? 'Tonomo Master' : c.account_email}
             {c.last_synced && (
-              <span className="text-muted-foreground">
+              <span className={c.account_email === 'info@flexmedia.sydney' ? 'text-white/70' : 'text-muted-foreground'}>
                 · {formatLastSync(c.last_synced)}
               </span>
             )}
@@ -297,14 +297,27 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
           </div>
         ) : (
           <div className="space-y-3">
-            {connections.map(connection => (
-              <div key={connection.id} className="flex items-center justify-between p-3 border rounded-lg">
+            {connections.map(connection => {
+              // Detect Tonomo master calendar (the business calendar linked to Tonomo scheduling)
+              const isMasterCalendar = connection.account_email === 'info@flexmedia.sydney';
+              return (
+              <div key={connection.id} className={`flex items-center justify-between p-3 border rounded-lg ${isMasterCalendar ? 'border-blue-300 bg-blue-50/30' : ''}`}>
                 <div className="flex items-center gap-3">
                   <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: connection.color || '#3b82f6' }} />
                   <div>
-                    <p className="font-medium text-sm">{connection.account_name || connection.account_email}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-sm">{connection.account_name || connection.account_email}</p>
+                      {isMasterCalendar && (
+                        <Badge variant="default" className="text-[10px] px-1.5 py-0 bg-blue-600 hover:bg-blue-600">
+                          Tonomo Master
+                        </Badge>
+                      )}
+                    </div>
                     <p className="text-xs text-muted-foreground">{connection.account_email}</p>
-                    {connection.created_by && connection.created_by !== selectedUserEmail && (
+                    {isMasterCalendar && (
+                      <p className="text-[10px] text-blue-600/70">Business calendar — syncs Tonomo bookings to FlexStudios</p>
+                    )}
+                    {connection.created_by && connection.created_by !== selectedUserEmail && !isMasterCalendar && (
                       <p className="text-xs text-muted-foreground italic">Owner: {connection.created_by}</p>
                     )}
                   </div>
@@ -373,7 +386,8 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
                   </Button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
