@@ -6,12 +6,15 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   X, Phone, Mail, Video, Pencil, Coffee, Camera, DollarSign,
-  Calendar, MessageSquare, FileText, ArrowRight, Clock
+  Calendar, MessageSquare, FileText, ArrowRight, Clock,
+  ExternalLink, Building2, MapPin, Tag
 } from "lucide-react";
-import { formatDistanceToNow, format, parseISO } from "date-fns";
+import { formatDistanceToNow, format, differenceInDays } from "date-fns";
 import { cn } from "@/lib/utils";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { TagList } from "@/components/clients/ContactTags";
+import QuickLogInteraction from "@/components/clients/QuickLogInteraction";
 
 const INTERACTION_ICONS = {
   "Phone Call": Phone,
@@ -39,15 +42,19 @@ const SENTIMENT_DOT = {
   Negative: "bg-red-500",
 };
 
+const STATE_STYLES = {
+  Active:          "bg-emerald-50 text-emerald-700 border-emerald-200",
+  Prospecting:     "bg-blue-50 text-blue-700 border-blue-200",
+  Dormant:         "bg-gray-50 text-gray-500 border-gray-200",
+  "Do Not Contact":"bg-red-50 text-red-600 border-red-200",
+};
+
 /**
- * ContactActivityPanel — shows a combined timeline of interactions, projects, and emails
- * for a given agent. Designed to slide in from the side or render inline.
- *
- * Props:
- *   agent     — the agent object { id, name }
- *   onClose   — callback to dismiss
+ * ContactActivityPanel - Pipedrive-style contact detail sidebar.
+ * Three sections: Contact info card, Quick actions, Activity timeline.
  */
 export default function ContactActivityPanel({ agent, onClose }) {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState("all");
 
   const { data: interactions = [], loading: interactionsLoading } = useEntityList(
@@ -64,112 +71,226 @@ export default function ContactActivityPanel({ agent, onClose }) {
     agent ? (item) => item.agent_id === agent.id : null
   );
 
-  // Merge into a unified timeline
+  // Merge into unified timeline
   const timeline = useMemo(() => {
     const items = [];
-
-    // Add interactions
     interactions.forEach((i) => {
-      items.push({
-        type: "interaction",
-        id: `i-${i.id}`,
-        date: i.date_time || i.created_date,
-        data: i,
-      });
+      items.push({ type: "interaction", id: `i-${i.id}`, date: i.date_time || i.created_date, data: i });
     });
-
-    // Add projects
     projects.forEach((p) => {
-      items.push({
-        type: "project",
-        id: `p-${p.id}`,
-        date: p.created_date,
-        data: p,
-      });
+      items.push({ type: "project", id: `p-${p.id}`, date: p.created_date, data: p });
     });
-
-    // Sort descending
     items.sort((a, b) => {
       const da = a.date ? new Date(a.date).getTime() : 0;
       const db = b.date ? new Date(b.date).getTime() : 0;
       return db - da;
     });
-
-    // Apply filter
     if (filter === "interactions") return items.filter((i) => i.type === "interaction");
     if (filter === "projects") return items.filter((i) => i.type === "project");
     return items;
   }, [interactions, projects, filter]);
 
+  // Compute summary
+  const totalRevenue = useMemo(() =>
+    projects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0),
+    [projects]
+  );
+
+  const lastContactInfo = useMemo(() => {
+    const lc = agent?.last_contacted_at || agent?.last_contact_date;
+    if (!lc) return { label: "Never contacted", color: "text-muted-foreground", isIdle: true };
+    const days = differenceInDays(new Date(), new Date(lc));
+    let color = "text-emerald-600";
+    if (days > 60) color = "text-red-600";
+    else if (days > 30) color = "text-amber-600";
+    else if (days > 14) color = "text-blue-600";
+    return {
+      label: `${days === 0 ? "Today" : days === 1 ? "Yesterday" : formatDistanceToNow(new Date(lc), { addSuffix: true })}`,
+      color,
+      isIdle: days > 30,
+    };
+  }, [agent]);
+
   const isLoading = interactionsLoading || projectsLoading;
+  const initials = (agent?.name || "?").split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
 
   if (!agent) return null;
 
   return (
-    <Card className="flex flex-col h-full border-l shadow-lg">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold truncate">{agent.name}</h3>
-          <p className="text-[11px] text-muted-foreground">Activity Timeline</p>
-        </div>
+    <Card className="flex flex-col h-full border-l shadow-lg bg-card">
+      {/* ── Header with close button ── */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b bg-muted/20">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Contact Details</span>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
           <X className="h-4 w-4" />
         </Button>
       </div>
 
-      {/* Filter tabs */}
-      <div className="flex gap-1 px-4 py-2 border-b">
-        {[
-          { id: "all", label: "All" },
-          { id: "interactions", label: "Interactions" },
-          { id: "projects", label: "Projects" },
-        ].map((f) => (
-          <button
-            key={f.id}
-            onClick={() => setFilter(f.id)}
-            className={cn(
-              "text-[11px] px-2.5 py-1 rounded-full font-medium transition-colors",
-              filter === f.id
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted"
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
-        <Badge variant="secondary" className="ml-auto text-[10px]">
-          {timeline.length}
-        </Badge>
-      </div>
-
-      {/* Timeline */}
-      <ScrollArea className="flex-1 px-4 py-3">
-        {isLoading ? (
-          <div className="space-y-3">
-            {Array(4)
-              .fill(0)
-              .map((_, i) => (
-                <div key={i} className="h-14 bg-muted animate-pulse rounded-lg" />
-              ))}
-          </div>
-        ) : timeline.length === 0 ? (
-          <div className="text-center py-8">
-            <Clock className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
-            <p className="text-xs text-muted-foreground">No activity yet</p>
-          </div>
-        ) : (
-          <div className="relative">
-            {/* Timeline line */}
-            <div className="absolute left-3 top-2 bottom-2 w-px bg-border" />
-
-            <div className="space-y-1">
-              {timeline.map((item, idx) => (
-                <TimelineEntry key={item.id} item={item} isLast={idx === timeline.length - 1} />
-              ))}
+      <ScrollArea className="flex-1">
+        {/* ── Contact info card ── */}
+        <div className="px-4 py-4 border-b">
+          <div className="flex items-start gap-3 mb-3">
+            {/* Avatar */}
+            <div className={cn(
+              "w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold shrink-0",
+              lastContactInfo.isIdle
+                ? "bg-amber-100 text-amber-700 ring-2 ring-amber-200"
+                : "bg-primary/10 text-primary"
+            )}>
+              {initials}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold truncate">{agent.name}</h3>
+              {agent.title && (
+                <p className="text-xs text-muted-foreground truncate">{agent.title}</p>
+              )}
+              {agent.current_agency_name && (
+                <button
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors mt-0.5"
+                  onClick={() => navigate(createPageUrl("OrgDetails") + "?id=" + agent.current_agency_id)}
+                >
+                  <Building2 className="h-3 w-3" />
+                  {agent.current_agency_name}
+                </button>
+              )}
             </div>
           </div>
-        )}
+
+          {/* Status + tags */}
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            {agent.relationship_state && (
+              <span className={cn(
+                "text-[11px] font-medium px-2 py-0.5 rounded-full border",
+                STATE_STYLES[agent.relationship_state] || "bg-muted"
+              )}>
+                {agent.relationship_state}
+              </span>
+            )}
+            {Array.isArray(agent.tags) && agent.tags.length > 0 && (
+              <TagList tags={agent.tags} max={3} size="xs" />
+            )}
+          </div>
+
+          {/* Contact info rows */}
+          <div className="space-y-1.5 mb-3">
+            {agent.email && (
+              <a href={`mailto:${agent.email}`} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-primary transition-colors">
+                <Mail className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                <span className="truncate">{agent.email}</span>
+              </a>
+            )}
+            {agent.phone && (
+              <a href={`tel:${agent.phone}`} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-emerald-600 transition-colors">
+                <Phone className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                <span>{agent.phone}</span>
+              </a>
+            )}
+            <div className={cn("flex items-center gap-2 text-xs", lastContactInfo.color)}>
+              <Clock className="h-3.5 w-3.5 shrink-0" />
+              <span>Last contact: {lastContactInfo.label}</span>
+              {lastContactInfo.isIdle && (
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              )}
+            </div>
+          </div>
+
+          {/* Summary stats */}
+          <div className="grid grid-cols-3 gap-2 pt-2 border-t">
+            <div className="text-center">
+              <p className="text-lg font-bold tabular-nums">{projects.length}</p>
+              <p className="text-[10px] text-muted-foreground">Projects</p>
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-bold tabular-nums">
+                {totalRevenue >= 1000 ? `$${(totalRevenue / 1000).toFixed(1)}k` : `$${totalRevenue}`}
+              </p>
+              <p className="text-[10px] text-muted-foreground">Revenue</p>
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-bold tabular-nums">{interactions.length}</p>
+              <p className="text-[10px] text-muted-foreground">Activities</p>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Quick actions ── */}
+        <div className="px-4 py-3 border-b">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Quick Actions</p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {agent.email && (
+              <a href={`mailto:${agent.email}`}>
+                <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5">
+                  <Mail className="h-3 w-3 text-blue-500" />Email
+                </Button>
+              </a>
+            )}
+            {agent.phone && (
+              <a href={`tel:${agent.phone}`}>
+                <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5">
+                  <Phone className="h-3 w-3 text-emerald-500" />Call
+                </Button>
+              </a>
+            )}
+            <QuickLogInteraction agent={agent} triggerSize="sm" />
+            <Button
+              variant="outline" size="sm" className="h-7 text-xs gap-1.5"
+              onClick={() => navigate(createPageUrl("PersonDetails") + "?id=" + agent.id)}
+            >
+              <ExternalLink className="h-3 w-3" />Full Profile
+            </Button>
+          </div>
+        </div>
+
+        {/* ── Timeline ── */}
+        <div className="px-4 py-3">
+          {/* Filter tabs */}
+          <div className="flex items-center gap-1 mb-3">
+            {[
+              { id: "all", label: "All" },
+              { id: "interactions", label: "Interactions" },
+              { id: "projects", label: "Projects" },
+            ].map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFilter(f.id)}
+                className={cn(
+                  "text-[11px] px-2.5 py-1 rounded-full font-medium transition-colors",
+                  filter === f.id
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted"
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+            <Badge variant="secondary" className="ml-auto text-[10px]">
+              {timeline.length}
+            </Badge>
+          </div>
+
+          {/* Timeline content */}
+          {isLoading ? (
+            <div className="space-y-3">
+              {Array(4).fill(0).map((_, i) => (
+                <div key={i} className="h-14 bg-muted animate-pulse rounded-lg" />
+              ))}
+            </div>
+          ) : timeline.length === 0 ? (
+            <div className="text-center py-8">
+              <Clock className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+              <p className="text-xs text-muted-foreground">No activity recorded yet</p>
+            </div>
+          ) : (
+            <div className="relative">
+              <div className="absolute left-3 top-2 bottom-2 w-px bg-border" />
+              <div className="space-y-1">
+                {timeline.map((item) => (
+                  <TimelineEntry key={item.id} item={item} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </ScrollArea>
     </Card>
   );

@@ -1,16 +1,18 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { base44 } from "@/api/base44Client";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import {
   Plus, Search, Building, LayoutGrid, Network, Activity,
   Clock, FileText, TreePine, BarChart3, AlertTriangle, Users, User,
-  Table as TableIcon
+  Table as TableIcon, X, UserPlus, Tag, Zap, Calendar, ChevronDown
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import HierarchyTree from "@/components/clients/HierarchyTree";
 import HierarchyOrgChart from "@/components/clients/HierarchyOrgChart";
 import HierarchyGridView from "@/components/clients/HierarchyGridView";
@@ -24,11 +26,14 @@ import AgencyForm from "@/components/clients/AgencyForm";
 import TeamForm from "@/components/clients/TeamForm";
 import AgentForm from "@/components/clients/AgentForm";
 import ContactActivityPanel from "@/components/clients/ContactActivityPanel";
+import QuickAddContactPanel from "@/components/clients/QuickAddContactPanel";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePermissions } from '@/components/auth/PermissionGuard';
 import { Skeleton } from "@/components/ui/skeleton";
+import { differenceInDays } from "date-fns";
 
+// ─── Delete confirm dialog ───
 function DeleteConfirmDialog({ item, onConfirm, onCancel }) {
   const [typed, setTyped] = useState('');
   const [deleting, setDeleting] = useState(false);
@@ -56,7 +61,7 @@ function DeleteConfirmDialog({ item, onConfirm, onCancel }) {
         <DialogFooter className="gap-2">
           <Button variant="ghost" onClick={onCancel} disabled={deleting}>Cancel</Button>
           <Button variant="destructive" onClick={handleConfirm} disabled={!confirmed || deleting}>
-            {deleting ? 'Deleting…' : 'Delete'}
+            {deleting ? 'Deleting\u2026' : 'Delete'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -64,8 +69,9 @@ function DeleteConfirmDialog({ item, onConfirm, onCancel }) {
   );
 }
 
+// ─── Constants ───
 const TABS = [
-  { id: 'hierarchy', label: 'Hierarchy', icon: Network },
+  { id: 'contacts', label: 'Contacts', icon: Users },
   { id: 'timeline', label: 'Timeline', icon: Clock },
   { id: 'activity', label: 'Audit Log', icon: Activity },
   { id: 'statistics', label: 'Statistics', icon: BarChart3 },
@@ -74,24 +80,36 @@ const TABS = [
 ];
 
 const VIEW_MODES = [
-  { id: 'tree', label: 'Tree', icon: TreePine },
-  { id: 'org', label: 'Org', icon: Network },
-  { id: 'grid', label: 'Grid', icon: LayoutGrid },
   { id: 'table', label: 'Table', icon: TableIcon },
+  { id: 'grid', label: 'Cards', icon: LayoutGrid },
+  { id: 'tree', label: 'Tree', icon: TreePine },
+  { id: 'org', label: 'Org Chart', icon: Network },
 ];
 
+const QUICK_FILTERS = [
+  { id: "idle",        label: "Idle 30+ days", icon: Clock,          color: "text-amber-600 bg-amber-50 border-amber-200" },
+  { id: "at_risk",     label: "At risk",       icon: AlertTriangle,  color: "text-red-600 bg-red-50 border-red-200" },
+  { id: "active",      label: "Active",        icon: Zap,            color: "text-emerald-600 bg-emerald-50 border-emerald-200" },
+  { id: "prospecting", label: "Prospecting",   icon: UserPlus,       color: "text-blue-600 bg-blue-50 border-blue-200" },
+  { id: "no_email",    label: "Missing email",  icon: AlertTriangle,  color: "text-orange-600 bg-orange-50 border-orange-200" },
+];
+
+// ─── Main component ───
 export default function ClientAgents() {
   const { canManageContacts } = usePermissions();
 
+  // State
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState("hierarchy");
-  const [viewMode, setViewMode] = useState("tree");
-  const [stateFilter, setStateFilter] = useState('all');
-  const [showAtRisk, setShowAtRisk] = useState(false);
+  const [activeTab, setActiveTab] = useState("contacts");
+  const [viewMode, setViewMode] = useState("table"); // Table-first like Pipedrive
+  const [activeFilters, setActiveFilters] = useState(new Set());
+  const [tagFilter, setTagFilter] = useState(null);
+  const [orgFilter, setOrgFilter] = useState(null);
 
   const [showAgencyForm, setShowAgencyForm] = useState(false);
   const [showTeamForm, setShowTeamForm] = useState(false);
   const [showAgentForm, setShowAgentForm] = useState(false);
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [deletingItem, setDeletingItem] = useState(null);
   const [preselectedAgencyId, setPreselectedAgencyId] = useState(null);
@@ -101,12 +119,11 @@ export default function ClientAgents() {
 
   const [selectedAgentIds, setSelectedAgentIds] = useState(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
-
-  // Activity panel state
   const [activityPanelAgent, setActivityPanelAgent] = useState(null);
 
   const needsExtendedData = activeTab === 'statistics' || activeTab === 'health';
 
+  // Data
   const { data: agencies = [], loading: agenciesLoading } = useEntityList("Agency", "name");
   const { data: teams = [], loading: teamsLoading } = useEntityList("Team", "name");
   const { data: agents = [], loading: agentsLoading } = useEntityList("Agent", "name");
@@ -117,7 +134,16 @@ export default function ClientAgents() {
 
   const isLoading = agenciesLoading || teamsLoading || agentsLoading;
 
-  // Compute per-agent project counts and revenue for health scores
+  // All unique tags for filter dropdown
+  const allTags = useMemo(() => {
+    const tagSet = new Set();
+    agents.forEach(a => {
+      if (Array.isArray(a.tags)) a.tags.forEach(t => tagSet.add(t));
+    });
+    return Array.from(tagSet).sort();
+  }, [agents]);
+
+  // Per-agent project counts and revenue
   const { agentProjectCounts, agentRevenue } = useMemo(() => {
     const counts = {};
     const rev = {};
@@ -130,89 +156,99 @@ export default function ClientAgents() {
     return { agentProjectCounts: counts, agentRevenue: rev };
   }, [projects]);
 
-  // Overdue follow-ups count
+  // Summary stats
   const overdueFollowUps = useMemo(() => {
     const now = new Date();
     return agents.filter(a => a.next_follow_up_date && new Date(a.next_follow_up_date) < now).length;
   }, [agents]);
 
-  // When searching, filter agencies and show their complete sub-trees
-  // Searches across: agency name/email/phone, team name, agent name/email/phone/title/tags
-  const filteredAgencies = useMemo(() => {
-    if (!searchQuery) return agencies;
+  const idleCount = useMemo(() => {
+    return agents.filter(a => {
+      const lc = a.last_contacted_at || a.last_contact_date;
+      if (!lc) return true;
+      return differenceInDays(new Date(), new Date(lc)) > 30;
+    }).length;
+  }, [agents]);
+
+  // ─── Filtering pipeline ───
+  // Step 1: search
+  const searchFiltered = useMemo(() => {
+    if (!searchQuery) return agents;
     const q = searchQuery.toLowerCase();
     const qNoSpaces = q.replace(/\s/g, '');
-    const matchingAgentAgencyIds = new Set(
-      agents.filter(a =>
-        a.name?.toLowerCase().includes(q) ||
-        a.email?.toLowerCase().includes(q) ||
-        a.phone?.replace(/\s/g, '').includes(qNoSpaces) ||
-        a.title?.toLowerCase().includes(q) ||
-        a.current_agency_name?.toLowerCase().includes(q) ||
-        (Array.isArray(a.tags) && a.tags.some(t => t.toLowerCase().includes(q)))
-      ).map(a => a.current_agency_id)
-    );
-    const matchingTeamAgencyIds = new Set(
-      teams.filter(t =>
-        t.name?.toLowerCase().includes(q)
-      ).map(t => t.agency_id)
-    );
-    return agencies.filter(a =>
+    return agents.filter(a =>
       a.name?.toLowerCase().includes(q) ||
       a.email?.toLowerCase().includes(q) ||
       a.phone?.replace(/\s/g, '').includes(qNoSpaces) ||
-      matchingAgentAgencyIds.has(a.id) ||
-      matchingTeamAgencyIds.has(a.id)
+      a.title?.toLowerCase().includes(q) ||
+      a.current_agency_name?.toLowerCase().includes(q) ||
+      a.current_team_name?.toLowerCase().includes(q) ||
+      (Array.isArray(a.tags) && a.tags.some(t => t.toLowerCase().includes(q))) ||
+      a.notes?.toLowerCase().includes(q)
     );
-  }, [agencies, agents, teams, searchQuery]);
+  }, [agents, searchQuery]);
 
-  const filteredAgencyIds = useMemo(() => new Set(filteredAgencies.map(a => a.id)), [filteredAgencies]);
-
-  const teamsForView = useMemo(() =>
-    searchQuery ? teams.filter(t => filteredAgencyIds.has(t.agency_id)) : teams,
-    [teams, filteredAgencyIds, searchQuery]
-  );
-
-  const agentsForView = useMemo(() =>
-    searchQuery ? agents.filter(a => filteredAgencyIds.has(a.current_agency_id)) : agents,
-    [agents, filteredAgencyIds, searchQuery]
-  );
-
-  const agentsFiltered = useMemo(() => {
-    let result = agentsForView;
-    if (stateFilter !== 'all') {
-      result = result.filter(a => a.relationship_state === stateFilter);
+  // Step 2: smart filters + tag/org
+  const filteredAgents = useMemo(() => {
+    let result = searchFiltered;
+    if (activeFilters.has("idle")) {
+      result = result.filter(a => {
+        const lc = a.last_contacted_at || a.last_contact_date;
+        if (!lc) return true;
+        return differenceInDays(new Date(), new Date(lc)) > 30;
+      });
     }
-    if (showAtRisk) {
-      result = result.filter(a => a.is_at_risk === true);
-    }
+    if (activeFilters.has("at_risk")) result = result.filter(a => a.is_at_risk === true);
+    if (activeFilters.has("active")) result = result.filter(a => a.relationship_state === "Active");
+    if (activeFilters.has("prospecting")) result = result.filter(a => a.relationship_state === "Prospecting");
+    if (activeFilters.has("no_email")) result = result.filter(a => !a.email);
+    if (tagFilter) result = result.filter(a => Array.isArray(a.tags) && a.tags.includes(tagFilter));
+    if (orgFilter) result = result.filter(a => a.current_agency_id === orgFilter);
     return result;
-  }, [agentsForView, stateFilter, showAtRisk]);
+  }, [searchFiltered, activeFilters, tagFilter, orgFilter]);
 
-  // Health checks
-  const healthChecks = useMemo(() => {
-    const checks = [];
-    const orphanedAgents = agents.filter(a => !agencies.find(ag => ag.id === a.current_agency_id));
-    if (orphanedAgents.length > 0) {
-      checks.push({ type: "warning", title: "Orphaned People", message: `${orphanedAgents.length} person(s) reference non-existent organisations`, agents: orphanedAgents });
-    }
-    const orphanedTeams = teams.filter(t => !agencies.find(a => a.id === t.agency_id));
-    if (orphanedTeams.length > 0) {
-      checks.push({ type: "warning", title: "Orphaned Teams", message: `${orphanedTeams.length} team(s) reference non-existent organisations`, teams: orphanedTeams });
-    }
-    const emptyAgencies = agencies.filter(a =>
-      !agents.find(ag => ag.current_agency_id === a.id) && !teams.find(t => t.agency_id === a.id)
-    );
-    if (emptyAgencies.length > 0) {
-      checks.push({ type: "info", title: "Empty Organisations", message: `${emptyAgencies.length} organisation(s) have no teams or people`, agencies: emptyAgencies });
-    }
-    return checks;
+  // For hierarchy views: filter agencies to match
+  const filteredAgencies = useMemo(() => {
+    if (viewMode === "table") return agencies;
+    if (!searchQuery && activeFilters.size === 0 && !tagFilter && !orgFilter) return agencies;
+    const ids = new Set(filteredAgents.map(a => a.current_agency_id));
+    return agencies.filter(a => ids.has(a.id));
+  }, [agencies, filteredAgents, viewMode, searchQuery, activeFilters, tagFilter, orgFilter]);
+
+  const teamsForView = useMemo(() => {
+    if (viewMode === "table") return teams;
+    const agencyIds = new Set(filteredAgencies.map(a => a.id));
+    return teams.filter(t => agencyIds.has(t.agency_id));
+  }, [teams, filteredAgencies, viewMode]);
+
+  // Health checks for badge count
+  const warningCount = useMemo(() => {
+    let count = 0;
+    if (agents.some(a => !agencies.find(ag => ag.id === a.current_agency_id))) count++;
+    if (teams.some(t => !agencies.find(a => a.id === t.agency_id))) count++;
+    return count;
   }, [agencies, teams, agents]);
 
-  const warningCount = healthChecks.filter(c => c.type === 'warning').length;
+  const hasActiveFilters = activeFilters.size > 0 || tagFilter || orgFilter;
 
-  // Permission check — must be after all hooks
+  // Permission check after all hooks
   if (!canManageContacts) return <div className="p-8 text-center text-muted-foreground">Access restricted.</div>;
+
+  // ─── Callbacks ───
+  const toggleFilter = (id) => {
+    setActiveFilters(prev => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  };
+
+  const clearAllFilters = () => {
+    setActiveFilters(new Set());
+    setTagFilter(null);
+    setOrgFilter(null);
+    setSearchQuery("");
+  };
 
   const handleAddTeam = (agencyId) => { setPreselectedAgencyId(agencyId); setPreselectedTeamId(null); setEditingItem(null); setShowTeamForm(true); };
   const handleAddAgent = (agencyId, teamId = null) => { setPreselectedAgencyId(agencyId); setPreselectedTeamId(teamId); setEditingItem(null); setShowAgentForm(true); };
@@ -239,23 +275,14 @@ export default function ClientAgents() {
         await base44.entities.Team.delete(deletingItem.item.id);
         await base44.entities.AuditLog.create({ entity_type: "team", entity_id: deletingItem.item.id, entity_name: deletingItem.item.name, action: "delete", changed_fields: [], previous_state: deletingItem.item, new_state: {}, user_name: user.full_name, user_email: user.email });
       } else if (deletingItem.type === 'agent') {
-        // Nullify agent references on open projects before deleting
         try {
-          const agentProjects = await base44.entities.Project.filter(
-            { agent_id: deletingItem.item.id }, null, 500
-          );
-          const openProjects = agentProjects.filter(
-            p => !['delivered', 'cancelled'].includes(p.status)
-          );
+          const agentProjects = await base44.entities.Project.filter({ agent_id: deletingItem.item.id }, null, 500);
+          const openProjects = agentProjects.filter(p => !['delivered', 'cancelled'].includes(p.status));
           await Promise.all(openProjects.map(p =>
-            base44.entities.Project.update(p.id, {
-              agent_id: null,
-              agent_name: null,
-            }).catch(() => {})
+            base44.entities.Project.update(p.id, { agent_id: null, agent_name: null }).catch(() => {})
           ));
         } catch { /* non-fatal */ }
 
-        // Clean up orphaned related entities
         try {
           const [logs, matrices, events] = await Promise.all([
             base44.entities.InteractionLog.filter({ entity_id: deletingItem.item.id, entity_type: 'Agent' }, null, 500).catch(() => []),
@@ -271,15 +298,12 @@ export default function ClientAgents() {
 
         await base44.entities.Agent.delete(deletingItem.item.id);
 
-        // Update agency agent count
         if (deletingItem.item.current_agency_id) {
           try {
             const remaining = agents.filter(a =>
               a.id !== deletingItem.item.id && a.current_agency_id === deletingItem.item.current_agency_id
             );
-            await base44.entities.Agency.update(deletingItem.item.current_agency_id, {
-              agent_count: remaining.length,
-            });
+            await base44.entities.Agency.update(deletingItem.item.current_agency_id, { agent_count: remaining.length });
           } catch { /* non-fatal */ }
         }
 
@@ -308,10 +332,10 @@ export default function ClientAgents() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedAgentIds.size === agentsFiltered.length) {
+    if (selectedAgentIds.size === filteredAgents.length) {
       setSelectedAgentIds(new Set());
     } else {
-      setSelectedAgentIds(new Set(agentsFiltered.map(a => a.id)));
+      setSelectedAgentIds(new Set(filteredAgents.map(a => a.id)));
     }
   };
 
@@ -327,96 +351,86 @@ export default function ClientAgents() {
         )
       );
       refetchEntityList("Agent");
-      toast.success(
-        `Updated ${selectedAgentIds.size} contact${selectedAgentIds.size > 1 ? 's' : ''} to ${newState}`
-      );
+      toast.success(`Updated ${selectedAgentIds.size} contact${selectedAgentIds.size > 1 ? 's' : ''} to ${newState}`);
       clearSelection();
     } catch {
-      toast.error('Some updates failed — please try again');
+      toast.error('Some updates failed');
     }
     setBulkActionLoading(false);
   };
 
+  // Props for all hierarchy/view components
   const hierarchyProps = {
     agencies: filteredAgencies,
     teams: teamsForView,
-    agents: agentsFiltered,
+    agents: filteredAgents,
     onAddTeam: handleAddTeam,
     onAddAgent: handleAddAgent,
     onEdit: handleEdit,
     onDelete: (type, item) => setDeletingItem({ type, item }),
-    selectedAgentIds: viewMode === 'grid' ? selectedAgentIds : undefined,
-    toggleSelectAgent: viewMode === 'grid' ? toggleSelectAgent : undefined,
-    toggleSelectAll: viewMode === 'grid' ? toggleSelectAll : undefined,
-    agentsFiltered: viewMode === 'grid' ? agentsFiltered : undefined,
+    selectedAgentIds,
+    toggleSelectAgent,
+    toggleSelectAll,
+    agentsFiltered: filteredAgents,
     agentProjectCounts,
     agentRevenue,
     onOpenActivityPanel: (agent) => setActivityPanelAgent(agent),
   };
 
+  // ─── Render ───
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background to-muted/20">
-      {/* Sticky header */}
+    <div className="min-h-screen bg-background">
+      {/* ═══ Sticky header ═══ */}
       <div className="sticky top-0 z-20 bg-card/95 backdrop-blur border-b">
-        <div className="px-6 pt-5 pb-0">
-          {/* Title row */}
-          <div className="flex items-center justify-between gap-4 mb-4">
-            <div className="flex items-center gap-5 min-w-0">
-              <div>
-                <h1 className="text-xl font-bold tracking-tight">Contacts</h1>
-                <p className="text-xs text-muted-foreground mt-0.5">Organisations · Teams · People</p>
-              </div>
-              {/* Stat pills */}
-              <div className="hidden sm:flex items-center gap-2 flex-wrap">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50 border border-blue-100 text-xs font-medium text-blue-700">
-                  <Building className="h-3 w-3" />{agencies.length} Organisations
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-50 border border-purple-100 text-xs font-medium text-purple-700">
-                  <Users className="h-3 w-3" />{teams.length} Teams
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-50 border border-green-100 text-xs font-medium text-green-700">
-                  <User className="h-3 w-3" />{agents.length} People
-                </span>
-                {agents.filter(a => a.is_at_risk).length > 0 && (
-                  <span
-                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-700 border border-amber-200 cursor-pointer hover:bg-amber-200 transition-colors"
-                    onClick={() => setShowAtRisk(true)}
+        <div className="px-6 pt-4 pb-0">
+          {/* Title + actions */}
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div className="flex items-center gap-4 min-w-0">
+              <h1 className="text-xl font-bold tracking-tight">Contacts</h1>
+              <div className="hidden md:flex items-center gap-1.5">
+                <Badge variant="secondary" className="font-normal gap-1">
+                  <User className="h-3 w-3" />{agents.length}
+                </Badge>
+                <Badge variant="secondary" className="font-normal gap-1">
+                  <Building className="h-3 w-3" />{agencies.length}
+                </Badge>
+                {idleCount > 0 && (
+                  <Badge
+                    variant="outline"
+                    className="font-normal gap-1 text-amber-600 border-amber-200 bg-amber-50 cursor-pointer hover:bg-amber-100"
+                    onClick={() => toggleFilter("idle")}
                   >
-                    <AlertTriangle className="h-3 w-3" />
-                    {agents.filter(a => a.is_at_risk).length} at risk
-                  </span>
+                    <Clock className="h-3 w-3" />{idleCount} idle
+                  </Badge>
                 )}
-                {warningCount > 0 && (
-                  <button onClick={() => setActiveTab('health')} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-xs font-medium text-amber-700 hover:bg-amber-100 transition-colors">
-                    <AlertTriangle className="h-3 w-3" />{warningCount} {warningCount === 1 ? 'Issue' : 'Issues'}
-                  </button>
+                {overdueFollowUps > 0 && (
+                  <Badge variant="outline" className="font-normal gap-1 text-red-600 border-red-200 bg-red-50">
+                    <Calendar className="h-3 w-3" />{overdueFollowUps} overdue
+                  </Badge>
                 )}
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <Button variant="outline" onClick={() => { setEditingItem(null); setPreselectedAgencyId(null); setPreselectedTeamId(null); setShowAgentForm(true); }} className="gap-2" size="sm">
-                <Plus className="h-3.5 w-3.5" />Add Person
+              <Button variant="outline" size="sm" onClick={() => { setEditingItem(null); setShowAgencyForm(true); }} className="gap-1.5 hidden sm:flex">
+                <Building className="h-3.5 w-3.5" />Add Org
               </Button>
-              <Button variant="outline" onClick={() => { setEditingItem(null); setPreselectedAgencyId(null); setShowTeamForm(true); }} className="gap-2" size="sm">
-                <Plus className="h-3.5 w-3.5" />Add Team
-              </Button>
-              <Button onClick={() => { setEditingItem(null); setShowAgencyForm(true); }} className="gap-2" size="sm">
-                <Plus className="h-3.5 w-3.5" />Add Organisation
+              <Button size="sm" onClick={() => setShowQuickAdd(true)} className="gap-1.5">
+                <Plus className="h-3.5 w-3.5" />Add Contact
               </Button>
             </div>
           </div>
 
           {/* Tab bar */}
-          <div className="flex items-center gap-0.5 overflow-x-auto">
+          <div className="flex items-center gap-0.5 overflow-x-auto -mb-px">
             {TABS.map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  "relative flex items-center gap-1.5 px-3.5 py-2.5 text-sm font-medium transition-all whitespace-nowrap rounded-t-lg",
+                  "relative flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-all whitespace-nowrap",
                   activeTab === tab.id
-                    ? "text-primary bg-background border border-b-background border-border -mb-px"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    ? "text-primary border-b-2 border-primary"
+                    : "text-muted-foreground hover:text-foreground"
                 )}
               >
                 <tab.icon className="h-3.5 w-3.5" />
@@ -432,165 +446,221 @@ export default function ClientAgents() {
         </div>
       </div>
 
-      {/* Content area */}
+      {/* ═══ Content ═══ */}
       <div className="p-6">
 
-        {/* ── Hierarchy ── */}
-        {activeTab === 'hierarchy' && (
-          <div className="space-y-4">
+        {/* ── Contacts tab ── */}
+        {activeTab === 'contacts' && (
+          <div className="space-y-3">
+            {/* Search + Filters + View toggle */}
             <div className="flex flex-col gap-3">
               <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-                <div className="relative flex-1 max-w-sm">
+                {/* Search */}
+                <div className="relative flex-1 max-w-md">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input placeholder="Search contacts…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 h-10" aria-label="Search contacts" />
-                </div>
-                {/* View mode switcher */}
-                <div className="flex items-center bg-muted rounded-lg p-1 gap-0.5">
-                {VIEW_MODES.map(mode => {
-                   const Icon = mode.icon;
-                   return (
-                     <button key={mode.id} onClick={() => setViewMode(mode.id)} title={mode.label} aria-label={`Switch to ${mode.label} view`} aria-pressed={viewMode === mode.id}
-                       className={cn(
-                         "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
-                         viewMode === mode.id ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                       )}>
-                       <Icon className="h-3.5 w-3.5" />
-                       <span className="hidden md:inline">{mode.label}</span>
-                     </button>
-                   );
-                 })}
-                </div>
+                  <Input
+                    placeholder="Search name, email, phone, tags, notes\u2026"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    className="pl-9 h-9"
+                    aria-label="Search contacts"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
 
-                {/* Filter bar */}
-                <div className="flex items-center gap-2 flex-wrap">
-
-                {/* Relationship state filter */}
-                <Select value={stateFilter} onValueChange={setStateFilter}>
-                  <SelectTrigger className="h-10 w-[160px]">
-                    <SelectValue placeholder="All states" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All states</SelectItem>
-                    <SelectItem value="Active">Active</SelectItem>
-                    <SelectItem value="Prospecting">Prospecting</SelectItem>
-                    <SelectItem value="Dormant">Dormant</SelectItem>
-                    <SelectItem value="Do Not Contact">Do Not Contact</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {/* At-risk toggle */}
-                <button
-                  onClick={() => setShowAtRisk(v => !v)}
-                  aria-label={showAtRisk ? "Hide at-risk contacts" : "Show at-risk contacts"}
-                  className={`h-10 px-3 text-sm rounded-lg border transition-all duration-200 flex items-center gap-1.5 ${
-                    showAtRisk
-                      ? 'bg-amber-100 text-amber-700 border-amber-300'
-                      : 'border-border text-muted-foreground hover:bg-muted'
-                  }`}
-                >
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  At risk
-                  {showAtRisk && ` (${agentsFiltered.length})`}
-                </button>
-
-                {/* Missing info warnings */}
-                {(() => {
-                  const noEmail = agents.filter(a => !a.email).length;
-                  const noPhone = agents.filter(a => !a.phone).length;
-                  if (noEmail === 0 && noPhone === 0) return null;
-                  return (
-                    <span className="text-xs text-muted-foreground/70 flex items-center gap-2 ml-1">
-                      {noEmail > 0 && (
-                        <span className="flex items-center gap-1 text-amber-600">
-                          <AlertTriangle className="h-3 w-3" />
-                          {noEmail} missing email
-                        </span>
+                {/* Quick filter chips */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {QUICK_FILTERS.map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => toggleFilter(f.id)}
+                      className={cn(
+                        "flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-all",
+                        activeFilters.has(f.id)
+                          ? f.color
+                          : "text-muted-foreground border-transparent hover:border-border hover:bg-muted/50"
                       )}
-                      {noPhone > 0 && (
-                        <span className="flex items-center gap-1 text-amber-600">
-                          {noPhone} missing phone
-                        </span>
+                    >
+                      <f.icon className="h-3 w-3" />
+                      {f.label}
+                    </button>
+                  ))}
+
+                  {/* Tag dropdown */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button className={cn(
+                        "flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-all",
+                        tagFilter
+                          ? "text-violet-600 bg-violet-50 border-violet-200"
+                          : "text-muted-foreground border-transparent hover:border-border hover:bg-muted/50"
+                      )}>
+                        <Tag className="h-3 w-3" />
+                        {tagFilter || "Tag"}
+                        <ChevronDown className="h-3 w-3" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-44 p-1">
+                      <button
+                        className="w-full text-left px-2 py-1.5 text-xs hover:bg-muted rounded-sm"
+                        onClick={() => setTagFilter(null)}
+                      >
+                        All tags
+                      </button>
+                      {allTags.map(tag => (
+                        <button
+                          key={tag}
+                          className={cn(
+                            "w-full text-left px-2 py-1.5 text-xs hover:bg-muted rounded-sm",
+                            tagFilter === tag && "bg-muted font-medium"
+                          )}
+                          onClick={() => setTagFilter(tagFilter === tag ? null : tag)}
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
+
+                  {/* Org dropdown */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button className={cn(
+                        "flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-all",
+                        orgFilter
+                          ? "text-blue-600 bg-blue-50 border-blue-200"
+                          : "text-muted-foreground border-transparent hover:border-border hover:bg-muted/50"
+                      )}>
+                        <Building className="h-3 w-3" />
+                        {orgFilter ? (agencies.find(a => a.id === orgFilter)?.name || "Org") : "Org"}
+                        <ChevronDown className="h-3 w-3" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-52 p-1 max-h-64 overflow-y-auto">
+                      <button
+                        className="w-full text-left px-2 py-1.5 text-xs hover:bg-muted rounded-sm"
+                        onClick={() => setOrgFilter(null)}
+                      >
+                        All organisations
+                      </button>
+                      {agencies.map(a => (
+                        <button
+                          key={a.id}
+                          className={cn(
+                            "w-full text-left px-2 py-1.5 text-xs hover:bg-muted rounded-sm truncate",
+                            orgFilter === a.id && "bg-muted font-medium"
+                          )}
+                          onClick={() => setOrgFilter(orgFilter === a.id ? null : a.id)}
+                        >
+                          {a.name}
+                        </button>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {/* View mode */}
+                <div className="flex items-center bg-muted rounded-lg p-0.5 gap-0.5 ml-auto shrink-0">
+                  {VIEW_MODES.map(mode => (
+                    <button
+                      key={mode.id}
+                      onClick={() => setViewMode(mode.id)}
+                      title={mode.label}
+                      aria-label={`Switch to ${mode.label} view`}
+                      aria-pressed={viewMode === mode.id}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all",
+                        viewMode === mode.id
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
                       )}
+                    >
+                      <mode.icon className="h-3.5 w-3.5" />
+                      <span className="hidden lg:inline">{mode.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Active filter chips (removable) */}
+              {hasActiveFilters && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs text-muted-foreground mr-1">Filters:</span>
+                  {Array.from(activeFilters).map(fId => {
+                    const f = QUICK_FILTERS.find(sf => sf.id === fId);
+                    if (!f) return null;
+                    return (
+                      <span key={fId} className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border", f.color)}>
+                        {f.label}
+                        <button onClick={() => toggleFilter(fId)} className="hover:opacity-70"><X className="h-3 w-3" /></button>
+                      </span>
+                    );
+                  })}
+                  {tagFilter && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border text-violet-600 bg-violet-50 border-violet-200">
+                      Tag: {tagFilter}
+                      <button onClick={() => setTagFilter(null)} className="hover:opacity-70"><X className="h-3 w-3" /></button>
                     </span>
-                  );
-                })()}
-
-                {/* Clear filters */}
-                {(stateFilter !== 'all' || showAtRisk) && (
-                  <button
-                    onClick={() => { setStateFilter('all'); setShowAtRisk(false); }}
-                    className="h-10 px-3 text-sm text-muted-foreground hover:text-foreground transition-colors duration-150"
-                    aria-label="Clear filters"
-                  >
-                    Clear
+                  )}
+                  {orgFilter && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border text-blue-600 bg-blue-50 border-blue-200">
+                      Org: {agencies.find(a => a.id === orgFilter)?.name}
+                      <button onClick={() => setOrgFilter(null)} className="hover:opacity-70"><X className="h-3 w-3" /></button>
+                    </span>
+                  )}
+                  <button onClick={clearAllFilters} className="text-xs text-muted-foreground hover:text-foreground ml-1">
+                    Clear all
                   </button>
-                )}
-
                 </div>
+              )}
+            </div>
+
+            {/* Bulk action bar */}
+            {selectedAgentIds.size > 0 && (
+              <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/20 rounded-lg animate-in slide-in-from-top-1 duration-200">
+                <span className="text-sm font-medium">{selectedAgentIds.size} selected</span>
+                <div className="flex items-center gap-1.5 flex-1 flex-wrap">
+                  <span className="text-xs text-muted-foreground">Set state:</span>
+                  {['Active', 'Prospecting', 'Dormant', 'Do Not Contact'].map(state => (
+                    <Button key={state} variant="outline" size="sm" disabled={bulkActionLoading}
+                      onClick={() => handleBulkStateChange(state)} className="h-7 text-xs">
+                      {state}
+                    </Button>
+                  ))}
                 </div>
+                <button onClick={clearSelection} className="text-sm text-muted-foreground hover:text-foreground">Clear</button>
+              </div>
+            )}
 
-                {/* Bulk action bar — only in grid view */}
-                {viewMode === 'grid' && selectedAgentIds.size > 0 && (
-                 <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/5
-                                 border border-primary/20 rounded-lg">
-                   <span className="text-sm font-medium text-foreground">
-                     {selectedAgentIds.size} selected
-                   </span>
-                   <div className="flex items-center gap-1.5 flex-1 flex-wrap">
-                     <span className="text-xs text-muted-foreground">Set state:</span>
-                     {['Active', 'Prospecting', 'Dormant', 'Do Not Contact'].map(state => (
-                       <button
-                         key={state}
-                         disabled={bulkActionLoading}
-                         onClick={() => handleBulkStateChange(state)}
-                         aria-label={`Set selected contacts to ${state}`}
-                         className={`text-sm px-3 py-1.5 rounded-lg border transition-all duration-200
-                           border-border text-muted-foreground ${
-                             state === 'Active'
-                               ? 'hover:bg-green-100 hover:border-green-300 hover:text-green-700'
-                             : state === 'Dormant'
-                               ? 'hover:bg-amber-100 hover:border-amber-300 hover:text-amber-700'
-                             : state === 'Do Not Contact'
-                               ? 'hover:bg-red-100 hover:border-red-300 hover:text-red-700'
-                             : 'hover:bg-blue-100 hover:border-blue-300 hover:text-blue-700'
-                           }`}
-                       >
-                         {state}
-                       </button>
-                     ))}
-                   </div>
-                   <button
-                     onClick={clearSelection}
-                     className="text-sm text-muted-foreground hover:text-foreground ml-auto transition-colors duration-150"
-                     aria-label="Clear selection"
-                   >
-                     Clear
-                   </button>
-                 </div>
-                )}
-
-                {isLoading ? (
-              <ClientAgentsSkeleton />
-            ) : filteredAgencies.length === 0 ? (
-              <Card className="p-12 text-center border-dashed bg-muted/20">
-                <Building className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
-                <h3 className="font-semibold mb-1">{searchQuery ? "No results" : "No organisations yet"}</h3>
-                <p className="text-sm text-muted-foreground mb-4">
-                  {searchQuery ? "Try a different search term." : "Add your first organisation to get started."}
+            {/* View content */}
+            {isLoading ? (
+              <ContactsTableSkeleton />
+            ) : agents.length === 0 ? (
+              <Card className="p-16 text-center border-dashed bg-muted/10">
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                  <Users className="h-8 w-8 text-primary/60" />
+                </div>
+                <h3 className="font-semibold text-lg mb-1">No contacts yet</h3>
+                <p className="text-sm text-muted-foreground mb-6 max-w-sm mx-auto">
+                  Add your first contact to get started.
                 </p>
-                {!searchQuery && (
-                  <Button onClick={() => setShowAgencyForm(true)} size="sm" className="gap-2">
-                    <Plus className="h-3.5 w-3.5" />Add Organisation
-                  </Button>
-                )}
+                <Button onClick={() => setShowQuickAdd(true)} className="gap-2">
+                  <Plus className="h-4 w-4" />Add First Contact
+                </Button>
               </Card>
             ) : (
               <>
+                {viewMode === "table" && <HierarchyTableView {...hierarchyProps} />}
+                {viewMode === "grid" && <HierarchyGridView {...hierarchyProps} />}
                 {viewMode === "tree" && <HierarchyTree {...hierarchyProps} />}
                 {viewMode === "org" && <HierarchyOrgChart {...hierarchyProps} />}
-                {viewMode === "grid" && <HierarchyGridView {...hierarchyProps} />}
-                {viewMode === "table" && <HierarchyTableView {...hierarchyProps} />}
               </>
             )}
           </div>
@@ -598,12 +668,12 @@ export default function ClientAgents() {
 
         {/* ── Timeline ── */}
         {activeTab === 'timeline' && (
-        <Card className="p-6">
-          <div className="flex gap-3 mb-6 flex-wrap">
+          <Card className="p-6">
+            <div className="flex gap-3 mb-6 flex-wrap">
               <Select value={selectedTimelineType || ""} onValueChange={v => { setSelectedTimelineType(v); setSelectedTimelineEntity(null); }}>
                 <SelectTrigger className="w-36"><SelectValue placeholder="Select type" /></SelectTrigger>
                 <SelectContent>
-                          <SelectItem value="agency">Organisation</SelectItem>
+                  <SelectItem value="agency">Organisation</SelectItem>
                   <SelectItem value="team">Team</SelectItem>
                   <SelectItem value="agent">Person</SelectItem>
                 </SelectContent>
@@ -616,44 +686,60 @@ export default function ClientAgents() {
                   {selectedTimelineType === "agency" && agencies.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
                   {selectedTimelineType === "team" && teams.map(t => <SelectItem key={t.id} value={t.id}>{t.name}{t.agency_name ? ` (${t.agency_name})` : ''}</SelectItem>)}
                   {selectedTimelineType === "agent" && agents.map(a => <SelectItem key={a.id} value={a.id}>{a.name}{a.current_agency_name ? ` (${a.current_agency_name})` : ''}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  </div>
-                  {!selectedTimelineEntity && (
-                  <div className="text-center py-10 text-muted-foreground text-sm">
-                    Select a type and entity above to view their timeline
-                  </div>
-                  )}
-                  {selectedTimelineEntity && <ContactTimeline entityType={selectedTimelineType} entityId={selectedTimelineEntity} />}
+                </SelectContent>
+              </Select>
+            </div>
+            {!selectedTimelineEntity && (
+              <div className="text-center py-10 text-muted-foreground text-sm">
+                Select a type and entity above to view their timeline
+              </div>
+            )}
+            {selectedTimelineEntity && <ContactTimeline entityType={selectedTimelineType} entityId={selectedTimelineEntity} />}
           </Card>
         )}
 
-        {/* ── Activity ── */}
         {activeTab === 'activity' && <ActivityFeed />}
 
-        {/* ── Statistics ── */}
         {activeTab === 'statistics' && (
           <HierarchyStatistics agencies={agencies} teams={teams} agents={agents} projectTypes={projectTypes} products={products} packages={packages} />
         )}
 
-        {/* ── Health ── */}
         {activeTab === 'health' && (
-          <HierarchyHealthCheck checks={healthChecks} agents={agents} teams={teams} agencies={agencies} />
+          <HierarchyHealthCheck
+            checks={(() => {
+              const checks = [];
+              const orphanedAgents = agents.filter(a => !agencies.find(ag => ag.id === a.current_agency_id));
+              if (orphanedAgents.length > 0) checks.push({ type: "warning", title: "Orphaned People", message: `${orphanedAgents.length} person(s) reference non-existent organisations`, agents: orphanedAgents });
+              const orphanedTeams = teams.filter(t => !agencies.find(a => a.id === t.agency_id));
+              if (orphanedTeams.length > 0) checks.push({ type: "warning", title: "Orphaned Teams", message: `${orphanedTeams.length} team(s) reference non-existent organisations`, teams: orphanedTeams });
+              const emptyAgencies = agencies.filter(a => !agents.find(ag => ag.current_agency_id === a.id) && !teams.find(t => t.agency_id === a.id));
+              if (emptyAgencies.length > 0) checks.push({ type: "info", title: "Empty Organisations", message: `${emptyAgencies.length} organisation(s) have no teams or people`, agencies: emptyAgencies });
+              return checks;
+            })()}
+            agents={agents} teams={teams} agencies={agencies}
+          />
         )}
 
-        {/* ── Rulebook ── */}
         {activeTab === 'rulebook' && <ClientRulebook />}
       </div>
 
-      {/* Forms */}
+      {/* ═══ Dialogs & panels ═══ */}
       <AgencyForm agency={editingItem && showAgencyForm ? editingItem : null} open={showAgencyForm} onClose={closeAllForms} />
       <TeamForm team={editingItem && showTeamForm ? editingItem : null} open={showTeamForm} onClose={closeAllForms} preselectedAgencyId={preselectedAgencyId} />
       <AgentForm agent={editingItem && showAgentForm ? editingItem : null} open={showAgentForm} onClose={closeAllForms} preselectedAgencyId={preselectedAgencyId} preselectedTeamId={preselectedTeamId} />
       <DeleteConfirmDialog item={deletingItem} onConfirm={handleDelete} onCancel={() => setDeletingItem(null)} />
 
+      {/* Quick-add slide-in panel */}
+      <QuickAddContactPanel
+        open={showQuickAdd}
+        onOpenChange={setShowQuickAdd}
+        agencies={agencies}
+        preselectedAgencyId={preselectedAgencyId}
+      />
+
       {/* Activity side panel */}
       {activityPanelAgent && (
-        <div className="fixed inset-y-0 right-0 w-96 z-30 shadow-2xl">
+        <div className="fixed inset-y-0 right-0 w-96 z-30 shadow-2xl animate-in slide-in-from-right duration-200">
           <ContactActivityPanel
             agent={activityPanelAgent}
             onClose={() => setActivityPanelAgent(null)}
@@ -664,36 +750,38 @@ export default function ClientAgents() {
   );
 }
 
-function ClientAgentsSkeleton() {
+// ─── Skeleton ───
+function ContactsTableSkeleton() {
   return (
-    <div className="space-y-4 animate-in fade-in duration-300">
-      {/* Organisation cards */}
-      {Array(3).fill(0).map((_, i) => (
-        <Card key={i} className="p-4 space-y-3">
-          {/* Organisation header */}
-          <div className="flex items-center gap-3">
-            <Skeleton className="h-10 w-10 rounded-lg" />
-            <div className="flex-1 space-y-1.5">
-              <Skeleton className="h-4 w-40" />
-              <Skeleton className="h-3 w-24" />
-            </div>
-            <Skeleton className="h-8 w-20 rounded-md" />
-          </div>
-          {/* Agent rows inside the organisation */}
-          <div className="ml-6 border-l-2 border-muted pl-4 space-y-2.5">
-            {Array(2 + i).fill(0).map((_, j) => (
-              <div key={j} className="flex items-center gap-3">
-                <Skeleton className="h-8 w-8 rounded-full" />
-                <div className="flex-1 space-y-1">
-                  <Skeleton className="h-3.5 w-32" />
-                  <Skeleton className="h-2.5 w-44" />
-                </div>
-                <Skeleton className="h-5 w-14 rounded-full" />
+    <div className="space-y-0 animate-in fade-in duration-300">
+      <div className="border rounded-xl overflow-hidden">
+        <div className="bg-muted/30 px-3 py-3 flex items-center gap-4 border-b">
+          <Skeleton className="h-4 w-4 rounded" />
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-4 w-28" />
+          <Skeleton className="h-4 w-36" />
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-4 w-20" />
+        </div>
+        {Array(8).fill(0).map((_, i) => (
+          <div key={i} className="px-3 py-3 flex items-center gap-4 border-b">
+            <Skeleton className="h-4 w-4 rounded" />
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-8 w-8 rounded-full" />
+              <div className="space-y-1">
+                <Skeleton className="h-3.5 w-28" />
+                <Skeleton className="h-2.5 w-20" />
               </div>
-            ))}
+            </div>
+            <Skeleton className="h-3.5 w-24" />
+            <Skeleton className="h-3.5 w-32" />
+            <Skeleton className="h-3.5 w-20" />
+            <Skeleton className="h-3.5 w-16" />
+            <Skeleton className="h-5 w-16 rounded-full" />
           </div>
-        </Card>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
