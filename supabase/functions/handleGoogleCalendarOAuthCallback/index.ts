@@ -22,7 +22,7 @@ function oauthResultPage(type: string, payload: Record<string, string> = {}) {
     <button onclick="window.close()" style="padding:0.5rem 1.5rem;background:${color};color:white;border:none;border-radius:6px;cursor:pointer;font-size:0.9rem;">Close Window</button>
   </div>
   <script>
-    try { window.opener.postMessage({ type: '${type}', ${safePayload} }, '*'); } catch(e) {}
+    try { window.opener.postMessage({ type: '${type}', ${safePayload} }, '${Deno.env.get('SITE_URL') || 'https://flexstudios.app'}'); } catch(e) {}
     try { window.close(); } catch(e) {}
   </script>
 </body></html>`,
@@ -46,8 +46,16 @@ Deno.serve(async (req) => {
       return oauthResultPage('calendar_auth_error', { error: 'Missing authorization code or state' });
     }
 
-    const stateData = JSON.parse(state);
+    let stateData: any;
+    try {
+      stateData = JSON.parse(state);
+    } catch {
+      return oauthResultPage('calendar_auth_error', { error: 'Invalid state parameter. Please try connecting your calendar again.' });
+    }
     const { userId } = stateData;
+    if (!userId) {
+      return oauthResultPage('calendar_auth_error', { error: 'Missing user ID in state. Please try connecting your calendar again.' });
+    }
 
     const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
     const clientSecret = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET');

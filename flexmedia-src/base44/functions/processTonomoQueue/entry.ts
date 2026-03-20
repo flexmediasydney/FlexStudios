@@ -842,7 +842,7 @@ async function handleScheduled(base44, orderId, p, originAction = 'scheduled') {
           attendees: JSON.stringify(photographers.map((ph) => ({
             name: ph.name, email: ph.email, tonomoId: ph.id
           }))),
-          activity_type: 'meeting',
+          activity_type: 'shoot',
           is_synced: false, // Will be updated to true when Google Calendar syncs
           is_done: false,
           auto_linked: true,

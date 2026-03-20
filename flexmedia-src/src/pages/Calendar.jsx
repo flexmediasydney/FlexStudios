@@ -326,8 +326,18 @@ export default function CalendarPage() {
           result.push(entry);
         }
       } else {
-        // No google_event_id — not deduplicatable
-        result.push({ event: ev, owners });
+        // No google_event_id — deduplicate by event.id
+        const dedupKey = `local_${ev.id}`;
+        if (seen.has(dedupKey)) {
+          const existing = seen.get(dedupKey);
+          for (const uid of owners) {
+            if (!existing.owners.includes(uid)) existing.owners.push(uid);
+          }
+        } else {
+          const entry = { event: ev, owners };
+          seen.set(dedupKey, entry);
+          result.push(entry);
+        }
       }
     }
 
@@ -910,19 +920,8 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
     return ranges;
   };
 
-  // Gap fix: Limit lane mode to 8 users max (unreadable beyond)
-  const MAX_LANE_USERS = 8;
+  // Lane mode: scrollable horizontal layout for any number of users
   if (isLaneMode && users.length > 0) {
-    if (users.length > MAX_LANE_USERS) {
-      return (
-        <div className="flex items-center justify-center min-h-[200px] text-center">
-          <div className="text-sm text-muted-foreground">
-            <p className="font-medium mb-1">Too many team members for lane view</p>
-            <p className="text-xs">Select {MAX_LANE_USERS} or fewer team members to use lane mode</p>
-          </div>
-        </div>
-      );
-    }
     // LANE MODE: columns = days, sub-columns = users
     return (
       <div className="flex h-full">

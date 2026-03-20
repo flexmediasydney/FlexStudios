@@ -171,14 +171,17 @@ export default function EventDetailsDialog({
         savedId = created?.id;
       }
 
-      // Fire-and-forget: push to Google Calendar if this is a native FlexStudios event
-      // and the user has a connected calendar. Non-blocking — dialog closes immediately.
+      // Push to Google Calendar if this is a native FlexStudios event
+      // and the user has a connected calendar.
       if (source === 'flexmedia' && savedId) {
-        base44.functions.invoke('writeCalendarEventToGoogle', {
-          calendar_event_id: savedId,
-        }).catch((err) => {
-          console.warn('writeCalendarEventToGoogle fire-and-forget failed:', err?.message);
-        });
+        try {
+          await base44.functions.invoke('writeCalendarEventToGoogle', {
+            calendar_event_id: savedId,
+          });
+        } catch (err) {
+          console.warn('writeCalendarEventToGoogle failed:', err?.message);
+          toast.error('Failed to sync event to Google Calendar. The event was saved locally.');
+        }
       }
 
       // Notify relevant staff about calendar event create/update
@@ -232,9 +235,14 @@ export default function EventDetailsDialog({
 
       // Remove from Google Calendar if this is a FlexStudios event that was pushed
       if (event.google_event_id && getEventSource(event) === 'flexmedia') {
-        base44.functions.invoke('deleteCalendarEventFromGoogle', {
-          calendar_event_id: event.id,
-        }).catch(() => {});
+        try {
+          await base44.functions.invoke('deleteCalendarEventFromGoogle', {
+            calendar_event_id: event.id,
+          });
+        } catch (err) {
+          console.warn('deleteCalendarEventFromGoogle failed:', err?.message);
+          toast.error('Failed to remove event from Google Calendar.');
+        }
       }
 
       invalidateAll();
@@ -248,13 +256,16 @@ export default function EventDetailsDialog({
   const handleDelete = async () => {
     if (!event?.id || !confirm("Delete this activity?")) return;
 
-    // Trigger Google Calendar delete first (fire-and-forget).
+    // Trigger Google Calendar delete before local delete.
     // Server-side function enforces: only flexmedia events, only the creator.
-    base44.functions.invoke('deleteCalendarEventFromGoogle', {
-      calendar_event_id: event.id,
-    }).catch((err) => {
+    try {
+      await base44.functions.invoke('deleteCalendarEventFromGoogle', {
+        calendar_event_id: event.id,
+      });
+    } catch (err) {
       console.warn('deleteCalendarEventFromGoogle skipped:', err?.message);
-    });
+      toast.error('Failed to remove event from Google Calendar. Deleting locally.');
+    }
 
     await base44.entities.CalendarEvent.delete(event.id);
     invalidateAll();

@@ -100,6 +100,14 @@ Deno.serve(async (req) => {
       return errorResponse(`Token refresh failed: ${err.message}`, 401);
     }
 
+    // ── Validate start/end times ────────────────────────────────────────────
+    if (!calEvent.start_time) {
+      return errorResponse('CalendarEvent is missing start_time', 400);
+    }
+    if (calEvent.end_time && new Date(calEvent.end_time) <= new Date(calEvent.start_time)) {
+      return errorResponse('end_time must be after start_time', 400);
+    }
+
     const isAllDay = calEvent.is_all_day || false;
 
     // Enrich description with project context if linked

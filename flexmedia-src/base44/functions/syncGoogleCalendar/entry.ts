@@ -277,7 +277,7 @@ Deno.serve(async (req) => {
               calendar_account: connection.account_email,
               is_synced: true,
               is_all_day: isAllDay,
-              activity_type: isTonomoBooking ? 'meeting' : (() => {
+              activity_type: isTonomoBooking ? 'shoot' : (() => {
                 switch (gEvent.eventType) {
                   case 'outOfOffice': return 'other';
                   case 'focusTime':   return 'other';

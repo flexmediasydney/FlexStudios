@@ -7,21 +7,25 @@ import { addDays, addWeeks, addMonths } from 'date-fns';
  */
 export function expandRecurringEvent(event, startDate, endDate) {
   if (!event || !event.start_time || event.recurrence === 'none' || !event.recurrence) return [event];
-  
+
   try {
     const instances = [event];
     let current = new Date(event.start_time);
     if (isNaN(current.getTime())) return [event];
-    
+
     // Calculate event duration once (in ms) — avoids day-of-month arithmetic bug
     const durationMs = event.end_time
       ? new Date(event.end_time).getTime() - new Date(event.start_time).getTime()
       : 0;
-    
+
+    // Cap expansion to 1 year from now to prevent infinite expansion when no end date is set
+    const maxEndDate = addMonths(new Date(), 12);
+    const effectiveEndDate = endDate < maxEndDate ? endDate : maxEndDate;
+
     const maxIterations = 1000;
     let iterations = 0;
-    
-    while (current < endDate && iterations < maxIterations) {
+
+    while (current < effectiveEndDate && iterations < maxIterations) {
       iterations++;
       if (event.recurrence === 'daily') {
         current = addDays(current, 1);

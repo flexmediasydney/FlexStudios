@@ -771,7 +771,7 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
           attendees: JSON.stringify(photographers.map((ph: any) => ({
             name: ph.name, email: ph.email, tonomoId: ph.id
           }))),
-          activity_type: 'meeting',
+          activity_type: 'shoot',
           is_synced: false,
           is_done: false,
           auto_linked: true,

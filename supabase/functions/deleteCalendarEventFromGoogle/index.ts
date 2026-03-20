@@ -57,7 +57,10 @@ Deno.serve(async (req) => {
     }
 
     // ── SECURITY GATE 2: Ownership check ─────────────────────────────────────
-    if (calEvent.created_by_user_id && calEvent.created_by_user_id !== user.id) {
+    // Require either ownership match OR admin role. Never skip if created_by_user_id is null.
+    const isAdmin = user.role === 'master_admin' || user.role === 'admin';
+    const isOwner = calEvent.created_by_user_id && calEvent.created_by_user_id === user.id;
+    if (!isOwner && !isAdmin) {
       return jsonResponse({
         error: 'You can only delete your own events from Google Calendar.',
         code: 'NOT_EVENT_OWNER'
@@ -85,10 +88,19 @@ Deno.serve(async (req) => {
       return jsonResponse({ skipped: true, reason: 'No connected Google Calendar for this user' });
     }
 
-    // Use the account the event was synced from if available, else first connection
-    const connection = calEvent.calendar_account
-      ? (connections.find((c: any) => c.account_email === calEvent.calendar_account) || connections[0])
-      : connections[0];
+    // Use ONLY the account the event was synced from — never fall back to a different calendar
+    let connection;
+    if (calEvent.calendar_account) {
+      connection = connections.find((c: any) => c.account_email === calEvent.calendar_account);
+      if (!connection) {
+        return errorResponse(
+          `No matching calendar connection for account "${calEvent.calendar_account}". Cannot delete from a different calendar.`,
+          400
+        );
+      }
+    } else {
+      connection = connections[0];
+    }
 
     if (!connection.refresh_token) {
       return jsonResponse({ skipped: true, reason: 'No refresh token — please reconnect calendar' });

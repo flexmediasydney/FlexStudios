@@ -75,8 +75,10 @@ Deno.serve(async (req) => {
     timeMax.setDate(timeMax.getDate() + 365);
 
     // Only load events within the sync window for dedup
+    // Include events that span the boundary (end_time >= timeMin AND start_time <= timeMax)
     const allExisting = await entities.CalendarEvent.filter({
-      start_time: { $gte: timeMin.toISOString() }
+      end_time: { $gte: timeMin.toISOString() },
+      start_time: { $lte: timeMax.toISOString() }
     }, '-start_time', 2000) || [];
     const existingByGoogleId = new Map();
     for (const ev of allExisting) {
@@ -152,53 +154,75 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const eventsUrl = new URL(`https://www.googleapis.com/calendar/v3/calendars/primary/events`);
+        // ── Fetch all pages of events from Google Calendar ───────────────────
         const hasSyncToken = incremental && connection.next_sync_token;
+        let useSyncToken = hasSyncToken;
+        let syncToken410Retried = false;
 
-        if (hasSyncToken) {
-          eventsUrl.searchParams.set('syncToken', connection.next_sync_token);
-          eventsUrl.searchParams.set('maxResults', '250');
-        } else {
-          eventsUrl.searchParams.set('timeMin', timeMin.toISOString());
-          eventsUrl.searchParams.set('timeMax', timeMax.toISOString());
-          eventsUrl.searchParams.set('singleEvents', 'true');
-          eventsUrl.searchParams.set('orderBy', 'startTime');
-          eventsUrl.searchParams.set('maxResults', '2500');
-        }
+        async function fetchAllPages(isSyncTokenMode: boolean): Promise<{ allItems: any[]; nextSyncToken: string | null }> {
+          const allItems: any[] = [];
+          let pageToken: string | null = null;
+          let finalSyncToken: string | null = null;
 
-        const response = await fetch(eventsUrl.toString(), {
-          headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
+          do {
+            const eventsUrl = new URL(`https://www.googleapis.com/calendar/v3/calendars/primary/events`);
 
-        let data;
-        if (!response.ok) {
-          if (response.status === 410 && hasSyncToken) {
-            console.warn(`Sync token expired for ${connection.account_email} — full sync`);
-            await entities.CalendarConnection.update(connection.id, {
-              next_sync_token: null,
-            });
-            const retryUrl = new URL(`https://www.googleapis.com/calendar/v3/calendars/primary/events`);
-            retryUrl.searchParams.set('timeMin', timeMin.toISOString());
-            retryUrl.searchParams.set('timeMax', timeMax.toISOString());
-            retryUrl.searchParams.set('singleEvents', 'true');
-            retryUrl.searchParams.set('orderBy', 'startTime');
-            retryUrl.searchParams.set('maxResults', '2500');
-            const retryRes = await fetch(retryUrl.toString(), {
+            if (isSyncTokenMode) {
+              eventsUrl.searchParams.set('syncToken', connection.next_sync_token);
+              eventsUrl.searchParams.set('maxResults', '250');
+            } else {
+              eventsUrl.searchParams.set('timeMin', timeMin.toISOString());
+              eventsUrl.searchParams.set('timeMax', timeMax.toISOString());
+              eventsUrl.searchParams.set('singleEvents', 'true');
+              eventsUrl.searchParams.set('orderBy', 'startTime');
+              eventsUrl.searchParams.set('maxResults', '2500');
+            }
+
+            if (pageToken) {
+              eventsUrl.searchParams.set('pageToken', pageToken);
+            }
+
+            const response = await fetch(eventsUrl.toString(), {
               headers: { 'Authorization': `Bearer ${accessToken}` }
             });
-            if (!retryRes.ok) {
-              const errText = await retryRes.text();
-              throw new Error(`Google API error ${retryRes.status}: ${errText.slice(0, 200)}`);
+
+            if (!response.ok) {
+              if (response.status === 410 && isSyncTokenMode && !syncToken410Retried) {
+                // Sync token expired — clear it BEFORE retrying to prevent infinite loop
+                syncToken410Retried = true;
+                console.warn(`Sync token expired for ${connection.account_email} — clearing token and doing full sync`);
+                await entities.CalendarConnection.update(connection.id, {
+                  next_sync_token: null,
+                });
+                // Return sentinel to signal caller to retry with full sync
+                return { allItems: [], nextSyncToken: '__410_RETRY__' };
+              }
+              const errText = await response.text();
+              throw new Error(`Google API error ${response.status}: ${errText.slice(0, 200)}`);
             }
-            data = await retryRes.json();
-          } else {
-            const errText = await response.text();
-            throw new Error(`Google API error ${response.status}: ${errText.slice(0, 200)}`);
-          }
-        } else {
-          data = await response.json();
+
+            const data = await response.json();
+            allItems.push(...(data.items || []));
+            pageToken = data.nextPageToken || null;
+
+            // The final page carries the nextSyncToken
+            if (data.nextSyncToken) {
+              finalSyncToken = data.nextSyncToken;
+            }
+          } while (pageToken);
+
+          return { allItems, nextSyncToken: finalSyncToken };
         }
-        const googleEvents = data.items || [];
+
+        let fetchResult = await fetchAllPages(!!useSyncToken);
+
+        // Handle 410 retry: do a full sync after clearing the token
+        if (fetchResult.nextSyncToken === '__410_RETRY__') {
+          fetchResult = await fetchAllPages(false);
+        }
+
+        const googleEvents = fetchResult.allItems;
+        const freshSyncToken = fetchResult.nextSyncToken;
 
         for (const gEvent of googleEvents) {
           try {
@@ -250,7 +274,7 @@ Deno.serve(async (req) => {
               calendar_account: connection.account_email,
               is_synced: true,
               is_all_day: isAllDay,
-              activity_type: isTonomoBooking ? 'meeting' : (() => {
+              activity_type: isTonomoBooking ? 'shoot' : (() => {
                 switch (gEvent.eventType) {
                   case 'outOfOffice': return 'other';
                   case 'focusTime':   return 'other';
@@ -395,8 +419,8 @@ Deno.serve(async (req) => {
           last_synced: new Date().toISOString(),
           last_sync_count: googleEvents.length,
         };
-        if (data.nextSyncToken) {
-          connectionUpdate.next_sync_token = data.nextSyncToken;
+        if (freshSyncToken) {
+          connectionUpdate.next_sync_token = freshSyncToken;
         }
         await entities.CalendarConnection.update(connection.id, connectionUpdate);
 
