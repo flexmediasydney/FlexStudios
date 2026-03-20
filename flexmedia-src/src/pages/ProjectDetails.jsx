@@ -1125,12 +1125,12 @@ export default function ProjectDetails() {
                     <p className="text-xs font-medium">{project.property_suburb}</p>
                   </div>
                 )}
-                {project._shoot_date_display && (
+                {project.shoot_date && (
                   <div>
                     <p className="text-xs text-muted-foreground mb-0.5">Shoot Date</p>
                     <div className="flex items-center gap-1">
                       <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                      <span className="text-xs font-medium">{project._shoot_date_display}</span>
+                      <span className="text-xs font-medium">{fmtDate(project.shoot_date)}</span>
                     </div>
                   </div>
                 )}
@@ -1166,10 +1166,10 @@ export default function ProjectDetails() {
                     </div>
                   </div>
                 )}
-                {project._delivery_date_display && (
+                {project.delivery_date && (
                   <div>
                     <p className="text-xs text-muted-foreground mb-0.5">Delivery Date</p>
-                    <span className="text-xs font-medium">{project._delivery_date_display}</span>
+                    <span className="text-xs font-medium">{fmtDate(project.delivery_date)}</span>
                   </div>
                 )}
                 <div>
@@ -1407,7 +1407,7 @@ export default function ProjectDetails() {
               </CardHeader>
               <CardContent className="pt-0 space-y-2.5">
                 <Link 
-                  to={createPageUrl("Agencies") + `?id=${agency.id}`}
+                  to={createPageUrl("OrgDetails") + `?id=${agency.id}`}
                   className="flex items-center gap-2 hover:text-primary transition-colors"
                 >
                   <Building className="h-4 w-4 text-muted-foreground flex-shrink-0" />

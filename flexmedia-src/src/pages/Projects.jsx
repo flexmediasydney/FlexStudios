@@ -128,7 +128,7 @@ export default function Projects() {
       }
     });
     return ids;
-  }, [myTeamIds]);
+  }, [myTeamIds, allEmployeeRoles]);
 
   // Filter projects for contractors
   const projects = useMemo(() => 
@@ -280,7 +280,7 @@ export default function Projects() {
       }
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
-  }, [projects, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
+  }, [projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
 
   // Pre-compute maps so table cells don't need O(n) filter per row
   const tasksByProject = useMemo(() => {

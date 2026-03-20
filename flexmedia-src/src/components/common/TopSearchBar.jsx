@@ -177,7 +177,7 @@ export default function TopSearchBar() {
     <div ref={dropdownRef} className="relative w-full max-w-2xl">
       {/* Search Input */}
       <div className={cn(
-        "relative flex items-center bg-white border rounded-lg transition-all",
+        "relative flex items-center bg-background border rounded-lg transition-all",
         isOpen ? "ring-2 ring-primary border-primary shadow-lg" : "border-input hover:border-primary/50"
       )}>
         {isSearching ? (
@@ -217,7 +217,7 @@ export default function TopSearchBar() {
 
       {/* Dropdown */}
       {showDropdown && (
-        <div className="absolute top-full mt-2 w-full bg-white border rounded-lg shadow-2xl z-50 max-h-[600px] overflow-hidden flex">
+        <div className="absolute top-full mt-2 w-full bg-background border rounded-lg shadow-2xl z-50 max-h-[600px] overflow-hidden flex">
           {/* Categories Sidebar */}
           <div className="w-48 border-r bg-muted/30 p-2 flex-shrink-0">
             {CATEGORIES.map(cat => {

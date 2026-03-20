@@ -101,6 +101,7 @@ const TonomoIntegrationDashboard = React.lazy(() => import('./pages/TonomoIntegr
 const TonomoPulse = React.lazy(() => import('./pages/TonomoPulse'));
 const SettingsAutomationRules = React.lazy(() => import('./pages/SettingsAutomationRules'));
 const SettingsNotifications = React.lazy(() => import('./pages/SettingsNotifications'));
+const SettingsSystemHealth = React.lazy(() => import('./pages/SettingsSystemHealth'));
 const NotificationsPulse = React.lazy(() => import('./pages/NotificationsPulse'));
 const TeamPulsePage = React.lazy(() => import('./pages/TeamPulsePage'));
 
@@ -146,6 +147,7 @@ export const PAGES = {
     "SettingsProductsPackages": SettingsProductsPackages,
     "SettingsProjectRulebook": SettingsProjectRulebook,
     "SettingsRevisionTemplates": SettingsRevisionTemplates,
+    "SettingsSystemHealth": SettingsSystemHealth,
     "SettingsTeamsUsers": SettingsTeamsUsers,
     "SettingsTonomoIntegration": SettingsTonomoIntegration,
     "SettingsTonomoMappings": SettingsTonomoMappings,

@@ -180,12 +180,12 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
               </div>
               <div>
                 <Label className="text-xs mb-1 block text-muted-foreground">Product Category (optional)</Label>
-                <Select value={formData.floorplan_product_category || ''} onValueChange={(val) => updateField('floorplan_product_category', val)}>
+                <Select value={formData.floorplan_product_category || '__none__'} onValueChange={(val) => updateField('floorplan_product_category', val === '__none__' ? '' : val)}>
                   <SelectTrigger className="h-8 text-xs">
                     <SelectValue placeholder="All categories" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={null}>All categories</SelectItem>
+                    <SelectItem value="__none__">All categories</SelectItem>
                     {allCategories.map(cat => (
                       <SelectItem key={cat.id} value={cat.name}>{cat.icon} {cat.name}</SelectItem>
                     ))}
@@ -260,12 +260,12 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
               </div>
               <div>
                 <Label className="text-xs mb-1 block text-muted-foreground">Product Category (optional)</Label>
-                <Select value={formData.images_product_category || ''} onValueChange={(val) => updateField('images_product_category', val)}>
+                <Select value={formData.images_product_category || '__none__'} onValueChange={(val) => updateField('images_product_category', val === '__none__' ? '' : val)}>
                   <SelectTrigger className="h-8 text-xs">
                     <SelectValue placeholder="All categories" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={null}>All categories</SelectItem>
+                    <SelectItem value="__none__">All categories</SelectItem>
                     {allCategories.map(cat => (
                       <SelectItem key={cat.id} value={cat.name}>{cat.icon} {cat.name}</SelectItem>
                     ))}
@@ -291,12 +291,12 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
               />
               <div className="mt-2">
                 <Label className="text-xs mb-1 block text-muted-foreground">Product Category (optional)</Label>
-                <Select value={formData.drone_product_category || ''} onValueChange={(val) => updateField('drone_product_category', val)}>
+                <Select value={formData.drone_product_category || '__none__'} onValueChange={(val) => updateField('drone_product_category', val === '__none__' ? '' : val)}>
                    <SelectTrigger className="h-8 text-xs">
                      <SelectValue placeholder="All categories" />
                    </SelectTrigger>
                    <SelectContent>
-                     <SelectItem value={null}>All categories</SelectItem>
+                     <SelectItem value="__none__">All categories</SelectItem>
                      {allCategories.map(cat => (
                        <SelectItem key={cat.id} value={cat.name}>{cat.icon} {cat.name}</SelectItem>
                      ))}
@@ -340,12 +340,12 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
               />
               <div className="mt-2">
                 <Label className="text-xs mb-1 block text-muted-foreground">Product Category (optional)</Label>
-                <Select value={formData.video_product_category || ''} onValueChange={(val) => updateField('video_product_category', val)}>
+                <Select value={formData.video_product_category || '__none__'} onValueChange={(val) => updateField('video_product_category', val === '__none__' ? '' : val)}>
                    <SelectTrigger className="h-8 text-xs">
                      <SelectValue placeholder="All categories" />
                    </SelectTrigger>
                    <SelectContent>
-                     <SelectItem value={null}>All categories</SelectItem>
+                     <SelectItem value="__none__">All categories</SelectItem>
                      {allCategories.map(cat => (
                        <SelectItem key={cat.id} value={cat.name}>{cat.icon} {cat.name}</SelectItem>
                      ))}

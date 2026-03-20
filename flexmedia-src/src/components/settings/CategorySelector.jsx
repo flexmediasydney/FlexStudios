@@ -16,12 +16,12 @@ export default function CategorySelector({ projectTypeId, value, onChange, label
   return (
     <div>
       {label && <Label className="text-xs mb-1 block text-muted-foreground">{label} (optional)</Label>}
-      <Select value={value || ''} onValueChange={onChange}>
+      <Select value={value || '__none__'} onValueChange={v => onChange(v === '__none__' ? '' : v)}>
         <SelectTrigger className="h-8 text-xs">
           <SelectValue placeholder="All categories" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={null}>All categories</SelectItem>
+          <SelectItem value="__none__">All categories</SelectItem>
           {categories.map(cat => (
             <SelectItem key={cat.id} value={cat.name}>
               {cat.icon} {cat.name}

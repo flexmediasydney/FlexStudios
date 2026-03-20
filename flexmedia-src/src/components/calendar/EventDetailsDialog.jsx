@@ -605,7 +605,7 @@ export default function EventDetailsDialog({
                   </Button>
                 )}
               </div>
-              <Select value={formData.project_id} onValueChange={v => set("project_id", v === "none" ? "" : v)}>
+              <Select value={formData.project_id || "none"} onValueChange={v => set("project_id", v === "none" ? "" : v)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select project (optional)" />
                 </SelectTrigger>
@@ -621,7 +621,7 @@ export default function EventDetailsDialog({
             {/* Person (Agent) */}
             <div>
               <Label>Person</Label>
-              <Select value={formData.agent_id} onValueChange={v => set("agent_id", v === "none" ? "" : v)}>
+              <Select value={formData.agent_id || "none"} onValueChange={v => set("agent_id", v === "none" ? "" : v)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select person (optional)" />
                 </SelectTrigger>
@@ -637,7 +637,7 @@ export default function EventDetailsDialog({
             {/* Organisation (Agency) */}
             <div>
               <Label>Organisation</Label>
-              <Select value={formData.agency_id} onValueChange={v => set("agency_id", v === "none" ? "" : v)}>
+              <Select value={formData.agency_id || "none"} onValueChange={v => set("agency_id", v === "none" ? "" : v)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select organisation (optional)" />
                 </SelectTrigger>
@@ -653,7 +653,7 @@ export default function EventDetailsDialog({
             {/* Owner */}
             <div>
               <Label>Owner</Label>
-              <Select value={formData.owner_user_id} onValueChange={v => set("owner_user_id", v === "none" ? "" : v)}>
+              <Select value={formData.owner_user_id || "none"} onValueChange={v => set("owner_user_id", v === "none" ? "" : v)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Assign to user (optional)" />
                 </SelectTrigger>

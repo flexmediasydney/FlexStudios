@@ -254,7 +254,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
         ].filter(Boolean)
       },
     ].filter(Boolean);
-  }, [user?.role]);
+  }, [user?.role, navBadges]);
 
 
 
