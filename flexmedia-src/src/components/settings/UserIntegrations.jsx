@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { base44 } from "@/api/base44Client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -7,13 +7,15 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Mail, Trash2, RotateCcw, Plus } from "lucide-react";
+import { Mail, Trash2, RotateCcw, Plus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function UserIntegrations({ user }) {
   const [showGmailDialog, setShowGmailDialog] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(null);
   const queryClient = useQueryClient();
 
   const { data: emailAccounts = [] } = useQuery({
@@ -27,22 +29,75 @@ export default function UserIntegrations({ user }) {
     queryFn: () => base44.entities.InternalTeam.list()
   });
 
-  const initializeGmailMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('initializeGmail', {
-      displayName: displayName || user?.full_name,
-      teamId: selectedTeamId || null
-    }),
-    onSuccess: (response) => {
-      toast.success(`Gmail connected: ${response.data.email}`);
+  // Listen for OAuth postMessage from popup
+  const handleAuthMessage = useCallback((event) => {
+    if (event.data?.type === 'gmail_auth_success') {
+      toast.success(`Gmail connected: ${event.data.email}`);
       setShowGmailDialog(false);
       setDisplayName("");
       setSelectedTeamId("");
+      setIsConnecting(false);
+      setIsReconnecting(null);
       queryClient.invalidateQueries({ queryKey: ["my-email-accounts"] });
-    },
-    onError: (error) => {
-      toast.error(error.message || "Failed to connect Gmail");
+    } else if (event.data?.type === 'gmail_auth_error') {
+      toast.error(event.data.error || "Failed to connect Gmail");
+      setIsConnecting(false);
+      setIsReconnecting(null);
     }
-  });
+  }, [queryClient]);
+
+  useEffect(() => {
+    window.addEventListener('message', handleAuthMessage);
+    return () => window.removeEventListener('message', handleAuthMessage);
+  }, [handleAuthMessage]);
+
+  const openOAuthPopup = async ({ displayName: dn, teamId: tid, reconnectAccountId } = {}) => {
+    const result = await base44.functions.invoke('getGmailOAuthUrl', {
+      displayName: dn || null,
+      teamId: tid || null,
+      reconnectAccountId: reconnectAccountId || null
+    });
+    if (result.data?.error) throw new Error(result.data.error);
+
+    const width = 600, height = 700;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+    const popup = window.open(
+      result.data.authUrl,
+      'Gmail Authorization',
+      `width=${width},height=${height},left=${left},top=${top}`
+    );
+    if (!popup || popup.closed) {
+      throw new Error("Popup blocked. Please allow popups for this site.");
+    }
+  };
+
+  const handleConnect = async () => {
+    try {
+      setIsConnecting(true);
+      await openOAuthPopup({
+        displayName: displayName || user?.full_name,
+        teamId: selectedTeamId
+      });
+    } catch (error) {
+      toast.error(error.message || "Failed to connect Gmail");
+      setIsConnecting(false);
+    }
+  };
+
+  const handleReconnect = async (accountId) => {
+    try {
+      setIsReconnecting(accountId);
+      const account = emailAccounts.find(a => a.id === accountId);
+      await openOAuthPopup({
+        displayName: account?.display_name,
+        reconnectAccountId: accountId
+      });
+    } catch (error) {
+      toast.error(error.message || "Failed to reconnect");
+      setIsReconnecting(null);
+    }
+  };
 
   const removeAccountMutation = useMutation({
     mutationFn: (accountId) => base44.entities.EmailAccount.delete(accountId),
@@ -51,19 +106,6 @@ export default function UserIntegrations({ user }) {
       queryClient.invalidateQueries({ queryKey: ["my-email-accounts"] });
     },
     onError: (err) => toast.error(err?.message || 'Failed to remove account'),
-  });
-
-  const reconnectAccountMutation = useMutation({
-    mutationFn: (accountId) => base44.functions.invoke('initializeGmail', {
-      displayName: emailAccounts.find(a => a.id === accountId)?.display_name
-    }),
-    onSuccess: () => {
-      toast.success("Email account reconnected");
-      queryClient.invalidateQueries({ queryKey: ["my-email-accounts"] });
-    },
-    onError: (error) => {
-      toast.error(error.message || "Failed to reconnect");
-    }
   });
 
   return (
@@ -119,11 +161,15 @@ export default function UserIntegrations({ user }) {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => reconnectAccountMutation.mutate(account.id)}
-                      disabled={reconnectAccountMutation.isPending}
+                      onClick={() => handleReconnect(account.id)}
+                      disabled={isReconnecting === account.id}
                       className="gap-2"
                     >
-                      <RotateCcw className="h-4 w-4" />
+                      {isReconnecting === account.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RotateCcw className="h-4 w-4" />
+                      )}
                       Reconnect
                     </Button>
                     <Button
@@ -192,11 +238,18 @@ export default function UserIntegrations({ user }) {
                   Cancel
                 </Button>
                 <Button
-                  onClick={() => initializeGmailMutation.mutate()}
-                  disabled={initializeGmailMutation.isPending || !displayName}
+                  onClick={handleConnect}
+                  disabled={isConnecting || !displayName}
                   className="gap-2"
                 >
-                  {initializeGmailMutation.isPending ? "Connecting..." : "Connect Gmail"}
+                  {isConnecting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Connecting...
+                    </>
+                  ) : (
+                    "Connect Gmail"
+                  )}
                 </Button>
               </div>
             </div>

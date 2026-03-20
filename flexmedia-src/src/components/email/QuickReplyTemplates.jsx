@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,37 +12,102 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { MessageSquare, Plus, Trash2 } from "lucide-react";
+import { MessageSquare, Plus, Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
+const QUICK_REPLY_CATEGORY = "quick_reply";
+const QUERY_KEY = ["email-templates", QUICK_REPLY_CATEGORY];
+
+const DEFAULT_TEMPLATES = [
+  { name: "Acknowledged", body: "Thank you for reaching out. I've received your message and will get back to you shortly." },
+  { name: "Will follow up", body: "Thanks for your email. I'm looking into this and will have an update for you within 24 hours." },
+  { name: "Out of office", body: "I'm currently out of the office and will return on [DATE]. I'll respond to your email then." },
+];
+
+async function fetchQuickReplyTemplates() {
+  const templates = await base44.entities.EmailTemplate.filter(
+    { category: QUICK_REPLY_CATEGORY },
+    "-created_date",
+    100
+  );
+  return templates;
+}
+
+async function seedDefaultTemplates() {
+  const created = [];
+  for (const t of DEFAULT_TEMPLATES) {
+    const record = await base44.entities.EmailTemplate.create({
+      name: t.name,
+      subject: "",
+      body: t.body,
+      category: QUICK_REPLY_CATEGORY,
+      is_shared: true,
+    });
+    created.push(record);
+  }
+  return created;
+}
+
 export default function QuickReplyTemplates({ onTemplateSelect, compact = false }) {
-  const [templates, setTemplates] = useState([
-    { id: 1, name: "Acknowledged", text: "Thank you for reaching out. I've received your message and will get back to you shortly." },
-    { id: 2, name: "Will follow up", text: "Thanks for your email. I'm looking into this and will have an update for you within 24 hours." },
-    { id: 3, name: "Out of office", text: "I'm currently out of the office and will return on [DATE]. I'll respond to your email then." },
-  ]);
+  const queryClient = useQueryClient();
+
+  const { data: templates = [], isLoading } = useQuery({
+    queryKey: QUERY_KEY,
+    queryFn: async () => {
+      const existing = await fetchQuickReplyTemplates();
+      if (existing.length === 0) {
+        // First load with empty DB — seed defaults
+        const seeded = await seedDefaultTemplates();
+        return seeded;
+      }
+      return existing;
+    },
+  });
 
   const [showNewTemplate, setShowNewTemplate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newText, setNewText] = useState("");
+
+  const createMutation = useMutation({
+    mutationFn: (data) => base44.entities.EmailTemplate.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      // Also invalidate the main templates list so TemplateSelector stays in sync
+      queryClient.invalidateQueries({ queryKey: ["email-templates"] });
+      setNewName("");
+      setNewText("");
+      setShowNewTemplate(false);
+      toast.success("Template saved");
+    },
+    onError: () => toast.error("Failed to save template"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => base44.entities.EmailTemplate.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["email-templates"] });
+      toast.success("Template deleted");
+    },
+    onError: () => toast.error("Failed to delete template"),
+  });
 
   const saveTemplate = () => {
     if (!newName.trim() || !newText.trim()) {
       toast.error("Please fill in both name and text");
       return;
     }
-    const updated = [...templates, { id: Date.now(), name: newName, text: newText }];
-    setTemplates(updated);
-    setNewName("");
-    setNewText("");
-    setShowNewTemplate(false);
-    toast.success("Template saved");
+    createMutation.mutate({
+      name: newName.trim(),
+      subject: "",
+      body: newText.trim(),
+      category: QUICK_REPLY_CATEGORY,
+      is_shared: true,
+    });
   };
 
   const deleteTemplate = (id) => {
-    const updated = templates.filter((t) => t.id !== id);
-    setTemplates(updated);
-    toast.success("Template deleted");
+    deleteMutation.mutate(id);
   };
 
   if (compact) {
@@ -53,16 +120,22 @@ export default function QuickReplyTemplates({ onTemplateSelect, compact = false 
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
-          {templates.map((t) => (
-            <DropdownMenuItem
-              key={t.id}
-              onClick={() => onTemplateSelect(t.text)}
-              className="flex-col items-start py-2"
-            >
-              <p className="font-medium text-sm">{t.name}</p>
-              <p className="text-xs text-muted-foreground truncate">{t.text}</p>
-            </DropdownMenuItem>
-          ))}
+          {isLoading ? (
+            <div className="flex items-center justify-center py-3">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            templates.map((t) => (
+              <DropdownMenuItem
+                key={t.id}
+                onClick={() => onTemplateSelect(t.body)}
+                className="flex-col items-start py-2"
+              >
+                <p className="font-medium text-sm">{t.name}</p>
+                <p className="text-xs text-muted-foreground truncate">{t.body}</p>
+              </DropdownMenuItem>
+            ))
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setShowNewTemplate(!showNewTemplate)}>
             <Plus className="h-4 w-4 mr-2" />
@@ -103,8 +176,8 @@ export default function QuickReplyTemplates({ onTemplateSelect, compact = false 
               rows={3}
             />
             <div className="flex gap-2">
-              <Button size="sm" onClick={saveTemplate}>
-                Save
+              <Button size="sm" onClick={saveTemplate} disabled={createMutation.isPending}>
+                {createMutation.isPending ? "Saving..." : "Save"}
               </Button>
               <Button
                 size="sm"
@@ -117,31 +190,41 @@ export default function QuickReplyTemplates({ onTemplateSelect, compact = false 
           </div>
         )}
         <div className="space-y-2 max-h-48 overflow-y-auto">
-          {templates.map((t) => (
-            <div
-              key={t.id}
-              className="p-2 rounded-lg border hover:bg-muted/50 transition-colors group cursor-pointer"
-              onClick={() => onTemplateSelect(t.text)}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex-1">
-                  <p className="text-sm font-medium">{t.name}</p>
-                  <p className="text-xs text-muted-foreground line-clamp-2">
-                    {t.text}
-                  </p>
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteTemplate(t.id);
-                  }}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <Trash2 className="h-3 w-3 text-destructive" />
-                </button>
-              </div>
+          {isLoading ? (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>
-          ))}
+          ) : templates.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              No quick reply templates yet
+            </p>
+          ) : (
+            templates.map((t) => (
+              <div
+                key={t.id}
+                className="p-2 rounded-lg border hover:bg-muted/50 transition-colors group cursor-pointer"
+                onClick={() => onTemplateSelect(t.body)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">{t.name}</p>
+                    <p className="text-xs text-muted-foreground line-clamp-2">
+                      {t.body}
+                    </p>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteTemplate(t.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 className="h-3 w-3 text-destructive" />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </CardContent>
     </Card>

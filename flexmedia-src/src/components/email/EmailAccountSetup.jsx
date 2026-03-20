@@ -1,44 +1,49 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { base44 } from "@/api/base44Client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Mail, Loader2 } from "lucide-react";
+import { Mail, Loader2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 
 export default function EmailAccountSetup() {
   const [displayName, setDisplayName] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
+  const [popupBlocked, setPopupBlocked] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data: teams = [] } = useQuery({
     queryKey: ["teams"],
     queryFn: () => base44.entities.InternalTeam.list()
   });
 
-  useEffect(() => {
-    const handleMessage = (event) => {
-      if (event.data.type === 'gmail_auth_success') {
-        toast.success(`Gmail account ${event.data.email} connected successfully`);
-        setDisplayName("");
-        setSelectedTeamId("");
-        setIsConnecting(false);
-        window.location.reload();
-      } else if (event.data.type === 'gmail_auth_error') {
-        toast.error(event.data.error || "Failed to connect Gmail account");
-        setIsConnecting(false);
-      }
-    };
+  const handleAuthMessage = useCallback((event) => {
+    if (event.data?.type === 'gmail_auth_success') {
+      toast.success(`Gmail account ${event.data.email} connected successfully`);
+      setDisplayName("");
+      setSelectedTeamId("");
+      setIsConnecting(false);
+      setPopupBlocked(false);
+      // Refresh email accounts list without full page reload
+      queryClient.invalidateQueries({ queryKey: ["email-accounts"] });
+    } else if (event.data?.type === 'gmail_auth_error') {
+      toast.error(event.data.error || "Failed to connect Gmail account");
+      setIsConnecting(false);
+    }
+  }, [queryClient]);
 
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  useEffect(() => {
+    window.addEventListener('message', handleAuthMessage);
+    return () => window.removeEventListener('message', handleAuthMessage);
+  }, [handleAuthMessage]);
 
   const handleConnect = async () => {
     try {
       setIsConnecting(true);
+      setPopupBlocked(false);
 
       const result = await base44.functions.invoke('getGmailOAuthUrl', {
         displayName: displayName || null,
@@ -54,11 +59,35 @@ export default function EmailAccountSetup() {
       const left = window.screenX + (window.outerWidth - width) / 2;
       const top = window.screenY + (window.outerHeight - height) / 2;
 
-      window.open(
+      const popup = window.open(
         result.data.authUrl,
         'Gmail Authorization',
         `width=${width},height=${height},left=${left},top=${top}`
       );
+
+      if (!popup || popup.closed) {
+        setPopupBlocked(true);
+        setIsConnecting(false);
+        toast.error("Popup was blocked. Please allow popups for this site and try again.");
+        return;
+      }
+
+      // Monitor popup close — if user closes it without completing auth, reset state
+      const pollTimer = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(pollTimer);
+          // Give postMessage a moment to arrive before resetting
+          setTimeout(() => {
+            setIsConnecting((prev) => {
+              if (prev) {
+                // Still connecting means no success/error message arrived
+                return false;
+              }
+              return prev;
+            });
+          }, 1000);
+        }
+      }, 500);
     } catch (error) {
       console.error('Connect error:', error);
       toast.error(error.message || "Failed to initiate Gmail connection");
@@ -82,6 +111,18 @@ export default function EmailAccountSetup() {
         </CardHeader>
 
         <CardContent className="space-y-4">
+          {popupBlocked && (
+            <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium">Popup blocked</p>
+                <p className="text-xs mt-0.5">
+                  Your browser blocked the authorization window. Please allow popups for this site in your browser settings and try again.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="text-sm font-medium">Display Name (Optional)</label>
             <Input

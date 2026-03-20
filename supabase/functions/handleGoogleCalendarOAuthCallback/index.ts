@@ -1,5 +1,35 @@
 import { getAdminClient, createEntities, handleCors, corsHeaders } from '../_shared/supabase.ts';
 
+function oauthResultPage(type: string, payload: Record<string, string> = {}) {
+  const isSuccess = type.includes('success');
+  const safePayload = Object.entries(payload)
+    .map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v)}`)
+    .join(', ');
+  const title = isSuccess ? 'Authentication Successful' : 'Authentication Failed';
+  const message = isSuccess
+    ? 'Your Google Calendar has been connected. You can close this window.'
+    : `Something went wrong: ${payload.error || 'Unknown error'}`;
+  const color = isSuccess ? '#16a34a' : '#dc2626';
+
+  return new Response(
+    `<!DOCTYPE html>
+<html><head><title>${title}</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f9fafb;">
+  <div style="text-align:center;padding:2rem;max-width:400px;">
+    <div style="font-size:3rem;margin-bottom:1rem;">${isSuccess ? '&#9989;' : '&#10060;'}</div>
+    <h2 style="color:${color};margin:0 0 0.5rem;">${title}</h2>
+    <p style="color:#6b7280;margin:0 0 1.5rem;">${message}</p>
+    <button onclick="window.close()" style="padding:0.5rem 1.5rem;background:${color};color:white;border:none;border-radius:6px;cursor:pointer;font-size:0.9rem;">Close Window</button>
+  </div>
+  <script>
+    try { window.opener.postMessage({ type: '${type}', ${safePayload} }, '*'); } catch(e) {}
+    try { window.close(); } catch(e) {}
+  </script>
+</body></html>`,
+    { headers: { ...corsHeaders, 'Content-Type': 'text/html' } }
+  );
+}
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
@@ -9,25 +39,11 @@ Deno.serve(async (req) => {
     const error = url.searchParams.get('error');
 
     if (error) {
-      return new Response(`
-        <html>
-          <body>
-            <script>
-              window.opener.postMessage({ type: 'calendar_auth_error', error: '${error}' }, '*');
-              window.close();
-            </script>
-          </body>
-        </html>
-      `, {
-        headers: { ...corsHeaders, 'Content-Type': 'text/html' }
-      });
+      return oauthResultPage('calendar_auth_error', { error });
     }
 
     if (!code || !state) {
-      return new Response(JSON.stringify({ error: 'Missing authorization code or state' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return oauthResultPage('calendar_auth_error', { error: 'Missing authorization code or state' });
     }
 
     const stateData = JSON.parse(state);
@@ -53,10 +69,7 @@ Deno.serve(async (req) => {
     const tokens = await tokenResponse.json();
 
     if (!tokens.access_token) {
-      return new Response(JSON.stringify({ error: 'Failed to get access token' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return oauthResultPage('calendar_auth_error', { error: 'Failed to get access token' });
     }
 
     // Get user info
@@ -100,15 +113,8 @@ Deno.serve(async (req) => {
         .filter({ created_by: user.email }, null, 10);
 
       if (allUserConnections.length >= connectionLimit) {
-        return new Response(`
-          <html><body><script>
-            window.opener.postMessage({
-              type: 'calendar_auth_error',
-              error: 'Connection limit reached. ${isAdmin ? 'Admins' : 'Users'} can connect up to ${connectionLimit} calendars. Remove an existing connection first.'
-            }, '*');
-            window.close();
-          </script></body></html>
-        `, { headers: { ...corsHeaders, 'Content-Type': 'text/html' } });
+        const limitMsg = `Connection limit reached. ${isAdmin ? 'Admins' : 'Users'} can connect up to ${connectionLimit} calendars. Remove an existing connection first.`;
+        return oauthResultPage('calendar_auth_error', { error: limitMsg });
       }
 
       // Create the calendar connection
@@ -125,30 +131,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    return new Response(`
-      <html>
-        <body>
-          <script>
-            window.opener.postMessage({ type: 'calendar_auth_success', email: '${emailAddress}' }, '*');
-            window.close();
-          </script>
-        </body>
-      </html>
-    `, {
-      headers: { ...corsHeaders, 'Content-Type': 'text/html' }
-    });
+    return oauthResultPage('calendar_auth_success', { email: emailAddress });
   } catch (error: any) {
-    return new Response(`
-      <html>
-        <body>
-          <script>
-            window.opener.postMessage({ type: 'calendar_auth_error', error: '${error.message}' }, '*');
-            window.close();
-          </script>
-        </body>
-      </html>
-    `, {
-      headers: { ...corsHeaders, 'Content-Type': 'text/html' }
-    });
+    return oauthResultPage('calendar_auth_error', { error: error.message || 'Unknown error' });
   }
 });

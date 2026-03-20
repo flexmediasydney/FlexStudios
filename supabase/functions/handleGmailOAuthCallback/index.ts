@@ -1,5 +1,35 @@
 import { getAdminClient, createEntities, handleCors, corsHeaders } from '../_shared/supabase.ts';
 
+function oauthResultPage(type: string, payload: Record<string, string> = {}) {
+  const isSuccess = type.includes('success');
+  const safePayload = Object.entries(payload)
+    .map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v)}`)
+    .join(', ');
+  const title = isSuccess ? 'Authentication Successful' : 'Authentication Failed';
+  const message = isSuccess
+    ? 'Your Gmail account has been connected. You can close this window.'
+    : `Something went wrong: ${payload.error || 'Unknown error'}`;
+  const color = isSuccess ? '#16a34a' : '#dc2626';
+
+  return new Response(
+    `<!DOCTYPE html>
+<html><head><title>${title}</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f9fafb;">
+  <div style="text-align:center;padding:2rem;max-width:400px;">
+    <div style="font-size:3rem;margin-bottom:1rem;">${isSuccess ? '&#9989;' : '&#10060;'}</div>
+    <h2 style="color:${color};margin:0 0 0.5rem;">${title}</h2>
+    <p style="color:#6b7280;margin:0 0 1.5rem;">${message}</p>
+    <button onclick="window.close()" style="padding:0.5rem 1.5rem;background:${color};color:white;border:none;border-radius:6px;cursor:pointer;font-size:0.9rem;">Close Window</button>
+  </div>
+  <script>
+    try { window.opener.postMessage({ type: '${type}', ${safePayload} }, '*'); } catch(e) {}
+    try { window.close(); } catch(e) {}
+  </script>
+</body></html>`,
+    { headers: { 'Content-Type': 'text/html' } }
+  );
+}
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
@@ -9,16 +39,7 @@ Deno.serve(async (req) => {
     const error = url.searchParams.get('error');
 
     const sendMessage = (type: string, payload: Record<string, string> = {}) => {
-      const attrs = Object.entries(payload)
-        .map(([k, v]) => `${k}: '${v.replace(/'/g, "\\'")}'`)
-        .join(', ');
-      return new Response(
-        `<html><body><script>
-          window.opener?.postMessage({ type: '${type}', ${attrs} }, '*');
-          window.close();
-        </script></body></html>`,
-        { headers: { 'Content-Type': 'text/html' } }
-      );
+      return oauthResultPage(type, payload);
     };
 
     if (error) return sendMessage('gmail_auth_error', { error });
@@ -90,12 +111,6 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      `<html><body><script>
-        window.opener?.postMessage({ type: 'gmail_auth_error', error: '${msg.replace(/'/g, "\\'")}' }, '*');
-        window.close();
-      </script></body></html>`,
-      { headers: { 'Content-Type': 'text/html' } }
-    );
+    return oauthResultPage('gmail_auth_error', { error: msg });
   }
 });
