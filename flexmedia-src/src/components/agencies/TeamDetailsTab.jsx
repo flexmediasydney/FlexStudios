@@ -132,7 +132,7 @@ export default function TeamDetailsTab({ team }) {
                 <SelectContent>{agencies.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent>
               </Select>
             ) : (
-              <Link to={createPageUrl('AgencyDetails') + `?id=${team.agency_id}`} className="text-sm text-primary hover:underline flex items-center gap-1.5">
+              <Link to={createPageUrl('OrgDetails') + `?id=${team.agency_id}`} className="text-sm text-primary hover:underline flex items-center gap-1.5">
                 <Building2 className="h-3.5 w-3.5" />{team.agency_name}
               </Link>
             )}
@@ -152,7 +152,7 @@ export default function TeamDetailsTab({ team }) {
       {/* 2. Hierarchy */}
       <Section title="Hierarchy">
         <div className="flex items-center gap-2 flex-wrap">
-          <Link to={createPageUrl('AgencyDetails') + `?id=${team.agency_id}`}
+          <Link to={createPageUrl('OrgDetails') + `?id=${team.agency_id}`}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary/5 border border-primary/20 text-primary text-sm font-medium hover:bg-primary/10 transition-colors">
             <Building2 className="h-3.5 w-3.5" />{team.agency_name || '—'}
           </Link>
@@ -170,7 +170,7 @@ export default function TeamDetailsTab({ team }) {
         ) : (
           <div className="divide-y -mx-5 -mb-5 -mt-0">
             {teamAgents.map(agent => (
-              <Link key={agent.id} to={createPageUrl('AgentDetails') + `?id=${agent.id}`}
+              <Link key={agent.id} to={createPageUrl('PersonDetails') + `?id=${agent.id}`}
                 className="flex items-center gap-3 px-5 py-3 hover:bg-muted/30 transition-colors group">
                 <div className="p-1.5 rounded-md bg-muted/60 flex-shrink-0">
                   <User className="h-3.5 w-3.5 text-muted-foreground" />

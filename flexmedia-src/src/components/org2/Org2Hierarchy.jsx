@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { createPageUrl } from "@/utils";
 import { useNavigate } from "react-router-dom";
-import { base44 } from "@/api/base44Client";
 import AgentForm from "@/components/clients/AgentForm";
 
 const STATE_COLORS = {
@@ -30,7 +29,6 @@ export default function Org2Hierarchy({
   const [agentFormOpen, setAgentFormOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState(null);
   const [preselectedTeamId, setPreselectedTeamId] = useState(null);
-  const [deletingId, setDeletingId] = useState(null);
 
   const getTeamsForAgency = (id) => teams.filter(t => t.agency_id === id);
   const getAgentsForAgency = (id) => agents.filter(a => a.current_agency_id === id && !a.current_team_id);
@@ -51,14 +49,9 @@ export default function Org2Hierarchy({
     setAgentFormOpen(true);
   };
 
-  const handleDeleteAgent = async (agent) => {
-    if (!confirm(`Delete ${agent.name}? This cannot be undone.`)) return;
-    setDeletingId(agent.id);
-    try {
-      await base44.entities.Agent.delete(agent.id);
-      onRefresh?.();
-    } finally {
-      setDeletingId(null);
+  const handleDeleteAgent = (agent) => {
+    if (onDelete) {
+      onDelete('agent', agent);
     }
   };
 
@@ -233,10 +226,9 @@ export default function Org2Hierarchy({
                         <DropdownMenuItem
                           onClick={() => handleDeleteAgent(agent)}
                           className="text-destructive"
-                          disabled={deletingId === agent.id}
                         >
                           <Trash2 className="h-3.5 w-3.5 mr-2" />
-                          {deletingId === agent.id ? 'Deleting...' : 'Delete'}
+                          Delete
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>

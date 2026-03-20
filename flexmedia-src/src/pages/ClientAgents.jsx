@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { base44 } from "@/api/base44Client";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import {
   Plus, Search, Building, LayoutGrid, Network, Activity,
   Clock, FileText, TreePine, BarChart3, AlertTriangle, Users, User,
@@ -82,7 +82,6 @@ const VIEW_MODES = [
 
 export default function ClientAgents() {
   const { canManageContacts } = usePermissions();
-  if (!canManageContacts) return <div className="p-8 text-center text-muted-foreground">Access restricted.</div>;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("hierarchy");
@@ -212,6 +211,9 @@ export default function ClientAgents() {
 
   const warningCount = healthChecks.filter(c => c.type === 'warning').length;
 
+  // Permission check — must be after all hooks
+  if (!canManageContacts) return <div className="p-8 text-center text-muted-foreground">Access restricted.</div>;
+
   const handleAddTeam = (agencyId) => { setPreselectedAgencyId(agencyId); setPreselectedTeamId(null); setEditingItem(null); setShowTeamForm(true); };
   const handleAddAgent = (agencyId, teamId = null) => { setPreselectedAgencyId(agencyId); setPreselectedTeamId(teamId); setEditingItem(null); setShowAgentForm(true); };
   const handleEdit = (type, item) => {
@@ -283,6 +285,10 @@ export default function ClientAgents() {
 
         await base44.entities.AuditLog.create({ entity_type: "agent", entity_id: deletingItem.item.id, entity_name: deletingItem.item.name, action: "delete", changed_fields: [], previous_state: deletingItem.item, new_state: {}, user_name: user.full_name, user_email: user.email });
       }
+      refetchEntityList("Agency");
+      refetchEntityList("Team");
+      refetchEntityList("Agent");
+      refetchEntityList("AuditLog");
       toast.success("Deleted successfully");
     } catch (error) { toast.error(error.message || "Failed to delete"); }
     setDeletingItem(null);
@@ -320,6 +326,7 @@ export default function ClientAgents() {
           base44.entities.Agent.update(id, { relationship_state: newState })
         )
       );
+      refetchEntityList("Agent");
       toast.success(
         `Updated ${selectedAgentIds.size} contact${selectedAgentIds.size > 1 ? 's' : ''} to ${newState}`
       );
@@ -386,9 +393,17 @@ export default function ClientAgents() {
                 )}
               </div>
             </div>
-            <Button onClick={() => { setEditingItem(null); setShowAgencyForm(true); }} className="gap-2 shrink-0" size="sm">
-              <Plus className="h-3.5 w-3.5" />Add Organisation
-            </Button>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button variant="outline" onClick={() => { setEditingItem(null); setPreselectedAgencyId(null); setPreselectedTeamId(null); setShowAgentForm(true); }} className="gap-2" size="sm">
+                <Plus className="h-3.5 w-3.5" />Add Person
+              </Button>
+              <Button variant="outline" onClick={() => { setEditingItem(null); setPreselectedAgencyId(null); setShowTeamForm(true); }} className="gap-2" size="sm">
+                <Plus className="h-3.5 w-3.5" />Add Team
+              </Button>
+              <Button onClick={() => { setEditingItem(null); setShowAgencyForm(true); }} className="gap-2" size="sm">
+                <Plus className="h-3.5 w-3.5" />Add Organisation
+              </Button>
+            </div>
           </div>
 
           {/* Tab bar */}

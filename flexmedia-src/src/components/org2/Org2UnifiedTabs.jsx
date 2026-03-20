@@ -11,6 +11,7 @@ import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
 import Org2AuditLog from './Org2AuditLog';
 import AgencyInformationTab from '@/components/agencies/AgencyInformationTab';
 import EmailActivityLog from '@/components/email/EmailActivityLog';
+import EntityEmailTab from '@/components/email/EntityEmailTab';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
 
 export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes, projectNotes = [], agents, teams = [], projects = [], onRefresh, activeTab: externalTab, onTabChange, emailActivities = [], onEmailActivity }) {
@@ -134,7 +135,12 @@ export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes,
         </TabsContent>
 
         <TabsContent value="emails" className="h-full overflow-hidden m-0 border-0">
-          {/* Email tab content is handled by EntityEmailTab in parent */}
+          <EntityEmailTab
+            entityType="agency"
+            entityId={agencyId}
+            entityLabel={agency?.name}
+            onEmailActivity={onEmailActivity}
+          />
         </TabsContent>
 
         <TabsContent value="calendar" className="h-full overflow-hidden m-0 border-0">

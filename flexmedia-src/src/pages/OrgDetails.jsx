@@ -10,8 +10,7 @@ import Org2LeftPanel from "@/components/org2/Org2LeftPanel";
 import Org2Dashboard from "@/components/org2/Org2Dashboard";
 import Org2UnifiedTabs from "@/components/org2/Org2UnifiedTabs";
 import { fixTimestamp } from "@/components/utils/dateUtils";
-import EntityEmailTab from "@/components/email/EntityEmailTab";
-import EntityActivitiesTab from "@/components/calendar/EntityActivitiesTab";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 const STATE_BADGE = {
   Active:           "bg-green-100 text-green-800 border-green-200",
@@ -147,7 +146,7 @@ export default function OrgDetails() {
   }, []);
 
   if (!agencyId) {
-    window.location.href = createPageUrl("ClientAgents");
+    window.location.href = createPageUrl("Organisations");
     return null;
   }
 
@@ -191,6 +190,7 @@ export default function OrgDetails() {
   }
 
   return (
+    <ErrorBoundary>
     <div className="flex flex-col h-[calc(100vh-4rem)] lg:h-screen overflow-hidden bg-background">
       {/* ── Top header ── */}
       <div className="flex items-center gap-3 px-4 py-2.5 border-b bg-card shrink-0 shadow-sm z-10">
@@ -344,16 +344,9 @@ export default function OrgDetails() {
           emailActivities={emailActivities}
           onEmailActivity={handleEmailActivity}
         />
-        {activeTab === 'emails' && (
-          <EntityEmailTab
-            entityType="agency"
-            entityId={agencyId}
-            entityLabel={agency.name}
-            onEmailActivity={handleEmailActivity}
-          />
-        )}
         </div>
       </div>
     </div>
+    </ErrorBoundary>
   );
 }

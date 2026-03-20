@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -121,6 +122,8 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
       queryClient.invalidateQueries({ queryKey: ["teams"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
+      refetchEntityList("Team");
+      refetchEntityList("AuditLog");
       toast.success(team ? "Team updated" : "Team created");
       setFormData(INITIAL_STATE);
       onClose();

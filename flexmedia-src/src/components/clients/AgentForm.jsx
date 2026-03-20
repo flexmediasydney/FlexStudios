@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { useMutation } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { toast } from "sonner";
 
 const INITIAL_STATE = {
   name: "",
+  title: "",
   agency_id: "",
   agency_name: "",
   team_id: "",
@@ -47,6 +48,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
           ...agent,
           agency_id: agent.current_agency_id || "",
           team_id: agent.current_team_id || "",
+          title: agent?.title || "",
           contact_frequency_days: agent?.contact_frequency_days || "",
           tags: agent?.tags || [],
         });
@@ -77,8 +79,9 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
         throw new Error("Selected organisation not found");
       }
       const team = data.team_id ? teams.find(t => t.id === data.team_id) : null;
-      const payload = { 
+      const payload = {
         name: data.name,
+        title: data.title || null,
         email: data.email,
         phone: data.phone,
         notes: data.notes,
@@ -86,8 +89,8 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
         tags: data.tags || [],
         current_agency_id: data.agency_id,
         current_agency_name: agency.name,
-        current_team_id: data.team_id || "",
-        current_team_name: team?.name || ""
+        current_team_id: data.team_id || null,
+        current_team_name: team?.name || null
       };
       
       const user = await base44.auth.me();
@@ -132,6 +135,8 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
       return result;
     },
     onSuccess: () => {
+      refetchEntityList("Agent");
+      refetchEntityList("AuditLog");
       toast.success(agent ? "Person updated" : "Person created");
       setFormData(INITIAL_STATE);
       onClose();
@@ -253,6 +258,15 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
               autoFocus={!preselectedAgencyId}
             />
             <FieldError error={errors.name} />
+          </div>
+          <div>
+            <Label>Title / Role</Label>
+            <Input
+              value={formData.title}
+              onChange={(e) => handleChange("title", e.target.value)}
+              maxLength={LIMITS.title}
+              placeholder="e.g., Senior Sales Agent"
+            />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>

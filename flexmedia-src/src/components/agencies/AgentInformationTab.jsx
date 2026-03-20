@@ -197,7 +197,7 @@ export default function AgentInformationTab({ agent }) {
       <Section title="Agency Association">
         {!editing ? (
           <div className="flex items-center gap-2 flex-wrap">
-            <Link to={createPageUrl('AgencyDetails') + `?id=${agent.current_agency_id}`}
+            <Link to={createPageUrl('OrgDetails') + `?id=${agent.current_agency_id}`}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary/5 border border-primary/20 text-primary text-sm font-medium hover:bg-primary/10 transition-colors">
               <Building2 className="h-3.5 w-3.5" />{agent.current_agency_name || '—'}
             </Link>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { useMutation } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -96,6 +96,8 @@ export default function AgencyForm({ agency, open, onClose }) {
       return result;
     },
     onSuccess: () => {
+      refetchEntityList("Agency");
+      refetchEntityList("AuditLog");
       toast.success(agency ? "Organisation updated" : "Organisation created");
       setFormData(INITIAL_STATE);
       onClose();
@@ -245,7 +247,7 @@ export default function AgencyForm({ agency, open, onClose }) {
               Cancel
             </Button>
             <Button type="submit" disabled={saveMutation.isPending || !formData.name?.trim()} title="Ctrl+S to save">
-              {saveMutation.isPending ? "Saving..." : (agency ? "Save Changes" : "Create Agency")}
+              {saveMutation.isPending ? "Saving..." : (agency ? "Save Changes" : "Create Organisation")}
             </Button>
           </DialogFooter>
         </form>

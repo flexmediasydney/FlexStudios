@@ -22,7 +22,7 @@ export default function ProspectingStatusKanban({ agentsByStatus }) {
   const statuses = Object.keys(statusConfig);
 
   const handleAgentClick = (agent) => {
-    navigate(createPageUrl('AgentDetails') + '?id=' + agent.id);
+    navigate(createPageUrl('PersonDetails') + '?id=' + agent.id);
   };
 
   return (

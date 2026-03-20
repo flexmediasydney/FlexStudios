@@ -769,7 +769,7 @@ export default function PersonDetails() {
               {/* Right tabs */}
               <div ref={tabsRef} className="flex-1 overflow-hidden bg-background">
               <Tabs value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col">
-             <TabsList className="grid w-full shrink-0 rounded-none border-b bg-background h-10" style={{ gridTemplateColumns: 'repeat(7, minmax(0, 1fr))' }}>
+             <TabsList className="grid w-full shrink-0 rounded-none border-b bg-background h-10" style={{ gridTemplateColumns: 'repeat(8, minmax(0, 1fr))' }}>
                <TabsTrigger value="notes" className="text-xs rounded-none gap-1 relative">
                  Notes
                  {orgNotes.length > 0 && (

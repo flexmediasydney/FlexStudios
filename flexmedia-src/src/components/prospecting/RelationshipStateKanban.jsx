@@ -17,8 +17,8 @@ export default function RelationshipStateKanban({ entitiesByState, onDrillDown }
 
   const handleEntityClick = (entity) => {
     const pageMap = {
-      'Agent': 'AgentDetails',
-      'Agency': 'AgencyDetails'
+      'Agent': 'PersonDetails',
+      'Agency': 'OrgDetails'
     };
     navigate(createPageUrl(pageMap[entity.entity_type]) + '?id=' + entity.id);
   };

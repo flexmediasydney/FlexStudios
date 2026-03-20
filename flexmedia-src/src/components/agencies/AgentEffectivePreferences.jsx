@@ -136,7 +136,7 @@ export default function AgentEffectivePreferences({ agent, agency }) {
           <p className="text-sm font-medium text-foreground">
             Inherited from{' '}
             <a
-              href={createPageUrl('AgencyDetails') + `?id=${agency.id}`}
+              href={createPageUrl('OrgDetails') + `?id=${agency.id}`}
               className="text-primary hover:underline font-semibold"
             >
               {agency.name}
@@ -145,7 +145,7 @@ export default function AgentEffectivePreferences({ agent, agency }) {
           <p className="text-xs text-muted-foreground mt-0.5">Read-only. Edit branding preferences on the agency page.</p>
         </div>
         <a
-          href={createPageUrl('AgencyDetails') + `?id=${agency.id}#branding`}
+          href={createPageUrl('OrgDetails') + `?id=${agency.id}#branding`}
           className="flex items-center gap-1 text-xs text-primary hover:underline flex-shrink-0"
         >
           View Agency <ChevronRight className="h-3 w-3" />

@@ -1,426 +1,581 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useEntityList } from "@/components/hooks/useEntityData";
+import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
-  ChevronRight, ChevronDown, Building2, Users, User,
-  MoreVertical, Settings2, RotateCcw, Check,
-  Mail, Phone, FolderOpen
+  ChevronUp, ChevronDown, Building2, User,
+  Mail, Phone, Calendar, MoreHorizontal, Pencil, Trash2,
+  FolderOpen, MessageSquarePlus, ArrowUpDown, Clock,
+  ExternalLink
 } from "lucide-react";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuSeparator, DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import ContactHealthScore from "@/components/clients/ContactHealthScore";
-import { LastContactIndicator, NextFollowUpIndicator } from "@/components/clients/ContactIndicators";
 import { TagList } from "@/components/clients/ContactTags";
+import { toast } from "sonner";
+import { formatDistanceToNow, differenceInDays } from "date-fns";
 
-const STORAGE_KEY = "hierarchy_table_cols_v2";
-
-const ALL_COLUMNS = [
-  { id: 'state',       label: 'State' },
-  { id: 'health',      label: 'Health' },
-  { id: 'last_contact',label: 'Last Contact' },
-  { id: 'follow_up',   label: 'Follow-up' },
-  { id: 'tags',        label: 'Tags' },
-  { id: 'projects',    label: '# Projects' },
-  { id: 'team_size',   label: 'Team Size' },
-  { id: 'revenue',     label: 'Revenue' },
-  { id: 'email',       label: 'Email' },
-  { id: 'phone',       label: 'Phone' },
+// ─── Column definitions ───
+const COLUMNS = [
+  { id: "name",          label: "Name",          sortable: true,  minWidth: 220, defaultVisible: true },
+  { id: "organization",  label: "Organisation",  sortable: true,  minWidth: 160, defaultVisible: true },
+  { id: "email",         label: "Email",         sortable: true,  minWidth: 180, defaultVisible: true },
+  { id: "phone",         label: "Phone",         sortable: false, minWidth: 130, defaultVisible: true },
+  { id: "last_activity", label: "Last Activity", sortable: true,  minWidth: 120, defaultVisible: true },
+  { id: "deal_value",    label: "Deal Value",    sortable: true,  minWidth: 110, defaultVisible: true },
+  { id: "state",         label: "Status",        sortable: true,  minWidth: 110, defaultVisible: true },
+  { id: "tags",          label: "Tags",          sortable: false, minWidth: 120, defaultVisible: false },
+  { id: "team",          label: "Team",          sortable: true,  minWidth: 120, defaultVisible: false },
+  { id: "title",         label: "Title",         sortable: true,  minWidth: 140, defaultVisible: false },
 ];
 
-const DEFAULT_COLUMNS = ['state', 'health', 'last_contact', 'projects', 'revenue'];
-
-const STATE_COLORS = {
-  'Active':          'bg-green-100 text-green-700 border-green-200',
-  'Prospecting':     'bg-orange-100 text-orange-700 border-orange-200',
-  'Dormant':         'bg-gray-100 text-gray-500 border-gray-200',
-  'Do Not Contact':  'bg-red-100 text-red-700 border-red-200',
+const STATE_STYLES = {
+  Active:          { bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200", dot: "bg-emerald-500" },
+  Prospecting:     { bg: "bg-blue-50",    text: "text-blue-700",    border: "border-blue-200",    dot: "bg-blue-500" },
+  Dormant:         { bg: "bg-gray-50",    text: "text-gray-500",    border: "border-gray-200",    dot: "bg-gray-400" },
+  "Do Not Contact":{ bg: "bg-red-50",     text: "text-red-600",     border: "border-red-200",     dot: "bg-red-500" },
 };
 
 function fmtRevenue(val) {
-  if (!val) return '—';
+  if (!val) return "\u2014";
   if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(1)}M`;
-  if (val >= 1_000)     return `$${(val / 1_000).toFixed(1)}k`;
+  if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}k`;
   return `$${Math.round(val).toLocaleString()}`;
 }
 
-export default function HierarchyTableView({ agencies, teams, agents, onEdit, onDelete, onAddTeam, onAddAgent }) {
+function lastActivityInfo(agent) {
+  const lastContact = agent.last_contacted_at || agent.last_contact_date;
+  if (!lastContact) return { label: "Never", days: Infinity, color: "text-muted-foreground" };
+  const days = differenceInDays(new Date(), new Date(lastContact));
+  let color = "text-emerald-600";
+  if (days > 60) color = "text-red-600";
+  else if (days > 30) color = "text-amber-600";
+  else if (days > 14) color = "text-blue-600";
+  const label = days === 0 ? "Today" : days === 1 ? "Yesterday" : `${days}d ago`;
+  return { label, days, color };
+}
+
+// ─── Inline editable cell ───
+function InlineEditCell({ value, onSave, type = "text", className = "" }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const commit = () => {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed !== (value || "").trim()) {
+      onSave(trimmed);
+    }
+  };
+
+  if (editing) {
+    return (
+      <Input
+        ref={inputRef}
+        type={type}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") { setDraft(value || ""); setEditing(false); }
+        }}
+        className={cn("h-7 text-xs px-1.5 -my-0.5 w-full", className)}
+        onClick={e => e.stopPropagation()}
+      />
+    );
+  }
+
+  return (
+    <span
+      className={cn(
+        "cursor-text rounded px-1 -mx-1 py-0.5 hover:bg-muted/60 transition-colors inline-block max-w-full truncate",
+        className
+      )}
+      onClick={e => { e.stopPropagation(); setDraft(value || ""); setEditing(true); }}
+      title="Click to edit"
+    >
+      {value || <span className="text-muted-foreground/40">\u2014</span>}
+    </span>
+  );
+}
+
+// ─── Sort header ───
+function SortableHeader({ column, sortKey, sortDir, onSort }) {
+  const isActive = sortKey === column.id;
+  return (
+    <button
+      className={cn(
+        "flex items-center gap-1 text-left font-medium text-xs transition-colors whitespace-nowrap select-none",
+        isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+      )}
+      onClick={() => onSort(column.id)}
+    >
+      {column.label}
+      {column.sortable && (
+        isActive ? (
+          sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 opacity-40" />
+        )
+      )}
+    </button>
+  );
+}
+
+// ─── Main component ───
+export default function HierarchyTableView({
+  agencies, teams, agents, onEdit, onDelete, onAddTeam, onAddAgent,
+  onOpenActivityPanel, selectedAgentIds, toggleSelectAgent, toggleSelectAll,
+  agentProjectCounts, agentRevenue
+}) {
   const navigate = useNavigate();
-  const [expandedAgencies, setExpandedAgencies] = useState(new Set());
-  const [expandedTeams,    setExpandedTeams]    = useState(new Set());
-  const [showPicker,       setShowPicker]       = useState(false);
-  const [visibleColumns,   setVisibleColumns]   = useState(DEFAULT_COLUMNS);
-  const pickerRef = useRef(null);
+  const [sortKey, setSortKey] = useState("name");
+  const [sortDir, setSortDir] = useState("asc");
+  const [visibleCols, setVisibleCols] = useState(() =>
+    COLUMNS.filter(c => c.defaultVisible).map(c => c.id)
+  );
 
   const { data: projects = [] } = useEntityList("Project", null, 5000);
 
-  // Close picker on outside click
-  useEffect(() => {
-    const handler = (e) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target)) setShowPicker(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  // Build lookup maps
+  const agencyMap = useMemo(() => {
+    const m = {};
+    agencies.forEach(a => { m[a.id] = a; });
+    return m;
+  }, [agencies]);
 
-  // Pre-compute stats per entity
-  const agencyStats = useMemo(() => {
-    const map = {};
-    for (const ag of agencies) {
-      const ps          = projects.filter(p => p.agency_id === ag.id);
-      const agTeams     = teams.filter(t => t.agency_id === ag.id);
-      const directPeople= agents.filter(a => a.current_agency_id === ag.id && !a.current_team_id);
-      map[ag.id] = {
-        projects:  ps.length,
-        teamSize:  agTeams.length + directPeople.length,
-        revenue:   ps.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0),
-      };
-    }
-    return map;
-  }, [agencies, teams, agents, projects]);
+  const teamMap = useMemo(() => {
+    const m = {};
+    teams.forEach(t => { m[t.id] = t; });
+    return m;
+  }, [teams]);
 
-  const teamStats = useMemo(() => {
-    const map = {};
-    for (const t of teams) {
-      const tAgents = agents.filter(a => a.current_team_id === t.id);
-      const ids     = new Set(tAgents.map(a => a.id));
-      const ps      = projects.filter(p => ids.has(p.agent_id));
-      map[t.id] = {
-        projects: ps.length,
-        teamSize: tAgents.length,
-        revenue:  ps.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0),
-      };
-    }
-    return map;
-  }, [teams, agents, projects]);
-
+  // Compute per-agent stats
   const agentStats = useMemo(() => {
     const map = {};
     for (const a of agents) {
       const ps = projects.filter(p => p.agent_id === a.id);
       map[a.id] = {
         projects: ps.length,
-        revenue:  ps.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0),
+        revenue: ps.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0),
       };
     }
     return map;
   }, [agents, projects]);
 
-  const saveColumns = (cols) => {
-    setVisibleColumns(cols);
-  };
+  // Sort agents
+  const sortedAgents = useMemo(() => {
+    const arr = [...agents];
+    const dir = sortDir === "asc" ? 1 : -1;
 
-  const toggleColumn = (colId) => {
-    saveColumns(
-      visibleColumns.includes(colId)
-        ? visibleColumns.filter(c => c !== colId)
-        : [...visibleColumns, colId]
-    );
-  };
-
-  const toggleAgency = (id) =>
-    setExpandedAgencies(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const toggleTeam = (id) =>
-    setExpandedTeams(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-
-  const activeColumns = ALL_COLUMNS.filter(c => visibleColumns.includes(c.id));
-
-  const renderCell = (colId, entity, type, stats) => {
-    switch (colId) {
-      case 'state': {
-        if (type === 'team') return <span className="text-muted-foreground/50">—</span>;
-        const s = entity.relationship_state;
-        return s
-          ? <span className={cn("text-[10px] font-medium px-1.5 py-0.5 rounded border whitespace-nowrap", STATE_COLORS[s] || "bg-muted")}>{s}</span>
-          : <span className="text-muted-foreground/50">—</span>;
+    arr.sort((a, b) => {
+      let av, bv;
+      switch (sortKey) {
+        case "name":
+          av = (a.name || "").toLowerCase();
+          bv = (b.name || "").toLowerCase();
+          return av < bv ? -dir : av > bv ? dir : 0;
+        case "organization":
+          av = (a.current_agency_name || "").toLowerCase();
+          bv = (b.current_agency_name || "").toLowerCase();
+          return av < bv ? -dir : av > bv ? dir : 0;
+        case "email":
+          av = (a.email || "").toLowerCase();
+          bv = (b.email || "").toLowerCase();
+          return av < bv ? -dir : av > bv ? dir : 0;
+        case "last_activity": {
+          const da = lastActivityInfo(a).days;
+          const db = lastActivityInfo(b).days;
+          return (da - db) * dir;
+        }
+        case "deal_value": {
+          const ra = agentStats[a.id]?.revenue || 0;
+          const rb = agentStats[b.id]?.revenue || 0;
+          return (ra - rb) * dir;
+        }
+        case "state":
+          av = (a.relationship_state || "").toLowerCase();
+          bv = (b.relationship_state || "").toLowerCase();
+          return av < bv ? -dir : av > bv ? dir : 0;
+        case "team":
+          av = (a.current_team_name || "").toLowerCase();
+          bv = (b.current_team_name || "").toLowerCase();
+          return av < bv ? -dir : av > bv ? dir : 0;
+        case "title":
+          av = (a.title || "").toLowerCase();
+          bv = (b.title || "").toLowerCase();
+          return av < bv ? -dir : av > bv ? dir : 0;
+        default:
+          return 0;
       }
-      case 'health': {
-        if (type !== 'agent') return <span className="text-muted-foreground/50">—</span>;
+    });
+    return arr;
+  }, [agents, sortKey, sortDir, agentStats]);
+
+  const handleSort = useCallback((key) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  }, [sortKey]);
+
+  const handleInlineSave = useCallback(async (agentId, field, value) => {
+    try {
+      await base44.entities.Agent.update(agentId, { [field]: value });
+      toast.success("Updated");
+    } catch {
+      toast.error("Failed to save");
+    }
+  }, []);
+
+  const activeCols = COLUMNS.filter(c => visibleCols.includes(c.id));
+  const allSelected = selectedAgentIds && selectedAgentIds.size === agents.length && agents.length > 0;
+  const someSelected = selectedAgentIds && selectedAgentIds.size > 0;
+
+  return (
+    <div className="space-y-0">
+      {/* Results count */}
+      <div className="flex items-center justify-between px-1 pb-2">
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {agents.length} contact{agents.length !== 1 ? "s" : ""}
+          {someSelected && (
+            <span className="ml-2 text-primary font-medium">
+              ({selectedAgentIds.size} selected)
+            </span>
+          )}
+        </span>
+      </div>
+
+      {/* Table */}
+      <div className="border rounded-xl overflow-hidden bg-card shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/30">
+                {/* Checkbox column */}
+                {toggleSelectAgent && (
+                  <th className="w-10 px-3 py-2.5">
+                    <Checkbox
+                      checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                      onCheckedChange={() => toggleSelectAll && toggleSelectAll()}
+                      aria-label="Select all"
+                    />
+                  </th>
+                )}
+                {activeCols.map(col => (
+                  <th
+                    key={col.id}
+                    className="px-3 py-2.5 text-left"
+                    style={{ minWidth: col.minWidth }}
+                  >
+                    {col.sortable ? (
+                      <SortableHeader
+                        column={col}
+                        sortKey={sortKey}
+                        sortDir={sortDir}
+                        onSort={handleSort}
+                      />
+                    ) : (
+                      <span className="text-xs font-medium text-muted-foreground">{col.label}</span>
+                    )}
+                  </th>
+                ))}
+                {/* Actions column */}
+                <th className="w-12 px-2 py-2.5" />
+              </tr>
+            </thead>
+            <tbody>
+              {sortedAgents.length === 0 ? (
+                <tr>
+                  <td colSpan={activeCols.length + 2} className="text-center py-16 text-muted-foreground">
+                    <User className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                    <p className="text-sm">No contacts match your filters</p>
+                  </td>
+                </tr>
+              ) : (
+                sortedAgents.map(agent => (
+                  <ContactRow
+                    key={agent.id}
+                    agent={agent}
+                    activeCols={activeCols}
+                    agencyMap={agencyMap}
+                    teamMap={teamMap}
+                    stats={agentStats[agent.id]}
+                    isSelected={selectedAgentIds?.has(agent.id)}
+                    toggleSelect={toggleSelectAgent}
+                    showCheckbox={!!toggleSelectAgent}
+                    onEdit={onEdit}
+                    onDelete={onDelete}
+                    onOpenActivityPanel={onOpenActivityPanel}
+                    onInlineSave={handleInlineSave}
+                    navigate={navigate}
+                  />
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Individual row (memoized) ───
+const ContactRow = React.memo(function ContactRow({
+  agent, activeCols, agencyMap, teamMap, stats,
+  isSelected, toggleSelect, showCheckbox,
+  onEdit, onDelete, onOpenActivityPanel, onInlineSave, navigate
+}) {
+  const [hovered, setHovered] = useState(false);
+  const activityInfo = lastActivityInfo(agent);
+  const stateStyle = STATE_STYLES[agent.relationship_state] || {};
+  const initials = (agent.name || "?").split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
+  const isIdle = activityInfo.days > 30 && activityInfo.days !== Infinity;
+
+  const renderCell = (colId) => {
+    switch (colId) {
+      case "name":
         return (
-          <ContactHealthScore
-            agent={entity}
-            projectCount={stats?.projects || 0}
-            totalRevenue={stats?.revenue || 0}
-            size="sm"
-          />
+          <div className="flex items-center gap-2.5">
+            {/* Avatar */}
+            <div className={cn(
+              "w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 transition-shadow",
+              isIdle
+                ? "bg-amber-100 text-amber-700 ring-2 ring-amber-200"
+                : "bg-primary/10 text-primary"
+            )}>
+              {initials}
+            </div>
+            <div className="min-w-0">
+              <button
+                className="text-sm font-medium text-foreground hover:text-primary hover:underline truncate block text-left"
+                onClick={(e) => { e.stopPropagation(); navigate(createPageUrl("PersonDetails") + "?id=" + agent.id); }}
+              >
+                {agent.name}
+              </button>
+              {agent.title && (
+                <span className="text-[11px] text-muted-foreground truncate block">{agent.title}</span>
+              )}
+            </div>
+          </div>
+        );
+
+      case "organization": {
+        const org = agencyMap[agent.current_agency_id];
+        return org ? (
+          <button
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors group/org"
+            onClick={(e) => { e.stopPropagation(); navigate(createPageUrl("OrgDetails") + "?id=" + org.id); }}
+          >
+            <Building2 className="h-3 w-3 text-blue-500 shrink-0" />
+            <span className="truncate group-hover/org:underline">{org.name}</span>
+          </button>
+        ) : (
+          <span className="text-muted-foreground/40">\u2014</span>
         );
       }
-      case 'last_contact': {
-        if (type !== 'agent') return <span className="text-muted-foreground/50">—</span>;
-        return <LastContactIndicator agent={entity} size="xs" />;
+
+      case "email":
+        return (
+          <InlineEditCell
+            value={agent.email}
+            onSave={val => onInlineSave(agent.id, "email", val)}
+            type="email"
+            className="text-xs"
+          />
+        );
+
+      case "phone":
+        return (
+          <InlineEditCell
+            value={agent.phone}
+            onSave={val => onInlineSave(agent.id, "phone", val)}
+            type="tel"
+            className="text-xs tabular-nums"
+          />
+        );
+
+      case "last_activity":
+        return (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className={cn("inline-flex items-center gap-1 text-xs", activityInfo.color)}>
+                  <Clock className="h-3 w-3" />
+                  {activityInfo.label}
+                  {isIdle && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                {agent.last_contacted_at || agent.last_contact_date
+                  ? `Last contacted ${formatDistanceToNow(new Date(agent.last_contacted_at || agent.last_contact_date), { addSuffix: true })}`
+                  : "No contact recorded"}
+                {isIdle && <p className="text-amber-600 font-medium mt-0.5">Idle contact - follow up needed</p>}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+
+      case "deal_value":
+        return (
+          <span className="text-xs tabular-nums font-medium">
+            {fmtRevenue(stats?.revenue)}
+            {stats?.projects > 0 && (
+              <span className="text-muted-foreground font-normal ml-1">
+                ({stats.projects})
+              </span>
+            )}
+          </span>
+        );
+
+      case "state": {
+        const s = agent.relationship_state;
+        if (!s) return <span className="text-muted-foreground/40">\u2014</span>;
+        return (
+          <span className={cn(
+            "inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full border",
+            stateStyle.bg, stateStyle.text, stateStyle.border
+          )}>
+            <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", stateStyle.dot)} />
+            {s}
+          </span>
+        );
       }
-      case 'follow_up': {
-        if (type !== 'agent') return <span className="text-muted-foreground/50">—</span>;
-        const indicator = <NextFollowUpIndicator agent={entity} size="xs" />;
-        return indicator || <span className="text-muted-foreground/50">—</span>;
-      }
-      case 'tags': {
-        if (type !== 'agent') return <span className="text-muted-foreground/50">—</span>;
-        return Array.isArray(entity.tags) && entity.tags.length > 0
-          ? <TagList tags={entity.tags} max={3} size="xs" />
-          : <span className="text-muted-foreground/50">—</span>;
-      }
-      case 'projects':
-        return <span className="tabular-nums">{stats?.projects ?? '—'}</span>;
-      case 'team_size':
-        if (type === 'agent') return <span className="text-muted-foreground/50">—</span>;
-        return <span className="tabular-nums">{stats?.teamSize ?? '—'}</span>;
-      case 'revenue':
-        return <span className="tabular-nums font-medium">{fmtRevenue(stats?.revenue)}</span>;
-      case 'email':
-        return entity.email
-          ? <a href={`mailto:${entity.email}`} className="text-primary hover:underline max-w-[160px] block truncate" onClick={e => e.stopPropagation()}>{entity.email}</a>
-          : <span className="text-muted-foreground/50">—</span>;
-      case 'phone':
-        return entity.phone
-          ? <span className="whitespace-nowrap">{entity.phone}</span>
-          : <span className="text-muted-foreground/50">—</span>;
+
+      case "tags":
+        return Array.isArray(agent.tags) && agent.tags.length > 0
+          ? <TagList tags={agent.tags} max={2} size="xs" />
+          : <span className="text-muted-foreground/40">\u2014</span>;
+
+      case "team":
+        return agent.current_team_name
+          ? <span className="text-xs text-muted-foreground">{agent.current_team_name}</span>
+          : <span className="text-muted-foreground/40">\u2014</span>;
+
+      case "title":
+        return (
+          <InlineEditCell
+            value={agent.title}
+            onSave={val => onInlineSave(agent.id, "title", val)}
+            className="text-xs"
+          />
+        );
+
       default:
         return null;
     }
   };
 
   return (
-    <div className="space-y-2">
-      {/* Toolbar */}
-      <div className="flex justify-between items-center px-1">
-        <span className="text-xs text-muted-foreground">{agencies.length} organisations · {teams.length} teams · {agents.length} people</span>
-        <div className="relative" ref={pickerRef}>
-          <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" onClick={() => setShowPicker(v => !v)}>
-            <Settings2 className="h-3 w-3" /> Columns
-          </Button>
-          {showPicker && (
-            <div className="absolute right-0 top-9 z-50 bg-card border rounded-xl shadow-2xl p-3 w-48">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Visible Columns</p>
-              <div className="space-y-1">
-                {ALL_COLUMNS.map(col => (
-                  <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer py-0.5 hover:text-foreground select-none">
-                    <div className={cn(
-                      "w-4 h-4 rounded border flex items-center justify-center shrink-0",
-                      visibleColumns.includes(col.id) ? "bg-primary border-primary" : "border-input"
-                    )}>
-                      {visibleColumns.includes(col.id) && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
-                    </div>
-                    <input type="checkbox" className="sr-only" checked={visibleColumns.includes(col.id)} onChange={() => toggleColumn(col.id)} />
-                    {col.label}
-                  </label>
-                ))}
-              </div>
-              <div className="mt-3 pt-2 border-t">
-                <button className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => saveColumns(DEFAULT_COLUMNS)}>
-                  <RotateCcw className="h-3 w-3" /> Reset defaults
-                </button>
-              </div>
-            </div>
+    <tr
+      className={cn(
+        "border-b transition-colors group",
+        isSelected ? "bg-primary/5" : "hover:bg-muted/30",
+        isIdle && !isSelected && "bg-amber-50/20"
+      )}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {/* Checkbox */}
+      {showCheckbox && (
+        <td className="px-3 py-2">
+          <Checkbox
+            checked={isSelected || false}
+            onCheckedChange={() => toggleSelect(agent.id)}
+            onClick={e => e.stopPropagation()}
+            aria-label={`Select ${agent.name}`}
+          />
+        </td>
+      )}
+
+      {/* Data cells */}
+      {activeCols.map(col => (
+        <td key={col.id} className="px-3 py-2">
+          {renderCell(col.id)}
+        </td>
+      ))}
+
+      {/* Hover action icons */}
+      <td className="px-2 py-2">
+        <div className={cn(
+          "flex items-center gap-0.5 transition-opacity",
+          hovered ? "opacity-100" : "opacity-0"
+        )}>
+          {agent.email && (
+            <TooltipProvider delayDuration={100}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <a href={`mailto:${agent.email}`} onClick={e => e.stopPropagation()}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7">
+                      <Mail className="h-3.5 w-3.5 text-blue-600" />
+                    </Button>
+                  </a>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">Email</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
+          {agent.phone && (
+            <TooltipProvider delayDuration={100}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <a href={`tel:${agent.phone}`} onClick={e => e.stopPropagation()}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7">
+                      <Phone className="h-3.5 w-3.5 text-emerald-600" />
+                    </Button>
+                  </a>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">Call</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={e => e.stopPropagation()}>
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onClick={() => navigate(createPageUrl("PersonDetails") + "?id=" + agent.id)}>
+                <ExternalLink className="h-3.5 w-3.5 mr-2" />View Profile
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onEdit("agent", agent)}>
+                <Pencil className="h-3.5 w-3.5 mr-2" />Edit
+              </DropdownMenuItem>
+              {onOpenActivityPanel && (
+                <DropdownMenuItem onClick={() => onOpenActivityPanel(agent)}>
+                  <MessageSquarePlus className="h-3.5 w-3.5 mr-2" />Activity
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={() => navigate(createPageUrl("Projects") + `?agent=${agent.id}`)}>
+                <FolderOpen className="h-3.5 w-3.5 mr-2" />Projects
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onDelete("agent", agent)} className="text-destructive">
+                <Trash2 className="h-3.5 w-3.5 mr-2" />Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      </div>
-
-      {/* Table */}
-      <div className="border rounded-lg overflow-auto">
-        <table className="w-full text-xs border-collapse">
-          <thead>
-            <tr className="border-b bg-muted/50">
-              <th className="text-left px-3 py-2 font-medium text-muted-foreground min-w-[180px]">Name</th>
-              {activeColumns.map(col => (
-                <th key={col.id} className="text-left px-3 py-2 font-medium text-muted-foreground whitespace-nowrap">{col.label}</th>
-              ))}
-              <th className="w-28" />
-            </tr>
-          </thead>
-          <tbody>
-            {agencies.map(agency => {
-              const agencyTeams  = teams.filter(t => t.agency_id === agency.id);
-              const agencyAgents = agents.filter(a => a.current_agency_id === agency.id && !a.current_team_id);
-              const isExpanded   = expandedAgencies.has(agency.id);
-              const hasChildren  = agencyTeams.length > 0 || agencyAgents.length > 0;
-              const stats        = agencyStats[agency.id] || {};
-
-              return (
-                <React.Fragment key={agency.id}>
-                  {/* ── Organisation row ── */}
-                  <tr className="border-b hover:bg-muted/20 transition-colors group cursor-pointer" onClick={() => navigate(createPageUrl("OrgDetails") + "?id=" + agency.id)}>
-                    <td className="px-2 py-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); hasChildren && toggleAgency(agency.id); }}
-                          className={cn("w-4 h-4 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0", !hasChildren && "opacity-0 pointer-events-none")}
-                        >
-                          {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                        </button>
-                        <Building2 className="h-3 w-3 text-blue-600 shrink-0" />
-                        <span className="font-semibold text-primary hover:underline">{agency.name}</span>
-                      </div>
-                    </td>
-                    {activeColumns.map(col => (
-                      <td key={col.id} className="px-3 py-1.5">{renderCell(col.id, agency, 'agency', stats)}</td>
-                    ))}
-                    <td className="px-1 py-1" onClick={e => e.stopPropagation()}>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100" aria-label="More actions">
-                            <MoreVertical className="h-3 w-3" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => onEdit('agency', agency)}>Edit</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onAddTeam(agency.id)}>Add Team</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onAddAgent(agency.id)}>Add Person</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onDelete('agency', agency)} className="text-destructive">Delete</DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </td>
-                    </tr>
-
-                  {/* ── Teams ── */}
-                  {isExpanded && agencyTeams.map(team => {
-                    const teamAgents    = agents.filter(a => a.current_team_id === team.id);
-                    const isTeamExpanded= expandedTeams.has(team.id);
-                    const tStats        = teamStats[team.id] || {};
-
-                    return (
-                      <React.Fragment key={team.id}>
-                        <tr className="border-b hover:bg-purple-50/40 transition-colors group bg-purple-50/10">
-                          <td className="px-2 py-1.5">
-                            <div className="flex items-center gap-1.5 pl-5">
-                              <button
-                                onClick={() => teamAgents.length && toggleTeam(team.id)}
-                                className={cn("w-4 h-4 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0", teamAgents.length === 0 && "opacity-0 pointer-events-none")}
-                              >
-                                {isTeamExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                              </button>
-                              <Users className="h-3 w-3 text-purple-600 shrink-0" />
-                              <span className="font-medium">{team.name}</span>
-                            </div>
-                          </td>
-                          {activeColumns.map(col => (
-                            <td key={col.id} className="px-3 py-1.5">{renderCell(col.id, team, 'team', tStats)}</td>
-                          ))}
-                          <td className="px-1 py-1">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
-                                  <MoreVertical className="h-3 w-3" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => onEdit('team', team)}>Edit</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => onAddAgent(agency.id, team.id)}>Add Person</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => onDelete('team', team)} className="text-destructive">Delete</DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </td>
-                        </tr>
-
-                        {/* ── People in team ── */}
-                        {isTeamExpanded && teamAgents.map(agent => {
-                          const aStats = agentStats[agent.id] || {};
-                          return (
-                            <tr key={agent.id} className="border-b hover:bg-green-50/30 transition-colors group cursor-pointer" onClick={() => navigate(createPageUrl("PersonDetails") + "?id=" + agent.id)}>
-                              <td className="px-2 py-1.5">
-                                <div className="flex items-center gap-1.5 pl-10">
-                                  <div className="w-4 shrink-0" />
-                                  <User className="h-3 w-3 text-green-600 shrink-0" />
-                                  <span className="hover:underline">{agent.name}</span>
-                                </div>
-                              </td>
-                              {activeColumns.map(col => (
-                                <td key={col.id} className="px-3 py-1.5">{renderCell(col.id, agent, 'agent', aStats)}</td>
-                              ))}
-                              <td className="px-1 py-1" onClick={e => e.stopPropagation()}>
-                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                {agent.email && (
-                                  <a href={`mailto:${agent.email}`} title={`Email ${agent.name}`}>
-                                    <Button variant="ghost" size="icon" className="h-6 w-6"><Mail className="h-3 w-3 text-blue-600" /></Button>
-                                  </a>
-                                )}
-                                {agent.phone && (
-                                  <a href={`tel:${agent.phone}`} title={`Call ${agent.name}`}>
-                                    <Button variant="ghost" size="icon" className="h-6 w-6"><Phone className="h-3 w-3 text-green-600" /></Button>
-                                  </a>
-                                )}
-                                <Button variant="ghost" size="icon" className="h-6 w-6" title="View projects"
-                                  onClick={() => navigate(createPageUrl('Projects') + `?agent=${agent.id}`)}>
-                                  <FolderOpen className="h-3 w-3 text-indigo-600" />
-                                </Button>
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button variant="ghost" size="icon" className="h-6 w-6">
-                                      <MoreVertical className="h-3 w-3" />
-                                    </Button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="end">
-                                    <DropdownMenuItem onClick={() => onEdit('agent', agent)}>Edit</DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => onDelete('agent', agent)} className="text-destructive">Delete</DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                              </div>
-                              </td>
-                              </tr>
-                              );
-                              })}
-                              </React.Fragment>
-                              );
-                              })}
-
-                              {/* ── Direct people (no team) ── */}
-                              {isExpanded && agencyAgents.map(agent => {
-                              const aStats = agentStats[agent.id] || {};
-                              return (
-                              <tr key={agent.id} className="border-b hover:bg-green-50/30 transition-colors group cursor-pointer" onClick={() => navigate(createPageUrl("PersonDetails") + "?id=" + agent.id)}>
-                              <td className="px-2 py-1.5">
-                              <div className="flex items-center gap-1.5 pl-5">
-                              <div className="w-4 shrink-0" />
-                              <User className="h-3 w-3 text-green-600 shrink-0" />
-                              <span className="hover:underline">{agent.name}</span>
-                              </div>
-                              </td>
-                        {activeColumns.map(col => (
-                          <td key={col.id} className="px-3 py-1.5">{renderCell(col.id, agent, 'agent', aStats)}</td>
-                        ))}
-                        <td className="px-1 py-1" onClick={e => e.stopPropagation()}>
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                            {agent.email && (
-                              <a href={`mailto:${agent.email}`} title={`Email ${agent.name}`}>
-                                <Button variant="ghost" size="icon" className="h-6 w-6"><Mail className="h-3 w-3 text-blue-600" /></Button>
-                              </a>
-                            )}
-                            {agent.phone && (
-                              <a href={`tel:${agent.phone}`} title={`Call ${agent.name}`}>
-                                <Button variant="ghost" size="icon" className="h-6 w-6"><Phone className="h-3 w-3 text-green-600" /></Button>
-                              </a>
-                            )}
-                            <Button variant="ghost" size="icon" className="h-6 w-6" title="View projects"
-                              onClick={() => navigate(createPageUrl('Projects') + `?agent=${agent.id}`)}>
-                              <FolderOpen className="h-3 w-3 text-indigo-600" />
-                            </Button>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-6 w-6">
-                                  <MoreVertical className="h-3 w-3" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => onEdit('agent', agent)}>Edit</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => onDelete('agent', agent)} className="text-destructive">Delete</DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </td>
-                        </tr>
-                        );
-                        })}
-                        </React.Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-
-        {agencies.length === 0 && (
-          <div className="py-10 text-center text-sm text-muted-foreground">No organisations to display</div>
-        )}
-      </div>
-    </div>
+      </td>
+    </tr>
   );
-}
+});
