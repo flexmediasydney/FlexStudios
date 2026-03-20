@@ -39,8 +39,13 @@ export default function ProjectCalendarEvents({ projectId }) {
   return (
     <div className="space-y-3">
       {events.map(event => {
+        if (!event.start_time) return null; // skip events with no start time
         const startDate = new Date(fixTimestamp(event.start_time));
-        const endDate = new Date(fixTimestamp(event.end_time));
+        if (isNaN(startDate.getTime())) return null; // skip invalid dates
+        const endDate = event.end_time
+          ? new Date(fixTimestamp(event.end_time))
+          : null;
+        const hasValidEnd = endDate && !isNaN(endDate.getTime());
         const isUpcoming = startDate > new Date();
 
         return (
@@ -58,7 +63,7 @@ export default function ProjectCalendarEvents({ projectId }) {
                   <Calendar className="h-4 w-4 flex-shrink-0" />
                   <span>
                     {format(startDate, "MMM d, yyyy")}
-                    {format(startDate, "yyyy-MM-dd") !== format(endDate, "yyyy-MM-dd") && (
+                    {hasValidEnd && format(startDate, "yyyy-MM-dd") !== format(endDate, "yyyy-MM-dd") && (
                       <>
                         {" → "}
                         {format(endDate, "MMM d, yyyy")}
@@ -70,7 +75,7 @@ export default function ProjectCalendarEvents({ projectId }) {
                 <div className="flex items-center gap-2">
                   <Clock className="h-4 w-4 flex-shrink-0" />
                   <span>
-                    {format(startDate, "h:mm a")} - {format(endDate, "h:mm a")}
+                    {format(startDate, "h:mm a")}{hasValidEnd ? ` - ${format(endDate, "h:mm a")}` : ''}
                   </span>
                 </div>
 

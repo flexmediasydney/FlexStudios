@@ -236,6 +236,22 @@ Deno.serve(async (req) => {
 
             const existing = existingByGoogleId.get(gEvent.id);
 
+            // Handle cancelled events from incremental sync: Google sends minimal
+            // payloads (just id + status) with no start/end times. Mark existing
+            // events as done and skip creating new records for cancelled events.
+            if (gEvent.status === 'cancelled') {
+              if (existing) {
+                await entities.CalendarEvent.update(existing.id, {
+                  is_done: true,
+                  done_at: new Date().toISOString(),
+                });
+                totalUpdated++;
+                accountResult.updated++;
+              }
+              // Don't create new records for cancelled events
+              continue;
+            }
+
             const startTime = gEvent.start?.dateTime || gEvent.start?.date || null;
             const endTime = gEvent.end?.dateTime || gEvent.end?.date || null;
             const isAllDay = !gEvent.start?.dateTime;
@@ -289,7 +305,7 @@ Deno.serve(async (req) => {
               attendees,
               attendee_responses: attendeeResponses,
               conference_link: conferenceLink,
-              is_done: gEvent.status === 'cancelled',
+              is_done: false,
               recurrence: gEvent.recurrence ? 'recurring' : 'none',
               recurrence_rule: gEvent.recurrence ? JSON.stringify(gEvent.recurrence) : null,
               recurring_event_id: gEvent.recurringEventId || null,
@@ -366,7 +382,7 @@ Deno.serve(async (req) => {
             if (!existing) {
               await entities.CalendarEvent.create({
                 ...eventData,
-                is_done: gEvent.status === 'cancelled',
+                is_done: false,
               });
               existingByGoogleId.set(gEvent.id, eventData);
               totalCreated++;

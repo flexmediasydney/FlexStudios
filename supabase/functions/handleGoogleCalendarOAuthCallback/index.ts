@@ -112,9 +112,12 @@ Deno.serve(async (req) => {
       });
     } else {
       const user = await entities.User.get(userId);
+      if (!user || !user.email) {
+        return oauthResultPage('calendar_auth_error', { error: 'User not found. Please try connecting your calendar again.' });
+      }
 
       // ── CONNECTION LIMIT ENFORCEMENT ─────────────────────────────────────────
-      const isAdmin = user?.role === 'master_admin' || user?.role === 'admin';
+      const isAdmin = user.role === 'master_admin' || user.role === 'admin';
       const connectionLimit = isAdmin ? 5 : 2;
 
       const allUserConnections = await entities.CalendarConnection

@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
     const userEntities = createEntities(userClient);
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
-    if (!['master_admin', 'employee'].includes(user.role)) {
+    if (!['master_admin', 'admin', 'employee'].includes(user.role)) {
       return errorResponse('Forbidden: insufficient role', 403);
     }
 

@@ -6,7 +6,8 @@ import { addDays, addWeeks, addMonths } from 'date-fns';
  * Expands a recurring event into individual instances for display
  */
 export function expandRecurringEvent(event, startDate, endDate) {
-  if (!event || !event.start_time || event.recurrence === 'none' || !event.recurrence) return [event];
+  if (!event) return [];
+  if (!event.start_time || event.recurrence === 'none' || !event.recurrence) return [event];
 
   try {
     const instances = [event];
@@ -18,9 +19,15 @@ export function expandRecurringEvent(event, startDate, endDate) {
       ? new Date(event.end_time).getTime() - new Date(event.start_time).getTime()
       : 0;
 
-    // Cap expansion to 1 year from now to prevent infinite expansion when no end date is set
+    // Honour recurrence_end_date if the event has one, otherwise cap to 1 year
     const maxEndDate = addMonths(new Date(), 12);
-    const effectiveEndDate = endDate < maxEndDate ? endDate : maxEndDate;
+    let effectiveEndDate = endDate < maxEndDate ? endDate : maxEndDate;
+    if (event.recurrence_end_date) {
+      const recEnd = new Date(event.recurrence_end_date);
+      if (!isNaN(recEnd.getTime()) && recEnd < effectiveEndDate) {
+        effectiveEndDate = recEnd;
+      }
+    }
 
     const maxIterations = 1000;
     let iterations = 0;

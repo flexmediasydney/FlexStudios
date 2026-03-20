@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon,
-  Users, User, RefreshCw, Search
+  Users, User, RefreshCw, Search, AlertTriangle, Clock
 } from "lucide-react";
 import { expandRecurringEvent } from "@/components/calendar/CalendarEventUtils";
 import {
@@ -164,7 +164,6 @@ export default function CalendarPage() {
     queryKey: ["users-for-cal"],
     queryFn: () => base44.entities.User.list(),
     staleTime: 5 * 60 * 1000,
-    onError: () => toast.error('Failed to load team members'),
   });
 
   const { data: connections = [] } = useQuery({
@@ -199,7 +198,6 @@ export default function CalendarPage() {
     },
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
-    onError: () => toast.error('Failed to load calendar events'),
   });
 
   // ── User → colour map ── (Gap fix: stable dep array to avoid recalc every render)
@@ -275,21 +273,16 @@ export default function CalendarPage() {
     const MAX_RECURRING_INSTANCES = 52; // Cap recurring expansions
     const result = [];
     for (const item of rawEvents) {
-      // FlexStudios events store recurrence as 'daily'/'weekly'/'monthly'
-      // Google events (via incremental sync) may store recurrence_rule as JSON RRULE array
-      const isRecurring = item.recurrence && item.recurrence !== 'none';
-      if (isRecurring) {
+      // Only expand FlexStudios-native recurring events (daily/weekly/monthly).
+      // Google/Tonomo events are already expanded by their respective APIs
+      // (singleEvents=true in full sync), so re-expanding them would duplicate events.
+      const isFlexRecurring = item.recurrence && item.recurrence !== 'none' &&
+        item.recurrence !== 'recurring' &&
+        (item.event_source === 'flexmedia' || !item.event_source);
+      if (isFlexRecurring) {
         try {
-          if (item.recurrence_rule) {
-            // Google-style RRULE — parse and pass as recurrence
-            const rule = JSON.parse(item.recurrence_rule);
-            const instances = expandRecurringEvent({ ...item, recurrence: rule }, rangeStart, rangeEnd);
-            result.push(...instances.slice(0, MAX_RECURRING_INSTANCES));
-          } else {
-            // FlexStudios-style — recurrence is already 'daily'/'weekly'/'monthly'
-            const instances = expandRecurringEvent(item, rangeStart, rangeEnd);
-            result.push(...instances.slice(0, MAX_RECURRING_INSTANCES));
-          }
+          const instances = expandRecurringEvent(item, rangeStart, rangeEnd);
+          result.push(...instances.slice(0, MAX_RECURRING_INSTANCES));
         } catch {
           result.push(item);
         }
@@ -344,6 +337,40 @@ export default function CalendarPage() {
     return result;
   }, [expandedEvents, eventsByUser]);
 
+  // ── Conflict detection: find overlapping events for the same owner ────────
+  const conflictSet = useMemo(() => {
+    const ids = new Set();
+    // Group events by owner
+    const byOwner = new Map();
+    for (const { event, owners } of deduplicatedEvents) {
+      if (!event.start_time || event.is_all_day) continue;
+      for (const uid of owners) {
+        if (!byOwner.has(uid)) byOwner.set(uid, []);
+        byOwner.get(uid).push(event);
+      }
+    }
+    // For each owner, find overlapping pairs
+    for (const [, ownerEvents] of byOwner) {
+      const sorted = ownerEvents
+        .filter(e => e.start_time)
+        .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+      for (let i = 0; i < sorted.length; i++) {
+        const aStart = new Date(sorted[i].start_time);
+        const aEnd = sorted[i].end_time
+          ? new Date(sorted[i].end_time)
+          : new Date(aStart.getTime() + 3600000);
+        for (let j = i + 1; j < sorted.length; j++) {
+          const bStart = new Date(sorted[j].start_time);
+          if (bStart >= aEnd) break; // no more overlaps possible
+          // Overlap found
+          ids.add(sorted[i].id);
+          ids.add(sorted[j].id);
+        }
+      }
+    }
+    return ids;
+  }, [deduplicatedEvents]);
+
   // ── Active team members (who to show lanes for) ───────────────────────────
   const activeUsers = useMemo(() => {
     if (selectedUserIds.includes("all")) return users;
@@ -383,7 +410,7 @@ export default function CalendarPage() {
       // Must belong to at least one selected user
       return owners.some(uid => selectedUserIds.includes(uid));
     });
-  }, [deduplicatedEvents, filterType, calendarMode, selectedUserIds, isContractor, permUser]);
+  }, [deduplicatedEvents, filterType, calendarMode, selectedUserIds, isContractor, permUser, searchQuery]);
 
   // ── Person selector handlers ───────────────────────────────────────────────
   const handlePersonClick = useCallback((userId, evt) => {
@@ -435,6 +462,16 @@ export default function CalendarPage() {
   }, []);
 
   const handleCellClick = useCallback((date, userId = null) => {
+    // Single-click still works for quick creation
+    const d = new Date(date);
+    d.setSeconds(0, 0);
+    setDefaultStart(d.toISOString());
+    setEditingEvent(null);
+    setDialogOpen(true);
+  }, []);
+
+  const handleCellDoubleClick = useCallback((date, userId = null) => {
+    // Double-click: open dialog pre-filled with clicked time slot
     const d = new Date(date);
     d.setSeconds(0, 0);
     setDefaultStart(d.toISOString());
@@ -738,7 +775,9 @@ export default function CalendarPage() {
             users={users}
             userColorMap={userColorMap}
             isLaneMode={false}
+            conflictSet={conflictSet}
             onCellClick={handleCellClick}
+            onCellDoubleClick={handleCellDoubleClick}
             onEventClick={handleEventClick}
           />
         )}
@@ -751,7 +790,9 @@ export default function CalendarPage() {
             isLaneMode={isLaneMode}
             allAvailability={allAvailability}
             currentUserId={currentUser?.id}
+            conflictSet={conflictSet}
             onCellClick={handleCellClick}
+            onCellDoubleClick={handleCellDoubleClick}
             onEventClick={handleEventClick}
           />
         )}
@@ -764,7 +805,9 @@ export default function CalendarPage() {
             isLaneMode={isLaneMode}
             allAvailability={allAvailability}
             currentUserId={currentUser?.id}
+            conflictSet={conflictSet}
             onCellClick={handleCellClick}
+            onCellDoubleClick={handleCellDoubleClick}
             onEventClick={handleEventClick}
           />
         )}
@@ -786,7 +829,7 @@ export default function CalendarPage() {
 // ── MONTH VIEW ────────────────────────────────────────────────────────────────
 // Month view doesn't use lanes — shows all events with owner colour dots
 
-function MonthView({ currentDate, events, users, userColorMap, onCellClick, onEventClick }) {
+function MonthView({ currentDate, events, users, userColorMap, conflictSet, onCellClick, onCellDoubleClick, onEventClick }) {
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
   const gridStart = startOfWeek(monthStart, { weekStartsOn: 1 });
@@ -816,8 +859,9 @@ function MonthView({ currentDate, events, users, userColorMap, onCellClick, onEv
             <div
               key={i}
               className={`border-r border-b p-1 cursor-pointer hover:bg-muted/30 transition-all hover:shadow-inner min-h-[90px] ${!isCurrentMonth ? 'bg-muted/10' : ''}`}
+              onDoubleClick={() => onCellDoubleClick(d)}
               onClick={() => onCellClick(d)}
-              title={`Click to create event on ${format(d, 'EEEE, d MMMM yyyy')}`}
+              title={`Double-click to create event on ${format(d, 'EEEE, d MMMM yyyy')}`}
             >
               <div className={`text-sm mb-1 ${!isCurrentMonth ? 'text-muted-foreground' : ''}`}>
                 <span className={isToday(d) ? 'bg-primary text-primary-foreground rounded-full w-6 h-6 flex items-center justify-center mx-auto text-xs font-bold shadow-sm' : 'text-xs pl-0.5'}>
@@ -832,6 +876,7 @@ function MonthView({ currentDate, events, users, userColorMap, onCellClick, onEv
                     owners={owners}
                     userColorMap={userColorMap}
                     users={users}
+                    hasConflict={conflictSet.has(event.id)}
                     onClick={(e) => onEventClick(e, event)}
                   />
                 ))}
@@ -847,7 +892,7 @@ function MonthView({ currentDate, events, users, userColorMap, onCellClick, onEv
   );
 }
 
-function MonthEventPill({ event, owners, userColorMap, users, onClick, title }) {
+function MonthEventPill({ event, owners, userColorMap, users, onClick, title, hasConflict }) {
    const typeColor = getEventTypeColor(event);
    const source = getEventSource(event);
    const sourceConfig = EVENT_SOURCE_CONFIG[source];
@@ -890,6 +935,8 @@ function MonthEventPill({ event, owners, userColorMap, users, onClick, title }) 
         {startTime && <span className="font-semibold opacity-70 mr-0.5">{startTime}</span>}
         {event.is_done ? '✓ ' : ''}{event.title || 'Untitled'}
       </span>
+      {hasConflict && <AlertTriangle className="h-3 w-3 text-orange-500 flex-shrink-0" title="Scheduling conflict" />}
+      {event.travel_time_minutes > 0 && <span className="text-[7px] opacity-60 flex-shrink-0" title={`${event.travel_time_minutes}min travel`}>{event.travel_time_minutes}m</span>}
       {event.event_source === 'tonomo' && <span className="text-[7px] opacity-50 flex-shrink-0 ml-auto">BK</span>}
     </div>
   );
@@ -897,10 +944,18 @@ function MonthEventPill({ event, owners, userColorMap, users, onClick, title }) 
 
 // ── TEAM WEEK VIEW ────────────────────────────────────────────────────────────
 
-function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, allAvailability, currentUserId, onCellClick, onEventClick }) {
+function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, allAvailability, currentUserId, conflictSet, onCellClick, onCellDoubleClick, onEventClick }) {
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const hours = Array.from({ length: 24 }, (_, i) => i);
+
+  // Current time indicator state — must be declared before any early returns
+  // to satisfy React's Rules of Hooks (hooks cannot be called conditionally).
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   const getUnavailableRanges = (userId, date) => {
     const dayOfWeek = date.getDay();
@@ -920,6 +975,27 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
     return ranges;
   };
 
+  // Compute booked hours per user per day for availability display
+  const bookedHoursMap = useMemo(() => {
+    const map = new Map(); // `${userId}-${dayIdx}` -> hours
+    if (!isLaneMode) return map;
+    days.forEach((d, di) => {
+      users.forEach(u => {
+        const userDayEvents = events
+          .filter(({ owners }) => owners.includes(u.id))
+          .filter(({ event }) => event.start_time && !event.is_all_day && isSameDay(new Date(fixTimestamp(event.start_time)), d));
+        let totalMin = 0;
+        for (const { event } of userDayEvents) {
+          const s = new Date(fixTimestamp(event.start_time));
+          const e = event.end_time ? new Date(fixTimestamp(event.end_time)) : new Date(s.getTime() + 3600000);
+          totalMin += Math.max(0, differenceInMinutes(e, s));
+        }
+        map.set(`${u.id}-${di}`, Math.round(totalMin / 60 * 10) / 10);
+      });
+    });
+    return map;
+  }, [isLaneMode, events, users, days]);
+
   // Lane mode: scrollable horizontal layout for any number of users
   if (isLaneMode && users.length > 0) {
     // LANE MODE: columns = days, sub-columns = users
@@ -931,7 +1007,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
           {hours.map(h => (
             <div key={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
               <span className="text-xs text-muted-foreground">
-                {h === 0 ? '' : format(new Date().setHours(h, 0), 'h a')}
+                {h === 0 ? '' : format(new Date(new Date().setHours(h, 0)), 'h a')}
               </span>
             </div>
           ))}
@@ -949,17 +1025,23 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                 >
                   <div className="text-xs text-muted-foreground">{format(d, 'EEE')}</div>
                   <div className={`text-sm font-medium ${isToday(d) ? 'text-primary' : ''}`}>{format(d, 'd MMM')}</div>
-                  {/* User lane headers */}
+                  {/* User lane headers with availability */}
                   <div className="flex border-t mt-0.5">
                     {users.map(u => {
                       const color = userColorMap.get(u.id);
+                      const booked = bookedHoursMap.get(`${u.id}-${di}`) || 0;
+                      const avail = 8;
+                      const pct = Math.min(100, Math.round((booked / avail) * 100));
                       return (
-                        <div key={u.id} className="flex-1 flex items-center justify-center gap-1 py-0.5 border-r last:border-r-0">
+                        <div key={u.id} className="flex-1 flex flex-col items-center gap-0 py-0.5 border-r last:border-r-0">
                           <span
                             className="w-4 h-4 rounded-full text-white text-[8px] font-bold flex items-center justify-center"
                             style={{ backgroundColor: color?.bg }}
                           >
                             {getInitials(u.full_name || u.email)[0]}
+                          </span>
+                          <span className={`text-[7px] leading-none ${booked >= avail ? 'text-red-500 font-semibold' : 'text-muted-foreground'}`} title={`${booked}h booked / ${avail}h available`}>
+                            {booked}/{avail}h
                           </span>
                         </div>
                       );
@@ -975,6 +1057,11 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                         <div
                           key={u.id}
                           className="flex-1 border-r border-b last:border-r-0 hover:bg-muted/10 cursor-pointer relative group"
+                          onDoubleClick={() => {
+                            const dt = new Date(d);
+                            dt.setHours(h, 0, 0, 0);
+                            onCellDoubleClick(dt, u.id);
+                          }}
                           onClick={() => {
                             const dt = new Date(d);
                             dt.setHours(h, 0, 0, 0);
@@ -1010,6 +1097,42 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                     });
                   })}
 
+                  {/* Availability stripes: green=free working hours, red=busy event times */}
+                  {users.map((u, uIdx) => {
+                    const laneW = 100 / users.length;
+                    const leftP = uIdx * laneW;
+                    const userDayEvs = events
+                      .filter(({ owners }) => owners.includes(u.id))
+                      .filter(({ event }) => event.start_time && !event.is_all_day && isSameDay(new Date(fixTimestamp(event.start_time)), d));
+                    const workStart = 9 * 60, workEnd = 17 * 60;
+                    const greenTop = (workStart / 60) * SLOT_HEIGHT;
+                    const greenH = ((workEnd - workStart) / 60) * SLOT_HEIGHT;
+                    return (
+                      <div key={`avail-${u.id}`}>
+                        <div className="absolute pointer-events-none" style={{
+                          top: greenTop, height: greenH,
+                          left: `${leftP}%`, width: `${laneW}%`,
+                          background: 'rgba(34,197,94,0.04)',
+                        }} />
+                        {userDayEvs.map(({ event: ev }) => {
+                          const s = new Date(fixTimestamp(ev.start_time));
+                          const e = ev.end_time ? new Date(fixTimestamp(ev.end_time)) : new Date(s.getTime() + 3600000);
+                          const sMin = s.getHours() * 60 + s.getMinutes();
+                          const eMin = e.getHours() * 60 + e.getMinutes() || 24 * 60;
+                          const t = (sMin / 60) * SLOT_HEIGHT;
+                          const h = ((eMin - sMin) / 60) * SLOT_HEIGHT;
+                          return (
+                            <div key={`busy-${ev.id}-${u.id}`} className="absolute pointer-events-none" style={{
+                              top: t, height: Math.max(h, 4),
+                              left: `${leftP}%`, width: `${laneW}%`,
+                              background: 'rgba(239,68,68,0.06)',
+                            }} />
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+
                   {/* Events rendered as positioned blocks */}
                   {users.map((u, uIdx) => {
                    const userEvents = events.filter(({ owners }) => owners.includes(u.id))
@@ -1027,6 +1150,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                       allUsers={users}
                       slotHeight={SLOT_HEIGHT}
                       currentUserId={currentUserId}
+                      hasConflict={conflictSet.has(event.id)}
                       onClick={(e) => onEventClick(e, event)}
                     />
                    ));
@@ -1057,12 +1181,6 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
   }
 
   // STANDARD mode (single user selected)
-  // Current time indicator state
-  const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60000);
-    return () => clearInterval(timer);
-  }, []);
 
   return (
     <div className="flex h-full">
@@ -1071,7 +1189,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
         {hours.map(h => (
           <div key={h} data-hour={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
             <span className="text-xs text-muted-foreground">
-              {h === 0 ? '' : format(new Date().setHours(h, 0), 'h a')}
+              {h === 0 ? '' : format(new Date(new Date().setHours(h, 0)), 'h a')}
             </span>
           </div>
         ))}
@@ -1105,12 +1223,13 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                     data-hour={h}
                     style={{ height: SLOT_HEIGHT }}
                     className="border-b hover:bg-muted/10 cursor-pointer group relative"
+                    onDoubleClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellDoubleClick(dt); }}
                     onClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellClick(dt); }}
                   >
                     {/* Click to add hint on empty slots */}
                     {!slotHasEvent && (
                       <span className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground/0 group-hover:text-muted-foreground/40 transition-all duration-200 pointer-events-none select-none">
-                        + Click to add
+                        + Double-click to add
                       </span>
                     )}
                   </div>
@@ -1142,6 +1261,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   allUsers={users}
                   slotHeight={SLOT_HEIGHT}
                   headerOffset={40}
+                  hasConflict={conflictSet.has(event.id)}
                   onClick={(e) => onEventClick(e, event)}
                 />
               ))}
@@ -1155,7 +1275,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
 
 // ── TEAM DAY VIEW ─────────────────────────────────────────────────────────────
 
-function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, allAvailability, currentUserId, onCellClick, onEventClick }) {
+function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, allAvailability, currentUserId, conflictSet, onCellClick, onCellDoubleClick, onEventClick }) {
   const hours = Array.from({ length: 24 }, (_, i) => i);
 
   const getUnavailableRanges = (userId, date) => {
@@ -1202,7 +1322,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
           {hours.map(h => (
             <div key={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
               <span className="text-xs text-muted-foreground">
-                {h === 0 ? '' : format(new Date().setHours(h, 0), 'h a')}
+                {h === 0 ? '' : format(new Date(new Date().setHours(h, 0)), 'h a')}
               </span>
             </div>
           ))}
@@ -1216,17 +1336,34 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
               const userItems = timedItems.filter(({ owners }) => owners.includes(u.id));
               return (
                 <div key={u.id} className="flex-1 border-r relative">
-                  {/* User header */}
-                  <div className="sticky top-0 bg-background border-b z-10 flex items-center justify-center gap-2 py-2">
-                    <span className="w-6 h-6 rounded-full text-white text-xs font-bold flex items-center justify-center"
-                      style={{ backgroundColor: color?.bg }}>
-                      {getInitials(u.full_name || u.email)}
-                    </span>
-                    <span className="text-xs font-medium">{u.full_name?.split(' ')[0]}</span>
+                  {/* User header with availability */}
+                  <div className="sticky top-0 bg-background border-b z-10 flex flex-col items-center py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full text-white text-xs font-bold flex items-center justify-center"
+                        style={{ backgroundColor: color?.bg }}>
+                        {getInitials(u.full_name || u.email)}
+                      </span>
+                      <span className="text-xs font-medium">{u.full_name?.split(' ')[0]}</span>
+                    </div>
+                    {(() => {
+                      let totalMin = 0;
+                      for (const { event } of userItems) {
+                        const s = new Date(fixTimestamp(event.start_time));
+                        const e = event.end_time ? new Date(fixTimestamp(event.end_time)) : new Date(s.getTime() + 3600000);
+                        totalMin += Math.max(0, differenceInMinutes(e, s));
+                      }
+                      const booked = Math.round(totalMin / 60 * 10) / 10;
+                      return (
+                        <span className={`text-[9px] ${booked >= 8 ? 'text-red-500 font-semibold' : 'text-muted-foreground'}`}>
+                          {booked}/8h booked
+                        </span>
+                      );
+                    })()}
                   </div>
                   {hours.map(h => (
                     <div key={h} style={{ height: SLOT_HEIGHT }}
                       className="border-b hover:bg-muted/10 cursor-pointer"
+                      onDoubleClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellDoubleClick(dt, u.id); }}
                       onClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellClick(dt, u.id); }}
                     />
                   ))}
@@ -1256,6 +1393,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
                      allUsers={users}
                      slotHeight={SLOT_HEIGHT}
                      currentUserId={currentUserId}
+                     hasConflict={conflictSet.has(event.id)}
                      onClick={(e) => onEventClick(e, event)}
                    />
                   ))}
@@ -1269,16 +1407,18 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
             {hours.map(h => (
               <div key={h} style={{ height: SLOT_HEIGHT }}
                 className="border-b hover:bg-muted/10 cursor-pointer group relative"
+                onDoubleClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellDoubleClick(dt); }}
                 onClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellClick(dt); }}
               >
                 <span className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground/0 group-hover:text-muted-foreground/40 transition-all duration-200 pointer-events-none select-none">
-                  + Click to add event
+                  + Double-click to add event
                 </span>
               </div>
             ))}
             {timedItems.map(({ event, owners }) => (
               <StandardEventBlock key={event.id} event={event} owners={owners}
                 userColorMap={userColorMap} allUsers={users} slotHeight={SLOT_HEIGHT}
+                hasConflict={conflictSet.has(event.id)}
                 onClick={(e) => onEventClick(e, event)} />
             ))}
           </div>
@@ -1291,7 +1431,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
 // ── EVENT BLOCKS ──────────────────────────────────────────────────────────────
 
 // Proportional duration block for standard (non-lane) views
-function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight, isAllDay, userColor, headerOffset = 0, onClick }) {
+function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight, isAllDay, userColor, headerOffset = 0, hasConflict, onClick }) {
   const typeColor = getEventTypeColor(event);
 
   if (isAllDay) {
@@ -1332,9 +1472,17 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
       onClick={onClick}
       title={`${event.title} (${format(start, 'h:mm a')} - ${format(end, 'h:mm a')})`}
     >
-      <p className="text-xs font-semibold leading-tight truncate">{event.title}</p>
+      <div className="flex items-center gap-1">
+        <p className="text-xs font-semibold leading-tight truncate flex-1">{event.title}</p>
+        {hasConflict && <AlertTriangle className="h-3 w-3 text-orange-500 flex-shrink-0" title="Scheduling conflict" />}
+      </div>
       {heightPx > 30 && (
         <p className="text-[11px] opacity-70 leading-tight">{format(start, 'h:mm')} - {format(end, 'h:mm a')}</p>
+      )}
+      {heightPx > 30 && event.travel_time_minutes > 0 && (
+        <span className="inline-flex items-center gap-0.5 text-[9px] bg-blue-100 text-blue-700 rounded px-1 py-0 w-fit">
+          <Clock className="h-2.5 w-2.5" />{event.travel_time_minutes}m travel
+        </span>
       )}
       {heightPx > 44 && event.location && (
         <p className="text-[10px] opacity-50 leading-tight truncate">{event.location}</p>
@@ -1359,7 +1507,7 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
 }
 
 // Block for lane (team) view — positioned within a specific user's sub-column
-function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap, allUsers, slotHeight, onClick, currentUserId }) {
+function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap, allUsers, slotHeight, onClick, currentUserId, hasConflict }) {
   const start = new Date(fixTimestamp(event.start_time));
   const end = event.end_time
     ? new Date(fixTimestamp(event.end_time))
@@ -1411,14 +1559,22 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
       onClick={onClick}
       title={`${event.title} - ${format(start, 'h:mm')} - ${format(end, 'h:mm a')}`}
     >
-      <p className="text-xs font-semibold leading-tight truncate">
-        {isBusyBlock ? 'Busy' :
-         isOutOfOffice ? 'Out of Office' :
-         isFocusTime ? 'Focus Time' :
-         event.title}
-      </p>
+      <div className="flex items-center gap-0.5">
+        <p className="text-xs font-semibold leading-tight truncate flex-1">
+          {isBusyBlock ? 'Busy' :
+           isOutOfOffice ? 'Out of Office' :
+           isFocusTime ? 'Focus Time' :
+           event.title}
+        </p>
+        {hasConflict && <AlertTriangle className="h-2.5 w-2.5 text-orange-500 flex-shrink-0" title="Scheduling conflict" />}
+      </div>
       {heightPx > 28 && (
         <p className="text-[11px] opacity-70 leading-tight">{format(start, 'h:mm')} - {format(end, 'h:mm a')}</p>
+      )}
+      {heightPx > 28 && event.travel_time_minutes > 0 && (
+        <span className="inline-flex items-center gap-0.5 text-[8px] bg-blue-100 text-blue-700 rounded px-0.5 py-0 w-fit">
+          <Clock className="h-2 w-2" />{event.travel_time_minutes}m
+        </span>
       )}
       {heightPx > 52 && event.location && (
         <p className="text-[10px] opacity-50 leading-tight truncate mt-0.5">{event.location}</p>

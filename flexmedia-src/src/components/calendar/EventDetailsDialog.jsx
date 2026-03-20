@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Link2, X, Check, RefreshCw } from "lucide-react";
+import { Loader2, Link2, X, Check, RefreshCw, Clock, ChevronDown } from "lucide-react";
 import { utcToSydneyInput, sydneyInputToUtc } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import { ACTIVITY_TYPE_LIST, getActivityType, getEventSource, isEventEditable, canMarkDone, getEventExternalUrl, EVENT_SOURCE_CONFIG } from "./activityConfig";
@@ -36,6 +36,7 @@ const EMPTY_FORM = {
   is_done: false,
   color: "",
   recurrence: "none",
+  travel_time_minutes: "",
 };
 
 export default function EventDetailsDialog({
@@ -106,6 +107,7 @@ export default function EventDetailsDialog({
        is_done: event.is_done || false,
        color: event.color || "",
        recurrence: event.recurrence || "none",
+       travel_time_minutes: event.travel_time_minutes || "",
      });
    } else {
      const start = defaultStart
@@ -158,6 +160,7 @@ export default function EventDetailsDialog({
          owner_user_id: formData.owner_user_id || null,
          color: formData.color || null,
          recurrence: formData.recurrence || "none",
+         travel_time_minutes: formData.travel_time_minutes ? parseInt(formData.travel_time_minutes, 10) : null,
          event_source: source,
          // Set on create only — never overwrite on update
          ...(!event?.id && currentUserId ? { created_by_user_id: currentUserId } : {}),
@@ -276,6 +279,67 @@ export default function EventDetailsDialog({
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
     queryClient.invalidateQueries({ queryKey: ["entity-activities"] });
+  };
+
+  const [rescheduling, setRescheduling] = useState(false);
+
+  const handleReschedule = async (option) => {
+    if (!event?.id) return;
+    setRescheduling(true);
+    try {
+      const start = new Date(event.start_time);
+      const end = event.end_time ? new Date(event.end_time) : null;
+      const durationMs = end ? end.getTime() - start.getTime() : 3600000;
+
+      let newStart;
+      switch (option) {
+        case '+1h':
+          newStart = new Date(start.getTime() + 3600000);
+          break;
+        case '+1d':
+          newStart = new Date(start.getTime() + 86400000);
+          break;
+        case 'next_monday': {
+          newStart = new Date(start);
+          const day = newStart.getDay();
+          const daysUntilMon = day === 0 ? 1 : day === 1 ? 7 : 8 - day;
+          newStart.setDate(newStart.getDate() + daysUntilMon);
+          break;
+        }
+        case '+1w':
+          newStart = new Date(start.getTime() + 7 * 86400000);
+          break;
+        default:
+          return;
+      }
+
+      const newEnd = new Date(newStart.getTime() + durationMs);
+      await base44.entities.CalendarEvent.update(event.id, {
+        start_time: newStart.toISOString(),
+        end_time: newEnd.toISOString(),
+      });
+
+      // Sync to Google Calendar
+      const source = event.event_source || 'flexmedia';
+      if (source === 'flexmedia') {
+        try {
+          await base44.functions.invoke('writeCalendarEventToGoogle', {
+            calendar_event_id: event.id,
+          });
+        } catch (err) {
+          console.warn('writeCalendarEventToGoogle (reschedule) failed:', err?.message);
+        }
+      }
+
+      toast.success(`Rescheduled to ${newStart.toLocaleDateString('en-AU', { timeZone: 'Australia/Sydney', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`);
+      invalidateAll();
+      onSave?.();
+      onClose();
+    } catch (err) {
+      toast.error('Failed to reschedule: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setRescheduling(false);
+    }
   };
 
   const { data: currentUser } = useCurrentUser();
@@ -482,6 +546,27 @@ export default function EventDetailsDialog({
             />
           </div>
 
+          {/* Travel time buffer */}
+          {formData.location && (
+            <div>
+              <Label htmlFor="travel_time" className="flex items-center gap-1.5">
+                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                Travel Buffer (minutes)
+              </Label>
+              <Input
+                id="travel_time"
+                type="number"
+                min="0"
+                max="480"
+                value={formData.travel_time_minutes}
+                onChange={e => set("travel_time_minutes", e.target.value)}
+                placeholder="e.g., 30"
+                className="w-32"
+              />
+              <p className="text-[10px] text-muted-foreground mt-0.5">Estimated travel time to this location</p>
+            </div>
+          )}
+
           {/* Description */}
           <div>
             <Label htmlFor="description" className="flex items-center justify-between">
@@ -611,8 +696,6 @@ export default function EventDetailsDialog({
               )}
             </div>
           )}
-          </fieldset>
-
           {/* Recurrence with end date */}
           <div>
             <Label>Repeat</Label>
@@ -627,8 +710,9 @@ export default function EventDetailsDialog({
                 <SelectItem value="monthly">Monthly</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground mt-1">💡 Pro tip: Set a recurrence end date to prevent infinite repeats</p>
+            <p className="text-xs text-muted-foreground mt-1">Set a recurrence end date to prevent infinite repeats</p>
           </div>
+          </fieldset>
 
           {/* Outcome note — always editable even for Tonomo/Google events */}
           {(event?.id || formData.is_done) && (
@@ -660,6 +744,34 @@ export default function EventDetailsDialog({
                   {markingDone ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
                   Mark Done
                 </Button>
+              )}
+              {event?.id && editable && !event.is_done && (
+                <div className="relative group">
+                  <Button type="button" variant="outline" size="sm" disabled={rescheduling} className="hover:shadow-sm transition-shadow">
+                    {rescheduling ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Clock className="h-4 w-4 mr-1" />}
+                    Reschedule
+                    <ChevronDown className="h-3 w-3 ml-1" />
+                  </Button>
+                  <div className="absolute bottom-full left-0 mb-1 hidden group-hover:block group-focus-within:block z-50">
+                    <div className="bg-popover border rounded-lg shadow-lg py-1 min-w-[140px]">
+                      {[
+                        { key: '+1h', label: '+1 Hour' },
+                        { key: '+1d', label: '+1 Day' },
+                        { key: 'next_monday', label: 'Next Monday' },
+                        { key: '+1w', label: '+1 Week' },
+                      ].map(opt => (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+                          onClick={() => handleReschedule(opt.key)}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
             <div className="flex gap-2">
