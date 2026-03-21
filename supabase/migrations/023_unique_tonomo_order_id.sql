@@ -7,7 +7,7 @@ DECLARE
   dup RECORD;
 BEGIN
   FOR dup IN
-    SELECT tonomo_order_id, array_agg(id ORDER BY created_date ASC) AS ids
+    SELECT tonomo_order_id, array_agg(id ORDER BY created_at ASC) AS ids
     FROM projects
     WHERE tonomo_order_id IS NOT NULL
     GROUP BY tonomo_order_id
