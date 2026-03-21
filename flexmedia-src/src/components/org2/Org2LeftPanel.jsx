@@ -1,15 +1,13 @@
 import React, { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  ChevronDown, ChevronRight, MapPin, Mail, Phone, Calendar,
-  User, ExternalLink, MessageCircle, DollarSign, Edit2, AlertCircle,
+  ChevronDown, ChevronRight, Calendar,
+  User, ExternalLink, Edit2, AlertCircle,
   Copy, Check
 } from "lucide-react";
 import { fmtDate, fmtTimestampCustom, isOverdue, parseDate, todaySydney } from "@/components/utils/dateUtils";
-import ProjectStatusBadge from "@/components/dashboard/ProjectStatusBadge";
 
 const STAGES = [
   { key: 'to_be_scheduled', color: 'bg-gray-300' },
@@ -54,24 +52,24 @@ function Section({ title, badge, children, defaultOpen = true, action }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border-b border-border/50">
-      <div className="flex items-center justify-between px-4 py-2.5">
+      <div className="flex items-center justify-between px-4 py-2">
         <button
-          className="flex items-center gap-2 flex-1 text-xs font-semibold text-foreground hover:text-primary transition-colors text-left"
+          className="flex items-center gap-1.5 flex-1 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors text-left"
           onClick={() => setOpen(o => !o)}
         >
           {open
-            ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-            : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
-          <span className="uppercase tracking-wide">{title}</span>
+            ? <ChevronDown className="h-3 w-3" />
+            : <ChevronRight className="h-3 w-3" />}
+          <span>{title}</span>
           {badge !== undefined && badge > 0 && (
-            <span className="ml-0.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+            <span className="ml-0.5 bg-muted text-muted-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
               {badge}
             </span>
           )}
         </button>
         {action && <div className="ml-2">{action}</div>}
       </div>
-      {open && <div className="px-4 pb-4">{children}</div>}
+      {open && <div className="pb-1">{children}</div>}
     </div>
   );
 }
@@ -90,30 +88,27 @@ function CopyableInfoRow({ label, value, href, Icon, copyValue }) {
   };
 
   return (
-    <div className="flex items-start gap-2 text-xs group">
-      {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />}
-      <div className="min-w-0 flex-1">
-        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">{label}</p>
-        <div className="flex items-center gap-1">
-          {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer"
-              className="text-primary hover:underline flex items-center gap-1 font-medium truncate">
-              {value} <ExternalLink className="h-2.5 w-2.5 shrink-0" />
-            </a>
-          ) : (
-            <p className="font-medium truncate text-foreground flex-1">{value}</p>
-          )}
-          <button
-            onClick={handleCopy}
-            className="opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0 p-0.5 rounded hover:bg-muted"
-            title={`Copy ${label}`}
-          >
-            {copied
-              ? <Check className="h-2.5 w-2.5 text-green-600" />
-              : <Copy className="h-2.5 w-2.5 text-muted-foreground" />
-            }
-          </button>
-        </div>
+    <div className="flex items-center justify-between py-1.5 px-4 group hover:bg-muted/30 transition-colors">
+      <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
+      <div className="flex items-center gap-1 min-w-0 ml-3 justify-end">
+        {href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer"
+            className="text-[12px] font-semibold text-primary hover:underline flex items-center gap-1 truncate">
+            {value} <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+          </a>
+        ) : (
+          <span className="text-[12px] font-semibold text-foreground truncate">{value}</span>
+        )}
+        <button
+          onClick={handleCopy}
+          className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5 rounded hover:bg-muted"
+          title={`Copy ${label}`}
+        >
+          {copied
+            ? <Check className="h-2.5 w-2.5 text-green-600" />
+            : <Copy className="h-2.5 w-2.5 text-muted-foreground" />
+          }
+        </button>
       </div>
     </div>
   );
@@ -177,21 +172,19 @@ export default function Org2LeftPanel({
              </Button>
            )}
          >
-           <div className="space-y-3">
-             <Badge className={`text-xs border-0 ${STATE_COLORS[agency.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
-               {agency.relationship_state || 'Unknown'}
-             </Badge>
-             <InfoRow label="Email" value={agency.email} href={agency.email ? `mailto:${agency.email}` : null} Icon={Mail} />
-             <InfoRow label="Phone" value={agency.phone} href={agency.phone ? `tel:${agency.phone}` : null} Icon={Phone} />
-             <InfoRow label="Address" value={agency.address} Icon={MapPin} />
-             <InfoRow label="Onboarding" value={safeFmt(agency.onboarding_date, 'dd MMM yyyy')} Icon={Calendar} />
-             <InfoRow label="Marketing Contact" value={agency.primary_marketing_contact} Icon={User} />
-             <InfoRow label="Accounts Contact" value={agency.primary_accounts_contact} Icon={User} />
-             <InfoRow label="Primary Partner" value={agency.primary_partner} Icon={User} />
-             <InfoRow label="WhatsApp" value={agency.whatsapp_group_chat ? "Open group chat" : null} href={agency.whatsapp_group_chat} Icon={MessageCircle} />
-             <InfoRow label="Pricing Agreement" value={agency.pricing_agreement} Icon={DollarSign} />
+           <div>
+             <InfoRow label="Status" value={agency.relationship_state || 'Unknown'} />
+             <InfoRow label="Email" value={agency.email} href={agency.email ? `mailto:${agency.email}` : null} />
+             <InfoRow label="Phone" value={agency.phone} href={agency.phone ? `tel:${agency.phone}` : null} />
+             <InfoRow label="Address" value={agency.address} />
+             <InfoRow label="Onboarding" value={safeFmt(agency.onboarding_date, 'dd MMM yyyy')} />
+             <InfoRow label="Marketing contact" value={agency.primary_marketing_contact} />
+             <InfoRow label="Accounts contact" value={agency.primary_accounts_contact} />
+             <InfoRow label="Primary partner" value={agency.primary_partner} />
+             <InfoRow label="WhatsApp" value={agency.whatsapp_group_chat ? "Open group chat" : null} href={agency.whatsapp_group_chat} />
+             <InfoRow label="Pricing agreement" value={agency.pricing_agreement} />
              {agency.notes && (
-               <div className="mt-2 p-2 rounded-md bg-muted/40 text-[11px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
+               <div className="mx-4 mb-2 p-2 rounded-md bg-muted/40 text-[11px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
                  {agency.notes}
                </div>
              )}
@@ -200,38 +193,35 @@ export default function Org2LeftPanel({
 
          {/* Organisation insights */}
          <Section title="Organisation insights" defaultOpen>
-           <div className="space-y-2.5">
-
-             {/* Agent health breakdown */}
-             <div>
-               <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
-                 People ({agents.length})
-               </p>
-               <div className="flex gap-1.5 flex-wrap">
+           <div>
+             {/* People health */}
+             <div className="flex items-center justify-between py-1.5 px-4">
+               <span className="text-[11px] text-muted-foreground">People</span>
+               <div className="flex items-center gap-1.5">
                  {activeAgents.length > 0 && (
-                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200">
+                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">
                      {activeAgents.length} active
                    </span>
                  )}
                  {dormantAgents.length > 0 && (
-                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold">
                      {dormantAgents.length} dormant
                    </span>
                  )}
                  {atRiskAgents.length > 0 && (
-                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
                      {atRiskAgents.length} at risk
                    </span>
                  )}
                </div>
              </div>
 
-             {/* Revenue summary */}
+             {/* Revenue rows */}
              {totalOrgRev > 0 && (
-               <div className="space-y-1 pt-1 border-t">
-                 <div className="flex items-center justify-between text-xs">
-                   <span className="text-muted-foreground">Total revenue</span>
-                   <span className="font-semibold text-green-700">
+               <>
+                 <div className="flex items-center justify-between py-1.5 px-4">
+                   <span className="text-[11px] text-muted-foreground">Total revenue</span>
+                   <span className="text-[12px] font-semibold text-green-700">
                      ${totalOrgRev >= 1000000
                        ? `${(totalOrgRev / 1000000).toFixed(1)}M`
                        : totalOrgRev >= 1000
@@ -240,39 +230,39 @@ export default function Org2LeftPanel({
                    </span>
                  </div>
                  {avgOrgBookingValue && (
-                   <div className="flex items-center justify-between text-xs">
-                     <span className="text-muted-foreground">Avg booking value</span>
-                     <span className="font-medium">
+                   <div className="flex items-center justify-between py-1.5 px-4">
+                     <span className="text-[11px] text-muted-foreground">Avg booking value</span>
+                     <span className="text-[12px] font-semibold">
                        ${avgOrgBookingValue >= 1000
                          ? `${(avgOrgBookingValue / 1000).toFixed(0)}k`
                          : avgOrgBookingValue}
                      </span>
                    </div>
                  )}
-                 <div className="flex items-center justify-between text-xs">
-                   <span className="text-muted-foreground">Total bookings</span>
-                   <span className="font-medium">{projects.length}</span>
+                 <div className="flex items-center justify-between py-1.5 px-4">
+                   <span className="text-[11px] text-muted-foreground">Total bookings</span>
+                   <span className="text-[12px] font-semibold">{projects.length}</span>
                  </div>
-               </div>
+               </>
              )}
 
-             {/* Top agents by revenue */}
+             {/* Top performers */}
              {revenueByAgent.length > 0 && (
-               <div className="pt-1 border-t">
-                 <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
-                   Top performers
-                 </p>
+               <div className="border-t border-border/30 mt-1 pt-1">
+                 <div className="py-1 px-4">
+                   <span className="text-[11px] text-muted-foreground">Top performers</span>
+                 </div>
                  {revenueByAgent.slice(0, 4).map(({ agent, rev, count }) => (
                    <div
                      key={agent.id}
-                     className="flex items-center justify-between text-xs py-1 border-b border-dashed border-border/50 last:border-0"
+                     className="flex items-center justify-between py-1 px-4"
                    >
-                     <span className="truncate text-foreground max-w-[120px] font-medium">
+                     <span className="text-[12px] truncate text-foreground font-medium max-w-[120px]">
                        {agent.name}
                      </span>
-                     <div className="flex items-center gap-2 flex-shrink-0">
-                       <span className="text-muted-foreground">{count}×</span>
-                       <span className="font-semibold text-green-700">
+                     <div className="flex items-center gap-2 shrink-0">
+                       <span className="text-[11px] text-muted-foreground">{count}x</span>
+                       <span className="text-[12px] font-semibold text-green-700">
                          ${rev >= 1000 ? `${(rev / 1000).toFixed(0)}k` : rev}
                        </span>
                      </div>
@@ -283,19 +273,19 @@ export default function Org2LeftPanel({
 
              {/* Website */}
              {agency?.website && (
-               <div className="pt-1 border-t">
+               <div className="flex items-center justify-between py-1.5 px-4 border-t border-border/30 mt-1">
+                 <span className="text-[11px] text-muted-foreground">Website</span>
                  <a
                    href={agency.website}
                    target="_blank"
                    rel="noopener noreferrer"
-                   className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                   className="text-[12px] font-semibold text-primary hover:underline flex items-center gap-1 truncate ml-3"
                  >
-                   <ExternalLink className="h-3 w-3" />
                    {agency.website.replace(/^https?:\/\//, '')}
+                   <ExternalLink className="h-2.5 w-2.5 shrink-0" />
                  </a>
                </div>
              )}
-
            </div>
          </Section>
 
@@ -313,7 +303,7 @@ export default function Org2LeftPanel({
 
         if (overdue.length > 0 || dueThisWeek.length > 0) {
           return (
-            <div className="border-l-2 border-amber-400 bg-amber-50/50 px-3 py-2 rounded text-xs space-y-1 mb-3">
+            <div className="border-l-2 border-amber-400 bg-amber-50/50 mx-4 px-3 py-2 rounded text-xs space-y-1 mb-2">
               {overdue.length > 0 && (
                 <div className="flex items-center gap-2 text-red-700">
                   <AlertCircle className="h-3 w-3" />
@@ -334,7 +324,7 @@ export default function Org2LeftPanel({
 
       {/* Projects — open count only */}
       <Section title={`Projects${openProjects.length < projects.length ? ` (${openProjects.length} open)` : ''}`} badge={openProjects.length}>
-        <div className="space-y-2">
+        <div className="space-y-2 px-4">
           {openProjects.length === 0 && (
             <p className="text-xs text-muted-foreground italic">No open projects</p>
           )}
@@ -424,7 +414,7 @@ export default function Org2LeftPanel({
 
       {/* Teams */}
       <Section title="Teams" badge={teams.length}>
-        <div className="space-y-0.5">
+        <div className="space-y-0.5 px-4">
           {teams.length === 0 && (
             <p className="text-xs text-muted-foreground italic">No teams linked</p>
           )}
@@ -453,7 +443,7 @@ export default function Org2LeftPanel({
       {/* People Summary — all relationship states */}
       {agents.length > 0 && (
         <div className="px-4 pt-1 pb-1 flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">People</span>
+          <span className="text-[10px] font-semibold text-muted-foreground">People</span>
           {[
             { state: 'Active', cls: 'bg-green-100 text-green-700', label: 'active' },
             { state: 'Prospecting', cls: 'bg-blue-100 text-blue-700', label: 'prospecting' },
@@ -473,7 +463,7 @@ export default function Org2LeftPanel({
 
       {/* People */}
       <Section title="People" badge={agents.length}>
-        <div className="space-y-0.5">
+        <div className="space-y-0.5 px-4">
           {agents.length === 0 && (
             <p className="text-xs text-muted-foreground italic">No people linked</p>
           )}

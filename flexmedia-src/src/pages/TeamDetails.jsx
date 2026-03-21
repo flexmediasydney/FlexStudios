@@ -8,8 +8,8 @@ import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
 import { fmtDate, fmtTimestampCustom, fixTimestamp, formatRelative } from '@/components/utils/dateUtils';
 import {
-  ArrowLeft, ChevronDown, ChevronRight, Mail, Phone, Building2,
-  MessageSquare, Activity, Info, AlertCircle, Plus, Trash2, Calendar, User, Copy, Check
+  ArrowLeft, ChevronDown,
+  MessageSquare, Activity, AlertCircle, Trash2, Calendar, User, Copy, Check
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -60,37 +60,36 @@ function fmtMoney(val) {
   return `A$${Math.round(val)}`;
 }
 
-function CopyableInfoRow({ label, value, href, Icon, copyValue }) {
+function FieldRow({ label, value, href, copyable = true }) {
   const [copied, setCopied] = React.useState(false);
   if (!value) return null;
 
   const handleCopy = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    navigator.clipboard.writeText(copyValue || value).then(() => {
+    navigator.clipboard.writeText(value).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
   };
 
   return (
-    <div className="flex items-start gap-2 text-xs group">
-      {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />}
-      <div className="min-w-0 flex-1">
-        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">{label}</p>
-        <div className="flex items-center gap-1">
-          {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer"
-              className="text-primary hover:underline flex items-center gap-1 font-medium truncate transition-colors"
-              title={value}>
-              {value}
-            </a>
-          ) : (
-            <p className="font-medium truncate text-foreground flex-1" title={value}>{value}</p>
-          )}
+    <div className="flex items-center justify-between py-1.5 px-4 group hover:bg-muted/30 transition-colors">
+      <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
+      <div className="flex items-center gap-1 min-w-0 ml-3">
+        {href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer"
+            className="text-[12px] font-semibold text-primary hover:underline truncate"
+            title={value}>
+            {value}
+          </a>
+        ) : (
+          <span className="text-[12px] font-semibold text-foreground truncate" title={value}>{value}</span>
+        )}
+        {copyable && (
           <button
             onClick={handleCopy}
-            className="opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0 p-1 rounded hover:bg-muted active:scale-95"
+            className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5 rounded hover:bg-muted active:scale-95"
             title={`Copy ${label}`}
             aria-label={`Copy ${label}`}
           >
@@ -99,14 +98,10 @@ function CopyableInfoRow({ label, value, href, Icon, copyValue }) {
               : <Copy className="h-3 w-3 text-muted-foreground" />
             }
           </button>
-        </div>
+        )}
       </div>
     </div>
   );
-}
-
-function InfoRow({ label, value, href, Icon }) {
-  return <CopyableInfoRow label={label} value={value} href={href} Icon={Icon} />;
 }
 
 function ErrorState({ navigate, title, message }) {
@@ -126,17 +121,17 @@ function ErrorState({ navigate, title, message }) {
   );
 }
 
-function Section({ title, badge, children, defaultOpen = true }) {
+function Section({ title, badge, children, defaultOpen = true, noPadding = false }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border-b border-border/50">
       <button
-        className="flex items-center gap-2 w-full px-4 py-2.5 text-xs font-semibold text-foreground hover:text-primary hover:bg-muted/40 transition-all duration-200 text-left"
+        className="flex items-center gap-2 w-full px-4 py-2 text-[11px] font-semibold text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-all duration-200 text-left"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
       >
-        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${!open && '-rotate-90'}`} />
-        <span className="uppercase tracking-wide">{title}</span>
+        <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${!open && '-rotate-90'}`} />
+        <span>{title}</span>
         {badge > 0 && (
           <span className="ml-0.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">
             {badge}
@@ -144,7 +139,7 @@ function Section({ title, badge, children, defaultOpen = true }) {
         )}
       </button>
       {open && (
-        <div className="px-4 pb-4 animate-in fade-in duration-200">
+        <div className={noPadding ? 'pb-2 animate-in fade-in duration-200' : 'px-4 pb-3 animate-in fade-in duration-200'}>
           {children}
         </div>
       )}
@@ -426,7 +421,7 @@ export default function TeamDetails() {
           <div className="h-5 w-16 rounded-full bg-muted animate-pulse" />
         </div>
         <div className="flex flex-1 overflow-hidden min-h-0">
-          <div className="w-80 shrink-0 border-r bg-card p-4 space-y-4">
+          <div className="w-72 shrink-0 border-r bg-card p-4 space-y-4">
             {[1, 2, 3, 4].map(i => <div key={i} className="h-16 rounded-lg bg-muted animate-pulse" />)}
           </div>
           <div className="flex-1 p-6 space-y-4 animate-in fade-in duration-300">
@@ -526,64 +521,28 @@ export default function TeamDetails() {
       {/* Body */}
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Left sidebar */}
-        <div className="w-80 shrink-0 border-r overflow-y-auto bg-card">
+        <div className="w-72 shrink-0 border-r overflow-y-auto bg-card">
           <div className="space-y-0">
-          {/* Quick Actions */}
-          <div className="flex gap-2 p-3 border-b">
-            <Button
-              size="sm"
-              className="flex-1 gap-1.5 h-8 text-xs font-semibold shadow-sm transition-all duration-200 hover:shadow-md active:scale-95"
-              title="Create new project (Cmd+Shift+P)"
-              onClick={() => navigate(createPageUrl('Projects') + `?team=${teamId}`)}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New Project
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="flex-1 gap-1.5 h-8 text-xs transition-all duration-200 hover:bg-muted active:scale-95"
-              title="Add a note (Cmd+Shift+N)"
-              onClick={() => {
-                setActiveTab('notes');
-                setTimeout(() => {
-                  const textarea = document.querySelector('[data-note-textarea]');
-                  if (textarea) {
-                    textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    textarea.focus();
-                  }
-                }, 150);
-              }}
-            >
-              <MessageSquare className="h-3.5 w-3.5" />
-              Add Note
-            </Button>
-          </div>
-
             {/* Team Info */}
-            <Section title="Team Info" badge={0} defaultOpen>
-              <div className="space-y-3">
+            <Section title="Team info" badge={0} defaultOpen noPadding>
+              <div>
                 {agency && (
-                  <div>
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1 flex items-center gap-1">
-                      <Building2 className="h-3 w-3" /> Agency
-                    </p>
+                  <div className="flex items-center justify-between py-1.5 px-4 hover:bg-muted/30 transition-colors">
+                    <span className="text-[11px] text-muted-foreground shrink-0">Agency</span>
                     <Link
                       to={createPageUrl(`OrgDetails?id=${agency.id}`)}
-                      className="text-xs text-primary hover:underline"
+                      className="text-[12px] font-semibold text-primary hover:underline truncate ml-3"
                     >
                       {agency.name}
                     </Link>
                   </div>
                 )}
-
-                <InfoRow label="Email" value={team.email} href={team.email ? `mailto:${team.email}` : null} Icon={Mail} />
-                <InfoRow label="Phone" value={team.phone} href={team.phone ? `tel:${team.phone}` : null} Icon={Phone} />
-
+                <FieldRow label="Email" value={team.email} href={team.email ? `mailto:${team.email}` : null} />
+                <FieldRow label="Phone" value={team.phone} href={team.phone ? `tel:${team.phone}` : null} />
                 {team.notes && (
-                  <div>
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Notes</p>
-                    <p className="text-xs text-muted-foreground leading-relaxed">{team.notes}</p>
+                  <div className="py-1.5 px-4">
+                    <span className="text-[11px] text-muted-foreground">Notes</span>
+                    <p className="text-[12px] text-foreground leading-relaxed mt-0.5">{team.notes}</p>
                   </div>
                 )}
               </div>
@@ -594,22 +553,27 @@ export default function TeamDetails() {
               {members.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No members assigned</p>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-0.5">
                   {members.slice(0, 10).map(member => (
                     <Link
                       key={member.id}
                       to={createPageUrl(`PersonDetails?id=${member.id}`)}
-                      className="flex items-center gap-2 p-2 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="flex items-center gap-2 py-1.5 px-1 rounded hover:bg-muted/40 transition-colors cursor-pointer"
                     >
                       <div className="h-6 w-6 rounded-full bg-primary/10 text-primary text-[9px] font-bold flex items-center justify-center flex-shrink-0">
                         {(member.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-primary hover:underline block truncate">
+                        <p className="text-[12px] font-semibold text-foreground truncate leading-tight">
                           {member.name}
                         </p>
-                        {member.title && <p className="text-[10px] text-muted-foreground truncate">{member.title}</p>}
+                        {member.title && <p className="text-[10px] text-muted-foreground truncate leading-tight">{member.title}</p>}
                       </div>
+                      {member.relationship_state && (
+                        <Badge className={`text-[9px] border px-1.5 py-0 h-4 ${STATE_BADGE[member.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+                          {member.relationship_state}
+                        </Badge>
+                      )}
                     </Link>
                   ))}
                 </div>
@@ -618,7 +582,7 @@ export default function TeamDetails() {
 
             {/* Projects */}
             {projects.length > 0 && (
-              <Section title="Projects" badge={openProjects.length} defaultOpen={true}>
+              <Section title="Active projects" badge={openProjects.length} defaultOpen={true}>
                 <div className="space-y-2">
                   {projects.slice(0, 10).map(proj => {
                     const price = proj.calculated_price || proj.price;
@@ -660,7 +624,7 @@ export default function TeamDetails() {
                 {/* Analytics */}
                 {projects.length > 0 && (
                 <div className="border-t pt-2">
-                <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Analytics</div>
+                <div className="text-[11px] font-semibold text-muted-foreground px-4 py-2">Analytics</div>
                 <SharedDashboard
                  projects={projects}
                  revisions={revisions}
@@ -675,7 +639,7 @@ export default function TeamDetails() {
 
                 {/* Right tabs */}
         <div ref={tabsRef} className="flex-1 overflow-hidden bg-background">
-          <Tabs value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col">
+          <Tabs value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col min-h-0">
             <TabsList className="grid w-full shrink-0 rounded-none border-b bg-background h-10" style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' }}>
               <TabsTrigger value="notes" className="text-xs rounded-none gap-1 relative">
                 Notes

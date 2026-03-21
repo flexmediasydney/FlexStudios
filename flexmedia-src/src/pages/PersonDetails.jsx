@@ -80,32 +80,29 @@ function CopyableInfoRow({ label, value, href, Icon, copyValue }) {
   };
 
   return (
-    <div className="flex items-start gap-2 text-xs group">
-      {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />}
-      <div className="min-w-0 flex-1">
-        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">{label}</p>
-        <div className="flex items-center gap-1">
-          {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer"
-              className="text-primary hover:underline flex items-center gap-1 font-medium truncate transition-colors"
-              title={value}>
-              {value}
-            </a>
-          ) : (
-            <p className="font-medium truncate text-foreground flex-1" title={value}>{value}</p>
-          )}
-          <button
-            onClick={handleCopy}
-            className="opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0 p-1 rounded hover:bg-muted active:scale-95"
-            title={`Copy ${label}`}
-            aria-label={`Copy ${label}`}
-          >
-            {copied
-              ? <Check className="h-3 w-3 text-green-600" />
-              : <Copy className="h-3 w-3 text-muted-foreground" />
-            }
-          </button>
-        </div>
+    <div className="flex items-center justify-between py-1.5 px-4 group hover:bg-muted/30 transition-colors">
+      <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
+      <div className="flex items-center gap-1 ml-2 min-w-0">
+        {href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer"
+            className="text-xs font-medium text-primary hover:underline truncate transition-colors"
+            title={value}>
+            {value}
+          </a>
+        ) : (
+          <span className="text-xs font-medium truncate text-foreground" title={value}>{value}</span>
+        )}
+        <button
+          onClick={handleCopy}
+          className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5 rounded hover:bg-muted active:scale-95"
+          title={`Copy ${label}`}
+          aria-label={`Copy ${label}`}
+        >
+          {copied
+            ? <Check className="h-2.5 w-2.5 text-green-600" />
+            : <Copy className="h-2.5 w-2.5 text-muted-foreground" />
+          }
+        </button>
       </div>
     </div>
   );
@@ -135,22 +132,25 @@ function ErrorState({ navigate, title, message }) {
 function Section({ title, badge, children, defaultOpen = true }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border-b border-border/50">
+    <div className="border-b border-border/40">
       <button
-        className="flex items-center gap-2 w-full px-4 py-2.5 text-xs font-semibold text-foreground hover:text-primary hover:bg-muted/40 transition-all duration-200 text-left"
+        className="flex items-center gap-1.5 w-full px-4 py-2 text-[11px] font-semibold text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-all duration-150 text-left"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
       >
-        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${!open && '-rotate-90'}`} />
-        <span className="uppercase tracking-wide">{title}</span>
+        {open
+          ? <ChevronDown className="h-3 w-3 text-muted-foreground/70 transition-transform duration-150" />
+          : <ChevronRight className="h-3 w-3 text-muted-foreground/70 transition-transform duration-150" />
+        }
+        <span>{title}</span>
         {badge > 0 && (
-          <span className="ml-0.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+          <span className="ml-0.5 bg-muted text-muted-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full">
             {badge}
           </span>
         )}
       </button>
       {open && (
-        <div className="px-4 pb-4 animate-in fade-in duration-200">
+        <div className="pb-2 animate-in fade-in duration-150">
           {children}
         </div>
       )}
@@ -426,7 +426,7 @@ export default function PersonDetails() {
           <div className="h-5 w-16 rounded-full bg-muted animate-pulse" />
         </div>
         <div className="flex flex-1 overflow-hidden min-h-0">
-          <div className="w-80 shrink-0 border-r bg-card p-4 space-y-4">
+          <div className="w-72 shrink-0 border-r bg-card p-4 space-y-4">
             {[1, 2, 3, 4].map(i => <div key={i} className="h-16 rounded-lg bg-muted animate-pulse" />)}
           </div>
           <div className="flex-1 p-6 space-y-4 animate-in fade-in duration-300">
@@ -547,112 +547,59 @@ export default function PersonDetails() {
       {/* Body */}
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Left sidebar */}
-        <div className="w-80 shrink-0 border-r overflow-y-auto bg-card">
+        <div className="w-72 shrink-0 border-r overflow-y-auto bg-card scrollbar-thin">
           <div className="space-y-0">
-          {/* Quick Actions */}
-          <div className="flex gap-2 p-3 border-b">
-            <Button
-              size="sm"
-              className="flex-1 gap-1.5 h-8 text-xs font-semibold shadow-sm transition-all duration-200 hover:shadow-md active:scale-95"
-              title="Create new project (Cmd+Shift+P)"
-              onClick={() => navigate(createPageUrl('Projects') + `?agent=${agentId}`)}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New Project
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="flex-1 gap-1.5 h-8 text-xs transition-all duration-200 hover:bg-muted active:scale-95"
-              title="Add a note (Cmd+Shift+N)"
-              onClick={() => {
-                setActiveTab('notes');
-                setTimeout(() => {
-                  const textarea = document.querySelector('[data-note-textarea]');
-                  if (textarea) {
-                    textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    textarea.focus();
-                  }
-                }, 150);
-              }}
-            >
-              <MessageSquare className="h-3.5 w-3.5" />
-              Add Note
-            </Button>
-          </div>
-
             {/* Contact Details */}
-             <Section title="Contact Details" badge={0} defaultOpen>
-               <div className="space-y-3">
-                 <div>
-                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                     State
-                   </p>
+             <Section title="Contact details" badge={0} defaultOpen>
+               <div>
+                 {/* State row */}
+                 <div className="flex items-center justify-between py-1.5 px-4">
+                   <span className="text-[11px] text-muted-foreground">State</span>
                    <Badge className={`text-[10px] border ${STATE_BADGE[agent.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
                      {agent.relationship_state || 'Unknown'}
                    </Badge>
                  </div>
 
-                 <InfoRow label="Email" value={agent.email} href={agent.email ? `mailto:${agent.email}` : null} Icon={Mail} />
-                 <InfoRow label="Phone" value={agent.phone} href={agent.phone ? `tel:${agent.phone}` : null} Icon={Phone} />
+                 <InfoRow label="Email" value={agent.email} href={agent.email ? `mailto:${agent.email}` : null} />
+                 <InfoRow label="Phone" value={agent.phone} href={agent.phone ? `tel:${agent.phone}` : null} />
 
                  {agent.last_contacted_at && (
                    <InfoRow
                      label="Last contacted"
                      value={fmtDate(agent.last_contacted_at, 'd MMM yyyy')}
-                     Icon={Clock}
                    />
                  )}
 
                  {agent.contact_frequency_days && (
-                   <div className="flex items-start gap-2 py-1">
-                     <Bell className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
-                     <div className="flex-1 min-w-0">
-                       <p className="text-[11px] text-muted-foreground">Contact every</p>
-                       <p className="text-xs font-medium">{agent.contact_frequency_days} days</p>
+                   <div className="flex items-center justify-between py-1.5 px-4">
+                     <span className="text-[11px] text-muted-foreground">Contact every</span>
+                     <div className="flex items-center gap-1.5 ml-2">
+                       <span className="text-xs font-medium">{agent.contact_frequency_days}d</span>
                        {contactHealth && (
-                         <div className={`mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full inline-block ${
+                         <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
                            contactHealth === 'ok'   ? 'bg-green-100 text-green-700' :
                            contactHealth === 'warn' ? 'bg-amber-100 text-amber-700' :
                                                       'bg-red-100 text-red-700'
                          }`}>
                            {contactHealth === 'ok'   ? 'On track' :
-                            contactHealth === 'warn' ? 'Due for contact' :
-                            `Overdue — ${daysSinceLastBooking}d ago`}
-                         </div>
+                            contactHealth === 'warn' ? 'Due' :
+                            `${daysSinceLastBooking}d overdue`}
+                         </span>
                        )}
                      </div>
                    </div>
                  )}
 
-                 {Array.isArray(agent.tags) && agent.tags.length > 0 && (
-                   <div className="flex flex-wrap gap-1 pt-1">
-                     {agent.tags.map((tag, i) => (
-                       <span
-                         key={i}
-                         className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20"
-                       >
-                         {tag}
-                       </span>
-                     ))}
-                   </div>
+                 {agent.title && (
+                   <InfoRow label="Title" value={agent.title} />
                  )}
 
-                {agent.title && (
-                  <div>
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Title</p>
-                    <p className="text-xs text-foreground">{agent.title}</p>
-                  </div>
-                )}
-
                 {agency && (
-                  <div>
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1 flex items-center gap-1">
-                      <Building2 className="h-3 w-3" /> Agency
-                    </p>
+                  <div className="flex items-center justify-between py-1.5 px-4">
+                    <span className="text-[11px] text-muted-foreground">Agency</span>
                     <Link
                       to={createPageUrl(`OrgDetails?id=${agency.id}`)}
-                      className="text-xs text-primary hover:underline"
+                      className="text-xs font-medium text-primary hover:underline truncate ml-2"
                     >
                       {agency.name}
                     </Link>
@@ -660,18 +607,31 @@ export default function PersonDetails() {
                 )}
 
                 {agent.value_potential && (
-                  <div>
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Value</p>
+                  <div className="flex items-center justify-between py-1.5 px-4">
+                    <span className="text-[11px] text-muted-foreground">Value</span>
                     <Badge variant="secondary" className="text-[10px]">
                       {agent.value_potential}
                     </Badge>
                   </div>
                 )}
 
+                 {Array.isArray(agent.tags) && agent.tags.length > 0 && (
+                   <div className="flex flex-wrap gap-1 py-1.5 px-4">
+                     {agent.tags.map((tag, i) => (
+                       <span
+                         key={i}
+                         className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50"
+                       >
+                         {tag}
+                       </span>
+                     ))}
+                   </div>
+                 )}
+
                 {agent.notes && (
-                  <div>
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Notes</p>
-                    <p className="text-xs text-muted-foreground leading-relaxed">{agent.notes}</p>
+                  <div className="py-1.5 px-4">
+                    <p className="text-[11px] text-muted-foreground mb-0.5">Notes</p>
+                    <p className="text-xs text-foreground/80 leading-relaxed">{agent.notes}</p>
                   </div>
                 )}
               </div>
@@ -680,38 +640,30 @@ export default function PersonDetails() {
             {/* Projects */}
             {projects.length > 0 && (
               <Section title="Projects" badge={openProjects.length} defaultOpen={true}>
-                <div className="space-y-2">
+                <div className="space-y-1 px-4">
                   {projects.slice(0, 10).map(proj => {
                     const price = proj.calculated_price || proj.price;
                     return (
-                      <div key={proj.id} className={`rounded-lg border-l-4 border border-l-current bg-background p-2.5 hover:shadow-md hover:bg-muted/20 transition-all duration-200 group ${STATUS_BORDER[proj.status] || 'border-l-gray-300'}`}>
-                        <Link
-                          to={createPageUrl("ProjectDetails") + `?id=${proj.id}`}
-                          className="text-xs font-semibold hover:text-primary line-clamp-2 leading-tight block group-hover:text-primary transition-colors"
-                        >
-                          {proj.title}
-                        </Link>
-                        {proj.agent_name && (
-                          <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1">
-                            <User className="h-2.5 w-2.5" />{proj.agent_name}
+                      <Link
+                        key={proj.id}
+                        to={createPageUrl("ProjectDetails") + `?id=${proj.id}`}
+                        className={`block rounded-md border-l-[3px] bg-background px-2.5 py-2 hover:bg-muted/40 transition-colors ${STATUS_BORDER[proj.status] || 'border-l-gray-300'}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-xs font-medium text-foreground line-clamp-1 leading-tight flex-1 min-w-0">
+                            {proj.title}
                           </p>
-                        )}
-                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
-                            {proj.status?.replace(/_/g, ' ').toUpperCase()}
-                          </span>
-                          {price && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
+                          {price && <span className="text-[11px] font-semibold text-foreground shrink-0">{fmtMoney(price)}</span>}
                         </div>
-                        {(proj.shoot_date || proj.delivery_date) && (
-                          <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">
-                            <Calendar className="h-2.5 w-2.5 shrink-0" />
-                            {proj.shoot_date && <span>{fmtDate(proj.shoot_date, 'd MMM yy')}</span>}
-                            {proj.shoot_date && proj.delivery_date && <span>→</span>}
-                            {proj.delivery_date && <span>{fmtDate(proj.delivery_date, 'd MMM yy')}</span>}
-                          </div>
-                        )}
-                        <PipelineBar status={proj.status} />
-                      </div>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <ProjectStatusBadge status={proj.status} />
+                          {proj.shoot_date && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {fmtDate(proj.shoot_date, 'd MMM yy')}
+                            </span>
+                          )}
+                        </div>
+                      </Link>
                     );
                   })}
                 </div>
@@ -719,41 +671,45 @@ export default function PersonDetails() {
             )}
 
             {/* Dates */}
-            <div className="px-4 py-4 border-t border-border/50 text-xs text-muted-foreground space-y-1">
+            {(agent.created_date || agent.became_active_date || agent.became_dormant_date) && (
+            <Section title="Dates" badge={0} defaultOpen={false}>
+              <div>
               {agent.created_date && (
-                <p>
-                  Added{' '}
-                  <span className="font-medium">
+                <div className="flex items-center justify-between py-1.5 px-4">
+                  <span className="text-[11px] text-muted-foreground">Added</span>
+                  <span className="text-xs font-medium">
                     {fmtTimestampCustom(agent.created_date, {
                       day: 'numeric',
                       month: 'short',
                       year: 'numeric',
                     })}
                   </span>
-                </p>
+                </div>
               )}
               {agent.became_active_date && (
-                <p>
-                  Active since{' '}
-                  <span className="font-medium text-green-600">
+                <div className="flex items-center justify-between py-1.5 px-4">
+                  <span className="text-[11px] text-muted-foreground">Active since</span>
+                  <span className="text-xs font-medium text-green-600">
                     {fmtDate(agent.became_active_date, 'MMM yyyy')}
                   </span>
-                </p>
+                </div>
               )}
               {agent.became_dormant_date && (
-                <p>
-                  Dormant since{' '}
-                  <span className="font-medium text-amber-600">
+                <div className="flex items-center justify-between py-1.5 px-4">
+                  <span className="text-[11px] text-muted-foreground">Dormant since</span>
+                  <span className="text-xs font-medium text-amber-600">
                     {fmtDate(agent.became_dormant_date, 'MMM yyyy')}
                   </span>
-                </p>
+                </div>
               )}
               </div>
+            </Section>
+            )}
 
               {/* Analytics */}
               {projects.length > 0 && (
-              <div className="border-t pt-2">
-               <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Analytics</div>
+              <Section title="Analytics" badge={0} defaultOpen={false}>
+               <div className="px-4">
                <SharedDashboard
                  projects={projects}
                  revisions={revisions}
@@ -761,14 +717,15 @@ export default function PersonDetails() {
                  taskTimeLogs={taskTimeLogs}
                  entityLabel={agent?.name || 'Person'}
                />
-              </div>
+               </div>
+              </Section>
               )}
               </div>
               </div>
 
               {/* Right tabs */}
               <div ref={tabsRef} className="flex-1 overflow-hidden bg-background">
-              <Tabs value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col">
+              <Tabs value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col min-h-0">
              <TabsList className="grid w-full shrink-0 rounded-none border-b bg-background h-10" style={{ gridTemplateColumns: 'repeat(8, minmax(0, 1fr))' }}>
                <TabsTrigger value="notes" className="text-xs rounded-none gap-1 relative">
                  Notes
@@ -794,7 +751,7 @@ export default function PersonDetails() {
                <TabsTrigger value="calendar" className="text-xs rounded-none gap-1">Activities</TabsTrigger>
              </TabsList>
 
-             <div className="flex-1 overflow-hidden">
+             <div className="flex-1 overflow-hidden min-h-0">
                <TabsContent value="notes" className="h-full overflow-hidden m-0 border-0">
                  <UnifiedNotesPanel
                    agentId={agentId}

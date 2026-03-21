@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState, useMemo } from "react"
 import { useNavigate } from "react-router-dom";
 import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
 import { useEntityList } from "@/components/hooks/useEntityData";
-import { ArrowLeft, AlertCircle, Plus, MessageSquare } from "lucide-react";
+import { ArrowLeft, AlertCircle } from "lucide-react";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -163,7 +163,7 @@ export default function OrgDetails() {
         </div>
         <div className="flex flex-1 overflow-hidden min-h-0">
           {/* Sidebar skeleton */}
-          <div className="w-80 shrink-0 border-r bg-card p-4 space-y-4">
+          <div className="w-72 shrink-0 border-r bg-card p-4 space-y-4">
             {[1,2,3,4].map(i => <div key={i} className="h-16 rounded-lg bg-muted animate-pulse" />)}
           </div>
           {/* Main area skeleton with fade-in */}
@@ -272,35 +272,8 @@ export default function OrgDetails() {
       {/* ── Two-pane layout ── */}
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Left sidebar */}
-        <div className="w-80 shrink-0 border-r overflow-y-auto bg-card">
+        <div className="w-72 shrink-0 border-r overflow-y-auto bg-card">
           <div className="space-y-0">
-            {/* Quick Actions */}
-            <div className="flex gap-2 p-3 border-b">
-              <Button
-                size="sm"
-                className="flex-1 gap-1.5 h-8 text-xs font-semibold shadow-sm transition-all duration-200 hover:shadow-md active:scale-95"
-                title="Create new project (Cmd+Shift+P)"
-                onClick={() => navigate(createPageUrl("Projects") + `?agency=${agencyId}`)}>
-                <Plus className="h-3.5 w-3.5" />
-                New Project
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="flex-1 gap-1.5 h-8 text-xs transition-all duration-200 hover:bg-muted active:scale-95"
-                title="Add a note (Cmd+Shift+N)"
-                onClick={() => {
-                  setActiveTab('notes');
-                  // Give tab time to mount before scrolling the composer into view
-                  setTimeout(() => {
-                    const textarea = document.querySelector('[data-note-textarea]');
-                    if (textarea) { textarea.scrollIntoView({ behavior: 'smooth', block: 'center' }); textarea.focus(); }
-                  }, 150);
-                }}>
-                <MessageSquare className="h-3.5 w-3.5" />
-                Add Note
-              </Button>
-            </div>
             <Org2LeftPanel
               agency={agency}
               agents={agents}
@@ -313,8 +286,8 @@ export default function OrgDetails() {
               atRiskAgents={atRiskAgents}
               revenueByAgent={revenueByAgent}
             />
-            <div className="border-t pt-2">
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Analytics</div>
+            <div className="border-t pt-1">
+              <div className="text-[11px] font-semibold text-muted-foreground px-4 py-2">Analytics</div>
               <Org2Dashboard
                 agency={agency}
                 agents={agents}
@@ -329,7 +302,7 @@ export default function OrgDetails() {
         </div>
 
         {/* Right - Unified tabs */}
-        <div ref={tabsRef} className="flex-1 overflow-hidden bg-background">
+        <div ref={tabsRef} className="flex-1 overflow-hidden bg-background min-h-0">
         <Org2UnifiedTabs
           agency={agency}
           agencyId={agencyId}
