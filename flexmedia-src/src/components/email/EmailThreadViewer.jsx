@@ -49,9 +49,9 @@ const sanitizeEmailHtml = (html) => {
   // Strip <form> tags (phishing risk)
   clean = clean.replace(/<\/?form\b[^>]*>/gi, '');
   // Auto-link plain text URLs that aren't already inside <a> tags
-  // Split by existing tags to avoid linking URLs that are already href values
+  // Only skip URLs inside attribute values (preceded by = or quotes), NOT after > (tag close)
   clean = clean.replace(
-    /(?<![="'>])(https?:\/\/[^\s<>"']+)/gi,
+    /(?<![="'])(https?:\/\/[^\s<>"']+)/gi,
     '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
   );
   // Ensure ALL links open in new tab (some emails have <a> without target)
