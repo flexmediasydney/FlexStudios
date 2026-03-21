@@ -283,13 +283,17 @@ export default function EmailInboxMain() {
 
   // Update message mutation - subscription handles UI updates automatically
   const updateMessageMutation = useMutation({
-    mutationFn: (data) => api.entities.EmailMessage.update(data.messageId, data.updates)
+    mutationFn: (data) => api.entities.EmailMessage.update(data.messageId, data.updates),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
+    }
   });
 
   // Delete emails mutation - subscription auto-updates UI
   const deleteEmailsMutation = useMutation({
     mutationFn: (data) => api.functions.invoke('deleteEmails', data),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       toast.success("Emails deleted", {
         action: {
           label: "Undo",

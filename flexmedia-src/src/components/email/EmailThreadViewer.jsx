@@ -222,6 +222,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       emailAccountId: account?.id
     }),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (msg?.id) {
         api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
@@ -242,6 +243,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       emailAccountId: account?.id
     }),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (msg?.id) {
         api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
@@ -296,6 +298,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["email-thread"] });
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (msg?.id) {
         api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
@@ -322,6 +325,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       permanently: false
     }),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (msg?.id) {
         api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
@@ -406,7 +410,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           queryClient.invalidateQueries({ queryKey: ['email-activity', msg.id] });
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      // Real-time subscription will handle UI update automatically
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       toast.success("Project unlinked");
     },
     onError: () => {
@@ -424,6 +428,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       return starred;
     },
     onSuccess: (starred) => {
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (msg?.id) {
         api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
@@ -459,7 +464,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           queryClient.invalidateQueries({ queryKey: ['email-activity', msg.id] });
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      // Real-time subscription will handle UI update automatically
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       setShowProjectLink(false);
       toast.success("Project linked");
     },
