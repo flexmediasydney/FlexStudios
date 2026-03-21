@@ -9,11 +9,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   Eye,
   Archive,
   Trash2,
@@ -21,7 +16,6 @@ import {
   Lock,
   Users,
   ChevronDown,
-  Tag,
   X,
   Loader2,
 } from "lucide-react";
@@ -42,7 +36,6 @@ export default function BulkActionBar({
   setSelectedMessages,
 }) {
   const [isProcessing, setIsProcessing] = useState(false);
-  const [labelPopoverOpen, setLabelPopoverOpen] = useState(false);
 
   const getAccountIds = () => getAccountIdsFromThreads(selectedMessages, threads);
 
@@ -269,58 +262,35 @@ export default function BulkActionBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Popover open={labelPopoverOpen} onOpenChange={setLabelPopoverOpen}>
-           <PopoverTrigger asChild>
-             <Button 
-               variant="outline" 
-               size="sm" 
-               className="gap-1.5 h-8 text-xs"
-               disabled={selectedCount === 0 || isProcessing}
-               title="Manage labels"
-             >
-               <Tag className="h-3.5 w-3.5" />
-               Labels
-               <ChevronDown className="h-3 w-3" />
-             </Button>
-           </PopoverTrigger>
-           <PopoverContent align="end" className="w-72 p-0" onOpenAutoFocus={(e) => e.preventDefault()}>
-            {(() => {
-              // Get first selected thread to determine account and current labels
-              const firstThreadId = Array.from(selectedMessages)[0];
-              const firstThread = threads.find(t => t.threadId === firstThreadId);
-              const account = emailAccounts.find(a => a.id === firstThread?.email_account_id);
-              if (!firstThread || !account) return <div className="p-3 text-xs text-muted-foreground">No valid emails selected</div>;
+        {/* Labels — LabelSelectorRobust is already a Popover, render directly */}
+        {(() => {
+          const firstThreadId = Array.from(selectedMessages)[0];
+          const firstThread = threads.find(t => t.threadId === firstThreadId);
+          const account = emailAccounts.find(a => a.id === firstThread?.email_account_id);
+          if (!firstThread || !account) return null;
 
-              return (
-                <div className="p-3">
-                  {selectedCount > 1 && (
-                    <p className="text-xs text-muted-foreground mb-2 font-medium">Apply labels to {selectedCount} emails</p>
-                  )}
-                  <LabelSelectorRobust
-                    emailAccountId={account.id}
-                    selectedLabels={firstThread.messages[0]?.labels || []}
-                    onLabelsChange={(labels) => {
-                      const allMessages = Array.from(selectedMessages).flatMap(tid => {
-                        const t = threads.find(th => th.threadId === tid);
-                        return t?.messages || [];
-                      });
-                      Promise.all(
-                        allMessages.map(m => api.entities.EmailMessage.update(m.id, { labels }))
-                      ).then(() => {
-                        toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
-                        setLabelPopoverOpen(false);
-                      }).catch(() => {
-                        toast.error("Failed to update labels");
-                      });
-                    }}
-                    isAdmin={user?.role === "master_admin"}
-                    compact={true}
-                  />
-                </div>
-              );
-            })()}
-          </PopoverContent>
-        </Popover>
+          return (
+            <LabelSelectorRobust
+              emailAccountId={account.id}
+              selectedLabels={firstThread.messages[0]?.labels || []}
+              onLabelsChange={(labels) => {
+                const allMessages = Array.from(selectedMessages).flatMap(tid => {
+                  const t = threads.find(th => th.threadId === tid);
+                  return t?.messages || [];
+                });
+                Promise.all(
+                  allMessages.map(m => api.entities.EmailMessage.update(m.id, { labels }))
+                ).then(() => {
+                  toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
+                }).catch(() => {
+                  toast.error("Failed to update labels");
+                });
+              }}
+              isAdmin={user?.role === "master_admin"}
+              compact={false}
+            />
+          );
+        })()}
 
         {filterView !== 'deleted' && (
           <Button 

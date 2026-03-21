@@ -3,7 +3,6 @@ import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -14,21 +13,19 @@ import {
 import { Plus, Trash2, Pencil, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import LabelBadge, { ColorDotPicker, LABEL_COLORS } from "./LabelBadge";
 
 export default function EmailLabelsTab() {
   const [newName, setNewName] = useState("");
-  const [newColor, setNewColor] = useState("#3b82f6");
-  // FIX 13: edit state includes both name and color
+  const [newColor, setNewColor] = useState(LABEL_COLORS[5]);
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState("");
-  const [editColor, setEditColor] = useState("#3b82f6");
-  // FIX 14: account selector
+  const [editColor, setEditColor] = useState(LABEL_COLORS[5]);
   const [selectedAccountId, setSelectedAccountId] = useState(null);
 
   const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
 
-  // FIX 14: filter by user
   const { data: emailAccounts = [] } = useQuery({
     queryKey: ["email-accounts-labels", user?.id],
     queryFn: () =>
@@ -39,7 +36,6 @@ export default function EmailLabelsTab() {
     enabled: !!user?.id,
   });
 
-  // Set first account once loaded
   useEffect(() => {
     if (emailAccounts.length > 0 && !selectedAccountId) {
       setSelectedAccountId(emailAccounts[0].id);
@@ -58,38 +54,40 @@ export default function EmailLabelsTab() {
     mutationFn: (data) => api.entities.EmailLabel.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels-manage", accountId] });
+      queryClient.invalidateQueries({ queryKey: ["email-labels", accountId] });
       setNewName("");
-      setNewColor("#3b82f6");
-      toast.success("Label created.");
+      setNewColor(LABEL_COLORS[5]);
+      toast.success("Label created");
     },
-    onError: () => toast.error("Failed to create label."),
+    onError: () => toast.error("Failed to create label"),
   });
 
-  // FIX 12: updateMutation now actually called from Save button
   const updateMutation = useMutation({
     mutationFn: ({ id, updates }) => api.entities.EmailLabel.update(id, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels-manage", accountId] });
+      queryClient.invalidateQueries({ queryKey: ["email-labels", accountId] });
       setEditingId(null);
-      toast.success("Label updated.");
+      toast.success("Label updated");
     },
-    onError: () => toast.error("Failed to update label."),
+    onError: () => toast.error("Failed to update label"),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id) => api.entities.EmailLabel.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels-manage", accountId] });
-      toast.success("Label deleted.");
+      queryClient.invalidateQueries({ queryKey: ["email-labels", accountId] });
+      toast.success("Label deleted");
     },
-    onError: () => toast.error("Failed to delete label."),
+    onError: () => toast.error("Failed to delete label"),
   });
 
   const handleAdd = () => {
-    if (!newName.trim()) { toast.error("Name is required."); return; }
-    if (!accountId) { toast.error("No email account found."); return; }
+    if (!newName.trim()) { toast.error("Name is required"); return; }
+    if (!accountId) { toast.error("No email account found"); return; }
     if (labels.some((l) => l.name.toLowerCase() === newName.trim().toLowerCase())) {
-      toast.error("A label with this name already exists.");
+      toast.error("Label already exists");
       return;
     }
     createMutation.mutate({ email_account_id: accountId, name: newName.trim(), color: newColor });
@@ -98,12 +96,11 @@ export default function EmailLabelsTab() {
   const startEdit = (label) => {
     setEditingId(label.id);
     setEditName(label.name);
-    setEditColor(label.color);
+    setEditColor(label.color || LABEL_COLORS[5]);
   };
 
-  // FIX 12: this now calls updateMutation
   const saveEdit = () => {
-    if (!editName.trim()) { toast.error("Name cannot be empty."); return; }
+    if (!editName.trim()) { toast.error("Name cannot be empty"); return; }
     updateMutation.mutate({ id: editingId, updates: { name: editName.trim(), color: editColor } });
   };
 
@@ -117,14 +114,13 @@ export default function EmailLabelsTab() {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-xl">
       <div>
         <h3 className="text-lg font-semibold mb-1">Email Labels</h3>
         <p className="text-sm text-muted-foreground mb-5">
           Categorise and filter emails. Labels are per account.
         </p>
 
-        {/* FIX 14: account selector for multi-account users */}
         {emailAccounts.length > 1 && (
           <div className="mb-5">
             <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Account</label>
@@ -141,165 +137,131 @@ export default function EmailLabelsTab() {
           </div>
         )}
 
-        {/* Create */}
-        <div className="bg-muted/40 border rounded-lg p-4 mb-6">
-          <h4 className="text-sm font-medium mb-3">Create Label</h4>
-          <div className="flex gap-3 items-end">
-            <div className="flex-1">
-              <label className="text-xs text-muted-foreground mb-1 block">Name</label>
-              <Input
-                placeholder="e.g. Hot Lead"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-                className="h-8"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Color</label>
-              <input
-                type="color"
-                value={newColor}
-                onChange={(e) => setNewColor(e.target.value)}
-                className="h-8 w-14 rounded border border-input cursor-pointer"
-              />
-            </div>
+        {/* Create New Label */}
+        <div className="bg-slate-50 border rounded-xl p-4 mb-6 space-y-3">
+          <h4 className="text-sm font-semibold text-slate-700">Create Label</h4>
+          <Input
+            placeholder="e.g. Hot Lead, Follow Up, Urgent..."
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+            className="h-9"
+          />
+          <div>
+            <p className="text-xs text-muted-foreground mb-2">Color</p>
+            <ColorDotPicker value={newColor} onChange={setNewColor} size="md" />
+          </div>
+          <div className="flex items-center justify-between pt-1">
+            {newName.trim() ? (
+              <LabelBadge label={newName.trim()} color={newColor} />
+            ) : (
+              <span />
+            )}
             <Button
               onClick={handleAdd}
               disabled={createMutation.isPending || !newName.trim()}
-              className="h-8 gap-1.5"
+              size="sm"
+              className="gap-1.5"
             >
-              <Plus className="h-3.5 w-3.5" /> Add
+              <Plus className="h-3.5 w-3.5" /> Create
             </Button>
           </div>
-          {newName.trim() && (
-            <div className="mt-3 flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Preview:</span>
-              <Badge style={{ backgroundColor: newColor }} className="text-white text-xs">
-                {newName.trim()}
-              </Badge>
-            </div>
-          )}
         </div>
 
-        {/* List */}
+        {/* Labels List */}
         <div>
-          <h4 className="text-sm font-medium mb-3">
-            Labels
+          <h4 className="text-sm font-semibold text-slate-700 mb-3">
+            Your Labels
             {labels.length > 0 && (
-              <span className="text-muted-foreground font-normal ml-1">({labels.length})</span>
+              <span className="text-muted-foreground font-normal ml-1.5">({labels.length})</span>
             )}
           </h4>
 
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading...</p>
+            <p className="text-sm text-muted-foreground py-4">Loading...</p>
           ) : labels.length === 0 ? (
-            <div className="text-center py-8 border rounded-lg text-muted-foreground">
-              <p className="text-sm">No labels yet. Create one above.</p>
+            <div className="text-center py-10 border rounded-xl text-muted-foreground bg-slate-50/50">
+              <p className="text-sm">No labels yet. Create one above to get started.</p>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="border rounded-xl overflow-hidden divide-y">
               {labels.map((label) => {
                 const isEditing = editingId === label.id;
                 return (
                   <div
                     key={label.id}
-                    className={`flex items-center gap-3 p-3 border rounded-lg transition-colors ${
-                      isEditing ? "border-primary bg-primary/5" : "hover:bg-muted/30"
+                    className={`flex items-center gap-3 px-4 py-3 transition-colors ${
+                      isEditing ? "bg-blue-50/50" : "hover:bg-slate-50/50"
                     }`}
                   >
                     {isEditing ? (
-                      // FIX 12 + 13: inline edit with both name input and color picker
-                      <>
-                        <input
-                          type="color"
-                          value={editColor}
-                          onChange={(e) => setEditColor(e.target.value)}
-                          className="h-8 w-10 rounded border border-input cursor-pointer flex-shrink-0"
-                        />
-                        <Input
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") saveEdit();
-                            if (e.key === "Escape") setEditingId(null);
-                          }}
-                          className="h-8 flex-1"
-                          autoFocus
-                        />
-                        <Badge
-                          style={{ backgroundColor: editColor }}
-                          className="text-white text-xs flex-shrink-0 min-w-[48px] justify-center"
-                        >
-                          {editName || label.name}
-                        </Badge>
-                        <Button
-                          size="icon"
-                          className="h-8 w-8 flex-shrink-0"
-                          onClick={saveEdit}
-                          disabled={updateMutation.isPending}
-                        >
-                          <Check className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 flex-shrink-0"
-                          onClick={() => setEditingId(null)}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </>
+                      <div className="flex-1 space-y-2.5">
+                        <div className="flex gap-2 items-center">
+                          <Input
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveEdit();
+                              if (e.key === "Escape") setEditingId(null);
+                            }}
+                            className="h-8 flex-1"
+                            autoFocus
+                          />
+                          <Button size="sm" className="h-8 px-3 gap-1" onClick={saveEdit} disabled={updateMutation.isPending}>
+                            <Check className="h-3.5 w-3.5" /> Save
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-8 px-2" onClick={() => setEditingId(null)}>
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        <ColorDotPicker value={editColor} onChange={setEditColor} size="sm" />
+                        <div className="flex items-center gap-2 pt-1">
+                          <span className="text-xs text-muted-foreground">Preview:</span>
+                          <LabelBadge label={editName || label.name} color={editColor} />
+                        </div>
+                      </div>
                     ) : (
                       <>
                         <div
-                          className="w-3.5 h-3.5 rounded-full flex-shrink-0 ring-1 ring-black/10"
-                          style={{ backgroundColor: label.color }}
+                          className="w-3 h-3 rounded-full flex-shrink-0 ring-1 ring-black/10"
+                          style={{ backgroundColor: label.color || "#64748b" }}
                         />
-                        <Badge
-                          style={{ backgroundColor: label.color }}
-                          className="text-white text-xs"
-                        >
-                          {label.name}
-                        </Badge>
-                        {/* FIX 15: remove fake message_count */}
-                        <span className="text-xs text-muted-foreground font-mono ml-auto">
-                          {label.color}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 flex-shrink-0"
-                          onClick={() => startEdit(label)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 flex-shrink-0 text-destructive hover:text-destructive"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogTitle>Delete "{label.name}"?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This removes the label from all emails that have it.
-                            </AlertDialogDescription>
-                            <div className="flex justify-end gap-3 mt-4">
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction
-                                className="bg-destructive hover:bg-destructive/90"
-                                onClick={() => deleteMutation.mutate(label.id)}
+                        <span className="text-sm font-medium text-slate-700 flex-1">{label.name}</span>
+                        <LabelBadge label={label.name} color={label.color} className="text-[10px]" />
+                        <div className="flex gap-1 ml-2">
+                          <button
+                            className="p-1.5 hover:bg-slate-100 rounded-md transition-colors"
+                            onClick={() => startEdit(label)}
+                            title="Edit label"
+                          >
+                            <Pencil className="h-3.5 w-3.5 text-slate-400" />
+                          </button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <button
+                                className="p-1.5 hover:bg-red-50 rounded-md transition-colors"
+                                title="Delete label"
                               >
-                                Delete
-                              </AlertDialogAction>
-                            </div>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                                <Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-500" />
+                              </button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogTitle>Delete "{label.name}"?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This removes the label from all emails that have it.
+                              </AlertDialogDescription>
+                              <div className="flex justify-end gap-3 mt-4">
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  className="bg-destructive hover:bg-destructive/90"
+                                  onClick={() => deleteMutation.mutate(label.id)}
+                                >
+                                  Delete
+                                </AlertDialogAction>
+                              </div>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
                       </>
                     )}
                   </div>
