@@ -1079,36 +1079,7 @@ export default function EmailInboxMain() {
                          <X className="h-3.5 w-3.5" />
                        </button>
                      )}
-                     {/* Search hints dropdown — only show if there are recent searches */}
-                     {searchFocused && !searchQuery && (() => {
-                       const recent = JSON.parse(localStorage.getItem('email-recent-searches') || '[]');
-                       if (recent.length === 0) return null; // Don't show empty dropdown on first focus
-                       return (
-                         <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-lg shadow-lg z-50 p-3 space-y-3">
-                           <div>
-                             <div className="flex items-center justify-between mb-1.5">
-                               <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Recent</p>
-                               <button
-                                 onMouseDown={(e) => { e.preventDefault(); localStorage.removeItem('email-recent-searches'); setSearchFocused(false); }}
-                                 className="text-[10px] text-muted-foreground hover:text-foreground"
-                               >Clear</button>
-                             </div>
-                             <div className="space-y-0.5">
-                               {recent.map((q, i) => (
-                                 <button
-                                   key={i}
-                                   onMouseDown={(e) => { e.preventDefault(); setSearchQuery(q); setSearchFocused(false); }}
-                                   className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted/80 text-foreground/80 flex items-center gap-2"
-                                 >
-                                   <Clock className="h-3 w-3 text-muted-foreground/50 flex-shrink-0" />
-                                   <span className="truncate">{q}</span>
-                                 </button>
-                               ))}
-                             </div>
-                           </div>
-                         </div>
-                       );
-                     })()}
+                     {/* Search hints dropdown removed — not needed */}
                 </div>
 
                 <Button 
