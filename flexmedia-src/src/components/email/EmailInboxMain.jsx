@@ -1257,6 +1257,7 @@ export default function EmailInboxMain() {
                 filterView={filterView}
                 onCompose={() => setShowCompose(true)}
                 labelData={labelData}
+                emailAccounts={emailAccounts}
                 onLinkProject={(thread) => setLinkProjectThread(thread)}
                 onToggleVisibility={async (thread, newVisibility) => {
                   try {

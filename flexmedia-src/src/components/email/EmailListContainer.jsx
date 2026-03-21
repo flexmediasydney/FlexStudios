@@ -17,6 +17,7 @@ export default function EmailListContainer({
   filterView,
   onCompose,
   labelData,
+  emailAccounts = [],
   onLinkProject,
   onToggleVisibility,
   onToggleStar,
@@ -128,6 +129,7 @@ export default function EmailListContainer({
                   onSelect={onSelectThread}
                   onOpen={onOpenThread}
                   labelData={labelData}
+                  emailAccounts={emailAccounts}
                   onLinkProject={onLinkProject}
                   onToggleVisibility={onToggleVisibility}
                   onToggleStar={onToggleStar}

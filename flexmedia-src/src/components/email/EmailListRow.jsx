@@ -24,13 +24,17 @@ import { FromHoverCard, AttachmentsHoverCard, ProjectHoverCard, VisibilityHoverC
 import { formatEmailDate } from "./emailDateUtils";
 import { PRIORITY_LIST_STYLES, HOVER_CARD_DELAY_MS } from "./emailConstants";
 
-export default function EmailListRow({ 
-  thread, 
-  columns, 
-  isSelected, 
-  onSelect, 
+// Distinct colors for multi-account indicator (left border + badge)
+const ACCOUNT_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#14b8a6'];
+
+export default function EmailListRow({
+  thread,
+  columns,
+  isSelected,
+  onSelect,
   onOpen,
   labelData = [],
+  emailAccounts = [],
   onLinkProject,
   onToggleVisibility,
   onToggleStar,
@@ -163,6 +167,14 @@ export default function EmailListRow({
   const totalRowWidth = columns.reduce((sum, c) => sum + (c.width ?? 0), 0);
   const isShared = thread.messages[0]?.visibility === 'shared';
 
+  // Account indicator — only meaningful when multiple accounts exist (All Inboxes view)
+  const accountId = thread.email_account_id;
+  const accountIndex = emailAccounts.findIndex(a => a.id === accountId);
+  const accountColor = emailAccounts.length > 1 && accountIndex >= 0 ? ACCOUNT_COLORS[accountIndex % ACCOUNT_COLORS.length] : null;
+  const accountEmail = emailAccounts.length > 1 ? emailAccounts[accountIndex]?.email_address : null;
+  // Short account label: first part before @ (e.g. "info" from "info@flexmedia.sydney")
+  const accountShort = accountEmail ? accountEmail.split('@')[0] : null;
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -171,11 +183,15 @@ export default function EmailListRow({
             "group relative flex items-center gap-0 border-b cursor-pointer select-none",
             "h-[56px] transition-all duration-150",
             "hover:bg-blue-50",
-            isSelected && "bg-blue-100 border-l-[4px] border-l-blue-600 shadow-sm",
-            isUnread && !isSelected && "bg-blue-50 border-l-[4px] border-l-blue-500 font-medium",
+            isSelected && "bg-blue-100 shadow-sm",
+            isUnread && !isSelected && "bg-blue-50 font-medium",
             !isUnread && !isSelected && priorityClass
           )}
-          style={{ minWidth: `${totalRowWidth}px` }}
+          style={{
+            minWidth: `${totalRowWidth}px`,
+            borderLeftWidth: accountColor || isSelected || (isUnread && !isSelected) ? '3px' : undefined,
+            borderLeftColor: isSelected ? '#2563eb' : (isUnread && !isSelected) ? '#3b82f6' : (accountColor || undefined),
+          }}
           onClick={() => onOpen(thread)}
         >
       {/* Checkbox */}
@@ -252,6 +268,16 @@ export default function EmailListRow({
                title={thread.agency_name ? `${thread.agent_name} @ ${thread.agency_name}` : thread.agent_name}
              >
                {thread.agent_name}{thread.agency_name ? ` \u00b7 ${thread.agency_name}` : ''}
+             </span>
+           )}
+           {/* Account indicator — shows which inbox this email belongs to (multi-account) */}
+           {accountShort && !thread.agent_name && (
+             <span
+               className="inline-flex items-center mt-0.5 text-[9px] font-semibold rounded px-1.5 py-0 leading-4 truncate max-w-full opacity-60"
+               style={{ color: accountColor, backgroundColor: accountColor ? `${accountColor}10` : undefined }}
+               title={accountEmail}
+             >
+               {accountShort}
              </span>
            )}
         </div>
