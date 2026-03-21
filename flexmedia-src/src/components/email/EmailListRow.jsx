@@ -386,50 +386,30 @@ export default function EmailListRow({
             className="flex-shrink-0 px-2 flex items-center justify-between gap-2"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Project name or placeholder */}
-            <div className="flex-1 min-w-0 overflow-hidden">
+            {/* Project name or link button */}
+            <div className="flex-1 min-w-0 overflow-hidden flex items-center">
               {thread.project_id ? (
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-green-500" />
-                  <span className="text-[12px] font-medium text-foreground/75 truncate" title={thread.project_title}>
+                <button
+                  onClick={() => onLinkProject?.(thread)}
+                  className="flex items-center gap-1.5 min-w-0 group/proj hover:bg-muted/50 rounded px-1.5 py-0.5 -mx-1.5 transition-colors"
+                  title={`Linked: ${thread.project_title} (click to change)`}
+                >
+                  <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  <span className="text-[12px] font-medium text-foreground/75 truncate group-hover/proj:text-foreground">
                     {thread.project_title}
                   </span>
-                </div>
+                </button>
               ) : (
-                <span className="text-[11px] text-muted-foreground/40 flex items-center gap-1">
+                <button
+                  onClick={() => onLinkProject?.(thread)}
+                  className="text-[11px] text-muted-foreground/40 hover:text-muted-foreground flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Link to project"
+                >
                   <Link2 className="h-3 w-3" />
-                  No project
-                </span>
+                  Link
+                </button>
               )}
             </div>
-
-            {/* Link / Change button */}
-            <TooltipProvider delayDuration={400}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() => onLinkProject?.(thread)}
-                    className={cn(
-                      "flex-shrink-0 h-8 px-3 rounded-lg text-[12px] font-bold",
-                      "transition-all duration-150 flex items-center gap-1.5 active:scale-95",
-                      thread.project_id
-                        ? "bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300"
-                        : "bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg"
-                    )}
-                    aria-label={thread.project_id ? "Change linked project" : "Link to project"}
-                    title={thread.project_id ? `Linked: ${thread.project_title}` : "Link to project"}
-                  >
-                    <Link2 className="h-4 w-4" />
-                    {thread.project_id ? "Change" : "Link"}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left" className="text-xs">
-                  {thread.project_id
-                    ? `Change project (currently: ${thread.project_title})`
-                    : "Link this email thread to a project"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
           </div>
         );
       })()}

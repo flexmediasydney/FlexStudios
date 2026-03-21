@@ -8,7 +8,7 @@ const DEFAULT_COLUMNS = [
   { id: 'attachments', label: '',        width: 28,  order: 4, resizable: false, minWidth: 28,  maxWidth: 28  },
   { id: 'visibility',  label: '',        width: 32,  order: 5, resizable: false, minWidth: 32,  maxWidth: 32  },
   { id: 'date',        label: 'Date',    width: 76,  order: 6, resizable: false, minWidth: 76,  maxWidth: 76  },
-  { id: 'actions',     label: 'Project', width: 210, order: 7, resizable: false, minWidth: 160, maxWidth: 260 },
+  { id: 'actions',     label: 'Project', width: 150, order: 7, resizable: true, minWidth: 100, maxWidth: 220 },
 ];
 
 const STORAGE_KEY = 'email-inbox-columns';

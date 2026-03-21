@@ -87,7 +87,7 @@ export default function EmailInboxMain() {
   const [saveFilterName, setSaveFilterName] = useState('');
   const MAX_UNDO_STACK = 20;
   const SEARCH_DEBOUNCE_MS = 300;
-  const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+  const AUTO_SYNC_INTERVAL_MS = 2 * 60 * 1000;
   const MAX_THREADS_TO_DISPLAY = 500;
   const containerRef = useRef(null);
   const sidebarScrollRef = useRef(null);
@@ -217,6 +217,9 @@ export default function EmailInboxMain() {
       return { synced, errors };
     },
     onSuccess: ({ synced, errors }) => {
+      // Always refetch messages after sync to pick up new data
+      queryClient.invalidateQueries({ queryKey: ['email-messages'] });
+      queryClient.invalidateQueries({ queryKey: ['email-accounts'] });
       if (synced > 0) {
         toast.success(`Synced ${synced} new email${synced !== 1 ? 's' : ''}`);
       } else if (errors > 0) {
@@ -247,12 +250,16 @@ export default function EmailInboxMain() {
           api.functions.invoke('syncGmailMessagesForAccount', {
             accountId: account.id,
             userId: user.id,
+          }).then((res) => {
+            if (res?.data?.synced > 0) {
+              queryClient.invalidateQueries({ queryKey: ['email-messages'] });
+            }
           }).catch(() => {});
         }, idx * 1500);
       });
     };
 
-    const mountTimeout = setTimeout(runSync, 2000);
+    const mountTimeout = setTimeout(runSync, 500);
     const interval = setInterval(runSync, AUTO_SYNC_INTERVAL_MS);
     return () => {
       clearTimeout(mountTimeout);
@@ -968,19 +975,12 @@ export default function EmailInboxMain() {
             Settings
           </Button>
           
-          {/* Keyboard Shortcuts Hint */}
-          <div className="text-[9px] text-muted-foreground/80 px-2 pt-2 border-t space-y-1 mt-2">
-            <p className="font-semibold text-[9px] uppercase tracking-widest opacity-70">Shortcuts</p>
-            <div className="space-y-0.5 text-[8px]">
-              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">c</kbd> Compose</p>
-              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">j/k</kbd> Navigate</p>
-              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">r</kbd> Reply</p>
-              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">a/e</kbd> Archive</p>
-              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">#</kbd> Delete</p>
-              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">/</kbd> Search</p>
-              <p><kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono">Esc</kbd> Back / Clear</p>
-            </div>
-          </div>
+          <button
+            onClick={() => setShowKeyboardHelp(true)}
+            className="w-full text-[10px] text-muted-foreground/50 hover:text-muted-foreground pt-2 border-t mt-2 text-center transition-colors"
+          >
+            Press <kbd className="px-1 py-0.5 bg-muted/60 rounded font-mono text-[9px]">?</kbd> for keyboard shortcuts
+          </button>
         </div>
       </aside>
 
