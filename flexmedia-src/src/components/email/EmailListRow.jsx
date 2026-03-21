@@ -83,10 +83,26 @@ export default function EmailListRow({
       .replace(/url\([^)]*\)/g, ' ')
       // Remove "none" as standalone word (CSS value remnant)
       .replace(/\bnone\b/g, ' ')
-      // Remove mojibake / encoding artifacts (â€, Â©, Ã©, etc.)
-      .replace(/[\u00C0-\u00FF]{2,}/g, ' ')
-      .replace(/â€[^\s]*/g, ' ')
-      .replace(/Â[^\s]*/g, ' ')
+      // Fix mojibake: UTF-8 smart quotes/dashes decoded as Latin-1
+      .replace(/\u00e2\u0080\u0099/g, "'")   // â€™ → '
+      .replace(/\u00e2\u0080\u0098/g, "'")   // â€˜ → '
+      .replace(/\u00e2\u0080\u009c/g, '"')   // â€œ → "
+      .replace(/\u00e2\u0080\u009d/g, '"')   // â€ → "
+      .replace(/\u00e2\u0080\u0093/g, '–')   // â€" → –
+      .replace(/\u00e2\u0080\u0094/g, '—')   // â€" → —
+      .replace(/\u00e2\u0080\u00a6/g, '...')  // â€¦ → ...
+      .replace(/\u00c2\u00a0/g, ' ')          // Â  → space (non-breaking space)
+      .replace(/â€™/g, "'")
+      .replace(/â€˜/g, "'")
+      .replace(/â€œ/g, '"')
+      .replace(/â€\u009d/g, '"')
+      .replace(/â€"/g, '–')
+      .replace(/â€"/g, '—')
+      .replace(/â€¦/g, '...')
+      .replace(/Â©/g, '©')
+      .replace(/Â /g, ' ')
+      // Remove any remaining mojibake clusters
+      .replace(/[\u00C0-\u00FF]{3,}/g, ' ')
       // Remove "Email Truncated" markers
       .replace(/Email\s*Truncat(ed|ion)[^.]*\.?/gi, ' ')
       // Collapse whitespace
