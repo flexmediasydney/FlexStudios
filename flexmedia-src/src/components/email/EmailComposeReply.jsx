@@ -14,13 +14,17 @@ export default function EmailComposeReply({
   onReplyMode,
   emailAccounts = [],
   defaultBodyPrefix = '',
+  replyType = 'reply',
+  replyToMessage,
   ...rest
 }) {
-  const latestMsg = thread?.messages?.[thread.messages.length - 1] || thread?.messages?.[0];
+  // If a specific message to reply to is provided, use it; otherwise use latest
+  const latestMsg = replyToMessage || thread?.messages?.[thread.messages.length - 1] || thread?.messages?.[0];
   const emailFromThread = latestMsg
     ? {
         from: latestMsg.from,
         from_name: latestMsg.from_name,
+        to: latestMsg.to,
         subject: thread.subject,
         body: latestMsg.body,
         received_at: latestMsg.received_at || latestMsg.date,
@@ -34,7 +38,7 @@ export default function EmailComposeReply({
     <EmailComposeDialog
       email={emailFromThread}
       account={account}
-      type="reply"
+      type={replyType}
       onClose={onClose}
       onSent={onClose}
       defaultBodyPrefix={defaultBodyPrefix}

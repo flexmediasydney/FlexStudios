@@ -81,6 +81,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const [showProjectLink, setShowProjectLink] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [replyExpanded, setReplyExpanded] = useState(false);
+  const [replyMode, setReplyMode] = useState('reply'); // 'reply' | 'replyAll'
+  const [replyToMessage, setReplyToMessage] = useState(null); // specific message to reply to
   const [expandedMessages, setExpandedMessages] = useState(new Set([thread.messages[thread.messages.length - 1]?.id]));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem('email-sidebar-collapsed') === 'true'; } catch { return false; }
@@ -114,6 +116,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     setExpandedMessages(new Set([thread.messages[thread.messages.length - 1]?.id]));
     setLiveMessages(thread.messages);
     setReplyExpanded(false);
+    setReplyMode('reply');
+    setReplyToMessage(null);
     setShowForward(false);
     setShowRaw(false);
   }, [thread.threadId]);
@@ -491,9 +495,19 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       // Ignore if typing in input/editor
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.contentEditable === 'true') return;
       
-      // R = Reply
-      if (e.key === 'r' || e.key === 'R') {
+      // Shift+R = Reply All
+      if ((e.key === 'R') && e.shiftKey) {
         e.preventDefault();
+        setReplyMode('replyAll');
+        setReplyToMessage(null);
+        setReplyExpanded(true);
+        return;
+      }
+      // R = Reply
+      if (e.key === 'r' && !e.shiftKey) {
+        e.preventDefault();
+        setReplyMode('reply');
+        setReplyToMessage(null);
         setReplyExpanded(v => !v);
       }
       // F = Forward
@@ -592,6 +606,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
               <span className="mx-1">·</span>
               <kbd className="bg-slate-100 px-1 rounded text-[10px]">R</kbd> reply
               <span className="mx-1">·</span>
+              <kbd className="bg-slate-100 px-1 rounded text-[10px]">⇧R</kbd> all
+              <span className="mx-1">·</span>
               <kbd className="bg-slate-100 px-1 rounded text-[10px]">F</kbd> fwd
               <span className="mx-1">·</span>
               <kbd className="bg-slate-100 px-1 rounded text-[10px]">A</kbd> archive
@@ -636,13 +652,24 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setReplyExpanded(v => !v)}
-              className={cn("gap-1.5 font-medium", replyExpanded && "bg-blue-50 border-blue-300 text-blue-700")}
+              onClick={() => { setReplyMode('reply'); setReplyToMessage(null); setReplyExpanded(v => !v); }}
+              className={cn("gap-1.5 font-medium", replyExpanded && replyMode === 'reply' && "bg-blue-50 border-blue-300 text-blue-700")}
               aria-label="Reply"
               title="Reply (R)"
             >
               <Reply className="h-3.5 w-3.5" />
               Reply
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => { setReplyMode('replyAll'); setReplyToMessage(null); setReplyExpanded(true); }}
+              className={cn("gap-1.5 font-medium", replyExpanded && replyMode === 'replyAll' && "bg-blue-50 border-blue-300 text-blue-700")}
+              aria-label="Reply All"
+              title="Reply All (Shift+R)"
+            >
+              <ReplyAll className="h-3.5 w-3.5" />
+              Reply All
             </Button>
             <Button
               size="sm"
@@ -896,7 +923,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                   key={msgItem.id}
                   ref={isLatest ? latestMessageRef : null}
                   className={cn(
-                    "transition-all duration-150",
+                    "transition-all duration-150 group/msg",
                     !isExpanded && !isLatest && "hover:bg-slate-50/80 cursor-pointer",
                     isLatest && "bg-white"
                   )}
@@ -955,7 +982,41 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                     </div>
 
                     {/* Right: date + actions */}
-                    <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {/* Per-message reply actions — Pipedrive style, visible on hover */}
+                      {isExpanded && (
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setReplyMode('reply'); setReplyToMessage(msgItem); setReplyExpanded(true); }}
+                            className="p-1.5 hover:bg-blue-50 rounded-md transition-colors"
+                            title="Reply to this message"
+                            aria-label="Reply"
+                          >
+                            <Reply className="h-3.5 w-3.5 text-slate-400 hover:text-blue-600" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setReplyMode('replyAll'); setReplyToMessage(msgItem); setReplyExpanded(true); }}
+                            className="p-1.5 hover:bg-blue-50 rounded-md transition-colors"
+                            title="Reply All to this message"
+                            aria-label="Reply All"
+                          >
+                            <ReplyAll className="h-3.5 w-3.5 text-slate-400 hover:text-blue-600" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowForward(true);
+                              // Set replyToMessage so the forward dialog has the right message context
+                              setReplyToMessage(msgItem);
+                            }}
+                            className="p-1.5 hover:bg-blue-50 rounded-md transition-colors"
+                            title="Forward this message"
+                            aria-label="Forward"
+                          >
+                            <Forward className="h-3.5 w-3.5 text-slate-400 hover:text-blue-600" />
+                          </button>
+                        </div>
+                      )}
                       <span className="text-xs text-slate-400 font-medium whitespace-nowrap">
                         {formatEmailDateTime(msgItem.received_at)}
                       </span>
@@ -1114,7 +1175,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           />
         )}
 
-        {/* Reply / Forward Box */}
+        {/* Reply / Forward Box — Pipedrive-style */}
         <div className="sticky bottom-0 bg-white border-t border-slate-200 shadow-lg">
           {/* Collapsed reply bar */}
           {!replyExpanded ? (
@@ -1126,42 +1187,91 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                 {user?.full_name?.charAt(0).toUpperCase() || '?'}
               </div>
               <button
-                onClick={() => setReplyExpanded(true)}
+                onClick={() => { setReplyMode('reply'); setReplyToMessage(null); setReplyExpanded(true); }}
                 className="flex-1 text-left text-sm text-slate-400 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-full px-4 py-2 transition-all"
                 aria-label="Click to reply"
               >
                 Reply to {msg.from_name || msg.from}…
               </button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setReplyExpanded(true)}
-                className="gap-1.5 text-blue-600 hover:bg-blue-50 font-semibold"
-                aria-label="Reply"
-              >
-                <Reply className="h-3.5 w-3.5" /> Reply
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowForward(true)}
-                className="gap-1.5 text-slate-500 hover:bg-slate-100 font-medium"
-                aria-label="Forward"
-              >
-                <Forward className="h-3.5 w-3.5" /> Forward
-              </Button>
+              <div className="flex items-center gap-0.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setReplyMode('reply'); setReplyToMessage(null); setReplyExpanded(true); }}
+                  className="gap-1.5 text-blue-600 hover:bg-blue-50 font-semibold"
+                  aria-label="Reply"
+                >
+                  <Reply className="h-3.5 w-3.5" /> Reply
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setReplyMode('replyAll'); setReplyToMessage(null); setReplyExpanded(true); }}
+                  className="gap-1.5 text-slate-500 hover:bg-slate-100 font-medium"
+                  aria-label="Reply All"
+                >
+                  <ReplyAll className="h-3.5 w-3.5" /> Reply All
+                </Button>
+                <div className="h-4 w-px bg-slate-200 mx-0.5" />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowForward(true)}
+                  className="gap-1.5 text-slate-500 hover:bg-slate-100 font-medium"
+                  aria-label="Forward"
+                >
+                  <Forward className="h-3.5 w-3.5" /> Forward
+                </Button>
+              </div>
             </div>
           ) : (
             <div className="p-4 space-y-3">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-sm font-bold text-slate-700">Reply</span>
-                <button
-                  onClick={() => setReplyExpanded(false)}
-                  className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
-                  aria-label="Close reply"
-                >
-                  Discard
-                </button>
+                {/* Mode selector — switch between Reply / Reply All like Pipedrive */}
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setReplyMode('reply')}
+                    className={cn(
+                      "flex items-center gap-1.5 text-sm font-bold px-2.5 py-1 rounded-md transition-all",
+                      replyMode === 'reply'
+                        ? "text-blue-700 bg-blue-50"
+                        : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                    )}
+                  >
+                    <Reply className="h-3.5 w-3.5" />
+                    Reply
+                  </button>
+                  <button
+                    onClick={() => setReplyMode('replyAll')}
+                    className={cn(
+                      "flex items-center gap-1.5 text-sm font-bold px-2.5 py-1 rounded-md transition-all",
+                      replyMode === 'replyAll'
+                        ? "text-blue-700 bg-blue-50"
+                        : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                    )}
+                  >
+                    <ReplyAll className="h-3.5 w-3.5" />
+                    Reply All
+                  </button>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setShowForward(true)}
+                    className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors flex items-center gap-1"
+                    aria-label="Forward instead"
+                  >
+                    <Forward className="h-3 w-3" />
+                    Forward
+                  </button>
+                  <div className="h-4 w-px bg-slate-200" />
+                  <button
+                    onClick={() => { setReplyExpanded(false); setReplyToMessage(null); }}
+                    className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
+                    aria-label="Close reply"
+                  >
+                    Discard
+                  </button>
+                </div>
               </div>
               <QuickReplyTemplates
                 onTemplateSelect={(template) => {
@@ -1170,9 +1280,12 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                 compact={true}
               />
               <EmailComposeReply
-                thread={thread}
+                key={`${replyMode}-${replyToMessage?.id || 'latest'}`}
+                thread={freshThread}
                 account={account}
-                onClose={() => { setReplyExpanded(false); setQuickReplyBody(''); latestMessageRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
+                replyType={replyMode}
+                replyToMessage={replyToMessage}
+                onClose={() => { setReplyExpanded(false); setReplyToMessage(null); setQuickReplyBody(''); latestMessageRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
                 onReplyMode={() => {}}
                 emailAccounts={emailAccounts}
                 defaultBodyPrefix={quickReplyBody}
@@ -1261,12 +1374,13 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       {/* Forward dialog */}
       {showForward && (
         <EmailComposeDialog
-          email={msg}
+          email={replyToMessage || msg}
           account={account}
           type="forward"
-          onClose={() => setShowForward(false)}
+          onClose={() => { setShowForward(false); setReplyToMessage(null); }}
           onSent={() => {
             setShowForward(false);
+            setReplyToMessage(null);
             toast.success('Email forwarded');
           }}
         />
