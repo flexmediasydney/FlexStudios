@@ -693,7 +693,7 @@ export default function EmailComposeDialog({
     <>
       <Dialog open onOpenChange={onClose}>
         <DialogContent
-          className="max-w-5xl w-[95vw] h-[88vh] flex flex-col p-0 bg-white relative"
+          className="max-w-5xl w-[95vw] h-[88vh] flex flex-col p-0 bg-white !fixed"
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}

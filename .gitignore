@@ -31,3 +31,4 @@ test_conn.py
 
 # Claude config
 .claude/
+.vercel
