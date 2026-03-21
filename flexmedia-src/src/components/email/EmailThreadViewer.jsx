@@ -33,10 +33,12 @@ import { formatEmailDateTime, formatFileSize } from "./emailDateUtils";
 // Preserves: all visual formatting, links, images, tables, lists.
 const sanitizeEmailHtml = (html) => {
   if (!html) return '';
-  // Remove script and style blocks entirely
+  // Remove script and style blocks entirely ([\s\S] for multiline matching)
   let clean = html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<head[\s\S]*?<\/head>/gi, '');
   // Strip all on* event handler attributes (onclick, onload, onerror, etc.)
   clean = clean.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
   // Strip javascript: and data: URI schemes from href and src
@@ -972,10 +974,24 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                     <div className="px-5 pb-6">
                       {/* Sandboxed email body — cap height for very large emails with scroll */}
                       <div
-                        className="prose prose-sm max-w-none text-slate-800 leading-relaxed overflow-x-auto overflow-y-auto"
+                        className="prose prose-sm max-w-none text-slate-800 leading-relaxed overflow-x-auto overflow-y-auto email-body-content"
                         style={{ fontFamily: 'inherit', maxHeight: '80vh' }}
                         dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msgItem.body) }}
                       />
+                      <style>{`
+                        .email-body-content a {
+                          color: #2563eb !important;
+                          text-decoration: underline !important;
+                          word-break: break-all;
+                        }
+                        .email-body-content a:hover {
+                          color: #1d4ed8 !important;
+                        }
+                        .email-body-content img {
+                          max-width: 100%;
+                          height: auto;
+                        }
+                      `}</style>
 
                       {/* Attachments */}
                       {msgItem.attachments && msgItem.attachments.length > 0 && (

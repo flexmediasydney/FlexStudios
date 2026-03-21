@@ -38,10 +38,15 @@ export default function EmailListRow({
 }) {
   const stripHtml = (html) => {
     if (!html) return '';
-    return html
-      // Remove entire <style>...</style> and <script>...</script> blocks including their content
-      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    let text = html
+      // Remove entire <style>...</style> blocks (dotAll via [\s\S])
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      // Remove entire <script>...</script> blocks
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      // Remove HTML comments (including conditional IE comments)
+      .replace(/<!--[\s\S]*?-->/g, '')
+      // Remove <head>...</head> blocks (contains meta, title, style)
+      .replace(/<head[\s\S]*?<\/head>/gi, '')
       // Remove all remaining HTML tags
       .replace(/<[^>]*>/g, ' ')
       // Decode common HTML entities
@@ -51,9 +56,48 @@ export default function EmailListRow({
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&#39;/g, "'")
+      .replace(/&#x[0-9a-fA-F]+;/g, ' ')
+      .replace(/&#\d+;/g, ' ')
+      // Remove CSS class/id selectors (.class-name, #id-name)
+      .replace(/[.#][\w-]+(?:\s*[{,>+~])/g, ' ')
+      .replace(/\.[\w-]{2,}/g, ' ')
+      // Remove CSS property: value pairs (background-image: none, color: #fff, etc.)
+      .replace(/[\w-]+\s*:\s*[^;]{1,80};/g, ' ')
+      // Remove CSS values without semicolons (standalone property patterns)
+      .replace(/\b(background|background-image|color|font|border|margin|padding|display|position|width|height|overflow|text-decoration|vertical-align|line-height|opacity|z-index|float|clear|visibility|content|cursor|outline|transform|transition|animation|box-shadow|text-align|white-space|word-break|max-width|min-width|min-height|max-height|flex|grid|align-items|justify-content)\s*:\s*[^.!?]{1,100}/gi, ' ')
+      // Remove !important
+      .replace(/!important/gi, '')
+      // Remove CSS block remnants: braces, brackets
+      .replace(/[{}\[\]]/g, ' ')
+      // Remove CSS comment markers
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/\*\//g, ' ')
+      .replace(/\/\*/g, ' ')
+      // Remove CSS media queries and @rules
+      .replace(/@(media|import|charset|font-face|keyframes|supports|page)[^;{]*/gi, ' ')
+      // Remove CSS units and values patterns (0px, 100%, #hex, rgb(), etc.)
+      .replace(/\b\d+(px|em|rem|pt|%|vh|vw)\b/g, ' ')
+      .replace(/#[0-9a-fA-F]{3,8}\b/g, ' ')
+      .replace(/rgb\([^)]*\)/g, ' ')
+      .replace(/rgba\([^)]*\)/g, ' ')
+      .replace(/url\([^)]*\)/g, ' ')
+      // Remove "none" as standalone word (CSS value remnant)
+      .replace(/\bnone\b/g, ' ')
+      // Remove mojibake / encoding artifacts (â€, Â©, Ã©, etc.)
+      .replace(/[\u00C0-\u00FF]{2,}/g, ' ')
+      .replace(/â€[^\s]*/g, ' ')
+      .replace(/Â[^\s]*/g, ' ')
+      // Remove "Email Truncated" markers
+      .replace(/Email\s*Truncat(ed|ion)[^.]*\.?/gi, ' ')
       // Collapse whitespace
       .replace(/\s+/g, ' ')
       .trim();
+
+    // If after all stripping the text is mostly garbage (very short or mostly non-alpha), return empty
+    const alphaRatio = (text.match(/[a-zA-Z]/g) || []).length / (text.length || 1);
+    if (text.length < 5 || alphaRatio < 0.4) return '';
+
+    return text;
   };
 
   const priorityConfig = PRIORITY_LIST_STYLES;
@@ -190,8 +234,9 @@ export default function EmailListRow({
       {columns.some(c => c.id === 'subject') && (() => {
         const col = columns.find(c => c.id === 'subject');
         const w = col?.width ?? 400;
-        const bodyText = stripHtml(thread.messages[0].body);
-        const preview = bodyText.substring(0, 250);
+        const lastMsg = thread.messages[thread.messages.length - 1] || thread.messages[0];
+        const bodyText = stripHtml(lastMsg.body);
+        const preview = bodyText.substring(0, 200);
         const cleanSubject = thread.subject?.replace(/^(Re:|Fwd?:)\s*/gi, '').trim();
         return (
           <div
@@ -278,9 +323,11 @@ export default function EmailListRow({
                 </HoverCard>
               )}
               {/* Preview snippet */}
-              <span className="text-[12px] text-muted-foreground/65 truncate min-w-0 italic">
-                {preview}
-              </span>
+              {preview && (
+                <span className="text-[12px] text-muted-foreground/60 truncate min-w-0">
+                  {preview}
+                </span>
+              )}
             </div>
           </div>
         );

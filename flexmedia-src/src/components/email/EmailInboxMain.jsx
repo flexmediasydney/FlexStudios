@@ -1079,64 +1079,36 @@ export default function EmailInboxMain() {
                          <X className="h-3.5 w-3.5" />
                        </button>
                      )}
-                     {/* Search hints dropdown */}
-                     {searchFocused && !searchQuery && (
-                       <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-lg shadow-lg z-50 p-3 space-y-3">
-                         {/* Recent searches */}
-                         {(() => {
-                           const recent = JSON.parse(localStorage.getItem('email-recent-searches') || '[]');
-                           if (recent.length > 0) return (
-                             <div>
-                               <div className="flex items-center justify-between mb-1.5">
-                                 <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Recent</p>
-                                 <button
-                                   onClick={() => { localStorage.removeItem('email-recent-searches'); }}
-                                   className="text-[10px] text-muted-foreground hover:text-foreground"
-                                 >Clear</button>
-                               </div>
-                               <div className="space-y-0.5">
-                                 {recent.map((q, i) => (
-                                   <button
-                                     key={i}
-                                     onMouseDown={(e) => { e.preventDefault(); setSearchQuery(q); setSearchFocused(false); }}
-                                     className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted/80 text-foreground/80 flex items-center gap-2"
-                                   >
-                                     <Clock className="h-3 w-3 text-muted-foreground/50 flex-shrink-0" />
-                                     <span className="truncate">{q}</span>
-                                   </button>
-                                 ))}
-                               </div>
-                             </div>
-                           );
-                           return null;
-                         })()}
-                         {/* Search operators */}
-                         <div>
-                           <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1.5">Search operators</p>
-                           <div className="grid grid-cols-2 gap-1">
-                             {[
-                               { op: 'from:', desc: 'Sender email' },
-                               { op: 'to:', desc: 'Recipient' },
-                               { op: 'subject:', desc: 'Subject line' },
-                               { op: 'label:', desc: 'Label name' },
-                               { op: 'has:attachment', desc: 'Has files' },
-                             ].map(({ op, desc }) => (
+                     {/* Search hints dropdown — only show if there are recent searches */}
+                     {searchFocused && !searchQuery && (() => {
+                       const recent = JSON.parse(localStorage.getItem('email-recent-searches') || '[]');
+                       if (recent.length === 0) return null; // Don't show empty dropdown on first focus
+                       return (
+                         <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-lg shadow-lg z-50 p-3 space-y-3">
+                           <div>
+                             <div className="flex items-center justify-between mb-1.5">
+                               <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Recent</p>
                                <button
-                                 key={op}
-                                 onMouseDown={(e) => { e.preventDefault(); setSearchQuery(op); }}
-                                 className="text-left text-xs px-2 py-1.5 rounded hover:bg-muted/80 flex items-center gap-1.5"
-                               >
-                                 <code className="text-[10px] bg-muted px-1 rounded font-mono text-primary">{op}</code>
-                                 <span className="text-muted-foreground truncate">{desc}</span>
-                               </button>
-                             ))}
+                                 onMouseDown={(e) => { e.preventDefault(); localStorage.removeItem('email-recent-searches'); setSearchFocused(false); }}
+                                 className="text-[10px] text-muted-foreground hover:text-foreground"
+                               >Clear</button>
+                             </div>
+                             <div className="space-y-0.5">
+                               {recent.map((q, i) => (
+                                 <button
+                                   key={i}
+                                   onMouseDown={(e) => { e.preventDefault(); setSearchQuery(q); setSearchFocused(false); }}
+                                   className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-muted/80 text-foreground/80 flex items-center gap-2"
+                                 >
+                                   <Clock className="h-3 w-3 text-muted-foreground/50 flex-shrink-0" />
+                                   <span className="truncate">{q}</span>
+                                 </button>
+                               ))}
+                             </div>
                            </div>
                          </div>
-                         <p className="text-[10px] text-muted-foreground/60 italic">
-                           Searches subject, sender, body text, labels, project names, and attachment filenames
-                         </p>
-                       </div>
-                     )}
+                       );
+                     })()}
                 </div>
 
                 <Button 
