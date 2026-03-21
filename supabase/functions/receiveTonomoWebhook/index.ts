@@ -69,6 +69,7 @@ Deno.serve(async (req) => {
           webhook_log_id: logId,
           action: action,
           order_id: orderId,
+          event_id: payload.id || null,
           status: 'pending',
           retry_count: 0,
           processor_version: PROCESSOR_VERSION,
