@@ -111,13 +111,12 @@ export default function UnifiedNotesPanel({
   // Compute per-tab counts for badges
   const tabCounts = useMemo(() => {
     if (!showContextOnNotes) return {};
-    const unpinned = rootNotes.filter(n => !n.is_pinned);
     return {
-      all: unpinned.length,
-      agency: unpinned.filter(n => !n.context_type || n.context_type === 'agency').length,
-      project: unpinned.filter(n => n.context_type === 'project').length,
-      agent: unpinned.filter(n => n.context_type === 'agent').length,
-      team: unpinned.filter(n => n.context_type === 'team').length,
+      all: rootNotes.length,
+      agency: rootNotes.filter(n => !n.context_type || n.context_type === 'agency').length,
+      project: rootNotes.filter(n => n.context_type === 'project').length,
+      agent: rootNotes.filter(n => n.context_type === 'agent').length,
+      team: rootNotes.filter(n => n.context_type === 'team').length,
     };
   }, [rootNotes, showContextOnNotes]);
 
