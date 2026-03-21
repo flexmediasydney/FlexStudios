@@ -20,7 +20,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import LabelBadge from "./LabelBadge";
-import { FromHoverCard, SubjectHoverCard, AttachmentsHoverCard, ProjectHoverCard, VisibilityHoverCard } from "./EmailColumnHoverCard";
+import { FromHoverCard, AttachmentsHoverCard, ProjectHoverCard, VisibilityHoverCard } from "./EmailColumnHoverCard";
 import { formatEmailDate } from "./emailDateUtils";
 import { PRIORITY_LIST_STYLES, HOVER_CARD_DELAY_MS } from "./emailConstants";
 
@@ -292,23 +292,14 @@ export default function EmailListRow({
                   </ProjectHoverCard>
                 )}
               {/* Subject text */}
-              <SubjectHoverCard
-                subject={cleanSubject}
-                preview={preview}
-                labels={labels}
-                from={thread.from_name}
-                fromEmail={thread.from_email}
-                date={thread.lastMessage ? new Date(thread.lastMessage).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' }) : undefined}
-                messageCount={thread.messages.length}
-                attachmentCount={realAttachments.length}
+              <span className={cn(
+                  "truncate text-[14px] leading-snug cursor-default min-w-0 block font-medium",
+                  isUnread ? "font-bold text-foreground" : "text-foreground/80"
+                )}
+                title={cleanSubject}
               >
-                <span className={cn(
-                    "truncate text-[14px] leading-snug cursor-default min-w-0 block font-medium",
-                    isUnread ? "font-bold text-foreground" : "text-foreground/80"
-                  )}>
-                    {cleanSubject || <em className="text-muted-foreground/40 not-italic">(no subject)</em>}
-                  </span>
-              </SubjectHoverCard>
+                {cleanSubject || <em className="text-muted-foreground/40 not-italic">(no subject)</em>}
+              </span>
             </div>
 
             {/* Bottom line: compact label chips + preview text */}
