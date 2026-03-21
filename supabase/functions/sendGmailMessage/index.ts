@@ -15,7 +15,7 @@ Deno.serve(async (req) => {
     }
 
     const { emailAccountId, to, cc, bcc, subject, body = '', inReplyTo, threadId,
-        attachments = [], attachmentUrls = [], idempotency_key, projectId, isPrivate } = await req.json();
+        attachments = [], attachmentUrls = [], idempotency_key, projectId, isPrivate, signatureId } = await req.json();
 
     // Validate required fields
     if (!emailAccountId) {
@@ -89,11 +89,13 @@ Deno.serve(async (req) => {
     // Write refreshed token back
     await entities.EmailAccount.update(account.id, { access_token: accessToken });
 
-    // Get user signature
-    const signatures = await entities.UserSignature.filter({
-      user_id: user.id,
-      is_default: true
-    });
+    // Get user signature — use specific one if signatureId provided, else default
+    let signatures;
+    if (signatureId) {
+      signatures = await entities.UserSignature.filter({ id: signatureId, user_id: user.id });
+    } else {
+      signatures = await entities.UserSignature.filter({ user_id: user.id, is_default: true });
+    }
 
     let finalBody = body || '';
     if (signatures.length > 0 && signatures[0].signature_html) {

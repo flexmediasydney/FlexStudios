@@ -254,6 +254,14 @@ export default function EmailComposeDialog({
   const [linkedProjectTitle, setLinkedProjectTitle] = useState(defaultProjectTitle || "");
   const [isPrivate, setIsPrivate] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedSignatureId, setSelectedSignatureId] = useState(null);
+
+  // Fetch user signatures for selector
+  const { data: userSignatures = [] } = useQuery({
+    queryKey: ["user-signatures-compose", user?.id],
+    queryFn: () => api.entities.UserSignature.filter({ user_id: user?.id }),
+    enabled: !!user?.id,
+  });
   const [projectSearch, setProjectSearch] = useState("");
   const [attachments, setAttachments] = useState(() => {
     // Forward: carry over original email's attachments so they're included
@@ -394,6 +402,7 @@ export default function EmailComposeDialog({
         projectId: linkedProject || undefined,
         isPrivate,
         attachments: attachments.length > 0 ? attachments : undefined,
+        signatureId: selectedSignatureId || undefined,
         idempotency_key: idemKey,
       });
 
@@ -906,6 +915,21 @@ export default function EmailComposeDialog({
                     className="hidden"
                     aria-label="Attach files"
                   />
+                  {userSignatures.length > 1 && (
+                    <Select value={selectedSignatureId || "default"} onValueChange={(v) => setSelectedSignatureId(v === "default" ? null : v)}>
+                      <SelectTrigger className="h-8 w-40 text-xs">
+                        <SelectValue placeholder="Signature" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">Default signature</SelectItem>
+                        {userSignatures.map(sig => (
+                          <SelectItem key={sig.id} value={sig.id}>
+                            {sig.name || `Signature ${userSignatures.indexOf(sig) + 1}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                   {attachments.length > 0 && (
                     <span className="text-xs text-muted-foreground">
                       {attachments.length} file{attachments.length !== 1 ? 's' : ''} ({formatFileSize(currentTotalSize)})

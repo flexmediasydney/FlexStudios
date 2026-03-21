@@ -80,6 +80,11 @@ export default function EmailInboxMain() {
   const [showAttachmentsOnly, setShowAttachmentsOnly] = useState(false);
   const [showReply, setShowReply] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [savedFilters, setSavedFilters] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('email-saved-filters') || '[]'); } catch { return []; }
+  });
+  const [showSaveFilter, setShowSaveFilter] = useState(false);
+  const [saveFilterName, setSaveFilterName] = useState('');
   const MAX_UNDO_STACK = 20;
   const SEARCH_DEBOUNCE_MS = 300;
   const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -1154,6 +1159,65 @@ export default function EmailInboxMain() {
                   <span className="text-base">↷</span>
                 </Button>
               </div>
+
+              {/* Saved filter presets */}
+              {(savedFilters.length > 0 || searchQuery || filterFrom || filterLabel || filterProject || showAttachmentsOnly || filterUnread) && (
+                <div className="flex items-center gap-1.5 flex-wrap px-1">
+                  {savedFilters.map((sf, i) => (
+                    <Button
+                      key={i}
+                      variant="outline"
+                      size="sm"
+                      className="h-6 px-2 text-[10px] gap-1"
+                      onClick={() => {
+                        if (sf.searchQuery) setSearchQuery(sf.searchQuery);
+                        if (sf.filterView) setFilterView(sf.filterView);
+                        if (sf.filterFrom) setFilterFrom(sf.filterFrom);
+                        if (sf.filterLabel) setFilterLabel(sf.filterLabel);
+                        if (sf.filterProject) setFilterProject(sf.filterProject);
+                        if (sf.filterUnread !== undefined) setFilterUnread(sf.filterUnread);
+                        if (sf.showAttachmentsOnly !== undefined) setShowAttachmentsOnly(sf.showAttachmentsOnly);
+                        if (sf.accountFilter) setAccountFilter(sf.accountFilter);
+                      }}
+                    >
+                      {sf.name}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const updated = savedFilters.filter((_, j) => j !== i);
+                          setSavedFilters(updated);
+                          localStorage.setItem('email-saved-filters', JSON.stringify(updated));
+                        }}
+                        className="ml-0.5 hover:text-destructive"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </Button>
+                  ))}
+                  {(searchQuery || filterFrom || filterLabel || filterProject || showAttachmentsOnly || filterUnread) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-[10px] text-blue-600"
+                      onClick={() => {
+                        const name = prompt('Save current filter as:');
+                        if (!name?.trim()) return;
+                        const newFilter = {
+                          name: name.trim(),
+                          searchQuery, filterView, filterFrom, filterLabel, filterProject,
+                          filterUnread, showAttachmentsOnly, accountFilter,
+                        };
+                        const updated = [...savedFilters, newFilter];
+                        setSavedFilters(updated);
+                        localStorage.setItem('email-saved-filters', JSON.stringify(updated));
+                        toast.success(`Filter "${name.trim()}" saved`);
+                      }}
+                    >
+                      + Save filter
+                    </Button>
+                  )}
+                </div>
+              )}
 
               {/* Pipedrive-style Filters */}
               {(filterFrom || filterLabel || filterProject) && (

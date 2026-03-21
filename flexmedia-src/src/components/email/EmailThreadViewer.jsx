@@ -978,29 +978,59 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                             Attachments ({msgItem.attachments.length})
                           </p>
                           <div className="flex flex-wrap gap-2">
-                            {msgItem.attachments.map((att, aidx) => (
-                              <a
-                                key={aidx}
-                                href={att.file_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group max-w-xs"
-                              >
-                                <div className="w-8 h-8 bg-white rounded-lg border border-slate-200 flex items-center justify-center text-base flex-shrink-0">
-                                  📄
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-bold text-slate-700 group-hover:text-blue-700 truncate leading-tight">
-                                    {att.filename}
-                                  </p>
-                                  {att.size && (
-                                    <p className="text-[10px] text-slate-400 font-medium mt-0.5">
-                                      {formatFileSize(att.size)}
+                            {msgItem.attachments.map((att, aidx) => {
+                              const isImage = /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(att.filename || '') ||
+                                (att.mime_type || att.mimeType || '').startsWith('image/');
+                              const isPdf = /\.pdf$/i.test(att.filename || '') ||
+                                (att.mime_type || att.mimeType || '') === 'application/pdf';
+
+                              if (isImage && att.file_url) {
+                                return (
+                                  <a
+                                    key={aidx}
+                                    href={att.file_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block rounded-xl border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all overflow-hidden group max-w-[200px]"
+                                  >
+                                    <img
+                                      src={att.file_url}
+                                      alt={att.filename}
+                                      className="w-full h-32 object-cover bg-slate-100"
+                                      loading="lazy"
+                                    />
+                                    <div className="px-2.5 py-1.5 bg-slate-50">
+                                      <p className="text-[10px] font-semibold text-slate-600 group-hover:text-blue-600 truncate">{att.filename}</p>
+                                      {att.size && <p className="text-[9px] text-slate-400">{formatFileSize(att.size)}</p>}
+                                    </div>
+                                  </a>
+                                );
+                              }
+
+                              return (
+                                <a
+                                  key={aidx}
+                                  href={att.file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group max-w-xs"
+                                >
+                                  <div className="w-8 h-8 bg-white rounded-lg border border-slate-200 flex items-center justify-center text-xs font-bold text-slate-500 flex-shrink-0 uppercase">
+                                    {isPdf ? 'PDF' : (att.filename?.split('.').pop() || '?')}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-bold text-slate-700 group-hover:text-blue-700 truncate leading-tight">
+                                      {att.filename}
                                     </p>
-                                  )}
-                                </div>
-                              </a>
-                            ))}
+                                    {att.size && (
+                                      <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                        {formatFileSize(att.size)}
+                                      </p>
+                                    )}
+                                  </div>
+                                </a>
+                              );
+                            })}
                           </div>
                         </div>
                       )}
