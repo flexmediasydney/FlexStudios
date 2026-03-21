@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useEntityList, useEntityData } from "@/components/hooks/useEntityData";
@@ -76,10 +76,10 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
 
   const mutation = useMutation({
     mutationFn: async (data) => {
-      const result = await base44.entities.Project.update(project.id, data);
+      const result = await api.entities.Project.update(project.id, data);
       // Notify newly assigned staff
       try {
-        const currentUser = await base44.auth.me().catch(() => null);
+        const currentUser = await api.auth.me().catch(() => null);
         const projectName = project.title || project.property_address || 'Project';
         const roleFields = ['photographer_id', 'onsite_staff_1_id', 'onsite_staff_2_id', 'image_editor_id', 'video_editor_id', 'project_owner_id'];
         for (const field of roleFields) {
@@ -111,7 +111,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
       const onsiteRoleFields = ['photographer_id', 'onsite_staff_1_id', 'videographer_id', 'onsite_staff_2_id'];
       const isOnsiteRoleChange = onsiteRoleFields.some(f => data[f] !== undefined);
       if (isOnsiteRoleChange && project?.id) {
-        base44.functions.invoke('syncOnsiteEffortTasks', {
+        api.functions.invoke('syncOnsiteEffortTasks', {
           project_id: project.id,
         }).catch(() => {});
       }

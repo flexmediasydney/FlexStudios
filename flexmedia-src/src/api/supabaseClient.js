@@ -1,25 +1,24 @@
 /**
- * base44Client.js — Supabase shim layer
+ * supabaseClient.js — Supabase shim layer
  *
  * Drop-in replacement for @base44/sdk that routes all calls to Supabase.
- * Preserves the exact same API surface so zero frontend files need to change.
  *
  * API surface:
- *   base44.entities.EntityName.list(sortBy?, limit?)
- *   base44.entities.EntityName.filter(filterObj, sortBy?, limit?)
- *   base44.entities.EntityName.get(id)
- *   base44.entities.EntityName.create(data)
- *   base44.entities.EntityName.update(id, data)
- *   base44.entities.EntityName.delete(id)
- *   base44.entities.EntityName.subscribe(callback) → unsubscribe
- *   base44.entities[dynamicName].*              (bracket notation)
- *   base44.asServiceRole.entities.*             (service-role client)
- *   base44.functions.invoke(name, params)
- *   base44.asServiceRole.functions.invoke(name, params)
- *   base44.auth.me()
- *   base44.auth.logout(redirectUrl?)
- *   base44.auth.redirectToLogin(redirectUrl?)
- *   base44.users.inviteUser(email, role)
+ *   api.entities.EntityName.list(sortBy?, limit?)
+ *   api.entities.EntityName.filter(filterObj, sortBy?, limit?)
+ *   api.entities.EntityName.get(id)
+ *   api.entities.EntityName.create(data)
+ *   api.entities.EntityName.update(id, data)
+ *   api.entities.EntityName.delete(id)
+ *   api.entities.EntityName.subscribe(callback) → unsubscribe
+ *   api.entities[dynamicName].*              (bracket notation)
+ *   api.asServiceRole.entities.*             (service-role client)
+ *   api.functions.invoke(name, params)
+ *   api.asServiceRole.functions.invoke(name, params)
+ *   api.auth.me()
+ *   api.auth.logout(redirectUrl?)
+ *   api.auth.redirectToLogin(redirectUrl?)
+ *   api.users.inviteUser(email, role)
  */
 
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
@@ -353,7 +352,7 @@ function getEntityApi(entityName, client, cache) {
 
 /**
  * Proxy that intercepts property access to create entity APIs on demand.
- * Supports both base44.entities.ProjectTask and base44.entities['ProjectTask'].
+ * Supports both api.entities.ProjectTask and api.entities['ProjectTask'].
  */
 const entitiesProxy = new Proxy({}, {
   get(_target, entityName) {
@@ -372,8 +371,8 @@ const entitiesProxyAdmin = new Proxy({}, {
 // ─── Functions (invoke) ──────────────────────────────────────────────────────
 
 /**
- * Invoke a Supabase Edge Function (replacement for base44 server functions).
- * Base44 signature: base44.functions.invoke(functionName, params) → response data
+ * Invoke a Supabase Edge Function.
+ * Signature: api.functions.invoke(functionName, params) → response data
  *
  * Maps to: supabase.functions.invoke(functionName, { body: params })
  */
@@ -458,7 +457,7 @@ const authApi = {
 const usersApi = {
   /**
    * Invite a user by email with a specific role.
-   * Base44 signature: base44.users.inviteUser(email, role)
+   * Signature: api.users.inviteUser(email, role)
    *
    * 1. Creates an auth user via Supabase admin API (sends invitation email)
    * 2. Creates a corresponding row in the `users` table with role and metadata
@@ -522,10 +521,9 @@ const usersApi = {
 // ─── Main client export ──────────────────────────────────────────────────────
 
 /**
- * The base44 object — drop-in replacement that routes to Supabase.
- * All existing code that imports { base44 } from '@/api/base44Client' works unchanged.
+ * The api object — Supabase-backed client that replaces the old Base44 SDK.
  */
-export const base44 = {
+export const api = {
   entities: entitiesProxy,
 
   asServiceRole: {
@@ -541,6 +539,9 @@ export const base44 = {
   _supabase: supabase,
   _supabaseAdmin: supabaseAdmin,
 };
+
+// Temporary backward-compat alias (remove once all imports are updated)
+export { api as base44 };
 
 // Also export individual Supabase clients for direct use where needed
 export { supabase, supabaseAdmin };

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -25,8 +25,8 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
   const { data: connections = [], isLoading } = useQuery({
     queryKey: ["calendar-connections", selectedUserEmail],
     queryFn: () => selectedUserEmail
-      ? base44.entities.CalendarConnection.filter({ created_by: selectedUserEmail })
-      : base44.entities.CalendarConnection.list(),
+      ? api.entities.CalendarConnection.filter({ created_by: selectedUserEmail })
+      : api.entities.CalendarConnection.list(),
     staleTime: 60_000,
   });
 
@@ -57,7 +57,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
       const stillEnabled = connections.filter(c => c.is_enabled);
       if (stillEnabled.length === 0) return;
       try {
-        await base44.asServiceRole.functions.invoke('syncGoogleCalendar', {
+        await api.asServiceRole.functions.invoke('syncGoogleCalendar', {
           targetUserEmail: selectedUserEmail || null,
           syncAll: !selectedUserEmail,
           incremental: true,
@@ -115,7 +115,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }) =>
-      base44.entities.CalendarConnection.update(id, { is_enabled: enabled }),
+      api.entities.CalendarConnection.update(id, { is_enabled: enabled }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["calendar-connections"] }),
     onError: (err) => toast.error(err?.message || 'Failed to toggle calendar connection'),
   });
@@ -129,7 +129,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
         if (accountEmail) {
           try {
             setDeletingEvents(true);
-            const eventsToOrphan = await base44.entities.CalendarEvent.filter({
+            const eventsToOrphan = await api.entities.CalendarEvent.filter({
               calendar_account: accountEmail,
               event_source: 'google', // only orphan google-source events, never tonomo
             }, null, 2000);
@@ -137,7 +137,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
             for (let i = 0; i < eventsToOrphan.length; i += batchSize) {
               const batch = eventsToOrphan.slice(i, i + batchSize);
               await Promise.all(batch.map(ev =>
-                base44.entities.CalendarEvent.update(ev.id, {
+                api.entities.CalendarEvent.update(ev.id, {
                   calendar_account: null,
                   is_enabled: false,
                   is_done: true,
@@ -149,7 +149,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
           }
         }
       }
-      return base44.entities.CalendarConnection.delete(id);
+      return api.entities.CalendarConnection.delete(id);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["calendar-connections"] });
@@ -171,7 +171,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
     }
     try {
       setIsConnecting(true);
-      const result = await base44.functions.invoke('getGoogleCalendarOAuthUrl', {});
+      const result = await api.functions.invoke('getGoogleCalendarOAuthUrl', {});
       if (result.data.error) throw new Error(result.data.error);
       const width = 600, height = 700;
       const left = window.screenX + (window.outerWidth - width) / 2;
@@ -188,7 +188,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
     setSyncing(true);
     setSyncResult(null);
     try {
-      const result = await base44.asServiceRole.functions.invoke('syncGoogleCalendar', {
+      const result = await api.asServiceRole.functions.invoke('syncGoogleCalendar', {
         targetUserEmail: selectedUserEmail || null,
         syncAll: !selectedUserEmail, // sync all team if no specific user targeted
       });
@@ -344,7 +344,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
                   <select
                     value={connection.visibility_policy || 'show_all'}
                     onChange={async (e) => {
-                      await base44.entities.CalendarConnection.update(connection.id, {
+                      await api.entities.CalendarConnection.update(connection.id, {
                         visibility_policy: e.target.value
                       });
                       queryClient.invalidateQueries({ queryKey: ['calendar-connections'] });
@@ -368,7 +368,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
                       // Count synced events for this connection to warn the user
                       let eventCount = 0;
                       try {
-                        const evs = await base44.entities.CalendarEvent.filter({
+                        const evs = await api.entities.CalendarEvent.filter({
                           calendar_account: connection.account_email,
                           event_source: 'google',
                         }, null, 1);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -56,9 +56,9 @@ export default function SettingsTonomoIntegration() {
   const { data: settings, isLoading } = useQuery({
     queryKey: ['tonomoSettings'],
     queryFn: async () => {
-      const all = await base44.entities.TonomoIntegrationSettings.list('-created_date', 1);
+      const all = await api.entities.TonomoIntegrationSettings.list('-created_date', 1);
       if (all.length === 0) {
-        return await base44.entities.TonomoIntegrationSettings.create({
+        return await api.entities.TonomoIntegrationSettings.create({
           auto_approve_enabled: false,
           urgent_review_hours: 24,
           auto_approve_on_imminent: true,
@@ -74,10 +74,10 @@ export default function SettingsTonomoIntegration() {
     queryKey: ['tonomoRoleDefaults'],
     queryFn: async () => {
       try {
-        const all = await base44.entities.TonomoRoleDefaults.list('-created_date', 1);
+        const all = await api.entities.TonomoRoleDefaults.list('-created_date', 1);
         if (all.length === 0) {
           // Entity exists but no rows yet — create the first one
-          return await base44.entities.TonomoRoleDefaults.create({});
+          return await api.entities.TonomoRoleDefaults.create({});
         }
         return all[0];
       } catch (err) {
@@ -93,7 +93,7 @@ export default function SettingsTonomoIntegration() {
   const roleDefaultsMutation = useMutation({
     mutationFn: async (updates) => {
       if (roleDefaults?.id) {
-        return base44.entities.TonomoRoleDefaults.update(roleDefaults.id, updates);
+        return api.entities.TonomoRoleDefaults.update(roleDefaults.id, updates);
       }
     },
     onSuccess: () => {
@@ -105,14 +105,14 @@ export default function SettingsTonomoIntegration() {
 
   const { data: queue = [] } = useQuery({
     queryKey: ['settingsQueue'],
-    queryFn: () => base44.entities.TonomoProcessingQueue.list('-created_date', 200),
+    queryFn: () => api.entities.TonomoProcessingQueue.list('-created_date', 200),
     refetchInterval: 10000,
   });
 
   const { data: queueStats } = useQuery({
     queryKey: ['tonomoQueueStats'],
     queryFn: async () => {
-      const queue = await base44.entities.TonomoProcessingQueue.list('-created_date', 500);
+      const queue = await api.entities.TonomoProcessingQueue.list('-created_date', 500);
       return {
         pending: queue.filter(q => q.status === 'pending').length,
         failed: queue.filter(q => q.status === 'failed').length,
@@ -126,7 +126,7 @@ export default function SettingsTonomoIntegration() {
     queryKey: ['tonomoAuditCount'],
     queryFn: async () => {
       const sydneyToday = new Date().toLocaleDateString("en-AU", { timeZone: "Australia/Sydney" });
-      const logs = await base44.entities.TonomoAuditLog.list('-processed_at', 500);
+      const logs = await api.entities.TonomoAuditLog.list('-processed_at', 500);
       return logs.filter(l => {
         const d = parseTS(l.processed_at);
         return d && d.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney" }) === sydneyToday;
@@ -138,7 +138,7 @@ export default function SettingsTonomoIntegration() {
   const { data: mappingCoverage } = useQuery({
     queryKey: ['tonomoMappingCoverage'],
     queryFn: async () => {
-      const all = await base44.entities.TonomoMappingTable.list('-created_date', 500);
+      const all = await api.entities.TonomoMappingTable.list('-created_date', 500);
       const confirmed = all.filter(m => m.is_confirmed).length;
       return all.length > 0 ? Math.round((confirmed / all.length) * 100) : 0;
     },
@@ -155,8 +155,8 @@ export default function SettingsTonomoIntegration() {
       startOfWeek.setHours(0, 0, 0, 0);
       const startOfMonth = new Date(sydneyNow.getFullYear(), sydneyNow.getMonth(), 1);
 
-      const allQueue = await base44.entities.TonomoProcessingQueue.list('-created_date', 500);
-      const allProjects = await base44.entities.Project.list('-created_date', 500);
+      const allQueue = await api.entities.TonomoProcessingQueue.list('-created_date', 500);
+      const allProjects = await api.entities.Project.list('-created_date', 500);
       const tonomoProjects = allProjects.filter(p => p.source === 'tonomo');
 
       // Filter by time periods
@@ -205,14 +205,14 @@ export default function SettingsTonomoIntegration() {
   const { data: recentProcessing } = useQuery({
     queryKey: ['tonomoRecentProcessing'],
     queryFn: async () => {
-      const queue = await base44.entities.TonomoProcessingQueue.list('-processed_at', 50);
+      const queue = await api.entities.TonomoProcessingQueue.list('-processed_at', 50);
       const projectIds = queue.map(q => {
         const match = q.result_summary?.match(/Project (created|updated)/);
         return match ? q.order_id : null;
       }).filter(Boolean);
       
       const projects = projectIds.length > 0 
-        ? await base44.entities.Project.filter({ tonomo_order_id: { $in: projectIds } }, null, 100)
+        ? await api.entities.Project.filter({ tonomo_order_id: { $in: projectIds } }, null, 100)
         : [];
       
       return queue.map(q => {
@@ -225,7 +225,7 @@ export default function SettingsTonomoIntegration() {
 
   const updateMutation = useMutation({
     mutationFn: async (data) => {
-      return await base44.entities.TonomoIntegrationSettings.update(settings.id, data);
+      return await api.entities.TonomoIntegrationSettings.update(settings.id, data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tonomoSettings'] });
@@ -235,7 +235,7 @@ export default function SettingsTonomoIntegration() {
 
   const processQueueMutation = useMutation({
     mutationFn: async () => {
-      const res = await base44.functions.invoke('processTonomoQueue', { triggered_by: 'manual' });
+      const res = await api.functions.invoke('processTonomoQueue', { triggered_by: 'manual' });
       return res.data || res;
     },
     onSuccess: () => {
@@ -449,9 +449,9 @@ export default function SettingsTonomoIntegration() {
               <Button variant="ghost" size="sm" className="text-xs text-muted-foreground"
                 onClick={async () => {
                   try {
-                    const settings = await base44.entities.TonomoIntegrationSettings.list('-created_date', 1);
+                    const settings = await api.entities.TonomoIntegrationSettings.list('-created_date', 1);
                     if (settings?.[0]?.id) {
-                      await base44.entities.TonomoIntegrationSettings.update(settings[0].id, { processing_lock_at: null });
+                      await api.entities.TonomoIntegrationSettings.update(settings[0].id, { processing_lock_at: null });
                       toast.success('Lock cleared');
                     }
                   } catch (err) { toast.error('Failed: ' + (err?.message || 'unknown')); }
@@ -467,7 +467,7 @@ export default function SettingsTonomoIntegration() {
               <Button variant="outline" size="sm" className="ml-2"
                 onClick={async () => {
                   try {
-                    const res = await base44.functions.invoke('diagnoseTonomoProcessor', {});
+                    const res = await api.functions.invoke('diagnoseTonomoProcessor', {});
                     console.log('DIAGNOSIS:', JSON.stringify(res.data || res, null, 2));
                     const steps = res.data?.steps || res?.steps || [];
                     const failed = steps.filter(s => s.ok === false);
@@ -549,11 +549,11 @@ export default function SettingsTonomoIntegration() {
                 className="w-full gap-2"
                 onClick={async () => {
                   try {
-                    const queue = await base44.entities.TonomoProcessingQueue.list('-created_date', 500);
+                    const queue = await api.entities.TonomoProcessingQueue.list('-created_date', 500);
                     const stuck = queue.filter(q => q.status === 'failed' || q.status === 'dead_letter');
                     if (stuck.length === 0) { toast.info('No failed items to retry'); return; }
                     await Promise.all(stuck.map(q =>
-                      base44.entities.TonomoProcessingQueue.update(q.id, {
+                      api.entities.TonomoProcessingQueue.update(q.id, {
                         status: 'pending',
                         retry_count: 0,
                         error_message: null,
@@ -561,7 +561,7 @@ export default function SettingsTonomoIntegration() {
                     ));
                     toast.success(`Reset ${stuck.length} items for reprocessing`);
                     // Trigger processor
-                    base44.functions.invoke('processTonomoQueue', { triggered_by: 'retry' }).catch(() => {});
+                    api.functions.invoke('processTonomoQueue', { triggered_by: 'retry' }).catch(() => {});
                   } catch (err) {
                     toast.error(err?.message || 'Failed to reset queue items');
                   }
@@ -748,7 +748,7 @@ function CalendarLinkAuditMini() {
   const { data: logs = [] } = useQuery({
     queryKey: ['calendarLinkAudit'],
     queryFn: async () => {
-      const all = await base44.entities.TonomoAuditLog.list('-processed_at', 200);
+      const all = await api.entities.TonomoAuditLog.list('-processed_at', 200);
       return all.filter(l => l.entity_type === 'CalendarLink').slice(0, 10);
     },
     refetchInterval: 30000,
@@ -814,13 +814,13 @@ function RoleDefaultsCard({ defaults, onSave, isSaving }) {
 
   const { data: teams = [] } = useQuery({
     queryKey: ['internal-teams-for-defaults'],
-    queryFn: () => base44.entities.InternalTeam.list('-created_date', 100),
+    queryFn: () => api.entities.InternalTeam.list('-created_date', 100),
     staleTime: 5 * 60_000,
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ['users-for-defaults'],
-    queryFn: () => base44.entities.User.list('-created_date', 500),
+    queryFn: () => api.entities.User.list('-created_date', 500),
     staleTime: 5 * 60_000,
   });
 

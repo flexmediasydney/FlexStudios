@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -142,7 +142,7 @@ export default function EmployeeUtilization() {
   // ─── Live active timers poll (30s) ────────────────────────────────────────
   const { data: liveTimers = [] } = useQuery({
     queryKey: ['liveActiveTimers'],
-    queryFn: () => base44.entities.TaskTimeLog.filter({ is_active: true, status: 'running' }),
+    queryFn: () => api.entities.TaskTimeLog.filter({ is_active: true, status: 'running' }),
     refetchInterval: 30_000,
     staleTime: 20_000,
   });

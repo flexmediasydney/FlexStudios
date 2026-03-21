@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -61,7 +61,7 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
       const endTime = new Date().toISOString();
       const startTime = new Date(Date.now() - totalSeconds * 1000).toISOString();
 
-      return base44.entities.TaskTimeLog.create({
+      return api.entities.TaskTimeLog.create({
         project_id: project.id,
         task_id: task.id,
         user_id: user.id,
@@ -81,7 +81,7 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
     },
     onSuccess: () => {
       if (project?.id) {
-        base44.entities.ProjectActivity.create({
+        api.entities.ProjectActivity.create({
           project_id: project.id,
           project_title: project.title || project.property_address || '',
           action: 'manual_time_entry',

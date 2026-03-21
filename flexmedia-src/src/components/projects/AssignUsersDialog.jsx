@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -16,7 +16,7 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
 
   const { data: users = [] } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.list()
+    queryFn: () => api.entities.User.list()
   });
 
   const { data: internalTeams = [] } = useEntityList("InternalTeam");
@@ -52,7 +52,7 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
     setSaving(true);
     try {
       const previousUsers = Array.isArray(project.assigned_users) ? project.assigned_users : [];
-      await base44.entities.Project.update(project.id, {
+      await api.entities.Project.update(project.id, {
         assigned_users: selectedUsers,
         assigned_teams: selectedTeams
       });
@@ -60,7 +60,7 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
       // Notify users who are newly added (weren't in the previous list)
       const newlyAdded = selectedUsers.filter(id => !previousUsers.includes(id));
       if (newlyAdded.length > 0) {
-        const currentUser = await base44.auth.me().catch(() => null);
+        const currentUser = await api.auth.me().catch(() => null);
         newlyAdded.forEach(userId => {
           createNotification({
             userId,

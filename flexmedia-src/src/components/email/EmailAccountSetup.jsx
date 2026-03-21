@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ export default function EmailAccountSetup() {
 
   const { data: teams = [] } = useQuery({
     queryKey: ["teams"],
-    queryFn: () => base44.entities.InternalTeam.list()
+    queryFn: () => api.entities.InternalTeam.list()
   });
 
   const handleAuthMessage = useCallback((event) => {
@@ -45,7 +45,7 @@ export default function EmailAccountSetup() {
       setIsConnecting(true);
       setPopupBlocked(false);
 
-      const result = await base44.functions.invoke('getGmailOAuthUrl', {
+      const result = await api.functions.invoke('getGmailOAuthUrl', {
         displayName: displayName || null,
         teamId: selectedTeamId || null
       });

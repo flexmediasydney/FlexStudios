@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -18,12 +18,12 @@ export default function NoteComposer({
   const { data: user } = useCurrentUser();
   const { data: availableTags = [] } = useQuery({
     queryKey: ["note-tags"],
-    queryFn: () => base44.entities.NoteTag.list("order", 100),
+    queryFn: () => api.entities.NoteTag.list("order", 100),
     staleTime: 5 * 60 * 1000,
   });
   const { data: allUsers = [] } = useQuery({
     queryKey: ["users-for-mention"],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
     staleTime: 10 * 60 * 1000,
   });
 
@@ -95,7 +95,7 @@ export default function NoteComposer({
     input.onchange = async (e) => {
       const files = Array.from(e.target.files);
       for (const file of files) {
-        const result = await base44.integrations.Core.UploadFile({ file });
+        const result = await api.integrations.Core.UploadFile({ file });
         setAttachments(prev => [...prev, {
           file_url: result.file_url,
           file_name: file.name,
@@ -112,7 +112,7 @@ export default function NoteComposer({
     if (!content.trim()) return;
     setIsSubmitting(true);
     try {
-      await base44.entities.OrgNote.create({
+      await api.entities.OrgNote.create({
         agency_id: agencyId,
         content,
         author_name: user?.full_name,

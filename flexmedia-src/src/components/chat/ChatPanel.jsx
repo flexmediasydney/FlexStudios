@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -39,23 +39,23 @@ export default function ChatPanel({
   // Fetch messages, project users, and project data
   const { data: allMessages = [], isLoading } = useQuery({
     queryKey: [entityName, filterQuery],
-    queryFn: () => base44.entities[entityName].filter(filterQuery, '-created_date', 500)
+    queryFn: () => api.entities[entityName].filter(filterQuery, '-created_date', 500)
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ['projectUsers', projectId],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
   });
 
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
-    queryFn: () => base44.entities.Project.list().then(p => p.find(x => x.id === projectId)),
+    queryFn: () => api.entities.Project.list().then(p => p.find(x => x.id === projectId)),
     enabled: !!projectId
   });
 
   // Real-time subscription
   useEffect(() => {
-    const unsubscribe = base44.entities[entityName].subscribe((event) => {
+    const unsubscribe = api.entities[entityName].subscribe((event) => {
       if (chatType === 'task' && event.data?.task_id === taskId) {
         queryClient.invalidateQueries({ queryKey: [entityName, filterQuery] });
       } else if (chatType === 'project' && event.data?.project_id === projectId && !event.data?.task_id) {
@@ -89,7 +89,7 @@ export default function ChatPanel({
         if (chatType === 'task') {
           data.task_id = taskId;
         }
-        return await base44.entities[entityName].create(data);
+        return await api.entities[entityName].create(data);
       } finally {
         setIsUploading(false);
       }
@@ -102,7 +102,7 @@ export default function ChatPanel({
   // Pin mutation
   const pinMutation = useMutation({
     mutationFn: ({ messageId, isPinned }) => 
-      base44.entities[entityName].update(messageId, { is_pinned: !isPinned }),
+      api.entities[entityName].update(messageId, { is_pinned: !isPinned }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [entityName, filterQuery] });
     }
@@ -110,7 +110,7 @@ export default function ChatPanel({
 
   // Delete mutation
   const deleteMutation = useMutation({
-    mutationFn: (messageId) => base44.entities[entityName].delete(messageId),
+    mutationFn: (messageId) => api.entities[entityName].delete(messageId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [entityName, filterQuery] });
     }

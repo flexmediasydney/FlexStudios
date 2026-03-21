@@ -11,7 +11,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import { useEntitiesData } from "@/components/hooks/useEntityData";
 import PriceMatrixEditor from "@/components/priceMatrix/PriceMatrixEditor";
@@ -61,7 +61,7 @@ export default function PriceMatrixPage() {
         setCreating(prev => ({ ...prev, [key]: false }));
         return;
       }
-      await base44.entities.PriceMatrix.create({
+      await api.entities.PriceMatrix.create({
         entity_type: entityType,
         entity_id: entity.id,
         entity_name: entity.name,

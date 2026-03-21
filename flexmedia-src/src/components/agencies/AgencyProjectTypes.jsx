@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -24,7 +24,7 @@ export default function AgencyProjectTypes({ agency }) {
     setSaving(true);
     setMessage(null);
     try {
-      await base44.entities.Agency.update(agency.id, { default_project_type_ids: selected });
+      await api.entities.Agency.update(agency.id, { default_project_type_ids: selected });
       setMessage({ type: 'success', text: 'Default project types saved.' });
     } catch {
       setMessage({ type: 'error', text: 'Failed to save.' });
@@ -38,7 +38,7 @@ export default function AgencyProjectTypes({ agency }) {
     setSaving(true);
     setMessage(null);
     try {
-      await base44.entities.Agency.update(agency.id, { default_project_type_ids: [] });
+      await api.entities.Agency.update(agency.id, { default_project_type_ids: [] });
       setMessage({ type: 'success', text: 'Default project types cleared.' });
     } catch {
       setMessage({ type: 'error', text: 'Failed to clear.' });

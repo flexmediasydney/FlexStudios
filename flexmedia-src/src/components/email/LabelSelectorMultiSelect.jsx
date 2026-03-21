@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,7 +47,7 @@ export default function LabelSelectorMultiSelect({
     queryKey: ["email-labels", emailAccountId],
     queryFn: async () => {
       try {
-        const result = await base44.entities.EmailLabel.filter({ email_account_id: emailAccountId });
+        const result = await api.entities.EmailLabel.filter({ email_account_id: emailAccountId });
         return Array.isArray(result) ? result : [];
       } catch (err) {
         console.error("Failed to fetch labels:", err);
@@ -83,7 +83,7 @@ export default function LabelSelectorMultiSelect({
         throw new Error("Invalid color format");
       }
 
-      return base44.entities.EmailLabel.create({
+      return api.entities.EmailLabel.create({
         email_account_id: emailAccountId,
         name: data.name.trim(),
         color: data.color

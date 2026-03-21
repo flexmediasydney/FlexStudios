@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, X, Star, Zap, Package, Box, Trash2, Edit, Plus, MapPin, AlertCircle, User, DollarSign, Info, CheckCircle, Copy } from "lucide-react";
@@ -113,7 +113,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
   // Fetch users with controlled query with error boundary (Fix #12, #13)
   const { data: allUsers = [] } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.filter({}, null, 100), // Reduced limit from 500 (Fix #12)
+    queryFn: () => api.entities.User.filter({}, null, 100), // Reduced limit from 500 (Fix #12)
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
     retry: 2
@@ -240,7 +240,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
     // If no client record exists, auto-create one
     if (!clientId && agent) {
       try {
-        const newClient = await base44.entities.Client.create({
+        const newClient = await api.entities.Client.create({
           agent_name: agent.name,
           agent_email: agent.email || "",
           agency_name: agent.current_agency_name || "",
@@ -275,7 +275,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
     setCalculatingPrice(true);
     try {
-      const response = await base44.functions.invoke('calculateProjectPricing', {
+      const response = await api.functions.invoke('calculateProjectPricing', {
         agent_id: agentId || null,
         agency_id: agencyId || null,
         products: prodList.map(p => ({ product_id: p.product_id || p, quantity: p.quantity || 1 })),
@@ -405,10 +405,10 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
       let projectId;
       if (project?.id) {
-        await base44.entities.Project.update(project.id, dataToSave);
+        await api.entities.Project.update(project.id, dataToSave);
         projectId = project.id;
       } else {
-        const newProject = await base44.entities.Project.create(dataToSave);
+        const newProject = await api.entities.Project.create(dataToSave);
         projectId = newProject.id;
       }
 
@@ -419,7 +419,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
       const shootDateChanged = formData.shoot_date !== (initialFormData.shoot_date || '');
       const shootTimeChanged = formData.shoot_time !== (initialFormData.shoot_time || '');
       if (shootDateChanged || shootTimeChanged) {
-        base44.entities.CalendarEvent.filter({ project_id: project.id }, null, 50)
+        api.entities.CalendarEvent.filter({ project_id: project.id }, null, 50)
           .then(events => {
             const tonomoEvents = events.filter(ev =>
               ev.event_source === 'tonomo' || ev.tonomo_appointment_id
@@ -433,7 +433,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               const hhmm = timeStr.length <= 5 ? timeStr : timeStr.slice(0, 5);
               const newStart = new Date(`${formData.shoot_date}T${hhmm}:00`);
               if (isNaN(newStart.getTime())) return;
-              base44.entities.CalendarEvent.update(ev.id, {
+              api.entities.CalendarEvent.update(ev.id, {
                 start_time: newStart.toISOString(),
               }).catch(() => {});
             });
@@ -444,12 +444,12 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
       // Fix 4b — update CalendarEvent locations when property address changes
       const addressChanged = formData.property_address !== (initialFormData.property_address || '');
       if (addressChanged && formData.property_address) {
-        base44.entities.CalendarEvent.filter({ project_id: project.id }, null, 50)
+        api.entities.CalendarEvent.filter({ project_id: project.id }, null, 50)
           .then(events => {
             events
               .filter(ev => ev.event_source === 'tonomo' || ev.tonomo_appointment_id)
               .forEach(ev => {
-                base44.entities.CalendarEvent.update(ev.id, {
+                api.entities.CalendarEvent.update(ev.id, {
                   location: formData.property_address,
                 }).catch(() => {});
               });
@@ -472,7 +472,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         }
       });
       if (changedFields.length > 0) {
-        base44.functions.invoke('logProjectChange', {
+        api.functions.invoke('logProjectChange', {
           event: { type: 'update', entity_id: project.id },
           data: { ...formData, id: project.id },
           old_data: initialFormData,
@@ -480,12 +480,12 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
       }
       }
 
-      base44.functions.invoke('syncProjectTasksFromProducts', {
+      api.functions.invoke('syncProjectTasksFromProducts', {
         project_id: projectId
       }).catch(err => console.warn('Task sync skipped:', err?.message));
 
       // Sync onsite effort tasks based on pricing (photographer/videographer locked tasks)
-      base44.functions.invoke('syncOnsiteEffortTasks', {
+      api.functions.invoke('syncOnsiteEffortTasks', {
         project_id: projectId
       }).catch(err => console.warn('Onsite effort sync skipped:', err?.message));
 
@@ -494,7 +494,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         const shootDateChanged = formData.shoot_date !== (initialFormData.shoot_date || '');
         const shootTimeChanged = formData.shoot_time !== (initialFormData.shoot_time || '');
         if (shootDateChanged || shootTimeChanged) {
-          const currentUser = await base44.auth.me().catch(() => null);
+          const currentUser = await api.auth.me().catch(() => null);
           const staffIds = [project.photographer_id, project.onsite_staff_1_id, project.project_owner_id].filter(Boolean);
           const projectName = formData.property_address || project.title || 'Project';
           const isAdvancedStage = ['onsite', 'uploaded', 'submitted', 'in_production', 'in_revision'].includes(project.status);
@@ -518,7 +518,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
       // GAP-4: Notify newly assigned staff when roles change
       if (project?.id) {
-        const currentUser = await base44.auth.me().catch(() => null);
+        const currentUser = await api.auth.me().catch(() => null);
         const projectName = formData.property_address || project.title || 'Project';
         const ROLE_NOTIF_MAP = {
           photographer: { field: 'photographer_id', type: 'photographer_assigned', title: 'You\'ve been assigned as photographer' },
@@ -553,7 +553,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         const shootDateChanged = formData.shoot_date !== (initialFormData.shoot_date || '');
         const shootTimeChanged = formData.shoot_time !== (initialFormData.shoot_time || '');
         if (shootDateChanged || shootTimeChanged) {
-          base44.functions.invoke('calculateProjectTaskDeadlines', {
+          api.functions.invoke('calculateProjectTaskDeadlines', {
             project_id: projectId,
             trigger_event: 'shoot_date_changed',
           }).catch(() => {});
@@ -565,7 +565,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         const addressChanged = !project?.id ||
           formData.property_address !== (initialFormData.property_address || '');
         if (addressChanged) {
-          base44.functions.invoke('geocodeProject', {
+          api.functions.invoke('geocodeProject', {
             projectIds: [projectId],
           }).catch(() => {});
         }

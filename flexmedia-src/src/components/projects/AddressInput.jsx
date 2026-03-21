@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Loader2, AlertCircle, MapPin } from "lucide-react";
 
 export default function AddressInput({ value, onChange, placeholder }) {
@@ -26,7 +26,7 @@ export default function AddressInput({ value, onChange, placeholder }) {
       setLoading(true);
       setError(null);
       try {
-        const response = await base44.functions.invoke('searchAustralianAddresses', {
+        const response = await api.functions.invoke('searchAustralianAddresses', {
           searchText: value
         });
         

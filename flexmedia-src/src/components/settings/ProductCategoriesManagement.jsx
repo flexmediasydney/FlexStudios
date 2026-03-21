@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -157,13 +157,13 @@ export default function ProductCategoriesManagement() {
 
   const { data: projectTypes = [] } = useQuery({
     queryKey: ['projectTypes'],
-    queryFn: () => base44.entities.ProjectType.list(),
+    queryFn: () => api.entities.ProjectType.list(),
     staleTime: 60000
   });
 
   const { data: allCategories = [], refetch: refetchCategories } = useQuery({
     queryKey: ['productCategories'],
-    queryFn: () => base44.entities.ProductCategory.list(),
+    queryFn: () => api.entities.ProductCategory.list(),
     staleTime: 5000
   });
 
@@ -174,14 +174,14 @@ export default function ProductCategoriesManagement() {
   }, [projectTypes, activeTab]);
 
   useEffect(() => {
-    const unsubscribe = base44.entities.ProductCategory.subscribe(() => {
+    const unsubscribe = api.entities.ProductCategory.subscribe(() => {
       refetchCategories();
     });
     return unsubscribe;
   }, [refetchCategories]);
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.ProductCategory.create(data),
+    mutationFn: (data) => api.entities.ProductCategory.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
       setExpandedFormType(null);
@@ -192,7 +192,7 @@ export default function ProductCategoriesManagement() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.ProductCategory.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.ProductCategory.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
       setEditingCategory(null);
@@ -204,7 +204,7 @@ export default function ProductCategoriesManagement() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id) => {
-      await base44.entities.ProductCategory.delete(id);
+      await api.entities.ProductCategory.delete(id);
       await new Promise(r => setTimeout(r, 500));
     },
     onSuccess: () => {
@@ -222,7 +222,7 @@ export default function ProductCategoriesManagement() {
 
   const handleDeleteClick = async (category) => {
     try {
-      const response = await base44.functions.invoke('analyzeCategoryImpact', {
+      const response = await api.functions.invoke('analyzeCategoryImpact', {
         categoryId: category.id,
         categoryName: category.name
       });

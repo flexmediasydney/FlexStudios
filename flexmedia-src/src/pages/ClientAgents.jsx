@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import {
   Plus, Search, Building, LayoutGrid, Network, Activity,
@@ -262,52 +262,52 @@ export default function ClientAgents() {
   const handleDelete = async () => {
     if (!deletingItem) return;
     try {
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       if (deletingItem.type === 'agency') {
         const hasTeams = teams.some(t => t.agency_id === deletingItem.item.id);
         const hasAgents = agents.some(a => a.current_agency_id === deletingItem.item.id);
         if (hasTeams || hasAgents) { toast.error("Cannot delete organisation with teams or people"); setDeletingItem(null); return; }
-        await base44.entities.Agency.delete(deletingItem.item.id);
-        await base44.entities.AuditLog.create({ entity_type: "agency", entity_id: deletingItem.item.id, entity_name: deletingItem.item.name, action: "delete", changed_fields: [], previous_state: deletingItem.item, new_state: {}, user_name: user.full_name, user_email: user.email });
+        await api.entities.Agency.delete(deletingItem.item.id);
+        await api.entities.AuditLog.create({ entity_type: "agency", entity_id: deletingItem.item.id, entity_name: deletingItem.item.name, action: "delete", changed_fields: [], previous_state: deletingItem.item, new_state: {}, user_name: user.full_name, user_email: user.email });
       } else if (deletingItem.type === 'team') {
         const hasAgents = agents.some(a => a.current_team_id === deletingItem.item.id);
         if (hasAgents) { toast.error("Cannot delete team with people"); setDeletingItem(null); return; }
-        await base44.entities.Team.delete(deletingItem.item.id);
-        await base44.entities.AuditLog.create({ entity_type: "team", entity_id: deletingItem.item.id, entity_name: deletingItem.item.name, action: "delete", changed_fields: [], previous_state: deletingItem.item, new_state: {}, user_name: user.full_name, user_email: user.email });
+        await api.entities.Team.delete(deletingItem.item.id);
+        await api.entities.AuditLog.create({ entity_type: "team", entity_id: deletingItem.item.id, entity_name: deletingItem.item.name, action: "delete", changed_fields: [], previous_state: deletingItem.item, new_state: {}, user_name: user.full_name, user_email: user.email });
       } else if (deletingItem.type === 'agent') {
         try {
-          const agentProjects = await base44.entities.Project.filter({ agent_id: deletingItem.item.id }, null, 500);
+          const agentProjects = await api.entities.Project.filter({ agent_id: deletingItem.item.id }, null, 500);
           const openProjects = agentProjects.filter(p => !['delivered', 'cancelled'].includes(p.status));
           await Promise.all(openProjects.map(p =>
-            base44.entities.Project.update(p.id, { agent_id: null, agent_name: null }).catch(() => {})
+            api.entities.Project.update(p.id, { agent_id: null, agent_name: null }).catch(() => {})
           ));
         } catch { /* non-fatal */ }
 
         try {
           const [logs, matrices, events] = await Promise.all([
-            base44.entities.InteractionLog.filter({ entity_id: deletingItem.item.id, entity_type: 'Agent' }, null, 500).catch(() => []),
-            base44.entities.PriceMatrix.filter({ entity_type: 'agent', entity_id: deletingItem.item.id }, null, 10).catch(() => []),
-            base44.entities.CalendarEvent.filter({ agent_id: deletingItem.item.id }, null, 100).catch(() => []),
+            api.entities.InteractionLog.filter({ entity_id: deletingItem.item.id, entity_type: 'Agent' }, null, 500).catch(() => []),
+            api.entities.PriceMatrix.filter({ entity_type: 'agent', entity_id: deletingItem.item.id }, null, 10).catch(() => []),
+            api.entities.CalendarEvent.filter({ agent_id: deletingItem.item.id }, null, 100).catch(() => []),
           ]);
           await Promise.all([
-            ...logs.map(l => base44.entities.InteractionLog.delete(l.id).catch(() => {})),
-            ...matrices.map(m => base44.entities.PriceMatrix.delete(m.id).catch(() => {})),
-            ...events.map(ev => base44.entities.CalendarEvent.update(ev.id, { agent_id: null }).catch(() => {})),
+            ...logs.map(l => api.entities.InteractionLog.delete(l.id).catch(() => {})),
+            ...matrices.map(m => api.entities.PriceMatrix.delete(m.id).catch(() => {})),
+            ...events.map(ev => api.entities.CalendarEvent.update(ev.id, { agent_id: null }).catch(() => {})),
           ]);
         } catch { /* non-fatal */ }
 
-        await base44.entities.Agent.delete(deletingItem.item.id);
+        await api.entities.Agent.delete(deletingItem.item.id);
 
         if (deletingItem.item.current_agency_id) {
           try {
             const remaining = agents.filter(a =>
               a.id !== deletingItem.item.id && a.current_agency_id === deletingItem.item.current_agency_id
             );
-            await base44.entities.Agency.update(deletingItem.item.current_agency_id, { agent_count: remaining.length });
+            await api.entities.Agency.update(deletingItem.item.current_agency_id, { agent_count: remaining.length });
           } catch { /* non-fatal */ }
         }
 
-        await base44.entities.AuditLog.create({ entity_type: "agent", entity_id: deletingItem.item.id, entity_name: deletingItem.item.name, action: "delete", changed_fields: [], previous_state: deletingItem.item, new_state: {}, user_name: user.full_name, user_email: user.email });
+        await api.entities.AuditLog.create({ entity_type: "agent", entity_id: deletingItem.item.id, entity_name: deletingItem.item.name, action: "delete", changed_fields: [], previous_state: deletingItem.item, new_state: {}, user_name: user.full_name, user_email: user.email });
       }
       refetchEntityList("Agency");
       refetchEntityList("Team");
@@ -347,7 +347,7 @@ export default function ClientAgents() {
     try {
       await Promise.all(
         Array.from(selectedAgentIds).map(id =>
-          base44.entities.Agent.update(id, { relationship_state: newState })
+          api.entities.Agent.update(id, { relationship_state: newState })
         )
       );
       refetchEntityList("Agent");

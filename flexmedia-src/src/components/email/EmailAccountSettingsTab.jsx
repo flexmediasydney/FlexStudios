@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -70,7 +70,7 @@ export default function EmailAccountSettingsTab() {
   const { data: emailAccounts = [], isLoading: accountsLoading } = useQuery({
     queryKey: ["email-accounts", user?.id],
     queryFn: () =>
-      base44.entities.EmailAccount.filter({
+      api.entities.EmailAccount.filter({
         is_active: true,
         assigned_to_user_id: user?.id,
       }),
@@ -79,7 +79,7 @@ export default function EmailAccountSettingsTab() {
 
   const { data: teams = [] } = useQuery({
     queryKey: ["internal-teams"],
-    queryFn: () => base44.entities.InternalTeam.list(),
+    queryFn: () => api.entities.InternalTeam.list(),
   });
 
   const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -99,7 +99,7 @@ export default function EmailAccountSettingsTab() {
   const { data: signatures = [] } = useQuery({
     queryKey: ["user-signatures", selectedAccount?.assigned_to_user_id],
     queryFn: () =>
-      base44.entities.UserSignature.filter({
+      api.entities.UserSignature.filter({
         user_id: selectedAccount.assigned_to_user_id,
       }),
     enabled: !!selectedAccount,
@@ -108,14 +108,14 @@ export default function EmailAccountSettingsTab() {
   const { data: blockedAddresses = [] } = useQuery({
     queryKey: ["email-blocked-addresses", selectedAccount?.id],
     queryFn: () =>
-      base44.entities.EmailBlockedAddress.filter({
+      api.entities.EmailBlockedAddress.filter({
         email_account_id: selectedAccount.id,
       }),
     enabled: !!selectedAccount,
   });
 
   const updateAccountMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailAccount.update(selectedAccountId, data),
+    mutationFn: (data) => api.entities.EmailAccount.update(selectedAccountId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-accounts", user?.id] });
       toast.success("Saved.");
@@ -128,7 +128,7 @@ export default function EmailAccountSettingsTab() {
   // FIX 3: correct function + correct params { accountId, userId }
   const syncMutation = useMutation({
     mutationFn: () =>
-      base44.functions.invoke("syncGmailMessagesForAccount", {
+      api.functions.invoke("syncGmailMessagesForAccount", {
         accountId: selectedAccount.id,
         userId: user.id,
       }),
@@ -145,7 +145,7 @@ export default function EmailAccountSettingsTab() {
   const handleReconnect = async () => {
     try {
       setIsReconnecting(true);
-      const result = await base44.functions.invoke("getGmailOAuthUrl", {
+      const result = await api.functions.invoke("getGmailOAuthUrl", {
         displayName: selectedAccount.display_name,
         teamId: selectedAccount.team_id || null,
         reconnectAccountId: selectedAccount.id,
@@ -179,7 +179,7 @@ export default function EmailAccountSettingsTab() {
   }, [queryClient, user?.id]);
 
   const createSignatureMutation = useMutation({
-    mutationFn: (data) => base44.entities.UserSignature.create(data),
+    mutationFn: (data) => api.entities.UserSignature.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["user-signatures"] });
       toast.success("Signature saved.");
@@ -189,7 +189,7 @@ export default function EmailAccountSettingsTab() {
 
   const updateSignatureMutation = useMutation({
     mutationFn: ({ id, html }) =>
-      base44.entities.UserSignature.update(id, { signature_html: html }),
+      api.entities.UserSignature.update(id, { signature_html: html }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["user-signatures"] });
       toast.success("Signature updated.");
@@ -203,7 +203,7 @@ export default function EmailAccountSettingsTab() {
       // Clear all defaults first, then set new one
       await Promise.all(
         signatures.map((s) =>
-          base44.entities.UserSignature.update(s.id, { is_default: s.id === sigId })
+          api.entities.UserSignature.update(s.id, { is_default: s.id === sigId })
         )
       );
     },
@@ -214,7 +214,7 @@ export default function EmailAccountSettingsTab() {
   });
 
   const deleteSignatureMutation = useMutation({
-    mutationFn: (id) => base44.entities.UserSignature.delete(id),
+    mutationFn: (id) => api.entities.UserSignature.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["user-signatures"] });
       toast.success("Signature deleted.");
@@ -222,7 +222,7 @@ export default function EmailAccountSettingsTab() {
   });
 
   const createBlockedAddressMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailBlockedAddress.create(data),
+    mutationFn: (data) => api.entities.EmailBlockedAddress.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-blocked-addresses"] });
       toast.success("Address blocked.");
@@ -231,7 +231,7 @@ export default function EmailAccountSettingsTab() {
   });
 
   const deleteBlockedAddressMutation = useMutation({
-    mutationFn: (id) => base44.entities.EmailBlockedAddress.delete(id),
+    mutationFn: (id) => api.entities.EmailBlockedAddress.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-blocked-addresses"] });
       toast.success("Address unblocked.");
@@ -239,7 +239,7 @@ export default function EmailAccountSettingsTab() {
   });
 
   const deleteAccountMutation = useMutation({
-    mutationFn: (id) => base44.entities.EmailAccount.update(id, { is_active: false }),
+    mutationFn: (id) => api.entities.EmailAccount.update(id, { is_active: false }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-accounts", user?.id] });
       setSelectedAccountId(null);
@@ -801,7 +801,7 @@ function AddGmailAccountForm({ onSuccess }) {
 
   const { data: teams = [] } = useQuery({
     queryKey: ["internal-teams"],
-    queryFn: () => base44.entities.InternalTeam.list(),
+    queryFn: () => api.entities.InternalTeam.list(),
   });
 
   useEffect(() => {
@@ -822,7 +822,7 @@ function AddGmailAccountForm({ onSuccess }) {
   const handleConnect = async () => {
     try {
       setIsConnecting(true);
-      const result = await base44.functions.invoke("getGmailOAuthUrl", {
+      const result = await api.functions.invoke("getGmailOAuthUrl", {
         displayName: displayName || null,
         teamId: teamId || null,
       });

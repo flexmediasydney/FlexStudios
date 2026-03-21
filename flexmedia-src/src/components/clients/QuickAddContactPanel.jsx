@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
@@ -97,10 +97,10 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
         current_team_name: team?.name || "",
       };
 
-      const user = await base44.auth.me();
-      const result = await base44.entities.Agent.create(payload);
+      const user = await api.auth.me();
+      const result = await api.entities.Agent.create(payload);
 
-      await base44.entities.AuditLog.create({
+      await api.entities.AuditLog.create({
         entity_type: "agent",
         entity_id: result.id,
         entity_name: data.name,

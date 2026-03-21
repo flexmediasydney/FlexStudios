@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -97,7 +97,7 @@ async function fetchThumbnails(pathOrUrl, isShareUrl = false) {
     queue.push(async () => {
       try {
         const params = isShareUrl ? { share_url: pathOrUrl } : { path: pathOrUrl };
-        const res = await base44.functions.invoke('getDeliveryMediaFeed', params);
+        const res = await api.functions.invoke('getDeliveryMediaFeed', params);
         const data = res?.data || res;
         const files = data?.files || [];
         if (files.length === 0) dropboxFailCount++;
@@ -343,7 +343,7 @@ export default function DeliveryFeed() {
   }, []);
 
   useEffect(() => {
-    const unsub = base44.entities.Project.subscribe((event) => {
+    const unsub = api.entities.Project.subscribe((event) => {
       if (event.type === 'update' && event.data?.tonomo_delivered_at && event.data?.status === 'delivered') {
         setNewDeliveryIds(prev => new Set([...prev, event.id]));
         setTimeout(() => setNewDeliveryIds(prev => { const next = new Set(prev); next.delete(event.id); return next; }), 60000);

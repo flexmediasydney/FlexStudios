@@ -1,5 +1,5 @@
 import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
-import { supabase, supabaseAdmin } from '@/api/base44Client';
+import { supabase, supabaseAdmin } from '@/api/supabaseClient';
 
 const AuthContext = createContext();
 

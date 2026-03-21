@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { fmtTimestampCustom } from '@/components/utils/dateUtils';
 
 export default function ConcurrentEditDetector({ project, onRefresh }) {
@@ -12,7 +12,7 @@ export default function ConcurrentEditDetector({ project, onRefresh }) {
 
   useEffect(() => {
     const getUser = async () => {
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       currentUserEmail.current = user?.email;
     };
     getUser();
@@ -23,7 +23,7 @@ export default function ConcurrentEditDetector({ project, onRefresh }) {
 
     let mounted = true;
 
-    const unsub = base44.entities.Project.subscribe((event) => {
+    const unsub = api.entities.Project.subscribe((event) => {
       if (!mounted || event.id !== project.id) return;
 
       const data = event.data;

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,13 +26,13 @@ export default function LabelSelector({
   // Fetch available labels with real-time polling
   const { data: labels = [] } = useQuery({
     queryKey: ["email-labels", emailAccountId],
-    queryFn: () => base44.entities.EmailLabel.filter({ email_account_id: emailAccountId }),
+    queryFn: () => api.entities.EmailLabel.filter({ email_account_id: emailAccountId }),
     refetchInterval: 60_000
   });
 
   // Create label mutation
   const createLabelMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailLabel.create(data),
+    mutationFn: (data) => api.entities.EmailLabel.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels", emailAccountId] });
       setNewLabelName("");

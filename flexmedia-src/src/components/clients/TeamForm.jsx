@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
@@ -34,13 +34,13 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
 
   const { data: agencies = [], isLoading: agenciesLoading } = useQuery({
     queryKey: ["agencies"],
-    queryFn: () => base44.entities.Agency.list("name"),
+    queryFn: () => api.entities.Agency.list("name"),
     enabled: open
   });
 
   const { data: allAgents = [] } = useQuery({
     queryKey: ["agents"],
-    queryFn: () => base44.entities.Agent.list("name"),
+    queryFn: () => api.entities.Agent.list("name"),
     enabled: open && !!team
   });
 
@@ -77,7 +77,7 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
       }
       const payload = { ...data, agency_name: agency.name };
       
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       let result;
       let auditAction;
       let changedFields = [];
@@ -92,10 +92,10 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
             });
           }
         });
-        result = await base44.entities.Team.update(team.id, payload);
+        result = await api.entities.Team.update(team.id, payload);
         auditAction = "update";
       } else {
-        result = await base44.entities.Team.create(payload);
+        result = await api.entities.Team.create(payload);
         auditAction = "create";
         changedFields = Object.keys(payload).map(key => ({
           field: key,
@@ -104,7 +104,7 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
         }));
       }
       
-      await base44.entities.AuditLog.create({
+      await api.entities.AuditLog.create({
         entity_type: "team",
         entity_id: result.id,
         entity_name: data.name,

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import React from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Shield, UserCheck, UserX, Edit, Trash2, MoreVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,16 +40,16 @@ export default function UsersManagement() {
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.list("-created_date")
+    queryFn: () => api.entities.User.list("-created_date")
   });
 
   const { data: teams = [] } = useQuery({
     queryKey: ["internal_teams"],
-    queryFn: () => base44.entities.InternalTeam.list()
+    queryFn: () => api.entities.InternalTeam.list()
   });
 
   const updateRoleMutation = useMutation({
-    mutationFn: ({ userId, role }) => base44.entities.User.update(userId, { role }),
+    mutationFn: ({ userId, role }) => api.entities.User.update(userId, { role }),
     onSuccess: () => {
       queryClient.invalidateQueries(["users"]);
       toast.success("User role updated");
@@ -63,7 +63,7 @@ export default function UsersManagement() {
   const updateTeamMutation = useMutation({
     mutationFn: ({ userId, teamId }) => {
       const team = teams.find(t => t.id === teamId);
-      return base44.entities.User.update(userId, { 
+      return api.entities.User.update(userId, { 
         internal_team_id: teamId,
         internal_team_name: team?.name || ""
       });
@@ -77,7 +77,7 @@ export default function UsersManagement() {
 
   const toggleActiveMutation = useMutation({
     mutationFn: ({ userId, isActive }) => 
-      base44.entities.User.update(userId, { is_active: isActive }),
+      api.entities.User.update(userId, { is_active: isActive }),
     onSuccess: () => {
       queryClient.invalidateQueries(["users"]);
       toast.success("User status updated");
@@ -89,7 +89,7 @@ export default function UsersManagement() {
     mutationFn: async (userId) => {
       // Clean up role references on open projects
       try {
-        const allProjects = await base44.entities.Project.filter({}, null, 2000);
+        const allProjects = await api.entities.Project.filter({}, null, 2000);
         const affectedProjects = allProjects.filter(p =>
           !['delivered', 'cancelled'].includes(p.status) && (
             p.photographer_id === userId ||
@@ -111,7 +111,7 @@ export default function UsersManagement() {
           if (p.project_owner_id === userId) updates.project_owner_id = null;
           if (p.onsite_staff_1_id === userId) { updates.onsite_staff_1_id = null; updates.onsite_staff_1_name = null; }
           if (p.onsite_staff_2_id === userId) { updates.onsite_staff_2_id = null; updates.onsite_staff_2_name = null; }
-          return base44.entities.Project.update(p.id, updates).catch(() => {
+          return api.entities.Project.update(p.id, updates).catch(() => {
             failedProjects.push(p.title || p.property_address || p.id);
           });
         }));
@@ -122,11 +122,11 @@ export default function UsersManagement() {
 
       // Remove EmployeeRole records for this user
        try {
-         const roles = await base44.entities.EmployeeRole.filter(
+         const roles = await api.entities.EmployeeRole.filter(
            { user_id: userId }, null, 50
          );
          await Promise.all(roles.map(r =>
-           base44.entities.EmployeeRole.delete(r.id).catch(() => {})
+           api.entities.EmployeeRole.delete(r.id).catch(() => {})
          ));
        } catch { /* non-fatal */ }
 
@@ -134,22 +134,22 @@ export default function UsersManagement() {
        try {
          const deletingUserRecord = users.find(u => u.id === userId);
          const [availability, connections, signatures, prefs] = await Promise.all([
-           base44.entities.PhotographerAvailability.filter({ user_id: userId }, null, 20).catch(() => []),
+           api.entities.PhotographerAvailability.filter({ user_id: userId }, null, 20).catch(() => []),
            deletingUserRecord?.email
-             ? base44.entities.CalendarConnection.filter({ created_by: deletingUserRecord.email }, null, 10).catch(() => [])
+             ? api.entities.CalendarConnection.filter({ created_by: deletingUserRecord.email }, null, 10).catch(() => [])
              : Promise.resolve([]),
-           base44.entities.UserSignature.filter({ user_id: userId }, null, 5).catch(() => []),
-           base44.entities.NotificationPreference.filter({ user_id: userId }, null, 50).catch(() => []),
+           api.entities.UserSignature.filter({ user_id: userId }, null, 5).catch(() => []),
+           api.entities.NotificationPreference.filter({ user_id: userId }, null, 50).catch(() => []),
          ]);
          await Promise.all([
-           ...availability.map(a => base44.entities.PhotographerAvailability.delete(a.id).catch(() => {})),
-           ...connections.map(c => base44.entities.CalendarConnection.delete(c.id).catch(() => {})),
-           ...signatures.map(s => base44.entities.UserSignature.delete(s.id).catch(() => {})),
-           ...prefs.map(p => base44.entities.NotificationPreference.delete(p.id).catch(() => {})),
+           ...availability.map(a => api.entities.PhotographerAvailability.delete(a.id).catch(() => {})),
+           ...connections.map(c => api.entities.CalendarConnection.delete(c.id).catch(() => {})),
+           ...signatures.map(s => api.entities.UserSignature.delete(s.id).catch(() => {})),
+           ...prefs.map(p => api.entities.NotificationPreference.delete(p.id).catch(() => {})),
          ]);
        } catch { /* non-fatal */ }
 
-       return base44.entities.User.delete(userId);
+       return api.entities.User.delete(userId);
     },
     onSuccess: () => {
       queryClient.invalidateQueries(["users"]);

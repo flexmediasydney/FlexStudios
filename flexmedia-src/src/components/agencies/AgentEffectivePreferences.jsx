@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Building2, ExternalLink, FileText, Link2, Sparkles, ChevronRight, File } from "lucide-react";
@@ -76,13 +76,13 @@ function CategoryRow({ pref }) {
 export default function AgentEffectivePreferences({ agent, agency }) {
   const { data: allTypes = [] } = useQuery({
     queryKey: ['projectTypes'],
-    queryFn: () => base44.entities.ProjectType.list(),
+    queryFn: () => api.entities.ProjectType.list(),
     staleTime: 30000
   });
 
   const { data: allCategories = [] } = useQuery({
     queryKey: ['productCategories'],
-    queryFn: () => base44.entities.ProductCategory.list(),
+    queryFn: () => api.entities.ProductCategory.list(),
     staleTime: 30000
   });
 

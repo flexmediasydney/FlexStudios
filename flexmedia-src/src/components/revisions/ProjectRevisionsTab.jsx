@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
@@ -76,7 +76,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
   const nonDeletedTasks = revisionTasks.filter(t => !t.is_deleted);
 
   const updateMutation = useMutation({
-     mutationFn: (data) => base44.entities.ProjectRevision.update(revision.id, data),
+     mutationFn: (data) => api.entities.ProjectRevision.update(revision.id, data),
      onSuccess: () => {
        toast.success("Request updated");
        setPricingImpact(revision.pricing_impact || {});
@@ -90,8 +90,8 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
   const deleteMutation = useMutation({
     mutationFn: async () => {
       // Clean up tasks and timers before deleting the revision record
-      await base44.functions.invoke('handleRevisionCancellation', { revision_id: revision.id }).catch(() => {});
-      await base44.entities.ProjectRevision.delete(revision.id);
+      await api.functions.invoke('handleRevisionCancellation', { revision_id: revision.id }).catch(() => {});
+      await api.entities.ProjectRevision.delete(revision.id);
     },
     onSuccess: () => toast.success('Request deleted'),
     onError: (e) => toast.error(e.message || 'Failed to delete'),
@@ -99,7 +99,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
 
   const markPricingUpdated = async () => {
     try {
-      await base44.functions.invoke('applyRevisionPricingImpact', {
+      await api.functions.invoke('applyRevisionPricingImpact', {
         revision_id: revision.id,
         project_id: project.id,
       });
@@ -110,7 +110,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
   };
 
   const handleCancel = async () => {
-    await base44.functions.invoke('handleRevisionCancellation', { revision_id: revision.id }).catch(() => {});
+    await api.functions.invoke('handleRevisionCancellation', { revision_id: revision.id }).catch(() => {});
     setShowCancelDialog(false);
     updateMutation.mutate({ status: 'cancelled' });
     logActivity?.('request_cancelled',
@@ -176,7 +176,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
 
     // Check if project qualifies for auto-archive after revision resolved
     if ((newStatus === 'completed' || newStatus === 'cancelled') && project?.status === 'delivered' && project?.payment_status === 'paid') {
-      base44.functions.invoke('checkAndArchiveProject', {
+      api.functions.invoke('checkAndArchiveProject', {
         project_id: project.id, triggered_by: 'revision_resolved'
       }).catch(() => {});
     }
@@ -189,7 +189,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
       : { status: revision.previous_status || "in_progress" };
 
     try {
-      await base44.functions.invoke('handleRevisionStuckStatus', { 
+      await api.functions.invoke('handleRevisionStuckStatus', { 
         revision_id: revision.id, 
         is_stuck: isBecomingStuck 
       });
@@ -221,7 +221,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
 
   const handleRevertPricing = async () => {
     try {
-      await base44.functions.invoke('revertRevisionPricingImpact', {
+      await api.functions.invoke('revertRevisionPricingImpact', {
         revision_id: revision.id,
         project_id: project.id,
       });
@@ -565,12 +565,12 @@ export default function ProjectRevisionsTab({ projectId, project, canEdit }) {
 
   const { data: currentUser } = useQuery({
     queryKey: ["currentUser"],
-    queryFn: () => base44.auth.me(),
+    queryFn: () => api.auth.me(),
   });
 
   const logActivity = (action, description) => {
     if (!projectId || !project) return;
-    base44.entities.ProjectActivity.create({
+    api.entities.ProjectActivity.create({
       project_id: projectId,
       project_title: project.title || project.property_address || '',
       action,
@@ -715,7 +715,7 @@ export default function ProjectRevisionsTab({ projectId, project, canEdit }) {
         onClose={(created) => {
           setShowCreateDialog(false);
           if (created) {
-            base44.functions.invoke('syncProjectRevisionStatus', { project_id: projectId })
+            api.functions.invoke('syncProjectRevisionStatus', { project_id: projectId })
               .catch(err => console.warn('[revisionSync]', err?.message));
           }
         }}

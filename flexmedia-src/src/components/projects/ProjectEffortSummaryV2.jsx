@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Zap, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 
 const ROLE_LABELS = {
   photographer: 'Photographer',
@@ -41,7 +41,7 @@ function useProjectEffortData(projectId, project = null) {
 
     const fetchTimeLogs = async () => {
       try {
-        const items = await base44.entities.TaskTimeLog.filter({ project_id: projectId });
+        const items = await api.entities.TaskTimeLog.filter({ project_id: projectId });
         if (mounted) setTimeLogs(items);
       } catch (err) {
         if (retries < 2 && err.message?.includes('Rate limit')) {
@@ -52,7 +52,7 @@ function useProjectEffortData(projectId, project = null) {
     };
 
     fetchTimeLogs();
-    const unsub = base44.entities.TaskTimeLog.subscribe(ev => {
+    const unsub = api.entities.TaskTimeLog.subscribe(ev => {
       if (!mounted) return;
       if (ev.type === 'create' && ev.data?.project_id === projectId) {
         setTimeLogs(prev => [...prev, ev.data]);
@@ -73,7 +73,7 @@ function useProjectEffortData(projectId, project = null) {
 
      const fetchTasks = async () => {
        try {
-         const items = await base44.entities.ProjectTask.filter({ project_id: projectId });
+         const items = await api.entities.ProjectTask.filter({ project_id: projectId });
          if (mounted) setProjectTasks(items.filter(t => !t.is_deleted));
        } catch (err) {
          if (retries < 2 && err.message?.includes('Rate limit')) {
@@ -84,7 +84,7 @@ function useProjectEffortData(projectId, project = null) {
      };
 
      fetchTasks(); // initial load + fires again if products/packages change via dep below
-     const unsub = base44.entities.ProjectTask.subscribe(ev => {
+     const unsub = api.entities.ProjectTask.subscribe(ev => {
        if (!mounted) return;
        if (ev.type === 'create' && ev.data?.project_id === projectId && !ev.data?.is_deleted) {
          setProjectTasks(prev => [...prev, ev.data]);
@@ -112,7 +112,7 @@ function useProjectEffortData(projectId, project = null) {
 
     const fetchRevisions = async () => {
       try {
-        const items = await base44.entities.ProjectRevision.filter({ project_id: projectId });
+        const items = await api.entities.ProjectRevision.filter({ project_id: projectId });
         if (mounted) setProjectRevisions(items);
       } catch (err) {
         if (retries < 2 && err.message?.includes('Rate limit')) {
@@ -123,7 +123,7 @@ function useProjectEffortData(projectId, project = null) {
     };
 
     fetchRevisions();
-    const unsub = base44.entities.ProjectRevision.subscribe(ev => {
+    const unsub = api.entities.ProjectRevision.subscribe(ev => {
       if (!mounted) return;
       if (ev.type === 'create' && ev.data?.project_id === projectId) {
         setProjectRevisions(prev => [...prev, ev.data]);

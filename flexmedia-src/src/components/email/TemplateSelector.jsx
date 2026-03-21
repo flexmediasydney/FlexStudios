@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import {
   DropdownMenu,
@@ -21,7 +21,7 @@ export default function TemplateSelector({ onSelectTemplate, onSaveAsTemplate })
 
   const { data: templates = [] } = useQuery({
     queryKey: ["email-templates"],
-    queryFn: () => base44.entities.EmailTemplate.list("-created_date", 100)
+    queryFn: () => api.entities.EmailTemplate.list("-created_date", 100)
   });
 
   const filteredTemplates = templates.filter(t =>

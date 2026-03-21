@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Filter, Lightbulb, MessageCircle, Pin, RefreshCw, X, CornerDownLeft } from 'lucide-react';
@@ -10,7 +10,7 @@ import { useQuery } from '@tanstack/react-query';
 export default function NotesPanel({ agencyId, notes = [] }) {
   const { data: noteTags = [] } = useQuery({
     queryKey: ['note-tags'],
-    queryFn: () => base44.entities.NoteTag.list('order', 100),
+    queryFn: () => api.entities.NoteTag.list('order', 100),
     staleTime: 5 * 60 * 1000,
   });
   const [filterType, setFilterType] = useState('all');
@@ -41,7 +41,7 @@ export default function NotesPanel({ agencyId, notes = [] }) {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      const updated = await base44.entities.OrgNote.filter({ agency_id: agencyId });
+      const updated = await api.entities.OrgNote.filter({ agency_id: agencyId });
       processNotes(updated);
     } finally {
       setIsRefreshing(false);

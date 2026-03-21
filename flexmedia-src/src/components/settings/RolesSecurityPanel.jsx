@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { ROUTE_ACCESS, canAccessRoute } from "@/components/lib/routeAccess";
 import { Badge } from "@/components/ui/badge";
@@ -85,24 +85,24 @@ function PeopleMode({ onViewAs }) {
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
     staleTime: 60_000,
   });
 
   const { data: userPermissions = [] } = useQuery({
     queryKey: ["userPermissions"],
-    queryFn: () => base44.entities.UserPermission.list(),
+    queryFn: () => api.entities.UserPermission.list(),
     staleTime: 60_000,
   });
 
   const { data: projects = [] } = useQuery({
     queryKey: ["projects-for-security"],
-    queryFn: () => base44.entities.Project.list("-created_date", 500),
+    queryFn: () => api.entities.Project.list("-created_date", 500),
     staleTime: 5 * 60_000,
   });
 
   const updateRoleMutation = useMutation({
-    mutationFn: ({ userId, role }) => base44.entities.User.update(userId, { role }),
+    mutationFn: ({ userId, role }) => api.entities.User.update(userId, { role }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
       toast.success("Role updated");
@@ -130,7 +130,7 @@ function PeopleMode({ onViewAs }) {
     queryKey: ["access-requests"],
     queryFn: async () => {
       try {
-        const notifs = await base44.entities.Notification.filter({ type: "access_request", is_dismissed: false }, "-created_date", 20);
+        const notifs = await api.entities.Notification.filter({ type: "access_request", is_dismissed: false }, "-created_date", 20);
         return notifs || [];
       } catch { return []; }
     },
@@ -156,7 +156,7 @@ function PeopleMode({ onViewAs }) {
                   <div className="text-[10px] text-amber-700 mt-0.5">{req.message}</div>
                 </div>
                 <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => {
-                  base44.entities.Notification.update(req.id, { is_dismissed: true }).catch(() => {});
+                  api.entities.Notification.update(req.id, { is_dismissed: true }).catch(() => {});
                   queryClient.invalidateQueries({ queryKey: ["access-requests"] });
                 }}>
                   Dismiss
@@ -342,7 +342,7 @@ function PeopleMode({ onViewAs }) {
                         variant="ghost"
                         className="h-5 px-2 text-[9px] text-red-600 hover:text-red-700 hover:bg-red-50"
                         onClick={() => {
-                          base44.entities.UserPermission.update(o.id, { is_active: false })
+                          api.entities.UserPermission.update(o.id, { is_active: false })
                             .then(() => { queryClient.invalidateQueries({ queryKey: ["userPermissions"] }); toast.success("Revoked"); })
                             .catch(() => toast.error("Failed to revoke"));
                         }}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
@@ -78,7 +78,7 @@ export default function EnhancedActivityStream({ maxItems = 20, compact = false 
 
   // Subscribe for live updates
   useEffect(() => {
-    const unsub = base44.entities.ProjectActivity.subscribe((event) => {
+    const unsub = api.entities.ProjectActivity.subscribe((event) => {
       if (event.type === 'create' && event.data) {
         setLiveItems(prev => [event.data, ...prev].slice(0, 10));
       }

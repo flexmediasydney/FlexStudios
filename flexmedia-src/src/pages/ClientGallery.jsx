@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,7 @@ export default function ClientGallery() {
   const { data: project, isLoading: projectLoading } = useQuery({
     queryKey: ["client-project", projectId],
     queryFn: async () => {
-      const projects = await base44.entities.Project.list();
+      const projects = await api.entities.Project.list();
       return projects.find(p => p.id === projectId);
     },
     enabled: !!projectId
@@ -31,7 +31,7 @@ export default function ClientGallery() {
   const { data: mediaConfig, isLoading: mediaLoading } = useQuery({
     queryKey: ["client-media", projectId],
     queryFn: async () => {
-      const list = await base44.entities.ProjectMedia.list();
+      const list = await api.entities.ProjectMedia.list();
       return list.find(m => m.project_id === projectId);
     },
     enabled: !!projectId
@@ -40,7 +40,7 @@ export default function ClientGallery() {
   const { data: client } = useQuery({
     queryKey: ["client-info", project?.client_id],
     queryFn: async () => {
-      const clients = await base44.entities.Client.list();
+      const clients = await api.entities.Client.list();
       return clients.find(c => c.id === project.client_id);
     },
     enabled: !!project?.client_id
@@ -49,7 +49,7 @@ export default function ClientGallery() {
   const trackViewMutation = useMutation({
     mutationFn: async () => {
       if (mediaConfig?.id) {
-        await base44.entities.ProjectMedia.update(mediaConfig.id, {
+        await api.entities.ProjectMedia.update(mediaConfig.id, {
           view_count: (mediaConfig.view_count || 0) + 1,
           last_viewed: new Date().toISOString()
         });

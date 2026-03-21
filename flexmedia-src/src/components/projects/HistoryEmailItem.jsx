@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Mail, ChevronDown, ChevronUp, Lock, Users, Reply, Share2, MoreVertical, ArrowRight, Trash2, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
   // Non-owners see the email body read-only with no action controls.
 
   const updateEmailMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailMessage.update(email.id, data),
+    mutationFn: (data) => api.entities.EmailMessage.update(email.id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["project-emails"] });
       toast.success("Updated");
@@ -51,7 +51,7 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
   // Hard delete via EmailMessage.delete is intentionally removed —
   // deleting from project view should not permanently destroy the email.
   const deleteEmailMutation = useMutation({
-    mutationFn: () => base44.entities.EmailMessage.update(email.id, {
+    mutationFn: () => api.entities.EmailMessage.update(email.id, {
       is_deleted: true,
       project_id: null,
       project_title: null

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -149,12 +149,12 @@ export default function TaskManagement({ projectId, project, canEdit }) {
    const [deleteConfirm, setDeleteConfirm] = useState(null);
    const { data: user = null } = useQuery({
      queryKey: ["currentUser"],
-     queryFn: () => base44.auth.me()
+     queryFn: () => api.auth.me()
    });
 
    const logActivity = (action, description) => {
      if (!projectId || !project) return;
-     base44.entities.ProjectActivity.create({
+     api.entities.ProjectActivity.create({
        project_id: projectId,
        project_title: project.title || project.property_address || '',
        action,
@@ -167,7 +167,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
    const { data: settings = {} } = useQuery({
     queryKey: ["deliverySettings"],
     queryFn: async () => {
-      const data = await base44.entities.DeliverySettings.filter({}, null, 1);
+      const data = await api.entities.DeliverySettings.filter({}, null, 1);
       return data?.[0] || {};
     },
     staleTime: 5 * 60 * 1000, // 5 min cache
@@ -200,7 +200,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   useEffect(() => {
     if (!projectId) return;
     let mounted = true;
-    const unsubscribe = base44.entities.TaskChat.subscribe((event) => {
+    const unsubscribe = api.entities.TaskChat.subscribe((event) => {
       if (mounted && event?.data?.project_id === projectId) {
         queryClient.invalidateQueries({ queryKey: ["taskChatCounts", projectId] });
       }
@@ -216,7 +216,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     queryFn: async () => {
       if (!projectId) return {};
       try {
-        const chats = await base44.entities.TaskChat.filter({ project_id: projectId }, null, 1000);
+        const chats = await api.entities.TaskChat.filter({ project_id: projectId }, null, 1000);
         const counts = {};
         if (Array.isArray(chats)) {
           chats.forEach(chat => {
@@ -262,7 +262,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
         if (Object.keys(updates).length > 0) {
           try {
-            await base44.entities.ProjectTask.update(task.id, updates);
+            await api.entities.ProjectTask.update(task.id, updates);
           } catch (err) {
             if (mounted) console.warn('Failed to sync task assignee names:', err);
           }
@@ -277,7 +277,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   const UPLOADED_STAGES_FOR_CREATE = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.ProjectTask.create({ ...data, project_id: projectId, order: Date.now() }),
+    mutationFn: (data) => api.entities.ProjectTask.create({ ...data, project_id: projectId, order: Date.now() }),
     onSuccess: (created, variables) => {
       setShowAddDialog(false);
       setNewTask({ title: "", description: "" });
@@ -336,7 +336,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       // Fix 3a — validate circular dependencies before saving
       if (data.depends_on_task_ids && data.depends_on_task_ids.length > 0) {
         try {
-          const validation = await base44.functions.invoke('validateTaskDependencies', {
+          const validation = await api.functions.invoke('validateTaskDependencies', {
             action: 'validate_add',
             task_id: id,
             project_id: projectId,
@@ -350,7 +350,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
           // Validation service transient failure — don't block the save
         }
       }
-      return base44.entities.ProjectTask.update(id, data);
+      return api.entities.ProjectTask.update(id, data);
     },
     onSuccess: async (_, variables) => {
       scheduleDeadlineSync(projectId, 'task_update');
@@ -377,7 +377,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
       // If task was just completed, check if project qualifies for auto-archive
       if (variables?.data?.is_completed === true && project?.status === 'delivered' && project?.payment_status === 'paid') {
-        base44.functions.invoke('checkAndArchiveProject', {
+        api.functions.invoke('checkAndArchiveProject', {
           project_id: projectId, triggered_by: 'last_task_completed'
         }).catch(() => {});
       }
@@ -395,12 +395,12 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     mutationFn: async (id) => {
       // Preserve time logs but mark them as orphaned so they're excluded from active utilisation
       try {
-        const timeLogs = await base44.entities.TaskTimeLog.filter({ task_id: id }, null, 100);
+        const timeLogs = await api.entities.TaskTimeLog.filter({ task_id: id }, null, 100);
         await Promise.all(timeLogs.map(log =>
-          base44.entities.TaskTimeLog.update(log.id, { task_deleted: true }).catch(() => {})
+          api.entities.TaskTimeLog.update(log.id, { task_deleted: true }).catch(() => {})
         ));
       } catch { /* non-fatal */ }
-      await base44.entities.ProjectTask.update(id, { is_deleted: true });
+      await api.entities.ProjectTask.update(id, { is_deleted: true });
     },
     onSuccess: async (_, id) => {
       logActivity('task_deleted', `Task deleted: "${deleteConfirm?.title || ''}"`);
@@ -417,7 +417,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       for (const t of dependentTasks) {
         const cleanedDeps = t.depends_on_task_ids.filter(depId => depId !== id);
         try {
-          await base44.entities.ProjectTask.update(t.id, {
+          await api.entities.ProjectTask.update(t.id, {
             depends_on_task_ids: cleanedDeps,
           });
         } catch { /* non-fatal */ }
@@ -489,7 +489,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     }
 
     try {
-      await base44.entities.ProjectTask.update(task.id, { is_completed: !task.is_completed });
+      await api.entities.ProjectTask.update(task.id, { is_completed: !task.is_completed });
       logActivity(
         task.is_completed ? 'task_added' : 'task_completed',
         task.is_completed

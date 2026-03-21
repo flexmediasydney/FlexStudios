@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,7 @@ export default function EmailInbox() {
   // Fetch email accounts
   const { data: emailAccounts = [], isLoading: accountsLoading } = useQuery({
     queryKey: ["email-accounts"],
-    queryFn: () => base44.entities.EmailAccount.filter({ is_active: true })
+    queryFn: () => api.entities.EmailAccount.filter({ is_active: true })
   });
 
   // Set first active account as selected
@@ -48,7 +48,7 @@ export default function EmailInbox() {
   const { data: messages = [], isLoading: messagesLoading, refetch: refetchMessages } = useQuery({
     queryKey: ["email-messages", selectedAccount?.id],
     queryFn: () => selectedAccount 
-      ? base44.entities.EmailMessage.filter({ 
+      ? api.entities.EmailMessage.filter({ 
           email_account_id: selectedAccount.id,
           is_draft: false,
           is_sent: false
@@ -61,7 +61,7 @@ export default function EmailInbox() {
   const syncMutation = useMutation({
     mutationFn: async () => {
       if (!selectedAccount) throw new Error('No account selected');
-      const result = await base44.functions.invoke('syncGmailMessagesForAccount', {
+      const result = await api.functions.invoke('syncGmailMessagesForAccount', {
         accountId: selectedAccount.id,
         userId: selectedAccount.assigned_to_user_id,
       });
@@ -79,7 +79,7 @@ export default function EmailInbox() {
 
   // Update message mutation
   const updateMessageMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailMessage.update(data.messageId, data.updates),
+    mutationFn: (data) => api.entities.EmailMessage.update(data.messageId, data.updates),
     onSuccess: () => {
       refetchMessages();
     }

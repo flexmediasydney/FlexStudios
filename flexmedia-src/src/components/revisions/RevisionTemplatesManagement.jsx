@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
@@ -35,9 +35,9 @@ export default function RevisionTemplatesManagement() {
   const saveMutation = useMutation({
     mutationFn: async (data) => {
       if (editingTemplate) {
-        return base44.entities.RevisionTemplate.update(editingTemplate.id, data);
+        return api.entities.RevisionTemplate.update(editingTemplate.id, data);
       }
-      return base44.entities.RevisionTemplate.create(data);
+      return api.entities.RevisionTemplate.create(data);
     },
     onSuccess: () => {
       toast.success(editingTemplate ? "Template updated" : "Template created");
@@ -48,7 +48,7 @@ export default function RevisionTemplatesManagement() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.RevisionTemplate.delete(id),
+    mutationFn: (id) => api.entities.RevisionTemplate.delete(id),
     onSuccess: () => {
       toast.success("Template deleted");
       setDeletingTemplate(null);

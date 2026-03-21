@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
@@ -53,12 +53,12 @@ export default function ProspectStatusManager({ prospect }) {
 
     try {
       // Update agent status
-      await base44.entities.Agent.update(prospect.id, {
+      await api.entities.Agent.update(prospect.id, {
         status: newStatus
       });
 
       // Log interaction for status change
-       await base44.entities.InteractionLog.create({
+       await api.entities.InteractionLog.create({
          entity_type: 'Agent',
          entity_id: prospect.id,
          entity_name: prospect.name,
@@ -72,7 +72,7 @@ export default function ProspectStatusManager({ prospect }) {
        });
 
        // Create audit log for status change
-       await base44.entities.AuditLog.create({
+       await api.entities.AuditLog.create({
          entity_type: "agent",
          entity_id: prospect.id,
          entity_name: prospect.name,
@@ -86,7 +86,7 @@ export default function ProspectStatusManager({ prospect }) {
 
        // Auto-transition relationship_state when converted to client
        if (newStatus === 'Converted to Client' && prospect.relationship_state !== 'Active') {
-         await base44.entities.Agent.update(prospect.id, {
+         await api.entities.Agent.update(prospect.id, {
            relationship_state: 'Active',
            became_active_date: new Date().toISOString().split('T')[0],
            is_at_risk: false,

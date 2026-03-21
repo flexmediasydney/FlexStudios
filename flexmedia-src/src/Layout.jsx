@@ -37,7 +37,7 @@ import GlobalSearch from "@/components/common/GlobalSearch";
 import TopSearchBar from "@/components/common/TopSearchBar";
 
 import { cn } from "@/lib/utils";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { canAccessRoute } from "@/components/lib/routeAccess";
 import { useNotifications } from "@/components/notifications/NotificationContext";
@@ -512,7 +512,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
               onClick={async () => {
                 if (confirm("Sign out?")) {
                   try {
-                    await base44.auth.logout('/login');
+                    await api.auth.logout('/login');
                   } catch {
                     // Fallback: redirect even if signOut call fails
                     window.location.href = '/login';

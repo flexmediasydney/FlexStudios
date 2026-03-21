@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 
 /**
  * Hook that subscribes to real-time updates for entities matching a filter
@@ -15,7 +15,7 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
     // Initial fetch
     const fetchInitial = async () => {
       try {
-        const results = await base44.entities[entityName].filter(filter);
+        const results = await api.entities[entityName].filter(filter);
         if (isMounted) {
           setData(results);
           setLoading(false);
@@ -29,7 +29,7 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
     fetchInitial();
 
     // Subscribe to all changes - let subscription update state
-    const unsubscribe = base44.entities[entityName].subscribe((event) => {
+    const unsubscribe = api.entities[entityName].subscribe((event) => {
       if (!isMounted) return;
 
       setData((prevData) => {
@@ -67,7 +67,7 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
 
   const refetch = async () => {
     try {
-      const results = await base44.entities[entityName].filter(filter);
+      const results = await api.entities[entityName].filter(filter);
       setData(results);
     } catch (error) {
       console.error(`Failed to refetch ${entityName}:`, error);

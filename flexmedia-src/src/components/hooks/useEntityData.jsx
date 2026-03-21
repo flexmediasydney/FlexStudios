@@ -28,7 +28,7 @@
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { globalThrottler } from '@/components/utils/requestThrottler';
 import { decorateEntity, decorateEntities } from '@/components/utils/entityTransformer';
 
@@ -169,7 +169,7 @@ function ensureSubscription(entityName) {
   };
 
   try {
-    const unsubscribe = base44.entities[entityName].subscribe((event) => {
+    const unsubscribe = api.entities[entityName].subscribe((event) => {
       if (!event) return;
       pendingEvents.push(event);
       if (!debounceTimer) debounceTimer = setTimeout(flush, 30);
@@ -218,7 +218,7 @@ function fetchEntityList(entityName) {
   }
 
   const promise = globalThrottler
-    .execute(() => base44.entities[entityName].list(null, LIST_LIMIT))
+    .execute(() => api.entities[entityName].list(null, LIST_LIMIT))
     .then(items => {
       inFlight.delete(entityName);
       const raw = items || [];
@@ -281,7 +281,7 @@ function fetchSingleEntity(entityName, entityId) {
   }
 
   const promise = globalThrottler
-    .execute(() => base44.entities[entityName].get(entityId))
+    .execute(() => api.entities[entityName].get(entityId))
     .then(item => {
       inFlight.delete(singleKey);
       singleCache.set(singleKey, item ?? null);

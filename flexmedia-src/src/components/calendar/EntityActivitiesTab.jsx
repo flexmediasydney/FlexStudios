@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -31,7 +31,7 @@ export default function EntityActivitiesTab({ entityType, entityId, entityLabel 
         agent:   { agent_id: entityId },
         agency:  { agency_id: entityId },
       };
-      const all = await base44.entities.CalendarEvent.list("-start_time", 200);
+      const all = await api.entities.CalendarEvent.list("-start_time", 200);
       const f = filterMap[entityType] || {};
       const [key, val] = Object.entries(f)[0] || [];
       return key ? all.filter(e => e[key] === val) : all;
@@ -59,7 +59,7 @@ export default function EntityActivitiesTab({ entityType, entityId, entityLabel 
     e.stopPropagation();
     // Ownership check: only mark done if this user is allowed to
     if (!canMarkDone(ev, currentUserId)) return;
-    await base44.entities.CalendarEvent.update(ev.id, {
+    await api.entities.CalendarEvent.update(ev.id, {
       is_done: true,
       done_at: new Date().toISOString(),
     });

@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, AlertCircle, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useProjectItemsManager } from "./hooks/useProjectItemsManager";
 import AddItemsDialog from "./AddItemsDialog";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
@@ -330,21 +330,21 @@ export default function ProjectProductsPackages({ project }) {
 
       // Trigger task and effort sync sequentially
       try {
-        await base44.functions.invoke('syncProjectTasksFromProducts', { project_id: project.id });
+        await api.functions.invoke('syncProjectTasksFromProducts', { project_id: project.id });
       } catch (syncErr) {
         console.warn('Task sync failed:', syncErr?.message);
       }
       try {
-        await base44.functions.invoke('syncOnsiteEffortTasks', { project_id: project.id });
+        await api.functions.invoke('syncOnsiteEffortTasks', { project_id: project.id });
       } catch (effortErr) {
         console.warn('Onsite effort sync failed:', effortErr?.message);
       }
       try {
-        await base44.functions.invoke('cleanupOrphanedProjectTasks', { project_id: project.id });
+        await api.functions.invoke('cleanupOrphanedProjectTasks', { project_id: project.id });
       } catch { /* non-fatal */ }
 
       // Fix 9 — recalculate price to reflect the updated product/package set
-      base44.functions.invoke('recalculateProjectPricingServerSide', {
+      api.functions.invoke('recalculateProjectPricingServerSide', {
         project_id: project.id,
       }).catch(() => {});
     } catch (err) {

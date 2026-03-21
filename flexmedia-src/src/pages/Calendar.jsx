@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -156,25 +156,25 @@ export default function CalendarPage() {
   // ── Data ───────────────────────────────────────────────────────────────────
   const { data: currentUser } = useQuery({
     queryKey: ["current-user"],
-    queryFn: () => base44.auth.me(),
+    queryFn: () => api.auth.me(),
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ["users-for-cal"],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: connections = [] } = useQuery({
     queryKey: ["calendar-connections-all"],
-    queryFn: () => base44.entities.CalendarConnection.list(),
+    queryFn: () => api.entities.CalendarConnection.list(),
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: allAvailability = [] } = useQuery({
     queryKey: ['photographer-availability-cal'],
-    queryFn: () => base44.entities.PhotographerAvailability.list(),
+    queryFn: () => api.entities.PhotographerAvailability.list(),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -188,7 +188,7 @@ export default function CalendarPage() {
       // Gap fix: Fetch only visible range + 1 month buffer, max 500 events (not 5000)
       const rangeStart = subMonths(startOfDay(currentDate), 1);
       const rangeEnd = addMonths(startOfDay(currentDate), 2);
-      const all = await base44.entities.CalendarEvent.filter({
+      const all = await api.entities.CalendarEvent.filter({
         start_time: {
           $gte: rangeStart.toISOString(),
           $lte: rangeEnd.toISOString(),

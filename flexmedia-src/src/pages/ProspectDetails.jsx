@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useEntityList, useEntityData } from '@/components/hooks/useEntityData';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ArrowLeft, Mail, Phone, Building, AlertCircle } from 'lucide-react';
@@ -26,19 +26,19 @@ export default function ProspectDetails() {
     try {
       // Clean up orphans BEFORE deleting the agent
       const [logs, matrices, events] = await Promise.all([
-        base44.entities.InteractionLog.filter({ entity_id: agentId, entity_type: 'Agent' }, null, 500).catch(() => []),
-        base44.entities.PriceMatrix.filter({ entity_type: 'agent', entity_id: agentId }, null, 10).catch(() => []),
-        base44.entities.CalendarEvent.filter({ agent_id: agentId }, null, 100).catch(() => []),
+        api.entities.InteractionLog.filter({ entity_id: agentId, entity_type: 'Agent' }, null, 500).catch(() => []),
+        api.entities.PriceMatrix.filter({ entity_type: 'agent', entity_id: agentId }, null, 10).catch(() => []),
+        api.entities.CalendarEvent.filter({ agent_id: agentId }, null, 100).catch(() => []),
       ]);
       await Promise.all([
-        ...logs.map(l => base44.entities.InteractionLog.delete(l.id).catch(() => {})),
-        ...matrices.map(m => base44.entities.PriceMatrix.delete(m.id).catch(() => {})),
-        ...events.map(ev => base44.entities.CalendarEvent.update(ev.id, { agent_id: null }).catch(() => {})),
+        ...logs.map(l => api.entities.InteractionLog.delete(l.id).catch(() => {})),
+        ...matrices.map(m => api.entities.PriceMatrix.delete(m.id).catch(() => {})),
+        ...events.map(ev => api.entities.CalendarEvent.update(ev.id, { agent_id: null }).catch(() => {})),
       ]);
     } catch { /* non-fatal — proceed with delete */ }
 
     // Create audit log before deleting
-    await base44.entities.AuditLog.create({
+    await api.entities.AuditLog.create({
       entity_type: "agent",
       entity_id: agentId,
       entity_name: agent?.name,
@@ -50,7 +50,7 @@ export default function ProspectDetails() {
       user_email: currentUser?.email
     }).catch(() => {}); // non-fatal
 
-    await base44.entities.Agent.delete(agentId);
+    await api.entities.Agent.delete(agentId);
     window.location.href = createPageUrl('Prospecting');
   };
 

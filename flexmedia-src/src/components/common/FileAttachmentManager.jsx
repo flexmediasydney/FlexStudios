@@ -1,5 +1,5 @@
 import React, { useState, useRef } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { 
   Paperclip, Upload, X, Download, Loader2,
@@ -61,7 +61,7 @@ export default function FileAttachmentManager({
     try {
       const uploaded = [];
       for (const file of files) {
-        const { file_url } = await base44.integrations.Core.UploadFile({ file });
+        const { file_url } = await api.integrations.Core.UploadFile({ file });
         uploaded.push({
           file_url,
           file_name: file.name,

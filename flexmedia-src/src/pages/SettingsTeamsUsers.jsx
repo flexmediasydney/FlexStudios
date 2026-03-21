@@ -7,7 +7,7 @@ import PermissionMatrix from "@/components/settings/PermissionMatrix";
 import CalendarIntegration from "@/components/calendar/CalendarIntegration";
 import { Shield, Calendar, Users, ChevronDown, ChevronRight, Clock } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import RolesSecurityPanel from "@/components/settings/RolesSecurityPanel";
@@ -70,7 +70,7 @@ function CleanupButton() {
     setRunning(true);
     setResult(null);
     try {
-      const res = await base44.functions.invoke('cleanupOrphanedCalendarEvents', {});
+      const res = await api.functions.invoke('cleanupOrphanedCalendarEvents', {});
       setResult(res.data);
     } catch (err) {
       setResult({ error: err.message });
@@ -105,15 +105,15 @@ function AdminCalendarManagement() {
 
   const { data: users = [] } = useQuery({
     queryKey: ["all-users-for-cal-admin"],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
     staleTime: 60_000,
   });
 
   const { data: allConnections = [] } = useQuery({
     queryKey: ["all-calendar-connections-admin"],
-    queryFn: () => base44.asServiceRole
-      ? base44.asServiceRole.entities.CalendarConnection.list('-created_date', 1000)
-      : base44.entities.CalendarConnection.list('-created_date', 1000),
+    queryFn: () => api.asServiceRole
+      ? api.asServiceRole.entities.CalendarConnection.list('-created_date', 1000)
+      : api.entities.CalendarConnection.list('-created_date', 1000),
     staleTime: 30_000,
   });
 
@@ -231,12 +231,12 @@ function WorkingHoursAdmin() {
   const queryClient = useQueryClient();
   const { data: users = [] } = useQuery({
     queryKey: ['all-users-hours'],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
     staleTime: 60_000,
   });
   const { data: allAvailability = [] } = useQuery({
     queryKey: ['photographer-availability'],
-    queryFn: () => base44.entities.PhotographerAvailability.list(),
+    queryFn: () => api.entities.PhotographerAvailability.list(),
     staleTime: 30_000,
   });
   const [selectedUser, setSelectedUser] = useState(null);
@@ -271,9 +271,9 @@ function WorkingHoursAdmin() {
     const existing = userAvailability.find(a => a.day_of_week === dayData.day_of_week);
     const payload = { ...dayData, user_id: selectedUser };
     if (existing) {
-      await base44.entities.PhotographerAvailability.update(existing.id, payload);
+      await api.entities.PhotographerAvailability.update(existing.id, payload);
     } else {
-      await base44.entities.PhotographerAvailability.create(payload);
+      await api.entities.PhotographerAvailability.create(payload);
     }
     queryClient.invalidateQueries({ queryKey: ['photographer-availability'] });
   };

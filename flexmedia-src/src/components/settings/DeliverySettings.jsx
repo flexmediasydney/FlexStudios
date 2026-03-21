@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -55,9 +55,9 @@ export default function DeliverySettings() {
   const saveMutation = useMutation({
     mutationFn: async (data) => {
       if (savedSettings?.id) {
-        return base44.entities.DeliverySettings.update(savedSettings.id, data);
+        return api.entities.DeliverySettings.update(savedSettings.id, data);
       }
-      return base44.entities.DeliverySettings.create(data);
+      return api.entities.DeliverySettings.create(data);
     },
     onSuccess: () => {
       setHasChanges(false);

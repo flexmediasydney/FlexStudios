@@ -1,6 +1,6 @@
 import { useState } from "react";
 import React from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +17,7 @@ export default function ProjectHistorySection({ projectId }) {
   // Fetch the current user's own email accounts so we can determine ownership
   const { data: myEmailAccounts = [] } = useQuery({
     queryKey: ["my-email-accounts", currentUser?.id],
-    queryFn: () => base44.entities.EmailAccount.filter({
+    queryFn: () => api.entities.EmailAccount.filter({
       assigned_to_user_id: currentUser?.id,
       is_active: true
     }),
@@ -28,7 +28,7 @@ export default function ProjectHistorySection({ projectId }) {
 
   const { data: notes = [] } = useQuery({
     queryKey: ["org-notes-project", projectId],
-    queryFn: () => base44.entities.OrgNote.filter(
+    queryFn: () => api.entities.OrgNote.filter(
       { project_id: projectId },
       "-created_date",
       100
@@ -39,12 +39,12 @@ export default function ProjectHistorySection({ projectId }) {
 
   const { data: activities = [] } = useQuery({
     queryKey: ["project-activities", projectId],
-    queryFn: () => base44.entities.ProjectActivity.filter({ project_id: projectId }, "-created_date", 200)
+    queryFn: () => api.entities.ProjectActivity.filter({ project_id: projectId }, "-created_date", 200)
   });
 
   const { data: allProjectEmails = [] } = useQuery({
     queryKey: ["project-emails", projectId],
-    queryFn: () => base44.entities.EmailMessage.filter({ project_id: projectId }, "-received_at")
+    queryFn: () => api.entities.EmailMessage.filter({ project_id: projectId }, "-received_at")
   });
 
   // Pipedrive visibility model:

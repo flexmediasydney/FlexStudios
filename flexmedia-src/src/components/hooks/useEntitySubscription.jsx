@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 
 /**
  * Hook that subscribes to real-time updates for a specific entity
@@ -12,7 +12,7 @@ export function useEntitySubscription(entityName, entityId, initialData = null) 
     if (!entityId || !entityName) return;
 
     // Subscribe to all changes for this entity type
-    const unsubscribe = base44.entities[entityName].subscribe((event) => {
+    const unsubscribe = api.entities[entityName].subscribe((event) => {
       if (!event) return;
       // If this is the entity we're watching, update state
       if (event.id === entityId && event.data) {
@@ -36,7 +36,7 @@ export function useEntityCollectionSubscription(entityName, filter = {}, initial
   useEffect(() => {
     if (!entityName) return;
 
-    const unsubscribe = base44.entities[entityName].subscribe((event) => {
+    const unsubscribe = api.entities[entityName].subscribe((event) => {
       if (!event) return;
       setData((prevData) => {
         if (event.type === 'create' && event.data) {

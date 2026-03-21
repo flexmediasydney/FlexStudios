@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -71,16 +71,16 @@ export default function ActivityFeed() {
       }
 
       if (entity_type === "agency") {
-        await base44.entities.Agency.update(entity_id, previous_state);
+        await api.entities.Agency.update(entity_id, previous_state);
       } else if (entity_type === "team") {
-        await base44.entities.Team.update(entity_id, previous_state);
+        await api.entities.Team.update(entity_id, previous_state);
       } else if (entity_type === "agent") {
-        await base44.entities.Agent.update(entity_id, previous_state);
+        await api.entities.Agent.update(entity_id, previous_state);
       }
 
       // Create audit log for restore
-      const user = await base44.auth.me();
-      await base44.entities.AuditLog.create({
+      const user = await api.auth.me();
+      await api.entities.AuditLog.create({
         entity_type,
         entity_id,
         entity_name: previous_state.name,

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Users, Link2, Trash2 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useEntitySubscription } from "@/components/hooks/useEntitySubscription";
@@ -28,12 +28,12 @@ export default function EmailDetailSidebar({ thread, onProjectLinkClick, onProje
 
   const { data: allUsers = [] } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
   });
 
   const assignMutation = useMutation({
     mutationFn: (userId) =>
-      base44.functions.invoke("assignEmailToUser", {
+      api.functions.invoke("assignEmailToUser", {
         threadId: thread.threadId,
         userId,
       }),

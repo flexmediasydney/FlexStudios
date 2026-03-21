@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Loader2 } from "lucide-react";
@@ -20,7 +20,7 @@ export default function AgentSearch({ onSelect }) {
 
     setIsLoading(true);
     try {
-      const agents = await base44.entities.Agent.list();
+      const agents = await api.entities.Agent.list();
       const filtered = agents
         .filter(
           (agent) =>

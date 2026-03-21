@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -57,22 +57,22 @@ export default function EventDetailsDialog({
 
   const { data: projects = [] } = useQuery({
     queryKey: ["projects-for-cal"],
-    queryFn: () => base44.entities.Project.list("-created_date", 200),
+    queryFn: () => api.entities.Project.list("-created_date", 200),
   });
 
   const { data: agents = [] } = useQuery({
     queryKey: ["agents-for-cal"],
-    queryFn: () => base44.entities.Agent.list("name", 500),
+    queryFn: () => api.entities.Agent.list("name", 500),
   });
 
   const { data: agencies = [] } = useQuery({
     queryKey: ["agencies-for-cal"],
-    queryFn: () => base44.entities.Agency.list("name", 200),
+    queryFn: () => api.entities.Agency.list("name", 200),
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ["users-for-cal"],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
   });
 
   const { data: emails = [] } = useQuery({
@@ -81,7 +81,7 @@ export default function EventDetailsDialog({
       if (!formData.project_id && !formData.agent_id) return [];
       const filters = {};
       if (formData.project_id) filters.project_id = formData.project_id;
-      return base44.entities.EmailMessage.filter(filters, "-received_at", 50);
+      return api.entities.EmailMessage.filter(filters, "-received_at", 50);
     },
     enabled: !!(formData.project_id || formData.agent_id),
   });
@@ -168,9 +168,9 @@ export default function EventDetailsDialog({
 
       let savedId = event?.id;
       if (event?.id) {
-        await base44.entities.CalendarEvent.update(event.id, payload);
+        await api.entities.CalendarEvent.update(event.id, payload);
       } else {
-        const created = await base44.entities.CalendarEvent.create(payload);
+        const created = await api.entities.CalendarEvent.create(payload);
         savedId = created?.id;
       }
 
@@ -178,7 +178,7 @@ export default function EventDetailsDialog({
       // and the user has a connected calendar.
       if (source === 'flexmedia' && savedId) {
         try {
-          await base44.functions.invoke('writeCalendarEventToGoogle', {
+          await api.functions.invoke('writeCalendarEventToGoogle', {
             calendar_event_id: savedId,
           });
         } catch (err) {
@@ -192,7 +192,7 @@ export default function EventDetailsDialog({
         const isUpdate = !!event?.id;
         const projectId = formData.project_id || null;
         if (projectId) {
-          const proj = await base44.entities.Project.get(projectId).catch(() => null);
+          const proj = await api.entities.Project.get(projectId).catch(() => null);
           if (proj) {
             const staffIds = [proj.project_owner_id, proj.photographer_id, proj.onsite_staff_1_id, proj.onsite_staff_2_id].filter(Boolean);
             const projectName = proj.title || proj.property_address || 'Project';
@@ -230,7 +230,7 @@ export default function EventDetailsDialog({
     if (!event?.id) return;
     setMarkingDone(true);
     try {
-      await base44.entities.CalendarEvent.update(event.id, {
+      await api.entities.CalendarEvent.update(event.id, {
         is_done: true,
         done_at: new Date().toISOString(),
         outcome_note: formData.outcome_note,
@@ -239,7 +239,7 @@ export default function EventDetailsDialog({
       // Remove from Google Calendar if this is a FlexStudios event that was pushed
       if (event.google_event_id && getEventSource(event) === 'flexmedia') {
         try {
-          await base44.functions.invoke('deleteCalendarEventFromGoogle', {
+          await api.functions.invoke('deleteCalendarEventFromGoogle', {
             calendar_event_id: event.id,
           });
         } catch (err) {
@@ -262,7 +262,7 @@ export default function EventDetailsDialog({
     // Trigger Google Calendar delete before local delete.
     // Server-side function enforces: only flexmedia events, only the creator.
     try {
-      await base44.functions.invoke('deleteCalendarEventFromGoogle', {
+      await api.functions.invoke('deleteCalendarEventFromGoogle', {
         calendar_event_id: event.id,
       });
     } catch (err) {
@@ -270,7 +270,7 @@ export default function EventDetailsDialog({
       toast.error('Failed to remove event from Google Calendar. Deleting locally.');
     }
 
-    await base44.entities.CalendarEvent.delete(event.id);
+    await api.entities.CalendarEvent.delete(event.id);
     invalidateAll();
     onSave?.();
     onClose();
@@ -314,7 +314,7 @@ export default function EventDetailsDialog({
       }
 
       const newEnd = new Date(newStart.getTime() + durationMs);
-      await base44.entities.CalendarEvent.update(event.id, {
+      await api.entities.CalendarEvent.update(event.id, {
         start_time: newStart.toISOString(),
         end_time: newEnd.toISOString(),
       });
@@ -323,7 +323,7 @@ export default function EventDetailsDialog({
       const source = event.event_source || 'flexmedia';
       if (source === 'flexmedia') {
         try {
-          await base44.functions.invoke('writeCalendarEventToGoogle', {
+          await api.functions.invoke('writeCalendarEventToGoogle', {
             calendar_event_id: event.id,
           });
         } catch (err) {

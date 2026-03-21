@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { validateField, LIMITS } from "@/components/hooks/useFormValidation";
@@ -53,9 +53,9 @@ export default function MediaDeliveryManager({ projectId, project }) {
     mutationFn: async (data) => {
       const saveData = { ...data, project_id: projectId };
       if (mediaConfig?.id) {
-        return base44.entities.ProjectMedia.update(mediaConfig.id, saveData);
+        return api.entities.ProjectMedia.update(mediaConfig.id, saveData);
       } else {
-        return base44.entities.ProjectMedia.create(saveData);
+        return api.entities.ProjectMedia.create(saveData);
       }
     },
     onSuccess: () => toast.success("Media delivery settings saved"),

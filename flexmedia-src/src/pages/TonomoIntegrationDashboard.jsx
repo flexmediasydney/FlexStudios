@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -79,11 +79,11 @@ export default function TonomoIntegrationDashboard() {
     const autoProcess = async () => {
       if (!mounted) return;
       try {
-        const q = await base44.entities.TonomoProcessingQueue.list('-created_date', 20);
+        const q = await api.entities.TonomoProcessingQueue.list('-created_date', 20);
         const hasPending = q.some(item => item.status === 'pending' || item.status === 'failed');
         if (hasPending && mounted) {
           try {
-            await base44.functions.invoke('processTonomoQueue', { triggered_by: 'auto' });
+            await api.functions.invoke('processTonomoQueue', { triggered_by: 'auto' });
             queryClient.invalidateQueries();
           } catch (err) {
             console.warn('[AutoProcessor] Process failed:', err?.message);
@@ -103,7 +103,7 @@ export default function TonomoIntegrationDashboard() {
   const { data: pendingProjects = [] } = useQuery({
     queryKey: ['pendingReviewProjects'],
     queryFn: async () => {
-      const all = await base44.entities.Project.list('-created_date', 200);
+      const all = await api.entities.Project.list('-created_date', 200);
       return all.filter(p => p.source === 'tonomo' && p.status === 'pending_review')
         .sort((a, b) => {
           const ha = calcBookingHealth(a);
@@ -122,7 +122,7 @@ export default function TonomoIntegrationDashboard() {
 
   const { data: auditLogs = [] } = useQuery({
     queryKey: ['tonomoRecentAudit'],
-    queryFn: () => base44.entities.TonomoAuditLog.list('-processed_at', 20),
+    queryFn: () => api.entities.TonomoAuditLog.list('-processed_at', 20),
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   });
@@ -131,7 +131,7 @@ export default function TonomoIntegrationDashboard() {
     queryKey: ['webhookLogsToday'],
     queryFn: async () => {
       const sydneyToday = new Date().toLocaleDateString("en-AU", { timeZone: "Australia/Sydney" });
-      const logs = await base44.entities.TonomoWebhookLog.list('-received_at', 500);
+      const logs = await api.entities.TonomoWebhookLog.list('-received_at', 500);
       return logs.filter(l => {
         const d = parseTS(l.received_at);
         return d && d.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney" }) === sydneyToday;
@@ -145,7 +145,7 @@ export default function TonomoIntegrationDashboard() {
     queryKey: ['projectsCreatedToday'],
     queryFn: async () => {
       const sydneyToday = new Date().toLocaleDateString("en-AU", { timeZone: "Australia/Sydney" });
-      const projects = await base44.entities.Project.list('-created_date', 500);
+      const projects = await api.entities.Project.list('-created_date', 500);
       return projects.filter(p => {
         const d = parseTS(p.created_date);
         return p.source === 'tonomo' && d && d.toLocaleDateString("en-AU", { timeZone: "Australia/Sydney" }) === sydneyToday;
@@ -157,14 +157,14 @@ export default function TonomoIntegrationDashboard() {
 
   const { data: queue = [] } = useQuery({
     queryKey: ['tonomoQueue'],
-    queryFn: () => base44.entities.TonomoProcessingQueue.list('-created_date', 200),
+    queryFn: () => api.entities.TonomoProcessingQueue.list('-created_date', 200),
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   });
 
   const { data: mappings = [] } = useQuery({
     queryKey: ['tonomoMappings'],
-    queryFn: () => base44.entities.TonomoMappingTable.list('-last_seen_at', 500),
+    queryFn: () => api.entities.TonomoMappingTable.list('-last_seen_at', 500),
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
     onError: () => toast.error('Failed to load mappings'),
@@ -210,13 +210,13 @@ export default function TonomoIntegrationDashboard() {
       const stuck = queue.filter(q => q.status === 'failed');
       if (stuck.length === 0) { toast.info('No failed items to retry'); return { count: 0 }; }
       await Promise.all(stuck.map(q =>
-        base44.entities.TonomoProcessingQueue.update(q.id, {
+        api.entities.TonomoProcessingQueue.update(q.id, {
           status: 'pending',
           retry_count: 0,
           error_message: null,
         })
       ));
-      base44.functions.invoke('processTonomoQueue', { triggered_by: 'retry' }).catch(() => {});
+      api.functions.invoke('processTonomoQueue', { triggered_by: 'retry' }).catch(() => {});
       return { count: stuck.length };
     },
     onSuccess: (data) => {
@@ -231,7 +231,7 @@ export default function TonomoIntegrationDashboard() {
       const dead = queue.filter(q => q.status === 'dead_letter');
       if (dead.length === 0) { toast.info('No dead letter items to clear'); return { count: 0 }; }
       await Promise.all(dead.map(q =>
-        base44.entities.TonomoProcessingQueue.delete(q.id)
+        api.entities.TonomoProcessingQueue.delete(q.id)
       ));
       return { count: dead.length };
     },
@@ -244,7 +244,7 @@ export default function TonomoIntegrationDashboard() {
 
   const forceProcessMutation = useMutation({
     mutationFn: async () => {
-      const res = await base44.functions.invoke('processTonomoQueue', { triggered_by: 'force_manual' });
+      const res = await api.functions.invoke('processTonomoQueue', { triggered_by: 'force_manual' });
       return res.data || res;
     },
     onSuccess: (data) => {
@@ -504,7 +504,7 @@ function PendingReviewCard({ project }) {
         reviewType === 'additional_appointment' ? (project.pre_revision_stage || (project.shoot_date ? 'scheduled' : 'to_be_scheduled')) :
         (project.shoot_date ? 'scheduled' : 'to_be_scheduled');
       
-      await base44.entities.Project.update(project.id, {
+      await api.entities.Project.update(project.id, {
         status: newStatus,
         pending_review_reason: null,
         pending_review_type: null,
@@ -515,12 +515,12 @@ function PendingReviewCard({ project }) {
       // Fire downstream automations (same as TonomoTab approve)
       if (newStatus !== 'cancelled') {
         // Role defaults + task generation + pricing recalc
-        base44.functions.invoke('applyProjectRoleDefaults', {
+        api.functions.invoke('applyProjectRoleDefaults', {
           project_id: project.id,
         }).catch(err => console.warn('applyProjectRoleDefaults failed:', err?.message));
 
         // Stage tracking — notifications, timers, deadline recalc
-        base44.functions.invoke('trackProjectStageChange', {
+        api.functions.invoke('trackProjectStageChange', {
           projectId: project.id,
           old_data: { status: project.status },
           actor_id: null,
@@ -661,7 +661,7 @@ function MappingsTab({ mappings }) {
 
   const confirmMutation = useMutation({
     mutationFn: async (mappingId) => {
-      return await base44.entities.TonomoMappingTable.update(mappingId, {
+      return await api.entities.TonomoMappingTable.update(mappingId, {
         is_confirmed: true,
         auto_suggested: false
       });
@@ -818,7 +818,7 @@ function CalendarLinkHealthPanel() {
   const { data: auditLogs = [] } = useQuery({
     queryKey: ['calendarLinkAuditFull'],
     queryFn: async () => {
-      const all = await base44.entities.TonomoAuditLog.list('-processed_at', 500);
+      const all = await api.entities.TonomoAuditLog.list('-processed_at', 500);
       return all.filter(l => l.entity_type === 'CalendarLink');
     },
     refetchInterval: 60_000,
@@ -828,7 +828,7 @@ function CalendarLinkHealthPanel() {
   const { data: autoLinkedProjects = [] } = useQuery({
     queryKey: ['autoLinkedProjects'],
     queryFn: async () => {
-      const all = await base44.entities.Project.list('-created_date', 500);
+      const all = await api.entities.Project.list('-created_date', 500);
       return all.filter(p => p.calendar_auto_linked);
     },
     refetchInterval: 60_000,
@@ -935,7 +935,7 @@ function MissedSchedulingPanel() {
   const { data: allProjects = [] } = useQuery({
     queryKey: ['missed-scheduling'],
     queryFn: async () => {
-      const projects = await base44.entities.Project.filter({
+      const projects = await api.entities.Project.filter({
         status: 'to_be_scheduled'
       }, null, 200);
       const cutoff = new Date();

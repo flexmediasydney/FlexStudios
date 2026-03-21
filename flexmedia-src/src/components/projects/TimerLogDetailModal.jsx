@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
 
   const { data: task } = useQuery({
     queryKey: ["task", log.task_id],
-    queryFn: () => base44.entities.ProjectTask.filter({ id: log.task_id }, null, 1).then(r => r[0] || null),
+    queryFn: () => api.entities.ProjectTask.filter({ id: log.task_id }, null, 1).then(r => r[0] || null),
     enabled: !!log.task_id
   });
 
@@ -30,7 +30,7 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
     mutationFn: () => {
       const totalSeconds = hours * 3600 + minutes * 60;
       if (totalSeconds <= 0) throw new Error("Duration must be greater than 0");
-      return base44.entities.TaskTimeLog.update(log.id, { total_seconds: totalSeconds });
+      return api.entities.TaskTimeLog.update(log.id, { total_seconds: totalSeconds });
     },
     onSuccess: () => {
       toast.success("Time log updated");
@@ -43,7 +43,7 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => base44.entities.TaskTimeLog.delete(log.id),
+    mutationFn: () => api.entities.TaskTimeLog.delete(log.id),
     onSuccess: () => {
       toast.success("Time log deleted");
       onClose();

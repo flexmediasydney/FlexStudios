@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -78,7 +78,7 @@ export default function AgencyInformationTab({ agency }) {
     if (!formData.name?.trim()) { toast.error('Agency name is required'); return; }
     setSaving(true);
     try {
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       const payload = {
         name: formData.name.trim(),
         email: formData.email.trim(),
@@ -99,9 +99,9 @@ export default function AgencyInformationTab({ agency }) {
       const changedFields = Object.keys(payload)
         .filter(k => String(payload[k] ?? '') !== String(agency[k] ?? ''))
         .map(k => ({ field: k, old_value: String(agency[k] ?? ''), new_value: String(payload[k] ?? '') }));
-      await base44.entities.Agency.update(agency.id, payload);
+      await api.entities.Agency.update(agency.id, payload);
       if (changedFields.length > 0) {
-        await base44.entities.AuditLog.create({
+        await api.entities.AuditLog.create({
           entity_type: 'agency', entity_id: agency.id, entity_name: formData.name,
           action: 'update', changed_fields: changedFields,
           previous_state: agency, new_state: payload,

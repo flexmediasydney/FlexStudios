@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { format } from "date-fns";
 import { Camera, Calendar, Database, ChevronDown, ChevronRight, Plus } from "lucide-react";
@@ -15,7 +15,7 @@ export default function PriceMatrixSnapshots() {
   const { data: snapshots = [], loading: isLoading } = useEntityList("PriceMatrixSnapshot", "-snapshot_date", 24);
 
   const createSnapshotMutation = useMutation({
-    mutationFn: () => base44.functions.invoke("generateMonthlyPriceMatrixSnapshots", {}),
+    mutationFn: () => api.functions.invoke("generateMonthlyPriceMatrixSnapshots", {}),
     onSuccess: () => {
       toast.success("Snapshot created successfully");
       queryClient.invalidateQueries({ queryKey: ["price-matrix-snapshots"] });

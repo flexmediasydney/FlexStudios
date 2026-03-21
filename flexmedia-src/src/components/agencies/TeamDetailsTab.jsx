@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -69,7 +69,7 @@ export default function TeamDetailsTab({ team }) {
     const agency = agencies.find(a => a.id === formData.agency_id);
     setSaving(true);
     try {
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       const payload = {
         name: formData.name.trim(),
         email: formData.email.trim(),
@@ -81,9 +81,9 @@ export default function TeamDetailsTab({ team }) {
       const changedFields = Object.keys(payload)
         .filter(k => String(payload[k] ?? '') !== String(team[k] ?? ''))
         .map(k => ({ field: k, old_value: String(team[k] ?? ''), new_value: String(payload[k] ?? '') }));
-      await base44.entities.Team.update(team.id, payload);
+      await api.entities.Team.update(team.id, payload);
       if (changedFields.length > 0) {
-        await base44.entities.AuditLog.create({
+        await api.entities.AuditLog.create({
           entity_type: 'team', entity_id: team.id, entity_name: formData.name,
           action: 'update', changed_fields: changedFields,
           previous_state: team, new_state: payload,

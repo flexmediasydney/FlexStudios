@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useEntityList } from "@/components/hooks/useEntityData";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Camera, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,12 +19,12 @@ export default function PackageSnapshotsPanel() {
   const handleManualSnapshot = async () => {
     setCreating(true);
     try {
-      const user = await base44.auth.me();
-      const packages = await base44.entities.Package.list();
+      const user = await api.auth.me();
+      const packages = await api.entities.Package.list();
       const now = new Date();
       const label = format(now, "MMMM yyyy") + " (Manual)";
 
-      await base44.entities.PackageSnapshot.create({
+      await api.entities.PackageSnapshot.create({
         snapshot_date: format(now, "yyyy-MM-dd"),
         snapshot_label: label,
         snapshot_type: "manual",

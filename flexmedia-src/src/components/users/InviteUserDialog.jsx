@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
     setLoading(true);
 
     try {
-      await base44.users.inviteUser(email, role, fullName || undefined);
+      await api.users.inviteUser(email, role, fullName || undefined);
       toast.success("Invitation sent successfully!");
       setEmail("");
       setFullName("");

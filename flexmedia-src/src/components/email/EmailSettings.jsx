@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -28,18 +28,18 @@ export default function EmailSettings({ onClose }) {
 
   const { data: user } = useQuery({
     queryKey: ["current-user"],
-    queryFn: () => base44.auth.me()
+    queryFn: () => api.auth.me()
   });
 
   const { data: signature } = useQuery({
     queryKey: ["user-signature", user?.id],
-    queryFn: () => user ? base44.entities.UserSignature.filter({ user_id: user.id }).then(res => res[0]) : null,
+    queryFn: () => user ? api.entities.UserSignature.filter({ user_id: user.id }).then(res => res[0]) : null,
     enabled: !!user
   });
 
   const { data: templates = [] } = useQuery({
     queryKey: ["email-templates"],
-    queryFn: () => base44.entities.EmailTemplate.list("-created_date", 50)
+    queryFn: () => api.entities.EmailTemplate.list("-created_date", 50)
   });
 
   const [signatureHtml, setSignatureHtml] = useState("");
@@ -62,9 +62,9 @@ export default function EmailSettings({ onClose }) {
         throw new Error("Signature cannot be empty");
       }
       if (signature?.id) {
-        await base44.entities.UserSignature.update(signature.id, { signature_html: cleanHtml });
+        await api.entities.UserSignature.update(signature.id, { signature_html: cleanHtml });
       } else {
-        await base44.entities.UserSignature.create({
+        await api.entities.UserSignature.create({
           user_id: user.id,
           user_name: user.full_name,
           user_email: user.email,
@@ -83,7 +83,7 @@ export default function EmailSettings({ onClose }) {
   });
 
   const deleteTemplateMutation = useMutation({
-    mutationFn: (id) => base44.entities.EmailTemplate.delete(id),
+    mutationFn: (id) => api.entities.EmailTemplate.delete(id),
     onSuccess: () => {
       toast.success("Template deleted");
       queryClient.invalidateQueries({ queryKey: ["email-templates"] });
@@ -92,7 +92,7 @@ export default function EmailSettings({ onClose }) {
   });
 
   const createTemplateMutation = useMutation({
-    mutationFn: () => base44.entities.EmailTemplate.create({
+    mutationFn: () => api.entities.EmailTemplate.create({
       name: templateName,
       subject: templateSubject,
       body: templateBody,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -89,7 +89,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   }, [thread.threadId]);
   const { data: user } = useQuery({
     queryKey: ['current-user'],
-    queryFn: () => base44.auth.me()
+    queryFn: () => api.auth.me()
   });
 
   // Subscribe to real-time updates for all messages in this thread
@@ -117,7 +117,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
 
     // Subscribe to EmailMessage updates — handle both updates to existing
     // messages AND new messages arriving in this thread (e.g., new reply)
-    const unsubscribe = base44.entities.EmailMessage.subscribe((event) => {
+    const unsubscribe = api.entities.EmailMessage.subscribe((event) => {
       if (!event.data) return;
       const data = event.data;
 
@@ -156,14 +156,14 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   };
 
   const markAsReadMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('markEmailsAsRead', {
+    mutationFn: () => api.functions.invoke('markEmailsAsRead', {
       threadIds: [thread.threadId],
       emailAccountId: account?.id
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'marked_read',
@@ -178,14 +178,14 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   });
 
   const markAsUnreadMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('markEmailsAsUnread', {
+    mutationFn: () => api.functions.invoke('markEmailsAsUnread', {
       threadIds: [thread.threadId],
       emailAccountId: account?.id
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'marked_unread',
@@ -200,13 +200,13 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   });
 
   const archiveEmailMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('archiveEmails', {
+    mutationFn: () => api.functions.invoke('archiveEmails', {
       threadIds: [thread.threadId],
       emailAccountId: account?.id
     }),
     onSuccess: () => {
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'archived',
@@ -220,13 +220,13 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   });
 
   const restoreEmailMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('restoreEmails', {
+    mutationFn: () => api.functions.invoke('restoreEmails', {
       threadIds: [thread.threadId],
       emailAccountId: account?.id
     }),
     onSuccess: () => {
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'restored',
@@ -244,7 +244,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       if (!['private', 'shared'].includes(visibility)) {
         throw new Error('Invalid visibility value');
       }
-      return base44.functions.invoke('setEmailVisibility', {
+      return api.functions.invoke('setEmailVisibility', {
         threadIds: [thread.threadId],
         emailAccountId: account?.id,
         visibility
@@ -253,7 +253,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     onSuccess: (_, visibility) => {
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'visibility_changed',
@@ -272,7 +272,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       const oldPriority = msg?.priority || 'none';
       await Promise.all(
         freshThread.messages.map(m =>
-          base44.entities.EmailMessage.update(m.id, { priority })
+          api.entities.EmailMessage.update(m.id, { priority })
         )
       );
       return { oldPriority, newPriority: priority || 'none' };
@@ -280,7 +280,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["email-thread"] });
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'priority_changed',
@@ -299,14 +299,14 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   });
 
   const deleteEmailMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('deleteEmails', {
+    mutationFn: () => api.functions.invoke('deleteEmails', {
       threadIds: [thread.threadId],
       emailAccountId: account?.id,
       permanently: false
     }),
     onSuccess: () => {
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'deleted',
@@ -323,7 +323,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
 
   const updateLabelsMutation = useMutation({
    mutationFn: (labels) =>
-     Promise.all(freshThread.messages.map(m => base44.entities.EmailMessage.update(m.id, { labels }))),
+     Promise.all(freshThread.messages.map(m => api.entities.EmailMessage.update(m.id, { labels }))),
    onSuccess: (_, newLabels) => {
      queryClient.invalidateQueries({ queryKey: ["email-thread"] });
      if (msg?.id) {
@@ -332,7 +332,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
        const removedLabels = oldLabels.filter(l => !newLabels.includes(l));
        
        if (addedLabels.length > 0) {
-         base44.functions.invoke('logEmailActivity', {
+         api.functions.invoke('logEmailActivity', {
            email_message_id: msg.id,
            email_account_id: account?.id,
            action_type: 'label_added',
@@ -342,7 +342,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
          }).catch(err => console.error('Failed to log activity:', err));
        }
        if (removedLabels.length > 0) {
-         base44.functions.invoke('logEmailActivity', {
+         api.functions.invoke('logEmailActivity', {
            email_message_id: msg.id,
            email_account_id: account?.id,
            action_type: 'label_removed',
@@ -362,7 +362,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const unlinkProjectMutation = useMutation({
     mutationFn: () => 
       Promise.all(freshThread.messages.map(m =>
-        base44.entities.EmailMessage.update(m.id, {
+        api.entities.EmailMessage.update(m.id, {
           project_id: null,
           project_title: null,
           visibility: 'private'
@@ -370,7 +370,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       )),
     onSuccess: () => {
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'project_unlinked',
@@ -393,14 +393,14 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     mutationFn: async (starred) => {
       await Promise.all(
         freshThread.messages.map(m =>
-          base44.entities.EmailMessage.update(m.id, { is_starred: starred })
+          api.entities.EmailMessage.update(m.id, { is_starred: starred })
         )
       );
       return starred;
     },
     onSuccess: (starred) => {
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: starred ? 'starred' : 'unstarred',
@@ -415,7 +415,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const linkProjectMutation = useMutation({
     mutationFn: (projectData) => 
       Promise.all(freshThread.messages.map(m =>
-        base44.entities.EmailMessage.update(m.id, {
+        api.entities.EmailMessage.update(m.id, {
           project_id: projectData.id,
           project_title: projectData.title
           // Do NOT force visibility to shared — owner controls that separately
@@ -423,7 +423,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       )),
     onSuccess: (_, projectData) => {
       if (msg?.id) {
-        base44.functions.invoke('logEmailActivity', {
+        api.functions.invoke('logEmailActivity', {
           email_message_id: msg.id,
           email_account_id: account?.id,
           action_type: 'project_linked',
@@ -448,7 +448,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     if (!thread?.threadId || !account?.id) return;
     const hasUnread = thread.messages.some(m => m.is_unread);
     if (!hasUnread) return;
-    base44.functions.invoke('markEmailsAsRead', {
+    api.functions.invoke('markEmailsAsRead', {
       threadIds: [thread.threadId],
       emailAccountId: account.id
     }).catch(() => {}); // Silent — don't surface errors for background action
@@ -459,7 +459,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     if (!msg?.id || !account?.id) return;
     
     // Log as opened
-    base44.functions.invoke('logEmailActivity', {
+    api.functions.invoke('logEmailActivity', {
       email_message_id: msg.id,
       email_account_id: account.id,
       action_type: 'opened',
@@ -517,7 +517,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const { data: labelData = [] } = useQuery({
    queryKey: ["email-labels", account?.id],
    queryFn: () =>
-     base44.entities.EmailLabel.filter({
+     api.entities.EmailLabel.filter({
        email_account_id: account?.id,
      }),
    enabled: !!account?.id,

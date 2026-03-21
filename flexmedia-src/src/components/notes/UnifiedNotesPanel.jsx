@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useCurrentUser, usePermissions } from '@/components/auth/PermissionGuard';
 import { useDebounce } from '@/components/hooks/useDebounce';
 import { Input } from '@/components/ui/input';
@@ -61,7 +61,7 @@ export default function UnifiedNotesPanel({
 
   const { data: rawNotes = [], isLoading: loading } = useQuery({
     queryKey: ['org-notes', contextField, contextKey],
-    queryFn: () => base44.entities.OrgNote.filter(
+    queryFn: () => api.entities.OrgNote.filter(
       { [contextField]: contextKey },
       '-created_date',
       agencyId && !projectId && !agentId && !teamId ? 500 : 200
@@ -72,7 +72,7 @@ export default function UnifiedNotesPanel({
 
   const { data: legacyNotes = [] } = useQuery({
     queryKey: ['project-notes', projectId],
-    queryFn: () => base44.entities.ProjectNote.filter({ project_id: projectId }, '-created_date', 100),
+    queryFn: () => api.entities.ProjectNote.filter({ project_id: projectId }, '-created_date', 100),
     enabled: !!projectId,
     staleTime: 30 * 1000,
   });

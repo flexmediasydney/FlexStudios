@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -197,7 +197,7 @@ export default function EmailInboxMain() {
       if (!user?.id || emailAccounts.length === 0) throw new Error('No accounts connected');
       const results = await Promise.allSettled(
         emailAccounts.map(account =>
-          base44.functions.invoke('syncGmailMessagesForAccount', {
+          api.functions.invoke('syncGmailMessagesForAccount', {
             accountId: account.id,
             userId: user.id,
           })
@@ -235,7 +235,7 @@ export default function EmailInboxMain() {
       // Sync each account individually using per-account token (correct OAuth flow)
       emailAccounts.forEach((account, idx) => {
         setTimeout(() => {
-          base44.functions.invoke('syncGmailMessagesForAccount', {
+          api.functions.invoke('syncGmailMessagesForAccount', {
             accountId: account.id,
             userId: user.id,
           }).catch(() => {});
@@ -253,12 +253,12 @@ export default function EmailInboxMain() {
 
   // Update message mutation - subscription handles UI updates automatically
   const updateMessageMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailMessage.update(data.messageId, data.updates)
+    mutationFn: (data) => api.entities.EmailMessage.update(data.messageId, data.updates)
   });
 
   // Delete emails mutation - subscription auto-updates UI
   const deleteEmailsMutation = useMutation({
-    mutationFn: (data) => base44.functions.invoke('deleteEmails', data),
+    mutationFn: (data) => api.functions.invoke('deleteEmails', data),
     onSuccess: () => {
       toast.success("Emails deleted", {
         action: {
@@ -293,7 +293,7 @@ export default function EmailInboxMain() {
       // Restore deleted emails across all affected accounts
       const acctIds = lastAction.data.accountIds || [lastAction.data.emailAccountId];
       await Promise.allSettled(acctIds.map(accId =>
-        base44.functions.invoke('restoreEmails', {
+        api.functions.invoke('restoreEmails', {
           threadIds: lastAction.data.threadIds,
           emailAccountId: accId
         })
@@ -328,7 +328,7 @@ export default function EmailInboxMain() {
       // Unlink project
       await Promise.all(
         lastAction.data.messageIds.map(msgId =>
-          base44.entities.EmailMessage.update(msgId, {
+          api.entities.EmailMessage.update(msgId, {
             project_id: null,
             project_title: null,
             visibility: 'private'
@@ -375,7 +375,7 @@ export default function EmailInboxMain() {
     } else if (action.type === 'linkProject') {
       Promise.all(
         action.data.messageIds.map(msgId =>
-          base44.entities.EmailMessage.update(msgId, {
+          api.entities.EmailMessage.update(msgId, {
             project_id: action.data.projectId,
             project_title: action.data.projectTitle,
             visibility: 'shared'
@@ -625,7 +625,7 @@ export default function EmailInboxMain() {
           }).filter(Boolean)
         ));
         Promise.all(accountIds.map(accId =>
-          base44.functions.invoke('archiveEmails', {
+          api.functions.invoke('archiveEmails', {
             threadIds: Array.from(selectedMessages),
             emailAccountId: accId
           })
@@ -646,7 +646,7 @@ export default function EmailInboxMain() {
             }).filter(Boolean)
           ));
           Promise.all(accountIds.map(accId =>
-            base44.functions.invoke('deleteEmails', {
+            api.functions.invoke('deleteEmails', {
               threadIds: Array.from(selectedMessages),
               emailAccountId: accId,
               permanently: false
@@ -1246,14 +1246,14 @@ export default function EmailInboxMain() {
                 onContextMenu={async (thread, action) => {
                   try {
                     if (action === 'archive') {
-                      await base44.functions.invoke('archiveEmails', {
+                      await api.functions.invoke('archiveEmails', {
                         threadIds: [thread.threadId],
                         emailAccountId: thread.email_account_id,
                       });
                       toast.success('Archived');
                       refetchMessages();
                     } else if (action === 'delete') {
-                      await base44.functions.invoke('deleteEmails', {
+                      await api.functions.invoke('deleteEmails', {
                         threadIds: [thread.threadId],
                         emailAccountId: thread.email_account_id,
                       });

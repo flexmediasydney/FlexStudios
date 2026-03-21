@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ export function useCurrentUser() {
   return useQuery({
     queryKey: ["current-user"],
     queryFn: async () => {
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       return user;
     },
     staleTime: 5 * 60 * 1000, // Keep user fresh for 5 minutes
@@ -132,7 +132,7 @@ export function PermissionGuard({
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
               <p className="mb-3">You need to be logged in to access this page.</p>
-              <Button onClick={() => base44.auth.redirectToLogin()}>
+              <Button onClick={() => api.auth.redirectToLogin()}>
                 Sign In
               </Button>
             </AlertDescription>
@@ -153,7 +153,7 @@ export function PermissionGuard({
               <Button variant="outline" size="sm" onClick={() => refetch()}>
                 Retry
               </Button>
-              <Button size="sm" onClick={() => base44.auth.redirectToLogin()}>
+              <Button size="sm" onClick={() => api.auth.redirectToLogin()}>
                 Sign In
               </Button>
             </div>
@@ -170,7 +170,7 @@ export function PermissionGuard({
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
             <p className="mb-3">You need to be logged in to access this page.</p>
-            <Button onClick={() => base44.auth.redirectToLogin()}>
+            <Button onClick={() => api.auth.redirectToLogin()}>
               Sign In
             </Button>
           </AlertDescription>

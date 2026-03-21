@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { LIMITS } from "@/components/hooks/useFormValidation";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -33,7 +33,7 @@ export default function ProjectNotes({ projectId }) {
   const { data: allUsers = [] } = useEntityList("User");
 
   const createNoteMutation = useMutation({
-    mutationFn: async (noteData) => base44.entities.ProjectNote.create(noteData),
+    mutationFn: async (noteData) => api.entities.ProjectNote.create(noteData),
     onSuccess: () => {
       setNoteContent("");
       setSelectedFiles([]);
@@ -49,7 +49,7 @@ export default function ProjectNotes({ projectId }) {
     const files = Array.from(e.target.files || []);
     
     for (const file of files) {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const { file_url } = await api.integrations.Core.UploadFile({ file });
       
       let fileType = "other";
       if (file.type.startsWith("image/")) fileType = "image";

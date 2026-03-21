@@ -24,7 +24,7 @@ import {
   Tag,
   X,
 } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { toast } from "sonner";
 import LabelSelectorRobust from "./LabelSelectorRobust";
 import { getAccountIdsFromThreads } from "./threadUtils";
@@ -58,7 +58,7 @@ export default function BulkActionBar({
         : getAccountIds();
 
       const results = await Promise.allSettled(accountIds.map(accId =>
-        base44.functions.invoke('markEmailsAsRead', {
+        api.functions.invoke('markEmailsAsRead', {
           threadIds,
           emailAccountId: accId
         })
@@ -83,7 +83,7 @@ export default function BulkActionBar({
     try {
       const accountIds = getAccountIds();
       const results = await Promise.allSettled(accountIds.map(accId =>
-        base44.functions.invoke('setEmailVisibility', {
+        api.functions.invoke('setEmailVisibility', {
           threadIds: Array.from(selectedMessages),
           emailAccountId: accId,
           visibility
@@ -109,7 +109,7 @@ export default function BulkActionBar({
     try {
       const accountIds = getAccountIds();
       const results = await Promise.allSettled(accountIds.map(accId =>
-        base44.functions.invoke('archiveEmails', {
+        api.functions.invoke('archiveEmails', {
           threadIds: Array.from(selectedMessages),
           emailAccountId: accId
         })
@@ -134,7 +134,7 @@ export default function BulkActionBar({
     try {
       const accountIds = getAccountIds();
       const results = await Promise.allSettled(accountIds.map(accId =>
-        base44.functions.invoke('restoreEmails', {
+        api.functions.invoke('restoreEmails', {
           threadIds: Array.from(selectedMessages),
           emailAccountId: accId
         })
@@ -211,7 +211,7 @@ export default function BulkActionBar({
               try {
                 const accountIds = getAccountIds();
                 const results = await Promise.allSettled(accountIds.map(accId =>
-                  base44.functions.invoke('markEmailsAsUnread', {
+                  api.functions.invoke('markEmailsAsUnread', {
                     threadIds: Array.from(selectedMessages),
                     emailAccountId: accId
                   })
@@ -291,7 +291,7 @@ export default function BulkActionBar({
                         onLabelsChange={(labels) => {
                           Promise.all(
                             thread.messages.map(m =>
-                              base44.entities.EmailMessage.update(m.id, { labels })
+                              api.entities.EmailMessage.update(m.id, { labels })
                             )
                           ).then(() => {
                             toast.success("Labels updated");
@@ -352,7 +352,7 @@ export default function BulkActionBar({
             setIsProcessing(true);
             const accountIds = getAccountIds();
             Promise.allSettled(accountIds.map(accId =>
-              base44.functions.invoke('deleteEmails', {
+              api.functions.invoke('deleteEmails', {
                 threadIds: Array.from(selectedMessages),
                 emailAccountId: accId,
                 permanently: false

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,18 +20,18 @@ export default function CompactBrandingPreferences({ agency }) {
 
   const { data: allTypes = [], isLoading: typesLoading } = useQuery({
     queryKey: ['projectTypes'],
-    queryFn: () => base44.entities.ProjectType.list(),
+    queryFn: () => api.entities.ProjectType.list(),
     staleTime: 20000
   });
   const { data: allCategories = [], isLoading: categoriesLoading } = useQuery({
     queryKey: ['productCategories'],
-    queryFn: () => base44.entities.ProductCategory.list(),
+    queryFn: () => api.entities.ProductCategory.list(),
     staleTime: 20000
   });
 
   useEffect(() => {
-    const u1 = base44.entities.ProjectType.subscribe(() => queryClient.invalidateQueries({ queryKey: ['projectTypes'] }));
-    const u2 = base44.entities.ProductCategory.subscribe(() => queryClient.invalidateQueries({ queryKey: ['productCategories'] }));
+    const u1 = api.entities.ProjectType.subscribe(() => queryClient.invalidateQueries({ queryKey: ['projectTypes'] }));
+    const u2 = api.entities.ProductCategory.subscribe(() => queryClient.invalidateQueries({ queryKey: ['productCategories'] }));
     return () => { u1(); u2(); };
   }, [queryClient]);
 
@@ -69,7 +69,7 @@ export default function CompactBrandingPreferences({ agency }) {
     try {
       const uploads = [];
       for (const file of files) {
-        const { file_url } = await base44.integrations.Core.UploadFile({ file });
+        const { file_url } = await api.integrations.Core.UploadFile({ file });
         uploads.push({ file_url, file_name: file.name, uploaded_at: new Date().toISOString() });
       }
       const existing = getPref(catId)?.reference_uploads || [];
@@ -89,7 +89,7 @@ export default function CompactBrandingPreferences({ agency }) {
     try {
       const activeIds = new Set(allCategories.map(c => c.id));
       const cleanPrefs = preferences.filter(p => activeIds.has(p.category_id));
-      await base44.entities.Agency.update(agency.id, {
+      await api.entities.Agency.update(agency.id, {
         branding_preferences: cleanPrefs,
         branding_general_notes: generalNotes,
         branding_files_link: filesLink

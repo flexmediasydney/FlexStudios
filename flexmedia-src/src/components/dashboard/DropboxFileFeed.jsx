@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useQuery } from '@tanstack/react-query';
 import { fixTimestamp } from '@/components/utils/dateUtils';
@@ -68,7 +68,7 @@ function Lightbox({ files, initialIndex, projectName, onClose }) {
     setLoadingUrl(true);
     setTempUrl(null);
     try {
-      const res = await base44.functions.invoke('getDeliveryMediaFeed', {
+      const res = await api.functions.invoke('getDeliveryMediaFeed', {
         action: 'get_temp_link', path
       });
       setTempUrl(res?.url || null);
@@ -327,7 +327,7 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
     setStatus('loading');
     setErrorMsg('');
     try {
-      const res = await base44.functions.invoke('getDeliveryMediaFeed', {
+      const res = await api.functions.invoke('getDeliveryMediaFeed', {
         path: project.tonomo_deliverable_path
       });
       setFiles(res?.files || []);

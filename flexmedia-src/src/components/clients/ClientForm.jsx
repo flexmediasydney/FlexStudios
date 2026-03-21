@@ -5,7 +5,7 @@ import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormV
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Loader2 } from "lucide-react";
 
 function FieldError({ error }) {
@@ -62,9 +62,9 @@ export default function ClientForm({ client, open, onClose, onSave }) {
 
     setSaving(true);
     if (client?.id) {
-      await base44.entities.Client.update(client.id, trimmed);
+      await api.entities.Client.update(client.id, trimmed);
     } else {
-      await base44.entities.Client.create(trimmed);
+      await api.entities.Client.create(trimmed);
     }
     setSaving(false);
     onSave();

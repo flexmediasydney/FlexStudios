@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,7 @@ export default function ClientMonitor() {
     queryKey: ["agentProjects", selectedAgent?.id, refreshKey],
     queryFn: () =>
       selectedAgent
-        ? base44.entities.Project.filter({ agent_id: selectedAgent.id })
+        ? api.entities.Project.filter({ agent_id: selectedAgent.id })
         : Promise.resolve([]),
     enabled: !!selectedAgent,
   });
@@ -30,7 +30,7 @@ export default function ClientMonitor() {
     queryKey: ["externalListings", selectedAgent?.id, refreshKey],
     queryFn: () =>
       selectedAgent
-        ? base44.entities.ExternalListing.filter({ agent_id: selectedAgent.id })
+        ? api.entities.ExternalListing.filter({ agent_id: selectedAgent.id })
         : Promise.resolve([]),
     enabled: !!selectedAgent,
   });

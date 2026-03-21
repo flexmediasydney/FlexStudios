@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Timer, User, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 
 function computeLiveSeconds(log) {
   if (!log?.start_time) return 0;
@@ -71,7 +71,7 @@ export default function ActiveTimersPanel({ projectId, tasks = [] }) {
 
     const fetchLogs = async () => {
       try {
-        const logs = await base44.entities.TaskTimeLog.filter({ project_id: projectId, is_active: true });
+        const logs = await api.entities.TaskTimeLog.filter({ project_id: projectId, is_active: true });
         if (mounted) setTimeLogs(logs);
       } catch (err) {
         if (retries < 2 && err.message?.includes('Rate limit')) {
@@ -84,7 +84,7 @@ export default function ActiveTimersPanel({ projectId, tasks = [] }) {
     fetchLogs();
 
     // Subscribe to changes - update local state in real-time
-    const unsub = base44.entities.TaskTimeLog.subscribe((event) => {
+    const unsub = api.entities.TaskTimeLog.subscribe((event) => {
       if (!mounted) return;
       if (event.data?.project_id !== projectId) return;
 

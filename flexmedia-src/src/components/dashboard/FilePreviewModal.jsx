@@ -2,7 +2,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Download, ExternalLink, X } from "lucide-react";
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 
 export default function FilePreviewModal({ isOpen, onClose, file }) {
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -13,7 +13,7 @@ export default function FilePreviewModal({ isOpen, onClose, file }) {
     if (isOpen && file) {
       setLoading(true);
       setError(null);
-      base44.functions
+      api.functions
         .invoke('getDropboxFilePreview', { filePath: file.path })
         .then(res => {
           setPreviewUrl(res.data.url);

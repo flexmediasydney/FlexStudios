@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useQuery } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -24,8 +24,8 @@ export default function EffortLoggingTab({ projectId, project }) {
   const [sortBy, setSortBy] = useState("recent"); // "recent" or "duration"
   const [selectedLog, setSelectedLog] = useState(null);
 
-  const { data: user } = useQuery({ queryKey: ["current-user"], queryFn: () => base44.auth.me() });
-  const { data: currentUser } = useQuery({ queryKey: ["user", user?.email], queryFn: () => base44.entities.User.filter({ email: user.email }, null, 1).then(users => users[0] || null), enabled: !!user?.email });
+  const { data: user } = useQuery({ queryKey: ["current-user"], queryFn: () => api.auth.me() });
+  const { data: currentUser } = useQuery({ queryKey: ["user", user?.email], queryFn: () => api.entities.User.filter({ email: user.email }, null, 1).then(users => users[0] || null), enabled: !!user?.email });
   const isMasterAdmin = currentUser?.role === "master_admin";
 
   const isClosed = ['delivered', 'cancelled'].includes(project?.status);

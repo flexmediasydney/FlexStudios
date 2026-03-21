@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -40,7 +40,7 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
     if (!selectedType || !summary.trim()) return;
     setLoading(true);
     try {
-      await base44.entities.InteractionLog.create({
+      await api.entities.InteractionLog.create({
         entity_type: "Agent",
         entity_id: agent.id,
         entity_name: agent.name || "Unknown",
@@ -55,7 +55,7 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
       });
 
       // Update last_contacted_at
-      base44.entities.Agent.update(agent.id, {
+      api.entities.Agent.update(agent.id, {
         last_contacted_at: new Date().toISOString(),
       }).catch(() => {});
 

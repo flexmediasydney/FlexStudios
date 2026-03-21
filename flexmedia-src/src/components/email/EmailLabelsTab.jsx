@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,7 @@ export default function EmailLabelsTab() {
   const { data: emailAccounts = [] } = useQuery({
     queryKey: ["email-accounts-labels", user?.id],
     queryFn: () =>
-      base44.entities.EmailAccount.filter({
+      api.entities.EmailAccount.filter({
         is_active: true,
         assigned_to_user_id: user?.id,
       }),
@@ -50,12 +50,12 @@ export default function EmailLabelsTab() {
 
   const { data: labels = [], isLoading } = useQuery({
     queryKey: ["email-labels-manage", accountId],
-    queryFn: () => base44.entities.EmailLabel.filter({ email_account_id: accountId }),
+    queryFn: () => api.entities.EmailLabel.filter({ email_account_id: accountId }),
     enabled: !!accountId,
   });
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailLabel.create(data),
+    mutationFn: (data) => api.entities.EmailLabel.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels-manage", accountId] });
       setNewName("");
@@ -67,7 +67,7 @@ export default function EmailLabelsTab() {
 
   // FIX 12: updateMutation now actually called from Save button
   const updateMutation = useMutation({
-    mutationFn: ({ id, updates }) => base44.entities.EmailLabel.update(id, updates),
+    mutationFn: ({ id, updates }) => api.entities.EmailLabel.update(id, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels-manage", accountId] });
       setEditingId(null);
@@ -77,7 +77,7 @@ export default function EmailLabelsTab() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.EmailLabel.delete(id),
+    mutationFn: (id) => api.entities.EmailLabel.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels-manage", accountId] });
       toast.success("Label deleted.");

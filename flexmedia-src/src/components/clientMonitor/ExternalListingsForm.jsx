@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,7 +41,7 @@ export default function ExternalListingsForm({ agent, onSuccess, onCancel }) {
     }
 
     try {
-      await base44.entities.ExternalListing.create({
+      await api.entities.ExternalListing.create({
         agent_id: agent.id,
         agent_name: agent.name,
         agency_id: agent.current_agency_id,

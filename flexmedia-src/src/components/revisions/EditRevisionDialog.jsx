@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -41,7 +41,7 @@ export default function EditRevisionDialog({ open, onClose, revision, project })
   }, [revision, open]);
 
   const updateMutation = useMutation({
-    mutationFn: (data) => base44.entities.ProjectRevision.update(revision.id, data),
+    mutationFn: (data) => api.entities.ProjectRevision.update(revision.id, data),
     onSuccess: () => {
       toast.success("Request updated");
       const projectName = project?.title || project?.property_address || 'Project';

@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 
 /**
  * Simple, bulletproof hook for project items management
@@ -10,7 +10,7 @@ export function useProjectItemsManager(projectId) {
 
   const productsQuery = useQuery({
     queryKey: ["products-all"],
-    queryFn: () => base44.entities.Product.list('-updated_date', 500),
+    queryFn: () => api.entities.Product.list('-updated_date', 500),
     staleTime: 300000, // Cache for 5 min to minimize DB hits
     gcTime: 600000, // Keep in memory for 10 min for faster re-mounts
     refetchOnWindowFocus: false,
@@ -19,7 +19,7 @@ export function useProjectItemsManager(projectId) {
 
   const packagesQuery = useQuery({
     queryKey: ["packages-all"],
-    queryFn: () => base44.entities.Package.list('-updated_date', 500),
+    queryFn: () => api.entities.Package.list('-updated_date', 500),
     staleTime: 300000,
     gcTime: 600000,
     refetchOnWindowFocus: false,
@@ -28,7 +28,7 @@ export function useProjectItemsManager(projectId) {
 
   const batchUpdateMutation = useMutation({
     mutationFn: async (updateData) => {
-      return base44.entities.Project.update(projectId, updateData);
+      return api.entities.Project.update(projectId, updateData);
     },
     onError: (err) => {
       console.error('Project batch update failed:', err);

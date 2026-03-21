@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -72,7 +72,7 @@ function MyPreferencesTab({ userId }) {
 
   const { data: prefs = [] } = useQuery({
     queryKey: ["notifPrefs", userId],
-    queryFn: () => base44.entities.NotificationPreference.list("-created_date", 200),
+    queryFn: () => api.entities.NotificationPreference.list("-created_date", 200),
     enabled: !!userId,
     staleTime: 60 * 1000,
   });
@@ -80,7 +80,7 @@ function MyPreferencesTab({ userId }) {
   const { data: digestData = [] } = useQuery({
     queryKey: ["notifDigest", userId],
     queryFn: async () => {
-      const data = await base44.entities.NotificationDigestSettings.list("-created_date", 10);
+      const data = await api.entities.NotificationDigestSettings.list("-created_date", 10);
       const mine = data.find(d => d.user_id === userId);
       if (mine) setDigestSettings(mine);
       return data;
@@ -93,9 +93,9 @@ function MyPreferencesTab({ userId }) {
     mutationFn: async ({ type, category, enabled }) => {
       const existing = prefs.find(p => p.user_id === userId && p.notification_type === type);
       if (existing) {
-        return base44.entities.NotificationPreference.update(existing.id, { in_app_enabled: enabled });
+        return api.entities.NotificationPreference.update(existing.id, { in_app_enabled: enabled });
       } else {
-        return base44.entities.NotificationPreference.create({
+        return api.entities.NotificationPreference.create({
           user_id: userId, notification_type: type, category, in_app_enabled: enabled
         });
       }
@@ -110,9 +110,9 @@ function MyPreferencesTab({ userId }) {
         p => p.user_id === userId && p.category === category && (!p.notification_type || p.notification_type === "*")
       );
       if (existing) {
-        return base44.entities.NotificationPreference.update(existing.id, { in_app_enabled: enabled });
+        return api.entities.NotificationPreference.update(existing.id, { in_app_enabled: enabled });
       } else {
-        return base44.entities.NotificationPreference.create({
+        return api.entities.NotificationPreference.create({
           user_id: userId, notification_type: "*", category, in_app_enabled: enabled
         });
       }
@@ -125,9 +125,9 @@ function MyPreferencesTab({ userId }) {
     mutationFn: async (settings) => {
       const existing = digestData.find(d => d.user_id === userId);
       if (existing) {
-        return base44.entities.NotificationDigestSettings.update(existing.id, settings);
+        return api.entities.NotificationDigestSettings.update(existing.id, settings);
       } else {
-        return base44.entities.NotificationDigestSettings.create({ user_id: userId, ...settings });
+        return api.entities.NotificationDigestSettings.create({ user_id: userId, ...settings });
       }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifDigest", userId] }),
@@ -293,12 +293,12 @@ function MyPreferencesTab({ userId }) {
 function NotificationLogTab() {
   const { data: notifs = [] } = useQuery({
     queryKey: ["allNotifications"],
-    queryFn: () => base44.entities.Notification.list("-created_date", 500),
+    queryFn: () => api.entities.Notification.list("-created_date", 500),
     staleTime: 30 * 1000,
   });
   const { data: users = [] } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
     staleTime: 5 * 60 * 1000,
   });
 

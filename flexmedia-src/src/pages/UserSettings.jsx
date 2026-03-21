@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Settings as SettingsIcon, Mail } from "lucide-react";
 import UserIntegrations from "@/components/settings/UserIntegrations";
@@ -7,7 +7,7 @@ import UserIntegrations from "@/components/settings/UserIntegrations";
 export default function UserSettings() {
   const { data: user } = useQuery({
     queryKey: ["current-user"],
-    queryFn: () => base44.auth.me(),
+    queryFn: () => api.auth.me(),
     staleTime: 5 * 60 * 1000,
   });
 

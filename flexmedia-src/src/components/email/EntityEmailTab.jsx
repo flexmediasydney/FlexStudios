@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Mail, Plus, Search, Reply, Archive, Trash2, Lock, Users, Star, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -57,7 +57,7 @@ export default function EntityEmailTab({
     queryKey: ['emails', entityType, entityId],
     queryFn: async () => {
       const filters = buildEmailFilters();
-      return await base44.entities.EmailMessage.filter(filters, '-received_at', 100);
+      return await api.entities.EmailMessage.filter(filters, '-received_at', 100);
     },
     staleTime: 2 * 60 * 1000,
   });
@@ -131,7 +131,7 @@ export default function EntityEmailTab({
 
   // Mutations
   const updateMessageMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailMessage.update(data.messageId, data.updates),
+    mutationFn: (data) => api.entities.EmailMessage.update(data.messageId, data.updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails', entityType, entityId] });
     },

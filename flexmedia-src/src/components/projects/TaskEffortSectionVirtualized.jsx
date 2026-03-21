@@ -6,7 +6,7 @@ import { fmtTimestampCustom, fixTimestamp } from "@/components/utils/dateUtils";
 import { Clock, Plus, ChevronDown, Lock, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import TimerLogActions from "./TimerLogActions";
 import ManualTimeEntryDialog from "./ManualTimeEntryDialog";
 
@@ -30,7 +30,7 @@ export default function TaskEffortSectionVirtualized({ taskId, onLogClick, task,
   const { data: currentUser } = useQuery({ 
     queryKey: ["user-by-email", user?.email], 
     queryFn: async () => {
-      const users = await base44.entities.User.filter({ email: user.email }, null, 1);
+      const users = await api.entities.User.filter({ email: user.email }, null, 1);
       return users[0] || null;
     }, 
     enabled: !!user?.email,

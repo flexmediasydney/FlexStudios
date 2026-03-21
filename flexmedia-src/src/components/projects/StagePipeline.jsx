@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { PROJECT_STAGES } from "./projectStatuses";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
@@ -78,14 +78,14 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
     let mounted = true;
 
     // Initial load
-    base44.entities.ProjectStageTimer.list().then(all => {
+    api.entities.ProjectStageTimer.list().then(all => {
       if (!mounted) return;
       const filtered = (all || []).filter(t => t.project_id === project.id);
       setStageTimers(filtered);
     });
 
     // Live subscription
-    const unsub = base44.entities.ProjectStageTimer.subscribe((event) => {
+    const unsub = api.entities.ProjectStageTimer.subscribe((event) => {
       if (!mounted) return;
       setStageTimers(prev => {
         // Only care about timers for this project

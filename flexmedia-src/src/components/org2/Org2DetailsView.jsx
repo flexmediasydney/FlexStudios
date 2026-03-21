@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Pencil, X, Save } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 
 const DETAIL_FIELDS = [
   { key: 'name', label: 'Agency Name', type: 'text', readOnly: false },
@@ -26,7 +26,7 @@ export default function Org2DetailsView({ agency, agents }) {
   const [editData, setEditData] = useState(agency || {});
 
   const handleSave = async () => {
-    await base44.entities.Agency.update(agency.id, editData);
+    await api.entities.Agency.update(agency.id, editData);
     setIsEditing(false);
   };
 

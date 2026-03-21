@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useQuery } from '@tanstack/react-query';
 import { AlertCircle, CheckCircle2, AlertTriangle, Zap, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -28,7 +28,7 @@ export default function DataIntegrityMonitor() {
   const { data: auditResult, isLoading, refetch } = useQuery({
     queryKey: ['product-category-audit'],
     queryFn: async () => {
-      const res = await base44.functions.invoke('auditProductCategoryIntegrity', {});
+      const res = await api.functions.invoke('auditProductCategoryIntegrity', {});
       return res.data;
     },
     staleTime: 5 * 60 * 1000
@@ -43,7 +43,7 @@ export default function DataIntegrityMonitor() {
     setRepairingIssue(issue.product_id || issue.category_id);
     try {
       const issueId = `${issue.type}:${issue.product_id || issue.category_id}|${issue.category || issue.invalid_type_id || issue.project_type_id}`;
-      const res = await base44.functions.invoke('repairProductCategoryIssues', {
+      const res = await api.functions.invoke('repairProductCategoryIssues', {
         issue_id: issueId,
         action: issue.type
       });

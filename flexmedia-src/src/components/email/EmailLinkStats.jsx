@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { format } from 'date-fns';
 import { ExternalLink, Link2, Eye } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ export default function ProjectLinkDialog({ thread, onClose }) {
 
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ["projects"],
-    queryFn: () => base44.entities.Project.list("-created_date", 100)
+    queryFn: () => api.entities.Project.list("-created_date", 100)
   });
 
   const linkMutation = useMutation({
@@ -20,14 +20,14 @@ export default function ProjectLinkDialog({ thread, onClose }) {
       const project = projects.find(p => p.id === projectId);
       
       // Update email with project link and change visibility to team
-      await base44.entities.EmailMessage.update(thread.messages[0].id, {
+      await api.entities.EmailMessage.update(thread.messages[0].id, {
         project_id: projectId,
         project_title: project?.title,
         visibility: "team"
       });
       
       // Create activity log entry
-      await base44.entities.ProjectActivity.create({
+      await api.entities.ProjectActivity.create({
         project_id: projectId,
         project_title: project?.title,
         action: "email_linked",

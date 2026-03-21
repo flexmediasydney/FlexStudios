@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { Building2, MapPin, User, Users, Pin, Edit, Trash2, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { toast } from 'sonner';
 import ActionMenu from '@/components/common/ActionMenu';
 import { fixTimestamp } from '@/components/utils/dateUtils';
@@ -130,13 +130,13 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
 
   const handleTogglePin = async () => {
     try {
-      await base44.entities.OrgNote.update(note.id, { is_pinned: !note.is_pinned });
+      await api.entities.OrgNote.update(note.id, { is_pinned: !note.is_pinned });
     } catch { toast.error('Failed to update pin'); }
   };
 
   const handleDelete = async () => {
     try {
-      await base44.entities.OrgNote.delete(note.id);
+      await api.entities.OrgNote.delete(note.id);
       onRefresh?.();
     } catch { toast.error('Failed to delete note'); }
   };

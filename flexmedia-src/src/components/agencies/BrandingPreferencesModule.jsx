@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,12 +25,12 @@ export default function BrandingPreferencesModule({ agency }) {
   // Fetch project types with real-time subscription
   const { data: allTypes = [], isLoading: typesLoading } = useQuery({
     queryKey: ['projectTypes'],
-    queryFn: () => base44.entities.ProjectType.list(),
+    queryFn: () => api.entities.ProjectType.list(),
     staleTime: 20000
   });
 
   useEffect(() => {
-    const unsubscribe = base44.entities.ProjectType.subscribe((event) => {
+    const unsubscribe = api.entities.ProjectType.subscribe((event) => {
       queryClient.invalidateQueries({ queryKey: ['projectTypes'] });
     });
     return unsubscribe;
@@ -39,13 +39,13 @@ export default function BrandingPreferencesModule({ agency }) {
   // Fetch all active categories with real-time subscription
   const { data: allCategories = [], isLoading: categoriesLoading } = useQuery({
     queryKey: ['productCategories'],
-    queryFn: () => base44.entities.ProductCategory.list(),
+    queryFn: () => api.entities.ProductCategory.list(),
     staleTime: 20000
   });
 
   // Real-time category subscription for dynamic updates
   useEffect(() => {
-    const unsubscribe = base44.entities.ProductCategory.subscribe((event) => {
+    const unsubscribe = api.entities.ProductCategory.subscribe((event) => {
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
     });
     return unsubscribe;
@@ -143,7 +143,7 @@ export default function BrandingPreferencesModule({ agency }) {
       const newUploads = [];
 
       for (let file of files) {
-        const { file_url } = await base44.integrations.Core.UploadFile({ file });
+        const { file_url } = await api.integrations.Core.UploadFile({ file });
         newUploads.push({
           file_url,
           file_name: file.name,
@@ -182,7 +182,7 @@ export default function BrandingPreferencesModule({ agency }) {
         return cat && cat.is_active !== false;
       });
 
-      await base44.entities.Agency.update(agency.id, {
+      await api.entities.Agency.update(agency.id, {
         branding_preferences: cleanPrefs,
         branding_general_notes: generalNotes,
         branding_files_link: filesLink

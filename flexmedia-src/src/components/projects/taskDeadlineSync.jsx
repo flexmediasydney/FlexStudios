@@ -2,7 +2,7 @@
  * Debounced wrapper for calculateProjectTaskDeadlines to prevent rate limiting.
  * Multiple calls within the debounce window are coalesced into one.
  */
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 
 const pendingTimers = new Map(); // project_id -> timeout handle
 
@@ -23,7 +23,7 @@ export function scheduleDeadlineSync(projectId, triggerEvent = "manual", delayMs
   const timer = setTimeout(async () => {
     pendingTimers.delete(projectId);
     try {
-      await base44.functions.invoke("calculateProjectTaskDeadlines", {
+      await api.functions.invoke("calculateProjectTaskDeadlines", {
         project_id: projectId,
         trigger_event: triggerEvent,
       });

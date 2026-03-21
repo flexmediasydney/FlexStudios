@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,22 +37,22 @@ export default function PermissionMatrix() {
   // Fetch data
   const { data: users = [], isLoading: usersLoading } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.list()
+    queryFn: () => api.entities.User.list()
   });
 
   const { data: permissions = [], isLoading: permsLoading } = useQuery({
     queryKey: ["permissions"],
-    queryFn: () => base44.entities.Permission.list()
+    queryFn: () => api.entities.Permission.list()
   });
 
   const { data: userPermissions = [], isLoading: userPermsLoading } = useQuery({
     queryKey: ["userPermissions"],
-    queryFn: () => base44.entities.UserPermission.list()
+    queryFn: () => api.entities.UserPermission.list()
   });
 
   const { data: auditLogs = [] } = useQuery({
     queryKey: ["permissionAuditLogs"],
-    queryFn: () => base44.entities.PermissionAuditLog.list("-created_date", 100)
+    queryFn: () => api.entities.PermissionAuditLog.list("-created_date", 100)
   });
 
   // Mutations
@@ -61,11 +61,11 @@ export default function PermissionMatrix() {
       if (!data.userEmail || !data.permissionName) {
         throw new Error("User and permission are required");
       }
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       const permission = permissions.find(p => p.name === data.permissionName);
       if (!permission) throw new Error("Permission not found");
       
-      return await base44.entities.UserPermission.create({
+      return await api.entities.UserPermission.create({
         user_email: data.userEmail,
         permission_id: permission.id,
         permission_name: permission.name,
@@ -97,7 +97,7 @@ export default function PermissionMatrix() {
       );
       if (!userPerm) throw new Error("Permission not found");
       
-      return await base44.entities.UserPermission.update(userPerm.id, { is_active: false });
+      return await api.entities.UserPermission.update(userPerm.id, { is_active: false });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["userPermissions"] });

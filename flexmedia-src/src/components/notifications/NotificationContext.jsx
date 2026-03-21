@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 
 const NotificationContext = createContext(null);
@@ -20,7 +20,7 @@ export function NotificationProvider({ children }) {
     if (!silent) setLoading(true);
     try {
       // Filter server-side by user_id so the limit applies per-user, not globally
-      const mine = await base44.entities.Notification.filter(
+      const mine = await api.entities.Notification.filter(
         { user_id: currentUser.id, is_dismissed: false },
         "-created_date",
         MAX_DISPLAY
@@ -41,7 +41,7 @@ export function NotificationProvider({ children }) {
   useEffect(() => {
     if (!currentUser?.id) return;
 
-    const unsubscribe = base44.entities.Notification.subscribe((event) => {
+    const unsubscribe = api.entities.Notification.subscribe((event) => {
       if (!event) return;
 
       if (event.type === 'create' && event.data) {
@@ -95,7 +95,7 @@ export function NotificationProvider({ children }) {
     );
     setUnreadCount(prev => Math.max(0, prev - 1));
     try {
-      await base44.entities.Notification.update(notificationId, {
+      await api.entities.Notification.update(notificationId, {
         is_read: true,
         read_at: new Date().toISOString(),
       });
@@ -109,7 +109,7 @@ export function NotificationProvider({ children }) {
     try {
       await Promise.all(
         unread.map(n =>
-          base44.entities.Notification.update(n.id, {
+          api.entities.Notification.update(n.id, {
             is_read: true,
             read_at: new Date().toISOString(),
           })
@@ -125,7 +125,7 @@ export function NotificationProvider({ children }) {
       return wasUnread ? Math.max(0, prev - 1) : prev;
     });
     try {
-      await base44.entities.Notification.update(notificationId, { is_dismissed: true });
+      await api.entities.Notification.update(notificationId, { is_dismissed: true });
     } catch { fetchNotifications(true); }
   }, [notifications, fetchNotifications]);
 

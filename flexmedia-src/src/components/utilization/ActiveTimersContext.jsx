@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 
 export const ActiveTimersContext = createContext();
 
@@ -14,7 +14,7 @@ export function ActiveTimersProvider({ children, currentUser }) {
     // Fetch active timers for this user
     const loadActiveTimers = async () => {
       try {
-        const logs = await base44.entities.TaskTimeLog.filter({
+        const logs = await api.entities.TaskTimeLog.filter({
           user_id: currentUser.id,
           is_active: true,
           status: 'running'
@@ -41,7 +41,7 @@ export function ActiveTimersProvider({ children, currentUser }) {
     if (!currentUser?.id) return;
 
     // Subscribe to real-time updates (separate effect to avoid re-subscribing on every user change)
-    const unsubscribe = base44.entities.TaskTimeLog.subscribe((event) => {
+    const unsubscribe = api.entities.TaskTimeLog.subscribe((event) => {
       if (!event.data || event.data.user_id !== currentUser.id) return;
 
       setActiveTimers(prev => {

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
@@ -25,7 +25,7 @@ export default function SaveAsTemplateModal({ subject, body, onClose }) {
   const queryClient = useQueryClient();
 
   const saveMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailTemplate.create(data),
+    mutationFn: (data) => api.entities.EmailTemplate.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-templates"] });
       toast.success("Template saved");

@@ -15,7 +15,7 @@
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { queryKeys } from '@/components/lib/query-client';
 import { toast } from 'sonner';
 
@@ -29,7 +29,7 @@ export function useOptimisticProjectStatusChange(projectId, { onMutate: external
 
   return useMutation({
     mutationFn: async ({ newStatus, updateData }) => {
-      return base44.entities.Project.update(projectId, updateData || { status: newStatus, last_status_change: new Date().toISOString() });
+      return api.entities.Project.update(projectId, updateData || { status: newStatus, last_status_change: new Date().toISOString() });
     },
 
     onMutate: async ({ newStatus }) => {
@@ -90,7 +90,7 @@ export function useOptimisticTaskCompletion(projectId, { onSuccess: externalOnSu
 
   return useMutation({
     mutationFn: async ({ taskId, isCompleted }) => {
-      return base44.entities.ProjectTask.update(taskId, { is_completed: isCompleted });
+      return api.entities.ProjectTask.update(taskId, { is_completed: isCompleted });
     },
 
     onMutate: async ({ taskId, isCompleted }) => {
@@ -136,7 +136,7 @@ export function useOptimisticEmailMarkAsRead(accountId, { onSuccess: externalOnS
 
   return useMutation({
     mutationFn: async ({ threadId, emailAccountId }) => {
-      return base44.functions.invoke('markEmailsAsRead', {
+      return api.functions.invoke('markEmailsAsRead', {
         threadIds: [threadId],
         emailAccountId: emailAccountId || accountId,
       });
@@ -186,7 +186,7 @@ export function useOptimisticEmailMarkAsUnread(accountId, { onSuccess: externalO
 
   return useMutation({
     mutationFn: async ({ threadId, emailAccountId }) => {
-      return base44.functions.invoke('markEmailsAsUnread', {
+      return api.functions.invoke('markEmailsAsUnread', {
         threadIds: [threadId],
         emailAccountId: emailAccountId || accountId,
       });

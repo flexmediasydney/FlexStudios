@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp } from "lucide-react";
@@ -34,7 +34,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
 
   const { data: currentUser } = useQuery({
     queryKey: ["current-user"],
-    queryFn: () => base44.auth.me(),
+    queryFn: () => api.auth.me(),
     staleTime: 60000,
   });
   const canEdit = currentUser?.role === "admin" || currentUser?.role === "master_admin";
@@ -75,8 +75,8 @@ export default function PriceMatrixEditor({ priceMatrix }) {
         last_modified_at: new Date().toISOString(),
         last_modified_by: currentUser?.email,
       };
-      await base44.entities.PriceMatrix.update(priceMatrix.id, payload);
-      base44.functions.invoke("logPriceMatrixChange", {
+      await api.entities.PriceMatrix.update(priceMatrix.id, payload);
+      api.functions.invoke("logPriceMatrixChange", {
         price_matrix_id: priceMatrix.id,
         previous_state: priceMatrix,
         new_state: payload

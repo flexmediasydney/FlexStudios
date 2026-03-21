@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,14 +17,14 @@ export default function BookingHealthMonitor() {
 
   const { data: queue = [] } = useQuery({
     queryKey: ['healthMonitor-queue'],
-    queryFn: () => base44.entities.TonomoProcessingQueue.list('-created_date', 200),
+    queryFn: () => api.entities.TonomoProcessingQueue.list('-created_date', 200),
     refetchInterval: 10000,
   });
 
   const { data: settings } = useQuery({
     queryKey: ['healthMonitor-settings'],
     queryFn: async () => {
-      const all = await base44.entities.TonomoIntegrationSettings.list('-created_date', 1);
+      const all = await api.entities.TonomoIntegrationSettings.list('-created_date', 1);
       return all[0] || null;
     },
     refetchInterval: 30000,

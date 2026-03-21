@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, GitBranch, History, Camera, BookOpen, LayoutList, Grid3x3, Trello } from "lucide-react";
@@ -62,11 +62,11 @@ export default function ProductsManagement() {
   const { data: productCategories = [] } = useEntityList("ProductCategory");
 
   const logChange = async (action, product, previousState, newState) => {
-    const user = await base44.auth.me().catch(() => null);
+    const user = await api.auth.me().catch(() => null);
     const changedFields = action === "update" ? getChangedFields(previousState, newState) : [];
     const summaryParts = changedFields.map(f => `${f.field}: ${f.old_value} → ${f.new_value}`);
 
-    await base44.entities.ProductAuditLog.create({
+    await api.entities.ProductAuditLog.create({
       product_id: product.id || "new",
       product_name: product.name,
       action,
@@ -122,11 +122,11 @@ export default function ProductsManagement() {
   const saveMutation = useMutation({
     mutationFn: async (data) => {
       if (editingProduct) {
-        const result = await base44.entities.Product.update(editingProduct.id, data);
+        const result = await api.entities.Product.update(editingProduct.id, data);
         await logChange("update", { id: editingProduct.id, name: data.name }, editingProduct, data);
         return result;
       }
-      const result = await base44.entities.Product.create(data);
+      const result = await api.entities.Product.create(data);
       await logChange("create", { id: result.id, name: data.name }, null, data);
       return result;
     },
@@ -157,12 +157,12 @@ export default function ProductsManagement() {
 
   const deleteMutation = useMutation({
     mutationFn: async (product) => {
-      const impact = await base44.functions.invoke('analyzeProductImpact', {
+      const impact = await api.functions.invoke('analyzeProductImpact', {
         productId: product.id,
         productName: product.name
       }).catch(() => null);
       
-      await base44.entities.Product.delete(product.id);
+      await api.entities.Product.delete(product.id);
       await logChange("delete", { id: product.id, name: product.name }, product, null);
       return impact?.data;
     },

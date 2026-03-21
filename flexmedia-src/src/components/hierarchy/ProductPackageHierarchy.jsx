@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
@@ -122,7 +122,7 @@ export default function ProductPackageHierarchy() {
 
   // Subscribe to package changes to keep hierarchy in sync
   useEffect(() => {
-    const unsubscribe = base44.entities.Package.subscribe((event) => {
+    const unsubscribe = api.entities.Package.subscribe((event) => {
       // Clear selected item if the modified package was selected
       setSelectedItem(prev => 
         prev?.id === event.id && prev?.type === "package" ? null : prev

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -61,12 +61,12 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
 
     try {
       if (agency) {
-        await base44.entities.Agency.update(agency.id, formData);
+        await api.entities.Agency.update(agency.id, formData);
       } else {
-        const result = await base44.entities.Agency.create(formData);
+        const result = await api.entities.Agency.create(formData);
         
         // Auto-log creation as interaction
-        await base44.entities.InteractionLog.create({
+        await api.entities.InteractionLog.create({
           entity_type: 'Agency',
           entity_id: result?.id || null,
           entity_name: formData.name,

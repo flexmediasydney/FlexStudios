@@ -10,7 +10,7 @@ import { useProjectItemsManager } from "./hooks/useProjectItemsManager";
 import { useProjectPricingCalculator } from "./hooks/useProjectPricingCalculator";
 import AddItemsDialog from "./AddItemsDialog";
 import { PricingTableBody } from "./PricingTableBody";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
 import { writeFeedEvent } from "@/components/notifications/createNotification";
@@ -212,7 +212,7 @@ export default function ProjectPricingTable({
         return;
       }
 
-      const response = await base44.functions.invoke('calculateProjectPricing', {
+      const response = await api.functions.invoke('calculateProjectPricing', {
         agent_id: project?.agent_id || null,
         agency_id: project?.agency_id || null,
         products: formState.products,
@@ -290,12 +290,12 @@ export default function ProjectPricingTable({
       const priceDelta = Math.abs(newPrice - oldPrice);
       const projectName = project?.title || project?.property_address || 'Project';
 
-      base44.auth.me().then(currentUser => {
+      api.auth.me().then(currentUser => {
         const userName = currentUser?.full_name || 'Unknown';
         const userEmail = currentUser?.email || '';
 
         // ProjectActivity entry (visible in project History tab)
-        base44.entities.ProjectActivity.create({
+        api.entities.ProjectActivity.create({
           project_id: projectId,
           project_title: projectName,
           action: 'pricing_updated',
@@ -305,7 +305,7 @@ export default function ProjectPricingTable({
         }).catch(() => {});
 
         // TeamActivityFeed entry (visible on Team Pulse page)
-        base44.entities.TeamActivityFeed.create({
+        api.entities.TeamActivityFeed.create({
           event_type: 'pricing_updated',
           project_id: projectId,
           project_title: projectName,
@@ -317,7 +317,7 @@ export default function ProjectPricingTable({
         // Notify project owner + admins if significant change (>$50 or >5%)
         const pctDelta = oldPrice > 0 ? (priceDelta / oldPrice) * 100 : 0;
         if (oldPrice > 0 && (priceDelta >= 50 || pctDelta >= 5)) {
-          base44.functions.invoke('notificationService', {
+          api.functions.invoke('notificationService', {
             type: 'project_pricing_changed',
             category: 'project',
             severity: 'info',
@@ -332,11 +332,11 @@ export default function ProjectPricingTable({
       }).catch(() => {});
 
       // Sync tasks, update onsite durations, clean up orphans — fire-and-forget
-      base44.functions.invoke('syncProjectTasksFromProducts', { project_id: projectId })
+      api.functions.invoke('syncProjectTasksFromProducts', { project_id: projectId })
         .catch(err => console.warn('Task sync failed:', err?.message));
-      base44.functions.invoke('syncOnsiteEffortTasks', { project_id: projectId })
+      api.functions.invoke('syncOnsiteEffortTasks', { project_id: projectId })
         .catch(err => console.warn('Onsite sync failed:', err?.message));
-      base44.functions.invoke('cleanupOrphanedProjectTasks', { project_id: projectId })
+      api.functions.invoke('cleanupOrphanedProjectTasks', { project_id: projectId })
         .catch(err => console.warn('Cleanup failed:', err?.message));
 
       // Force entity cache refresh for tasks after backend sync completes

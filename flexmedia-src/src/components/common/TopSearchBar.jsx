@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { useQuery } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { stageConfig, stageLabel } from "@/components/projects/projectStatuses";
 import { fmtDate } from "@/components/utils/dateUtils";
 import {
@@ -54,19 +54,19 @@ export default function TopSearchBar() {
   // This prevents 3 DB queries on every page load across the entire app.
   const { data: allProjects = [], isFetching: projectsFetching } = useQuery({
     queryKey: ["search-projects"],
-    queryFn: () => base44.entities.Project.list("-created_date", 500),
+    queryFn: () => api.entities.Project.list("-created_date", 500),
     enabled: isOpen,
     staleTime: 2 * 60 * 1000,
   });
   const { data: allAgents = [], isFetching: agentsFetching } = useQuery({
     queryKey: ["search-agents"],
-    queryFn: () => base44.entities.Agent.list("name", 1000),
+    queryFn: () => api.entities.Agent.list("name", 1000),
     enabled: isOpen,
     staleTime: 2 * 60 * 1000,
   });
   const { data: allAgencies = [], isFetching: agenciesFetching } = useQuery({
     queryKey: ["search-agencies"],
-    queryFn: () => base44.entities.Agency.list("name", 500),
+    queryFn: () => api.entities.Agency.list("name", 500),
     enabled: isOpen,
     staleTime: 2 * 60 * 1000,
   });

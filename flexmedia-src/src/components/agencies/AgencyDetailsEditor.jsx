@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,12 +19,12 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
   // Fetch all categories with real-time sync
   const { data: allCategories = [] } = useQuery({
     queryKey: ['productCategories'],
-    queryFn: () => base44.entities.ProductCategory.list(),
+    queryFn: () => api.entities.ProductCategory.list(),
     staleTime: 30000 // 30s cache
   });
 
   useEffect(() => {
-    const unsubscribe = base44.entities.ProductCategory.subscribe((event) => {
+    const unsubscribe = api.entities.ProductCategory.subscribe((event) => {
       // Force refetch on any category change
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
     });
@@ -70,7 +70,7 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
 
     setUploading(true);
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const { file_url } = await api.integrations.Core.UploadFile({ file });
       updateField(fieldName, file_url);
       setMessage({ type: 'success', text: successMsg });
     } catch (err) {
@@ -84,7 +84,7 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
     setSaving(true);
     setMessage(null);
     try {
-      await base44.entities.Agency.update(agency.id, formData);
+      await api.entities.Agency.update(agency.id, formData);
       setMessage({ type: 'success', text: 'Details saved successfully' });
       onSave?.();
     } catch (err) {

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import React from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, GitBranch } from "lucide-react";
@@ -91,11 +91,11 @@ export default function PackagesPage() {
   const availableProducts = products.filter(p => p.is_active);
 
   const logChange = async (action, pkg, previousState, newState) => {
-    const user = await base44.auth.me().catch(() => null);
+    const user = await api.auth.me().catch(() => null);
     const changedFields = action === "update" ? getChangedFields(previousState, newState) : [];
     const summaryParts = changedFields.map(f => `${f.field}: ${f.old_value} → ${f.new_value}`);
 
-    await base44.entities.PackageAuditLog.create({
+    await api.entities.PackageAuditLog.create({
       package_id: pkg.id || "new",
       package_name: pkg.name,
       action,
@@ -147,11 +147,11 @@ export default function PackagesPage() {
   const saveMutation = useMutation({
     mutationFn: async (data) => {
       if (editingPackage) {
-        const result = await base44.entities.Package.update(editingPackage.id, data);
+        const result = await api.entities.Package.update(editingPackage.id, data);
         await logChange("update", { id: editingPackage.id, name: data.name }, editingPackage, data);
         return result;
       }
-      const result = await base44.entities.Package.create(data);
+      const result = await api.entities.Package.create(data);
       await logChange("create", { id: result.id, name: data.name }, null, data);
       return result;
     },
@@ -183,7 +183,7 @@ export default function PackagesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: async (pkg) => {
-      await base44.entities.Package.delete(pkg.id);
+      await api.entities.Package.delete(pkg.id);
       await logChange("delete", { id: pkg.id, name: pkg.name }, pkg, null);
     },
     onSuccess: async () => { 

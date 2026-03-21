@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 
@@ -448,14 +448,14 @@ export default function SettingsAutomationRules() {
 
   const { data: rules = [], isLoading: rulesLoading } = useQuery({
     queryKey: ["automationRules"],
-    queryFn: () => base44.entities.ProjectAutomationRule.list("-priority", 200),
+    queryFn: () => api.entities.ProjectAutomationRule.list("-priority", 200),
     staleTime: 60 * 1000,
     onError: () => toast.error('Failed to load automation rules'),
   });
 
   const { data: logs = [], isLoading: logsLoading } = useQuery({
     queryKey: ["automationRuleLogs"],
-    queryFn: () => base44.entities.AutomationRuleLog.list("-fired_at", 200),
+    queryFn: () => api.entities.AutomationRuleLog.list("-fired_at", 200),
     enabled: activeTab === "log",
     staleTime: 30 * 1000,
   });
@@ -463,9 +463,9 @@ export default function SettingsAutomationRules() {
   const saveMutation = useMutation({
     mutationFn: async (rule) => {
       if (rule.id) {
-        return base44.entities.ProjectAutomationRule.update(rule.id, rule);
+        return api.entities.ProjectAutomationRule.update(rule.id, rule);
       } else {
-        return base44.entities.ProjectAutomationRule.create({ ...rule, fire_count: 0, skip_count: 0 });
+        return api.entities.ProjectAutomationRule.create({ ...rule, fire_count: 0, skip_count: 0 });
       }
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["automationRules"] }); setBuilderOpen(false); setEditingRule(null); },
@@ -473,13 +473,13 @@ export default function SettingsAutomationRules() {
   });
 
   const toggleMutation = useMutation({
-    mutationFn: ({ id, enabled }) => base44.entities.ProjectAutomationRule.update(id, { is_enabled: enabled }),
+    mutationFn: ({ id, enabled }) => api.entities.ProjectAutomationRule.update(id, { is_enabled: enabled }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["automationRules"] }),
     onError: (err) => toast.error(err?.message || 'Failed to toggle rule'),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.ProjectAutomationRule.delete(id),
+    mutationFn: (id) => api.entities.ProjectAutomationRule.delete(id),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["automationRules"] }); setDeleteTarget(null); },
     onError: (err) => toast.error(err?.message || 'Failed to delete rule'),
   });
@@ -517,7 +517,7 @@ export default function SettingsAutomationRules() {
     setSeedingRules(true);
     setSeedMessage(null);
     try {
-      const res = await base44.functions.invoke('seedAutomationRules', {});
+      const res = await api.functions.invoke('seedAutomationRules', {});
       if (res.data.error) {
         setSeedMessage({ type: 'error', text: res.data.error });
       } else {

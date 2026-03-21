@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import EffortTimersTab from "@/components/team-pulse/EffortTimersTab";
@@ -729,7 +729,7 @@ export default function TeamPulsePage() {
   const { data: liveEvents = [], isLoading } = useQuery({
     queryKey: ["teamActivityFeed", currentUser?.role],
     queryFn: async () => {
-      const all = await base44.entities.TeamActivityFeed.list("-created_date", 300);
+      const all = await api.entities.TeamActivityFeed.list("-created_date", 300);
 
       // Filter by visible_to_roles: if empty, all roles see it;
       // if set, only show if currentUser role is included
@@ -757,7 +757,7 @@ export default function TeamPulsePage() {
   useEffect(() => {
     if (!currentUser?.id) return;
 
-    const unsubscribe = base44.entities.TeamActivityFeed.subscribe((event) => {
+    const unsubscribe = api.entities.TeamActivityFeed.subscribe((event) => {
       if (!event) return;
       if (event.type === 'create') {
         // Invalidate the query to trigger a refetch with fresh data
@@ -772,7 +772,7 @@ export default function TeamPulsePage() {
   useEffect(() => {
     if (!currentUser?.id || view !== 'notifications') return;
 
-    const unsubscribe = base44.entities.Notification.subscribe((event) => {
+    const unsubscribe = api.entities.Notification.subscribe((event) => {
       if (!event) return;
       if (event.type === 'create' || event.type === 'update') {
         queryClient.invalidateQueries({ queryKey: ["pulse-notifications"] });
@@ -784,26 +784,26 @@ export default function TeamPulsePage() {
 
   const { data: users = [] } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.list(),
+    queryFn: () => api.entities.User.list(),
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: allProjects = [] } = useQuery({
     queryKey: ['pulse-projects-summary'],
-    queryFn: () => base44.entities.Project.filter({}, null, 500),
+    queryFn: () => api.entities.Project.filter({}, null, 500),
     refetchInterval: 60_000,
   });
 
   const { data: allNotifications = [] } = useQuery({
     queryKey: ['pulse-notifications'],
-    queryFn: () => base44.entities.Notification.list('-created_date', 200),
+    queryFn: () => api.entities.Notification.list('-created_date', 200),
     refetchInterval: 30_000,
     enabled: view === 'notifications',
   });
 
   const { data: pulseUsers = [] } = useQuery({
     queryKey: ['pulse-users-map'],
-    queryFn: () => base44.entities.User.list('-created_date', 200),
+    queryFn: () => api.entities.User.list('-created_date', 200),
     staleTime: 5 * 60_000,
     enabled: view === 'notifications',
   });

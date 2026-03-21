@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import { Loader2, Check } from 'lucide-react';
@@ -18,7 +18,7 @@ export default function AgencyProjectTypesCompact({ agency }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await base44.entities.Agency.update(agency.id, { default_project_type_ids: selected });
+      await api.entities.Agency.update(agency.id, { default_project_type_ids: selected });
       toast.success('Project types saved');
     } catch { toast.error('Failed to save'); }
     finally { setSaving(false); }

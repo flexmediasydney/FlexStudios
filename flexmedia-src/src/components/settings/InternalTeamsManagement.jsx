@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Edit, Trash2, Users, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,20 +29,20 @@ export default function InternalTeamsManagement() {
 
   const { data: teams = [] } = useQuery({
     queryKey: ["internal_teams"],
-    queryFn: () => base44.entities.InternalTeam.list("-created_date")
+    queryFn: () => api.entities.InternalTeam.list("-created_date")
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ["users"],
-    queryFn: () => base44.entities.User.list()
+    queryFn: () => api.entities.User.list()
   });
 
   const saveMutation = useMutation({
     mutationFn: (data) => {
       if (editingTeam) {
-        return base44.entities.InternalTeam.update(editingTeam.id, data);
+        return api.entities.InternalTeam.update(editingTeam.id, data);
       }
-      return base44.entities.InternalTeam.create(data);
+      return api.entities.InternalTeam.create(data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries(["internal_teams"]);
@@ -53,7 +53,7 @@ export default function InternalTeamsManagement() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.InternalTeam.delete(id),
+    mutationFn: (id) => api.entities.InternalTeam.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries(["internal_teams"]);
       toast.success("Team deleted");

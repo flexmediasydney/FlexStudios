@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Play, Pause, CheckCircle, Clock, AlertCircle, AlertTriangle, Plus } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -32,7 +32,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
   const logTimerActivity = (action, description) => {
     if (!project?.id) return;
-    base44.entities.ProjectActivity.create({
+    api.entities.ProjectActivity.create({
       project_id: project.id,
       project_title: project.title || project.property_address || '',
       action,
@@ -93,7 +93,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       
       try {
         // Fetch ALL logs for this task - order by created_date DESC for most recent
-        const logs = await base44.entities.TaskTimeLog.filter(
+        const logs = await api.entities.TaskTimeLog.filter(
           { task_id: task.id },
           '-created_date',
           100
@@ -118,7 +118,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
             if (wallClockSeconds > MAX_SESSION_DURATION) {
               try {
-                await base44.entities.TaskTimeLog.update(active.id, {
+                await api.entities.TaskTimeLog.update(active.id, {
                   end_time: new Date().toISOString(),
                   status: 'completed',
                   is_active: false,
@@ -168,7 +168,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
     const subscribeToChanges = () => {
       // Real-time subscription for this task's logs
-      unsubscribeRef.current = base44.entities.TaskTimeLog.subscribe((event) => {
+      unsubscribeRef.current = api.entities.TaskTimeLog.subscribe((event) => {
         if (!componentMountedRef.current) return;
 
         // Only care about logs for THIS task and THIS user
@@ -228,7 +228,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
       if (liveSeconds > MAX_SESSION_DURATION) {
         try {
-          await base44.entities.TaskTimeLog.update(log.id, {
+          await api.entities.TaskTimeLog.update(log.id, {
             end_time: new Date().toISOString(),
             status: 'completed',
             is_active: false,
@@ -242,7 +242,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       }
 
       try {
-        await base44.entities.TaskTimeLog.update(log.id, { total_seconds: liveSeconds });
+        await api.entities.TaskTimeLog.update(log.id, { total_seconds: liveSeconds });
       } catch (e) {
         console.warn('Sync failed, will retry:', e);
       }
@@ -288,7 +288,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       const now = new Date().toISOString();
       lastActivityTime.current = Date.now();
       
-      await base44.entities.TaskTimeLog.update(activeLog.id, {
+      await api.entities.TaskTimeLog.update(activeLog.id, {
         status: 'paused',
         pause_time: now,
         total_seconds: totalDisplaySeconds
@@ -314,7 +314,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
         ? (activeLog.paused_duration || 0) + Math.floor((Date.now() - new Date(activeLog.pause_time).getTime()) / 1000)
         : (activeLog.paused_duration || 0);
       
-      await base44.entities.TaskTimeLog.update(activeLog.id, {
+      await api.entities.TaskTimeLog.update(activeLog.id, {
         end_time: new Date().toISOString(),
         status: 'completed',
         is_active: false,
@@ -434,7 +434,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       
       // Reassign if needed
       if (isTeamAssigned) {
-        await base44.entities.ProjectTask.update(task.id, {
+        await api.entities.ProjectTask.update(task.id, {
           assigned_to: currentUser.id,
           assigned_to_name: currentUser.full_name,
           assigned_to_team_id: null,
@@ -445,7 +445,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       if (!componentMountedRef.current) return;
       
       // Create fresh timer - DB will trigger subscription update
-      const log = await base44.entities.TaskTimeLog.create({
+      const log = await api.entities.TaskTimeLog.create({
         task_id: task.id,
         project_id: project.id,
         user_id: currentUser.id,
@@ -488,7 +488,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       lastActivityTime.current = Date.now();
       
       // Update DB - subscription will update activeLog
-      await base44.entities.TaskTimeLog.update(activeLog.id, {
+      await api.entities.TaskTimeLog.update(activeLog.id, {
         status: 'running',
         pause_time: null,
         paused_duration: (activeLog.paused_duration || 0) + pauseDuration
@@ -517,7 +517,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       }
       
       // Create new timer session
-      await base44.entities.TaskTimeLog.create({
+      await api.entities.TaskTimeLog.create({
         task_id: task.id,
         project_id: project.id,
         user_id: currentUser.id,

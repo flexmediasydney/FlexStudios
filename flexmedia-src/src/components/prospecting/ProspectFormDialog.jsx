@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -64,13 +64,13 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
 
     try {
       if (prospect) {
-        await base44.entities[entityType].update(prospect.id, formData);
+        await api.entities[entityType].update(prospect.id, formData);
       } else {
-        const result = await base44.entities[entityType].create(formData);
+        const result = await api.entities[entityType].create(formData);
         
         // Auto-log creation as interaction (agents only)
         if (entityType === 'Agent') {
-          await base44.entities.InteractionLog.create({
+          await api.entities.InteractionLog.create({
             entity_type: 'Agent',
             entity_id: result?.id || null,
             entity_name: formData.name,

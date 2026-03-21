@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import {
   Bold, Italic, Underline, Link2, AtSign, List, ListOrdered,
@@ -39,7 +39,7 @@ export default function UnifiedNoteComposer({
 
   const { data: users = [] } = useQuery({
     queryKey: ['users'],
-    queryFn: () => base44.entities.User.list('full_name', 100),
+    queryFn: () => api.entities.User.list('full_name', 100),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -138,7 +138,7 @@ export default function UnifiedNoteComposer({
       const tempId = `${Date.now()}-${Math.random()}`;
       setUploadingFiles(prev => [...prev, { id: tempId, name: file.name }]);
       try {
-        const { file_url } = await base44.integrations.Core.UploadFile({ file });
+        const { file_url } = await api.integrations.Core.UploadFile({ file });
         const ft = file.type.startsWith('image/') ? 'image'
           : file.type.startsWith('video/') ? 'video'
           : file.type.startsWith('audio/') ? 'audio'
@@ -161,9 +161,9 @@ export default function UnifiedNoteComposer({
     setSaving(true);
     try {
       if (noteId) {
-        await base44.entities.OrgNote.update(noteId, { content: plainText, content_html: sanitized });
+        await api.entities.OrgNote.update(noteId, { content: plainText, content_html: sanitized });
       } else {
-        await base44.entities.OrgNote.create({
+        await api.entities.OrgNote.create({
           agency_id: agencyId,
           ...(projectId && { project_id: projectId }),
           ...(agentId && { agent_id: agentId }),
@@ -182,7 +182,7 @@ export default function UnifiedNoteComposer({
         });
         // Auto-update agent's last_contacted_at
         if (agentId) {
-          base44.entities.Agent.update(agentId, {
+          api.entities.Agent.update(agentId, {
             last_contacted_at: new Date().toISOString(),
           }).catch(() => {});
         }

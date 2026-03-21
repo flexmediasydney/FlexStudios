@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,7 @@ export default function TonomoPulse() {
   const { data: logs = [], refetch } = useQuery({
     queryKey: ['tonomoPulse'],
     queryFn: async () => {
-      const result = await base44.entities.TonomoWebhookLog.list('-received_at', 200);
+      const result = await api.entities.TonomoWebhookLog.list('-received_at', 200);
       return result;
     },
     staleTime: 5 * 1000,

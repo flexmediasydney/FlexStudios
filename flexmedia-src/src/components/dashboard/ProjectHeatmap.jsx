@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { MapContainer, TileLayer, useMap, useMapEvents, ZoomControl } from 'react-leaflet';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -286,7 +286,7 @@ export default function ProjectHeatmap() {
       for (let i = 0; i < missing.length; i += CHUNK) {
         if (!mounted) break;
         const chunk = missing.slice(i, i + CHUNK);
-        const response = await base44.functions.invoke('geocodeProject', {
+        const response = await api.functions.invoke('geocodeProject', {
           projectIds: chunk.map(p => p.id)
         });
         console.log('Geocoding batch result:', response?.data);

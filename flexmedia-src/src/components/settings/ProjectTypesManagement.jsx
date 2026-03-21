@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useMutation } from "@tanstack/react-query";
 import { Plus, Edit, Trash2, Star, Check } from "lucide-react";
@@ -38,12 +38,12 @@ export default function ProjectTypesManagement() {
       // If setting as default, clear other defaults first
       if (data.is_default) {
         const others = types.filter(t => t.is_default && t.id !== editingType?.id);
-        await Promise.all(others.map(t => base44.entities.ProjectType.update(t.id, { is_default: false })));
+        await Promise.all(others.map(t => api.entities.ProjectType.update(t.id, { is_default: false })));
       }
       if (editingType) {
-        return base44.entities.ProjectType.update(editingType.id, data);
+        return api.entities.ProjectType.update(editingType.id, data);
       }
-      return base44.entities.ProjectType.create(data);
+      return api.entities.ProjectType.create(data);
     },
     onSuccess: () => {
       toast.success(editingType ? "Project type updated" : "Project type created");
@@ -53,7 +53,7 @@ export default function ProjectTypesManagement() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (type) => base44.entities.ProjectType.delete(type.id),
+    mutationFn: (type) => api.entities.ProjectType.delete(type.id),
     onSuccess: () => {
       toast.success(`"${deletingType?.name}" deleted`);
       setDeletingType(null);
@@ -64,8 +64,8 @@ export default function ProjectTypesManagement() {
   const setDefaultMutation = useMutation({
     mutationFn: async (type) => {
       const others = types.filter(t => t.is_default && t.id !== type.id);
-      await Promise.all(others.map(t => base44.entities.ProjectType.update(t.id, { is_default: false })));
-      return base44.entities.ProjectType.update(type.id, { is_default: true });
+      await Promise.all(others.map(t => api.entities.ProjectType.update(t.id, { is_default: false })));
+      return api.entities.ProjectType.update(type.id, { is_default: true });
     },
     onSuccess: () => toast.success("Default updated"),
     onError: (err) => toast.error(err?.message || 'Failed to set default project type'),

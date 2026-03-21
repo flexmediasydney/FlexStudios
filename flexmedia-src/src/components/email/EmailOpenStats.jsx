@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Eye, Users } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -13,7 +13,7 @@ export default function EmailOpenStats({ messageId }) {
   const { data: activities = [], isLoading } = useQuery({
     queryKey: ['email-opens', messageId],
     queryFn: async () => {
-      const allActivities = await base44.entities.EmailActivity.filter(
+      const allActivities = await api.entities.EmailActivity.filter(
         { email_message_id: messageId, action_type: 'opened' },
         '-created_date'
       );

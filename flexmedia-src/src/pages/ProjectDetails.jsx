@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
@@ -197,7 +197,7 @@ export default function ProjectDetails() {
    const { data: packagesData = [] } = useSmartEntityList('Package');
    const { data: user = null } = useQuery({
      queryKey: ["current-user"],
-     queryFn: () => base44.auth.me()
+     queryFn: () => api.auth.me()
    });
 
    const filterProjectTasks = useCallback((t) => t.project_id === projectId, [projectId]);
@@ -258,7 +258,7 @@ export default function ProjectDetails() {
     const syncNames = async () => {
       try {
         if (agent.name !== project.client_name) {
-          await base44.functions.invoke('syncDenormalisedFieldsOnNameChange', {
+          await api.functions.invoke('syncDenormalisedFieldsOnNameChange', {
             entity_type: 'agent',
             entity_id: project.client_id,
             new_name: agent.name
@@ -322,14 +322,14 @@ export default function ProjectDetails() {
        updateData.shooting_started_at = new Date().toISOString();
      }
 
-     const result = await base44.entities.Project.update(projectId, updateData);
+     const result = await api.entities.Project.update(projectId, updateData);
      setErrorMessage(null);
 
      // ── Fire all side-effects in parallel, fire-and-forget with individual error handling ──
      // trackProjectStageChange is called from the frontend so stage timers are ALWAYS
      // created immediately — not dependent on automation ordering or delay.
      // It is fully idempotent: if automation also fires it, the duplicate is safely skipped.
-     base44.functions.invoke('trackProjectStageChange', {
+     api.functions.invoke('trackProjectStageChange', {
        projectId,
        old_data: { status: oldStatus },
        data: { ...project, status: newStatus },
@@ -453,7 +453,7 @@ export default function ProjectDetails() {
       const UPLOADED_OR_LATER = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
      const PRE_UPLOAD = ['to_be_scheduled', 'scheduled', 'onsite', 'pending_review'];
      if (UPLOADED_OR_LATER.includes(newStatus) && PRE_UPLOAD.includes(oldStatus)) {
-       base44.functions.invoke('logOnsiteEffortOnUpload', {
+       api.functions.invoke('logOnsiteEffortOnUpload', {
          project_id: projectId,
          old_status: oldStatus,
        }).catch(err => console.warn('logOnsiteEffortOnUpload failed:', err?.message));
@@ -462,7 +462,7 @@ export default function ProjectDetails() {
      // Check if project qualifies for auto-archive when delivered
      if (newStatus === 'delivered') {
        setTimeout(() => {
-         base44.functions.invoke('checkAndArchiveProject', {
+         api.functions.invoke('checkAndArchiveProject', {
            project_id: projectId, triggered_by: 'status_delivered'
          }).catch(() => {});
        }, 3000); // Delay to let other side-effects (stage timer, notifications) settle
@@ -480,7 +480,7 @@ export default function ProjectDetails() {
       if (!project) throw new Error('Project not loaded');
       if (!outcome) throw new Error('Outcome is required');
       const oldOutcome = project.outcome;
-      const result = await base44.entities.Project.update(projectId, { outcome });
+      const result = await api.entities.Project.update(projectId, { outcome });
       logActivity('outcome_changed',
         `Outcome changed from ${oldOutcome || 'none'} to ${outcome}`,
         { changed_fields: [{ field: 'outcome', old_value: oldOutcome, new_value: outcome }] }
@@ -531,7 +531,7 @@ export default function ProjectDetails() {
       if (!project) throw new Error('Project not loaded');
       if (!payment_status) throw new Error('Payment status is required');
       const oldStatus = project.payment_status;
-      const result = await base44.entities.Project.update(projectId, { payment_status });
+      const result = await api.entities.Project.update(projectId, { payment_status });
       logActivity('payment_changed',
         `Payment status changed from ${oldStatus || 'none'} to ${payment_status}`,
         { changed_fields: [{ field: 'payment_status', old_value: oldStatus, new_value: payment_status }] }
@@ -568,7 +568,7 @@ export default function ProjectDetails() {
 
       // Check if project qualifies for auto-archive
       if (payment_status === 'paid' && project?.status === 'delivered') {
-        base44.functions.invoke('checkAndArchiveProject', {
+        api.functions.invoke('checkAndArchiveProject', {
           project_id: projectId, triggered_by: 'payment_paid'
         }).catch(() => {});
       }
@@ -584,7 +584,7 @@ export default function ProjectDetails() {
     mutationFn: async (amount) => {
       const parsed = amount === "" || amount === null ? null : parseFloat(amount);
       if (parsed !== null && isNaN(parsed)) throw new Error("Invalid amount");
-      return base44.entities.Project.update(projectId, { invoiced_amount: parsed });
+      return api.entities.Project.update(projectId, { invoiced_amount: parsed });
     },
     onSuccess: (_, amount) => {
       logActivity('invoiced_amount_changed',
@@ -598,7 +598,7 @@ export default function ProjectDetails() {
     mutationFn: (agentId) => {
       if (!project) throw new Error('Project not loaded');
       const selectedAgent = agentId ? allAgents.find(a => a.id === agentId) : null;
-      return base44.entities.Project.update(projectId, { 
+      return api.entities.Project.update(projectId, { 
         agent_id: agentId || null, 
         agency_id: selectedAgent?.current_agency_id || null 
       });
@@ -634,7 +634,7 @@ export default function ProjectDetails() {
 
       // Recalculate pricing — new agent may have different matrix overrides (fire-and-forget)
       if (projectId) {
-        base44.functions.invoke('recalculateProjectPricingServerSide', {
+        api.functions.invoke('recalculateProjectPricingServerSide', {
           project_id: projectId,
         }).catch((err) => console.warn('Pricing recalc after agent change failed:', err?.message));
       }
@@ -653,7 +653,7 @@ export default function ProjectDetails() {
       if (!project) throw new Error('Project not loaded');
       // ── Soft-delete via backend function (batched, efficient) ────────────────────────────
       try {
-        base44.functions.invoke('cleanupProjectOnDelete', {
+        api.functions.invoke('cleanupProjectOnDelete', {
           project_id: projectId
         }).catch(err => console.warn('Async cleanup failed (non-fatal):', err?.message));
       } catch { /* non-fatal — proceed with project deletion */ }
@@ -661,7 +661,7 @@ export default function ProjectDetails() {
 
 
       // Audit: log deletion to team feed BEFORE the project is deleted
-      await base44.entities.TeamActivityFeed.create({
+      await api.entities.TeamActivityFeed.create({
         event_type: 'project_deleted',
         category: 'project',
         severity: 'warning',
@@ -677,7 +677,7 @@ export default function ProjectDetails() {
         created_date: new Date().toISOString(),
       }).catch(() => {});
 
-      return base44.entities.Project.delete(projectId);
+      return api.entities.Project.delete(projectId);
     },
     onSuccess: () => {
       setErrorMessage(null);
@@ -690,7 +690,7 @@ export default function ProjectDetails() {
 
     const logActivity = (action, description, extra = {}) => {
     if (!projectId || !project) return;
-    base44.entities.ProjectActivity.create({
+    api.entities.ProjectActivity.create({
       project_id: projectId,
       project_title: project.title || project.property_address || '',
       action,
@@ -761,7 +761,7 @@ export default function ProjectDetails() {
             <Button variant="outline" size="sm" className="text-xs"
               onClick={async () => {
                 try {
-                  await base44.entities.Project.update(projectId, { is_archived: false, archived_at: null });
+                  await api.entities.Project.update(projectId, { is_archived: false, archived_at: null });
                   toast.success('Project unarchived');
                 } catch (err) {
                   toast.error(err?.message || 'Failed to unarchive');

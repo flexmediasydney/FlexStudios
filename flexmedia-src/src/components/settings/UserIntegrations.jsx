@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,13 +20,13 @@ export default function UserIntegrations({ user }) {
 
   const { data: emailAccounts = [] } = useQuery({
     queryKey: ["my-email-accounts", user?.id],
-    queryFn: () => user ? base44.entities.EmailAccount.filter({ assigned_to_user_id: user.id }) : [],
+    queryFn: () => user ? api.entities.EmailAccount.filter({ assigned_to_user_id: user.id }) : [],
     enabled: !!user
   });
 
   const { data: teams = [] } = useQuery({
     queryKey: ["teams"],
-    queryFn: () => base44.entities.InternalTeam.list()
+    queryFn: () => api.entities.InternalTeam.list()
   });
 
   // Listen for OAuth postMessage from popup
@@ -52,7 +52,7 @@ export default function UserIntegrations({ user }) {
   }, [handleAuthMessage]);
 
   const openOAuthPopup = async ({ displayName: dn, teamId: tid, reconnectAccountId } = {}) => {
-    const result = await base44.functions.invoke('getGmailOAuthUrl', {
+    const result = await api.functions.invoke('getGmailOAuthUrl', {
       displayName: dn || null,
       teamId: tid || null,
       reconnectAccountId: reconnectAccountId || null
@@ -100,7 +100,7 @@ export default function UserIntegrations({ user }) {
   };
 
   const removeAccountMutation = useMutation({
-    mutationFn: (accountId) => base44.entities.EmailAccount.update(accountId, { is_active: false }),
+    mutationFn: (accountId) => api.entities.EmailAccount.update(accountId, { is_active: false }),
     onSuccess: () => {
       toast.success("Email account disconnected");
       queryClient.invalidateQueries({ queryKey: ["my-email-accounts", user?.id] });

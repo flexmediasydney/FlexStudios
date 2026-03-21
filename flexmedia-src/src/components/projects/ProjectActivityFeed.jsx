@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import ActivityLogItem from "./ActivityLogItem";
 
 export default function ProjectActivityFeed({ projectId }) {
@@ -16,7 +16,7 @@ export default function ProjectActivityFeed({ projectId }) {
 
     const fetchActivities = async () => {
       try {
-        const data = await base44.entities.ProjectActivity.filter({ project_id: projectId }, "-created_date", 100);
+        const data = await api.entities.ProjectActivity.filter({ project_id: projectId }, "-created_date", 100);
         if (mounted) setActivities(data);
       } catch (err) {
         if (retries < 2 && err.message?.includes('Rate limit')) {
@@ -28,7 +28,7 @@ export default function ProjectActivityFeed({ projectId }) {
 
     fetchActivities();
 
-    const unsub = base44.entities.ProjectActivity.subscribe((event) => {
+    const unsub = api.entities.ProjectActivity.subscribe((event) => {
       if (!mounted || event.data?.project_id !== projectId) return;
 
       if (event.type === 'create') {

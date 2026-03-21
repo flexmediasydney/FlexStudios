@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useEntityList } from "@/components/hooks/useEntityData";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -239,7 +239,7 @@ export default function HierarchyTableView({
 
   const handleInlineSave = useCallback(async (agentId, field, value) => {
     try {
-      await base44.entities.Agent.update(agentId, { [field]: value });
+      await api.entities.Agent.update(agentId, { [field]: value });
       toast.success("Updated");
     } catch {
       toast.error("Failed to save");

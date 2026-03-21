@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -74,7 +74,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
 
   const createMutation = useMutation({
     mutationFn: async (data) => {
-      const allRevisions = await base44.entities.ProjectRevision.filter(
+      const allRevisions = await api.entities.ProjectRevision.filter(
         { project_id: project.id },
         null,
         500
@@ -84,9 +84,9 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
         (r) => r.status !== 'cancelled'
       ).length;
       const revNum = activeRevCount + 1;
-      const user = await base44.auth.me().catch(() => null);
+      const user = await api.auth.me().catch(() => null);
 
-      const revision = await base44.entities.ProjectRevision.create({
+      const revision = await api.entities.ProjectRevision.create({
         project_id: project.id,
         project_title: project.title,
         revision_number: revNum,
@@ -153,7 +153,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
             }
           }
 
-          const task = await base44.entities.ProjectTask.create({
+          const task = await api.entities.ProjectTask.create({
             project_id: project.id,
             title: `[Revision #${revNum}] ${tmpl.title}`,
             description: tmpl.description || "",
@@ -196,7 +196,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
           return null;
         })();
 
-        await base44.entities.ProjectTask.create({
+        await api.entities.ProjectTask.create({
           project_id: project.id,
           title: `[Revision #${revNum}] ${mt.title}`,
           description: mt.description || "",
@@ -210,14 +210,14 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
       }
 
       if (createdTaskIds.length > 0 || data.manualTasks.some(t => t.title?.trim())) {
-        base44.functions.invoke('calculateProjectTaskDeadlines', {
+        api.functions.invoke('calculateProjectTaskDeadlines', {
           project_id: project.id,
           trigger_event: 'task_update'
         }).catch(() => {});
       }
 
       // Log to TeamActivityFeed
-      base44.entities.TeamActivityFeed.create({
+      api.entities.TeamActivityFeed.create({
         event_type: 'revision_created',
         category: 'requests',
         severity: 'info',

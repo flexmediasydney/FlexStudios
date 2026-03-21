@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Send, Paperclip, User as UserIcon, Loader2 } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { cn } from '@/lib/utils';
 
 export default function MessageInput({ 
@@ -63,7 +63,7 @@ export default function MessageInput({
       try {
         const fileContent = await file.arrayBuffer();
         const base64 = btoa(String.fromCharCode.apply(null, new Uint8Array(fileContent)));
-        const { file_url } = await base44.integrations.Core.UploadFile({
+        const { file_url } = await api.integrations.Core.UploadFile({
           file: `data:${file.type};base64,${base64}`
         });
         setAttachments(prev => [...prev, {

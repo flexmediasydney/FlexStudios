@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -50,60 +50,60 @@ export default function SettingsTonomoMappings() {
 
   const { data: mappings = [], isLoading, refetch } = useQuery({
     queryKey: ["tonomoMappings"],
-    queryFn: () => base44.entities.TonomoMappingTable.list("-last_seen_at", 1000),
+    queryFn: () => api.entities.TonomoMappingTable.list("-last_seen_at", 1000),
     staleTime: 30_000,
     onError: (err) => toast.error('Failed to load mappings — ' + (err?.message || 'unknown error')),
   });
 
   const { data: products = [] } = useQuery({
     queryKey: ["products"],
-    queryFn: () => base44.entities.Product.filter({ is_active: true }, "-updated_date"),
+    queryFn: () => api.entities.Product.filter({ is_active: true }, "-updated_date"),
     staleTime: 5 * 60_000,
   });
   const { data: packages = [] } = useQuery({
     queryKey: ["packages"],
-    queryFn: () => base44.entities.Package.filter({ is_active: true }, "-updated_date"),
+    queryFn: () => api.entities.Package.filter({ is_active: true }, "-updated_date"),
     staleTime: 5 * 60_000,
   });
   const { data: users = [] } = useQuery({
     queryKey: ["users-for-mapping"],
-    queryFn: () => base44.entities.User.list("-created_date", 500),
+    queryFn: () => api.entities.User.list("-created_date", 500),
     staleTime: 5 * 60_000,
   });
   const { data: agents = [] } = useQuery({
     queryKey: ["agents-for-mapping"],
-    queryFn: () => base44.entities.Agent.list("name", 2000),
+    queryFn: () => api.entities.Agent.list("name", 2000),
     staleTime: 5 * 60_000,
   });
   
   const { data: bookingFlows = [], refetch: refetchFlows } = useQuery({
     queryKey: ["tonomo-booking-flows"],
-    queryFn: () => base44.entities.TonomoBookingFlowTier.list('-last_seen_at', 100),
+    queryFn: () => api.entities.TonomoBookingFlowTier.list('-last_seen_at', 100),
     staleTime: 30_000,
   });
 
   const { data: projectTypeMappings = [], refetch: refetchTypeMap } = useQuery({
     queryKey: ["tonomo-project-type-mappings"],
-    queryFn: () => base44.entities.TonomoProjectTypeMapping.list('-created_date', 50),
+    queryFn: () => api.entities.TonomoProjectTypeMapping.list('-created_date', 50),
     staleTime: 30_000,
   });
 
   const { data: flexProjectTypes = [] } = useQuery({
     queryKey: ["project-types-for-mapping"],
-    queryFn: () => base44.entities.ProjectType.list('order', 50),
+    queryFn: () => api.entities.ProjectType.list('order', 50),
     staleTime: 5 * 60_000,
   });
 
   const rightEntities = { products, packages, users, agents, bookingflows: bookingFlows, projecttypes: flexProjectTypes };
 
   const saveMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.TonomoMappingTable.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.TonomoMappingTable.update(id, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tonomoMappings"] }),
     onError: () => toast.error("Failed to save"),
   });
 
   const updateUserMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.User.update(id, data),
+    mutationFn: ({ id, data }) => api.entities.User.update(id, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users-for-mapping"] }),
     onError: (err) => toast.error(err?.message || "Operation failed"),
   });
@@ -390,7 +390,7 @@ export default function SettingsTonomoMappings() {
                  flow={mapping}
                  isSaving={saveMutation.isPending}
                  onSetTier={async (id, tier) => {
-                   await base44.entities.TonomoBookingFlowTier.update(id, { pricing_tier: tier });
+                   await api.entities.TonomoBookingFlowTier.update(id, { pricing_tier: tier });
                    refetchFlows();
                  }}
                />
@@ -401,7 +401,7 @@ export default function SettingsTonomoMappings() {
                  projectTypes={flexProjectTypes}
                  isSaving={saveMutation.isPending}
                  onSetType={async (id, typeId, typeName) => {
-                   await base44.entities.TonomoProjectTypeMapping.update(id, {
+                   await api.entities.TonomoProjectTypeMapping.update(id, {
                      project_type_id: typeId,
                      project_type_name: typeName,
                    });
@@ -411,12 +411,12 @@ export default function SettingsTonomoMappings() {
                    if (makeDefault) {
                      const currentDefault = projectTypeMappings.find(m => m.is_default && m.id !== id);
                      if (currentDefault) {
-                       await base44.entities.TonomoProjectTypeMapping.update(
+                       await api.entities.TonomoProjectTypeMapping.update(
                          currentDefault.id, { is_default: false }
                        );
                      }
                    }
-                   await base44.entities.TonomoProjectTypeMapping.update(id, { is_default: makeDefault });
+                   await api.entities.TonomoProjectTypeMapping.update(id, { is_default: makeDefault });
                    refetchTypeMap();
                  }}
                />

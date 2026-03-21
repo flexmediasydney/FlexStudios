@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,11 +50,11 @@ export default function ProspectEditPanel({ prospect }) {
         }
       });
 
-      const result = await base44.entities.Agent.update(prospect.id, formData);
+      const result = await api.entities.Agent.update(prospect.id, formData);
 
       // Create audit log
       if (changedFields.length > 0) {
-        await base44.entities.AuditLog.create({
+        await api.entities.AuditLog.create({
           entity_type: "agent",
           entity_id: prospect.id,
           entity_name: formData.name || prospect.name,

@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { CalendarIcon, Trash2, AlertTriangle, ClockIcon, MessageCircle, Users, User, Lock } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { format } from "date-fns";
 import { wallClockToUTC } from "@/components/lib/deadlinePresets";
 import { CountdownTimer, CompletionTimer } from "./TaskManagement";
@@ -85,7 +85,7 @@ export default function TaskDetailPanel({
 
   const lockMutation = useMutation({
     mutationFn: async (isLocked) => {
-      await base44.entities.ProjectTask.update(task.id, { is_locked: isLocked });
+      await api.entities.ProjectTask.update(task.id, { is_locked: isLocked });
     },
     onError: (err) => toast.error(err?.message || 'Failed to update task lock'),
   });

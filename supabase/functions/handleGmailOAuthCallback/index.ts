@@ -104,7 +104,6 @@ Deno.serve(async (req) => {
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       is_active: true,
-      last_sync: new Date().toISOString(),
     });
 
     return sendMessage('gmail_auth_success', { email: emailAddress });

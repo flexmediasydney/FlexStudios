@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { base44, supabase } from "@/api/base44Client";
+import { api, supabase } from "@/api/supabaseClient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -301,7 +301,7 @@ export default function EmailComposeDialog({
   // Fetch only email accounts belonging to the current user
   const { data: emailAccounts = [] } = useQuery({
     queryKey: ["email-accounts", user?.id],
-    queryFn: () => base44.entities.EmailAccount.filter({
+    queryFn: () => api.entities.EmailAccount.filter({
       assigned_to_user_id: user?.id,
       is_active: true
     }),
@@ -311,13 +311,13 @@ export default function EmailComposeDialog({
   // Fetch templates
   const { data: templates = [] } = useQuery({
     queryKey: ["email-templates"],
-    queryFn: () => base44.entities.EmailTemplate.filter({}),
+    queryFn: () => api.entities.EmailTemplate.filter({}),
   });
 
   // Fetch projects for linking
   const { data: projects = [] } = useQuery({
     queryKey: ["projects"],
-    queryFn: () => base44.entities.Project.list(),
+    queryFn: () => api.entities.Project.list(),
   });
 
   // Load agent + agency for the linked project to enable template substitution
@@ -325,14 +325,14 @@ export default function EmailComposeDialog({
 
   const { data: linkedAgent } = useQuery({
     queryKey: ['agent-for-template', linkedProjectData?.agent_id],
-    queryFn: () => base44.entities.Agent.filter({ id: linkedProjectData.agent_id }, null, 1).then(r => r[0]),
+    queryFn: () => api.entities.Agent.filter({ id: linkedProjectData.agent_id }, null, 1).then(r => r[0]),
     enabled: !!linkedProjectData?.agent_id,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: linkedAgency } = useQuery({
     queryKey: ['agency-for-template', linkedProjectData?.agency_id],
-    queryFn: () => base44.entities.Agency.filter({ id: linkedProjectData.agency_id }, null, 1).then(r => r[0]),
+    queryFn: () => api.entities.Agency.filter({ id: linkedProjectData.agency_id }, null, 1).then(r => r[0]),
     enabled: !!linkedProjectData?.agency_id,
     staleTime: 5 * 60 * 1000,
   });
@@ -378,7 +378,7 @@ export default function EmailComposeDialog({
       setIsLoading(true);
 
       const idemKey = buildIdempotencyKey(recipients, subject, body);
-      const response = await base44.functions.invoke("sendGmailMessage", {
+      const response = await api.functions.invoke("sendGmailMessage", {
         emailAccountId: selectedAccount,
         to: recipients,
         cc: cc.trim() || undefined,

@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { X, FileText, MessageSquare, Zap, Users, Loader2 } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import Org2FeedItem from "./Org2FeedItem";
 import { format } from "date-fns";
 
@@ -161,7 +161,7 @@ export default function Org2Feed({
     const item = feedItems.find(i => i.id === itemId);
     if (!item || item.entityType !== 'OrgNote') return;
     const note = item.data;
-    await base44.entities.OrgNote.update(item.rawId, { is_pinned: !note.is_pinned });
+    await api.entities.OrgNote.update(item.rawId, { is_pinned: !note.is_pinned });
   };
 
   // Delete any feed item
@@ -170,9 +170,9 @@ export default function Org2Feed({
     if (!item) return;
     if (!confirm('Delete this item? This cannot be undone.')) return;
     if (item.entityType === 'OrgNote') {
-      await base44.entities.OrgNote.delete(item.rawId);
+      await api.entities.OrgNote.delete(item.rawId);
     } else if (item.entityType === 'InteractionLog') {
-      await base44.entities.InteractionLog.delete(item.rawId);
+      await api.entities.InteractionLog.delete(item.rawId);
     }
     // Status changes and project notes are not deletable from the feed
   };

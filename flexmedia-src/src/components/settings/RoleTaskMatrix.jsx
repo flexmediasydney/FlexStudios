@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useRoleMappings } from "@/components/hooks/useRoleMappings";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -166,9 +166,9 @@ function RoleEditor({ roleDef, entityRow, onSaved }) {
         order: roleDef.order ?? 0,
       };
       if (entityRow?.id) {
-        await base44.entities.RoleCategoryMapping.update(entityRow.id, payload);
+        await api.entities.RoleCategoryMapping.update(entityRow.id, payload);
       } else {
-        await base44.entities.RoleCategoryMapping.create(payload);
+        await api.entities.RoleCategoryMapping.create(payload);
       }
       toast.success(`${draft.label} mapping saved`);
       onSaved();

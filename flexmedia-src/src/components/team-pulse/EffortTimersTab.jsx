@@ -1,6 +1,6 @@
 import { useMemo, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -290,7 +290,7 @@ export default function EffortTimersTab() {
 
   const { data: timers = [], isLoading } = useQuery({
     queryKey: ["taskTimeLogs"],
-    queryFn: () => base44.entities.TaskTimeLog.list("-created_date", 500),
+    queryFn: () => api.entities.TaskTimeLog.list("-created_date", 500),
     staleTime: 10_000,
     refetchInterval: 15_000,
   });

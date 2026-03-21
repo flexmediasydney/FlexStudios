@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,7 +34,7 @@ export default function TonomoTab({ project }) {
     queryKey: ['tonomoAudit', project.tonomo_order_id],
     queryFn: async () => {
       if (!project.tonomo_order_id) return [];
-      const all = await base44.entities.TonomoAuditLog.list('-processed_at', 100);
+      const all = await api.entities.TonomoAuditLog.list('-processed_at', 100);
       return all.filter(log => log.tonomo_order_id === project.tonomo_order_id);
     },
     enabled: !!project.tonomo_order_id
@@ -44,7 +44,7 @@ export default function TonomoTab({ project }) {
     queryKey: ['tonomoRawPayload', project.tonomo_order_id],
     queryFn: async () => {
       if (!project.tonomo_order_id) return null;
-      const logs = await base44.entities.TonomoWebhookLog.list('-received_at', 200);
+      const logs = await api.entities.TonomoWebhookLog.list('-received_at', 200);
       const match = logs.find(log => {
         try {
           const p = JSON.parse(log.raw_payload || '{}');
@@ -61,7 +61,7 @@ export default function TonomoTab({ project }) {
     queryKey: ['tonomoBookingTimeline', project.tonomo_order_id],
     queryFn: async () => {
       if (!project.tonomo_order_id) return [];
-      const allQueue = await base44.entities.TonomoProcessingQueue.list('-created_date', 200);
+      const allQueue = await api.entities.TonomoProcessingQueue.list('-created_date', 200);
       return allQueue
         .filter(q => q.order_id === project.tonomo_order_id)
         .sort((a, b) => {
@@ -110,7 +110,7 @@ export default function TonomoTab({ project }) {
         newStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
     }
 
-    await base44.entities.Project.update(project.id, {
+    await api.entities.Project.update(project.id, {
       status: newStatus,
       pending_review_reason: null,
       pending_review_type: null,
@@ -122,7 +122,7 @@ export default function TonomoTab({ project }) {
     // This runs AFTER the status update so tasks are created for an active project.
     // Fire-and-forget — don't block the UI on this.
     if (newStatus !== 'cancelled') {
-      base44.functions.invoke('applyProjectRoleDefaults', {
+      api.functions.invoke('applyProjectRoleDefaults', {
         project_id: project.id,
       }).catch(err => {
         console.warn('applyProjectRoleDefaults failed (non-fatal):', err?.message);
@@ -130,7 +130,7 @@ export default function TonomoTab({ project }) {
 
       // Trigger stage-change engine so notifications, activity log, and
       // deadline recalc all fire — same as manual stage changes in ProjectDetails
-      base44.functions.invoke('trackProjectStageChange', {
+      api.functions.invoke('trackProjectStageChange', {
         projectId: project.id,
         old_data: { status: project.status },   // project.status is the OLD status here
         actor_id: null,

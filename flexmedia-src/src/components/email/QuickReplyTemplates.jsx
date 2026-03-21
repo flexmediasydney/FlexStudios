@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,7 +25,7 @@ const DEFAULT_TEMPLATES = [
 ];
 
 async function fetchQuickReplyTemplates() {
-  const templates = await base44.entities.EmailTemplate.filter(
+  const templates = await api.entities.EmailTemplate.filter(
     { category: QUICK_REPLY_CATEGORY },
     "-created_date",
     100
@@ -36,7 +36,7 @@ async function fetchQuickReplyTemplates() {
 async function seedDefaultTemplates() {
   const created = [];
   for (const t of DEFAULT_TEMPLATES) {
-    const record = await base44.entities.EmailTemplate.create({
+    const record = await api.entities.EmailTemplate.create({
       name: t.name,
       subject: "",
       body: t.body,
@@ -69,7 +69,7 @@ export default function QuickReplyTemplates({ onTemplateSelect, compact = false 
   const [newText, setNewText] = useState("");
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailTemplate.create(data),
+    mutationFn: (data) => api.entities.EmailTemplate.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       // Also invalidate the main templates list so TemplateSelector stays in sync
@@ -83,7 +83,7 @@ export default function QuickReplyTemplates({ onTemplateSelect, compact = false 
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.EmailTemplate.delete(id),
+    mutationFn: (id) => api.entities.EmailTemplate.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: ["email-templates"] });

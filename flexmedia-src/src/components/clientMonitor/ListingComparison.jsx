@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +25,7 @@ export default function ListingComparison({
     setIsUpdating(externalListingId);
     try {
       const project = internalProjects.find(p => p.id === projectId);
-      await base44.entities.ExternalListing.update(externalListingId, {
+      await api.entities.ExternalListing.update(externalListingId, {
         matched_project_id: projectId,
         matched_project_title: project?.title,
         match_status: "matched",
@@ -40,7 +40,7 @@ export default function ListingComparison({
     if (!confirm("Delete this external listing?")) return;
     setIsUpdating(externalListingId);
     try {
-      await base44.entities.ExternalListing.delete(externalListingId);
+      await api.entities.ExternalListing.delete(externalListingId);
       onRefresh();
     } finally {
       setIsUpdating(null);

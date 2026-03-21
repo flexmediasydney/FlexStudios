@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
@@ -50,7 +50,7 @@ export default function EditTemplateModal({ template, onClose }) {
   }, [template]);
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailTemplate.create(data),
+    mutationFn: (data) => api.entities.EmailTemplate.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-templates"] });
       toast.success("Template created");
@@ -60,7 +60,7 @@ export default function EditTemplateModal({ template, onClose }) {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailTemplate.update(template.id, data),
+    mutationFn: (data) => api.entities.EmailTemplate.update(template.id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-templates"] });
       toast.success("Template updated");
@@ -70,7 +70,7 @@ export default function EditTemplateModal({ template, onClose }) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => base44.entities.EmailTemplate.delete(template.id),
+    mutationFn: () => api.entities.EmailTemplate.delete(template.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-templates"] });
       toast.success("Template deleted");

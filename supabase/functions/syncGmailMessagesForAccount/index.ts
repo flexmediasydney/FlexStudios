@@ -253,7 +253,7 @@ async function fullSync(
   let query = '';
   if (account.last_sync) {
     const lastSyncDate = new Date(account.last_sync);
-    const syncFromDate = new Date(lastSyncDate.getTime() - 5 * 60 * 1000);
+    const syncFromDate = new Date(lastSyncDate.getTime() - 30 * 60 * 1000);
     const timestamp = Math.floor(syncFromDate.getTime() / 1000);
     query = `after:${timestamp}`;
   } else if (account.sync_start_date) {

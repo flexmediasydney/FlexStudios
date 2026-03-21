@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
@@ -52,7 +52,7 @@ export default function AgencyForm({ agency, open, onClose }) {
         throw new Error("Agency name is required");
       }
       
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       let result;
       let auditAction;
       let changedFields = [];
@@ -68,10 +68,10 @@ export default function AgencyForm({ agency, open, onClose }) {
             });
           }
         });
-        result = await base44.entities.Agency.update(agency.id, data);
+        result = await api.entities.Agency.update(agency.id, data);
         auditAction = "update";
       } else {
-        result = await base44.entities.Agency.create(data);
+        result = await api.entities.Agency.create(data);
         auditAction = "create";
         changedFields = Object.keys(data).map(key => ({
           field: key,
@@ -81,7 +81,7 @@ export default function AgencyForm({ agency, open, onClose }) {
       }
       
       // Create audit log
-      await base44.entities.AuditLog.create({
+      await api.entities.AuditLog.create({
         entity_type: "agency",
         entity_id: result.id,
         entity_name: data.name,

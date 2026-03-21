@@ -4,7 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Clock, User, CheckCircle2, AlertCircle, MessageSquare, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 
 const ActivityIcon = ({ type }) => {
   const icons = {
@@ -91,7 +91,7 @@ export default function RealtimeActivityStream({ maxItems = 10, autoRefresh = tr
     let cancelled = false;
     async function loadRecent() {
       try {
-        const recent = await base44.entities.ProjectActivity.list('-created_date', maxItems);
+        const recent = await api.entities.ProjectActivity.list('-created_date', maxItems);
         if (cancelled) return;
         const mapped = (recent || []).map(row => ({
           id: row.id,
@@ -112,7 +112,7 @@ export default function RealtimeActivityStream({ maxItems = 10, autoRefresh = tr
 
   // Realtime subscription — push new events to the top of the feed
   useEffect(() => {
-    const unsubscribe = base44.entities.ProjectActivity.subscribe((event) => {
+    const unsubscribe = api.entities.ProjectActivity.subscribe((event) => {
       if (event.type === 'create' && event.data) {
         const newActivity = {
           id: event.id,

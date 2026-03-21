@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,12 +29,12 @@ export default function LabelSelectorRobust({
   const { data: labels = [] } = useQuery({
     queryKey: ["email-labels", emailAccountId],
     queryFn: () =>
-      base44.entities.EmailLabel.filter({ email_account_id: emailAccountId }),
+      api.entities.EmailLabel.filter({ email_account_id: emailAccountId }),
     enabled: !!emailAccountId,
   });
 
   const createLabelMutation = useMutation({
-    mutationFn: (data) => base44.entities.EmailLabel.create(data),
+    mutationFn: (data) => api.entities.EmailLabel.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels", emailAccountId] });
       setNewLabelName("");
@@ -45,7 +45,7 @@ export default function LabelSelectorRobust({
   });
 
   const deleteLabelMutation = useMutation({
-    mutationFn: (labelId) => base44.entities.EmailLabel.delete(labelId),
+    mutationFn: (labelId) => api.entities.EmailLabel.delete(labelId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels", emailAccountId] });
       toast.success("Label deleted");
@@ -55,7 +55,7 @@ export default function LabelSelectorRobust({
 
   const updateLabelMutation = useMutation({
     mutationFn: ({ id, name, color }) =>
-      base44.entities.EmailLabel.update(id, { name, color }),
+      api.entities.EmailLabel.update(id, { name, color }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-labels", emailAccountId] });
       setEditingLabel(null);

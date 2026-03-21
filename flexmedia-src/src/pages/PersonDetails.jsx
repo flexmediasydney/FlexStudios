@@ -3,7 +3,7 @@ import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useNavigate } from 'react-router-dom';
 import { useSmartEntityData } from '@/components/hooks/useSmartEntityData';
 import { useEntityList, useEntityData } from '@/components/hooks/useEntityData';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
 import { fmtDate, fmtTimestampCustom, fixTimestamp, formatRelative } from '@/components/utils/dateUtils';
@@ -403,7 +403,7 @@ export default function PersonDetails() {
 
   const handleDelete = async () => {
     try {
-      await base44.entities.Agent.delete(agentId);
+      await api.entities.Agent.delete(agentId);
       navigate(createPageUrl('ClientAgents'));
     } catch {
       // error handled by UI

@@ -1,4 +1,4 @@
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 
 // Mirrors NOTIFICATION_TYPES from notificationService.ts
 // Keep in sync if you add new types
@@ -69,7 +69,7 @@ const TYPE_CONFIG = {
 export async function createNotification(params) {
   const cfg = TYPE_CONFIG[params.type] || { category: "system", severity: "info", ctaLabel: "View" };
   try {
-    await base44.entities.Notification.create({
+    await api.entities.Notification.create({
       user_id:         params.userId,
       type:            params.type,
       category:        cfg.category,
@@ -122,7 +122,7 @@ export async function createNotificationsForUsers(userIds, params, excludeUserId
  */
 export async function writeFeedEvent(params) {
   try {
-    await base44.entities.TeamActivityFeed.create({
+    await api.entities.TeamActivityFeed.create({
       event_type:       params.eventType,
       category:         params.category || "project",
       severity:         params.severity || "info",

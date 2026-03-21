@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 
 export default function NoteCard({ 
   note, 
@@ -24,7 +24,7 @@ export default function NoteCard({
   const handlePin = async () => {
     setIsLoading(true);
     try {
-      await base44.entities.OrgNote.update(note.id, { is_pinned: !note.is_pinned });
+      await api.entities.OrgNote.update(note.id, { is_pinned: !note.is_pinned });
       onRefresh?.();
     } finally {
       setIsLoading(false);
@@ -35,7 +35,7 @@ export default function NoteCard({
     if (confirm('Delete this note?')) {
       setIsLoading(true);
       try {
-        await base44.entities.OrgNote.delete(note.id);
+        await api.entities.OrgNote.delete(note.id);
         onRefresh?.();
       } finally {
         setIsLoading(false);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -76,7 +76,7 @@ export default function InteractionFormDialog({
     setError(null);
 
     try {
-      await base44.entities.InteractionLog.create({
+      await api.entities.InteractionLog.create({
         entity_type: entityType || 'Agent',
         entity_id: entityId || prospect?.id,
         entity_name: prospect?.name || 'Unknown',
@@ -92,7 +92,7 @@ export default function InteractionFormDialog({
 
       // Auto-update agent's last_contacted_at
       if (entityType === 'Agent' && (entityId || prospect?.id)) {
-        base44.entities.Agent.update(entityId || prospect?.id, {
+        api.entities.Agent.update(entityId || prospect?.id, {
           last_contacted_at: new Date().toISOString(),
         }).catch(() => {});
       }

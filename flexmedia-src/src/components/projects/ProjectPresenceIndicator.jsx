@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Eye } from "lucide-react";
 
@@ -64,7 +64,7 @@ export default function ProjectPresenceIndicator({ projectId, currentUser, label
   const sendHeartbeat = useCallback(async (action = "heartbeat") => {
     if (!projectId || !currentUser) return;
     try {
-      const res = await base44.functions.invoke("projectPresenceHeartbeat", {
+      const res = await api.functions.invoke("projectPresenceHeartbeat", {
         project_id: projectId,
         action
       });
@@ -95,7 +95,7 @@ export default function ProjectPresenceIndicator({ projectId, currentUser, label
       isMounted.current = false;
       clearInterval(heartbeatRef.current);
       // Fire-and-forget leave signal
-      base44.functions.invoke("projectPresenceHeartbeat", {
+      api.functions.invoke("projectPresenceHeartbeat", {
         project_id: projectId,
         action: "leave"
       }).catch(() => {});

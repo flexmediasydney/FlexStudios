@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from "react";
 import React from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
@@ -458,7 +458,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ projectId, newStatus, project }) => {
-      const user = await base44.auth.me();
+      const user = await api.auth.me();
       const oldStatus = project.status;
 
       const updateData = {
@@ -469,9 +469,9 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
         updateData.shooting_started_at = new Date().toISOString();
       }
 
-      await base44.entities.Project.update(projectId, updateData);
+      await api.entities.Project.update(projectId, updateData);
 
-      base44.entities.ProjectActivity.create({
+      api.entities.ProjectActivity.create({
         project_id: projectId,
         project_title: project.title,
         action: 'status_change',
@@ -483,7 +483,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
         user_email: user.email,
       }).catch(err => console.warn('Activity log failed:', err?.message));
 
-      base44.functions.invoke('trackProjectStageChange', {
+      api.functions.invoke('trackProjectStageChange', {
         projectId,
         old_data: { status: oldStatus },
         data: { ...project, status: newStatus },
@@ -501,7 +501,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
       const UPLOADED_OR_LATER = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
       const PRE_UPLOAD = ['to_be_scheduled', 'scheduled', 'onsite', 'pending_review'];
       if (UPLOADED_OR_LATER.includes(newStatus) && PRE_UPLOAD.includes(oldStatus)) {
-        base44.functions.invoke('logOnsiteEffortOnUpload', {
+        api.functions.invoke('logOnsiteEffortOnUpload', {
           project_id: projectId,
           old_status: oldStatus,
         }).catch(err => console.warn('logOnsiteEffortOnUpload failed:', err?.message));

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import { api } from '@/api/supabaseClient';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 
@@ -8,7 +8,7 @@ export default function CategorySelector({ projectTypeId, value, onChange, label
   const { data: categories = [] } = useQuery({
     queryKey: ['productCategories', projectTypeId],
     queryFn: () => projectTypeId 
-      ? base44.entities.ProductCategory.filter({ project_type_id: projectTypeId }, 'order')
+      ? api.entities.ProductCategory.filter({ project_type_id: projectTypeId }, 'order')
       : Promise.resolve([]),
     enabled: !!projectTypeId
   });

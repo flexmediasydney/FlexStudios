@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,7 @@ export default function IntegrationsManagement() {
   const { data: savedConfig } = useQuery({
     queryKey: ["tonomo-integration"],
     queryFn: async () => {
-      const list = await base44.entities.TonomoIntegration.list();
+      const list = await api.entities.TonomoIntegration.list();
       return list[0] || null;
     }
   });
@@ -45,9 +45,9 @@ export default function IntegrationsManagement() {
         throw new Error("Webhook URL must start with https://");
       }
       if (savedConfig?.id) {
-        return base44.entities.TonomoIntegration.update(savedConfig.id, data);
+        return api.entities.TonomoIntegration.update(savedConfig.id, data);
       } else {
-        return base44.entities.TonomoIntegration.create(data);
+        return api.entities.TonomoIntegration.create(data);
       }
     },
     onSuccess: () => {

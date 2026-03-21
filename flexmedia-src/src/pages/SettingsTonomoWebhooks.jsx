@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,7 +26,7 @@ export default function SettingsTonomoWebhooks() {
   const { data: logs = [], refetch } = useQuery({
     queryKey: ['tonomoLogs', limit],
     queryFn: async () => {
-      const result = await base44.entities.TonomoWebhookLog.list('-received_at', limit);
+      const result = await api.entities.TonomoWebhookLog.list('-received_at', limit);
       return result;
     },
     refetchInterval: 15000,

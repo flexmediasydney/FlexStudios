@@ -1,6 +1,6 @@
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { useQuery } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { MapPin, User, Building2, DollarSign } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
@@ -29,7 +29,7 @@ const statusLabels = {
 export default function ProjectHoverCard({ projectId, children }) {
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', projectId],
-    queryFn: () => base44.entities.Project.filter({ id: projectId }).then(results => results[0])
+    queryFn: () => api.entities.Project.filter({ id: projectId }).then(results => results[0])
   });
 
   if (!project && !isLoading) {

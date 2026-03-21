@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
@@ -27,7 +27,7 @@ export default function ProjectLinkDialogForInbox({
     queryKey: ["projects-search", searchQuery],
     queryFn: async () => {
       if (!searchQuery.trim()) return [];
-      const allProjects = await base44.entities.Project.filter({}, "-updated_date", 100);
+      const allProjects = await api.entities.Project.filter({}, "-updated_date", 100);
       const query = searchQuery.toLowerCase();
       return allProjects.filter(p => 
         p.title?.toLowerCase().includes(query) ||
@@ -47,7 +47,7 @@ export default function ProjectLinkDialogForInbox({
       // Linked + shared = all project members see it.
       await Promise.all(
         messageIds.map(msgId =>
-          base44.entities.EmailMessage.update(msgId, {
+          api.entities.EmailMessage.update(msgId, {
             project_id: projectId,
             project_title: project.title
             // visibility intentionally not set here

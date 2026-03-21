@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from "react";
-import { base44 } from "@/api/base44Client";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -263,7 +263,7 @@ export default function SettingsSystemHealth() {
     }, 100);
 
     try {
-      const response = await base44.functions.invoke("healthCheckFunctions", {
+      const response = await api.functions.invoke("healthCheckFunctions", {
         include_data_integrity: includeDataIntegrity,
         include_smoke_tests: includeSmokeTests,
       });
