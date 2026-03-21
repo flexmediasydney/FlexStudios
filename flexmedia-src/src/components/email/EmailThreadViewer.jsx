@@ -1009,56 +1009,88 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                           </p>
                           <div className="flex flex-wrap gap-2">
                             {msgItem.attachments.map((att, aidx) => {
-                              const isImage = /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(att.filename || '') ||
-                                (att.mime_type || att.mimeType || '').startsWith('image/');
                               const isPdf = /\.pdf$/i.test(att.filename || '') ||
                                 (att.mime_type || att.mimeType || '') === 'application/pdf';
+                              const ext = att.filename?.split('.').pop()?.toUpperCase() || '?';
 
-                              if (isImage && att.file_url) {
-                                return (
-                                  <a
-                                    key={aidx}
-                                    href={att.file_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block rounded-xl border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all overflow-hidden group max-w-[200px]"
-                                  >
-                                    <img
-                                      src={att.file_url}
-                                      alt={att.filename}
-                                      className="w-full h-32 object-cover bg-slate-100"
-                                      loading="lazy"
-                                    />
-                                    <div className="px-2.5 py-1.5 bg-slate-50">
-                                      <p className="text-[10px] font-semibold text-slate-600 group-hover:text-blue-600 truncate">{att.filename}</p>
-                                      {att.size && <p className="text-[9px] text-slate-400">{formatFileSize(att.size)}</p>}
-                                    </div>
-                                  </a>
-                                );
-                              }
+                              const handleDownload = async (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                // If we have a direct URL, use it
+                                if (att.file_url) {
+                                  window.open(att.file_url, '_blank');
+                                  return;
+                                }
+                                // Otherwise fetch from Gmail via edge function
+                                if (!att.attachment_id) {
+                                  toast.error('No attachment data available');
+                                  return;
+                                }
+                                const btn = e.currentTarget;
+                                btn.style.opacity = '0.5';
+                                btn.style.pointerEvents = 'none';
+                                try {
+                                  const { data: { session } } = await api.supabase.auth.getSession();
+                                  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/getEmailAttachment`, {
+                                    method: 'POST',
+                                    headers: {
+                                      'Content-Type': 'application/json',
+                                      'Authorization': `Bearer ${session?.access_token}`,
+                                    },
+                                    body: JSON.stringify({
+                                      messageId: msgItem.gmail_message_id,
+                                      attachmentId: att.attachment_id,
+                                      accountId: thread.messages[0]?.email_account_id || account?.id,
+                                    }),
+                                  });
+                                  if (!res.ok) throw new Error('Download failed');
+                                  const result = await res.json();
+                                  // Convert base64 to blob and download
+                                  const byteChars = atob(result.data);
+                                  const byteArray = new Uint8Array(byteChars.length);
+                                  for (let i = 0; i < byteChars.length; i++) {
+                                    byteArray[i] = byteChars.charCodeAt(i);
+                                  }
+                                  const blob = new Blob([byteArray], { type: att.mime_type || 'application/octet-stream' });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = att.filename || 'attachment';
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  document.body.removeChild(a);
+                                  URL.revokeObjectURL(url);
+                                  toast.success(`Downloaded ${att.filename}`);
+                                } catch (err) {
+                                  console.error('Attachment download error:', err);
+                                  toast.error('Failed to download attachment');
+                                } finally {
+                                  btn.style.opacity = '';
+                                  btn.style.pointerEvents = '';
+                                }
+                              };
 
                               return (
-                                <a
+                                <button
                                   key={aidx}
-                                  href={att.file_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group max-w-xs"
+                                  onClick={handleDownload}
+                                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group max-w-xs cursor-pointer text-left"
+                                  title={`Download ${att.filename}`}
                                 >
                                   <div className="w-8 h-8 bg-white rounded-lg border border-slate-200 flex items-center justify-center text-xs font-bold text-slate-500 flex-shrink-0 uppercase">
-                                    {isPdf ? 'PDF' : (att.filename?.split('.').pop() || '?')}
+                                    {isPdf ? 'PDF' : ext}
                                   </div>
                                   <div className="flex-1 min-w-0">
                                     <p className="text-xs font-bold text-slate-700 group-hover:text-blue-700 truncate leading-tight">
                                       {att.filename}
                                     </p>
-                                    {att.size && (
+                                    {att.size > 0 && (
                                       <p className="text-[10px] text-slate-400 font-medium mt-0.5">
                                         {formatFileSize(att.size)}
                                       </p>
                                     )}
                                   </div>
-                                </a>
+                                </button>
                               );
                             })}
                           </div>
