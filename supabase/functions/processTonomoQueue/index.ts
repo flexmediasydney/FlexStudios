@@ -29,12 +29,23 @@ Deno.serve(async (req) => {
   try {
     await safeUpdate(entities, 'TonomoIntegrationSettings', { heartbeat_at: new Date().toISOString() });
 
-    // Lock check — prevent concurrent runs
-    if (s?.processing_lock_at) {
-      const lockStr = s.processing_lock_at.replace(/Z$/, '') + 'Z';
-      const lockAge = (Date.now() - new Date(lockStr).getTime()) / 1000;
-      if (!isNaN(lockAge) && lockAge < LOCK_TTL_SECONDS) {
-        return jsonResponse({ skipped: true, reason: 'lock_active', lock_age: lockAge });
+    // Atomic lock — use Postgres advisory lock to prevent concurrent runs (TOCTOU-safe)
+    const LOCK_KEY = 424242; // arbitrary unique integer for this processor
+    let lockResult: any = null;
+    try {
+      const lockResp = await admin.rpc('pg_try_advisory_lock', { lock_id: LOCK_KEY });
+      lockResult = lockResp?.data ?? null;
+    } catch { lockResult = null; }
+    // Fallback to settings-based lock if advisory lock RPC not available
+    const gotAdvisoryLock = lockResult === true;
+    if (!gotAdvisoryLock) {
+      // Fallback: settings-based lock (original approach, kept for compatibility)
+      if (s?.processing_lock_at) {
+        const lockStr = s.processing_lock_at.replace(/Z$/, '') + 'Z';
+        const lockAge = (Date.now() - new Date(lockStr).getTime()) / 1000;
+        if (!isNaN(lockAge) && lockAge < LOCK_TTL_SECONDS) {
+          return jsonResponse({ skipped: true, reason: 'lock_active', lock_age: lockAge });
+        }
       }
     }
 
@@ -173,7 +184,7 @@ async function recoverFailedItems(entities: any) {
     const now = Date.now();
     const toRecover = failedItems.filter((item: any) => {
       if ((item.retry_count || 0) >= 3) return false;
-      const backoffSeconds = Math.pow(2, item.retry_count || 1) * 60;
+      const backoffSeconds = Math.pow(2, item.retry_count || 0) * 60; // 60s, 120s, 240s for retries 0,1,2
       const lastFailed = item.last_failed_at
         ? new Date(item.last_failed_at.replace(/Z$/, '') + 'Z').getTime()
         : 0;
@@ -224,7 +235,7 @@ function stripAddressTail(address: string): string {
     if (POSTCODE_RE.test(part)) continue;
     if (STATE_RE.test(part)) {
       const cleaned = part
-        .replace(/\s+(NSW|VIC|QLD|SA|WA|ACT|TAS|NT)(\s+\d{4})?$/i, '')
+        .replace(/(?:^|\s+)(NSW|VIC|QLD|SA|WA|ACT|TAS|NT)(\s+\d{4})?$/i, '')
         .trim();
       if (cleaned.length > 0) stripped.push(cleaned);
       break;
@@ -242,8 +253,15 @@ function extractSuburbFromAddress(address: string): string | null {
     const part = parts[i];
     const stateMatch = part.match(/\b(NSW|VIC|QLD|SA|WA|ACT|TAS|NT)\b/i);
     if (stateMatch) {
-      const cleaned = part.replace(/\s+(NSW|VIC|QLD|SA|WA|ACT|TAS|NT)(\s+\d{4})?$/i, '').trim();
+      // Strip state (+optional postcode) from end of part. Use (?:^|\s+) to also handle
+      // parts that ARE just the state (e.g. "NSW 2010" as its own comma-separated segment).
+      const cleaned = part.replace(/(?:^|\s+)(NSW|VIC|QLD|SA|WA|ACT|TAS|NT)(\s+\d{4})?$/i, '').trim();
       if (cleaned.length > 0 && !POSTCODE_RE.test(cleaned)) return cleaned;
+      // State part had no suburb prefix — look at the previous comma-separated part
+      if (cleaned.length === 0 && i > 0) {
+        const prev = parts[i - 1];
+        if (prev && prev.length > 0 && !POSTCODE_RE.test(prev)) return prev;
+      }
       break;
     }
   }
@@ -536,10 +554,14 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
     return { summary: `Skipped — orderId ${orderId} is an event ID, not an order ID`, skipped: true };
   }
 
-  const { isNew: isAdditionalAppointment, updatedIds: allAppointmentIds } = trackAppointment(
+  const { isNew: isNewAppointment, updatedIds: allAppointmentIds } = trackAppointment(
     existing?.tonomo_appointment_ids,
     eventId
   );
+  // Only flag as additional appointment when the project ALREADY EXISTS and already has appointments
+  // For brand new projects, isNewAppointment is always true (empty array → new ID), which is NOT additional
+  const existingAppointmentIds = existing?.tonomo_appointment_ids ? JSON.parse(existing.tonomo_appointment_ids) : [];
+  const isAdditionalAppointment = !!existing && isNewAppointment && existingAppointmentIds.length > 0;
 
   const lifecycleReversalDetected =
     existing && (
@@ -613,10 +635,29 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
 
   if (p.order?.deliverable_link) sharedData.tonomo_deliverable_link = p.order.deliverable_link;
   if (p.order?.deliverable_path) sharedData.tonomo_deliverable_path = p.order.deliverable_path;
-  if (agentId) sharedData.agent_id = agentId;
+  if (agentId) {
+    sharedData.agent_id = agentId;
+    // Resolve agency_id from the agent record
+    try {
+      const agentRecord = await entities.Agent.get(agentId);
+      if (agentRecord?.current_agency_id) sharedData.agency_id = agentRecord.current_agency_id;
+      if (agentRecord?.name) sharedData.agent_name = agentRecord.name;
+    } catch { /* non-fatal */ }
+  }
+
+  // Set denormalized name fields from resolved staff
+  const staffNameMap: Record<string, string> = {};
+  for (const rp of resolvedPhotographers) {
+    if (rp.userId && rp.name) staffNameMap[rp.userId] = rp.name;
+  }
 
   for (const [field, userId] of Object.entries(staffAssignment)) {
-    if (userId) sharedData[field] = userId;
+    if (userId) {
+      sharedData[field] = userId;
+      // Set corresponding _name field
+      const nameField = field.replace('_id', '_name');
+      if (staffNameMap[userId as string]) sharedData[nameField] = staffNameMap[userId as string];
+    }
   }
 
   const canAutoApprove =
@@ -891,12 +932,15 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
       console.warn('applyProjectRoleDefaults after auto-approve failed (non-fatal):', err?.message);
     });
 
-    invokeFunction('trackProjectStageChange', {
-      projectId: project.id,
-      old_data: { status: 'pending_review' },
-      actor_id: null,
-      actor_name: 'Auto-Approve',
-    }).catch(() => {});
+    // Only fire stage change for newly created projects, not race-condition updates
+    if (operation === 'created') {
+      invokeFunction('trackProjectStageChange', {
+        projectId: project.id,
+        old_data: { status: 'pending_review' },
+        actor_id: null,
+        actor_name: 'Auto-Approve',
+      }).catch(() => {});
+    }
 
     const notifProjectName = sharedData.title || address;
     fireAdminNotif(entities, {
@@ -944,7 +988,7 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
         projectName: notifProjectName,
         ctaLabel: 'Review Booking',
         source: 'tonomo',
-        idempotencyKey: `booking_arrived:${orderId}:${Date.now().toString().slice(0,-4)}`,
+        idempotencyKey: `booking_arrived:${orderId}:${new Date().toISOString().split('T')[0]}`,
       }).catch(() => {});
     }
 
@@ -1198,7 +1242,7 @@ async function handleChanged(entities: any, orderId: string, p: any) {
     }
     if (unresolvedPhotographers.length > 0) {
       reviewReasons.push(`Photographer(s) reassigned but not found: ${unresolvedPhotographers.join(', ')} — manual assignment required`);
-      if (project.status !== 'pending_review') updates.pending_review_type = 'staff_change';
+      updates.pending_review_type = 'staff_change';
     }
   }
 
@@ -1213,12 +1257,9 @@ async function handleChanged(entities: any, orderId: string, p: any) {
   if (changedAddress && !overriddenFields.includes('property_address')) {
     if (changedAddress !== project.property_address) {
       updates.property_address = changedAddress;
-      updates.title = changedAddress;
-      // Extract suburb from address (last part before state/postcode)
-      const addressParts = changedAddress.split(',').map((s: string) => s.trim());
-      if (addressParts.length >= 2) {
-        updates.property_suburb = addressParts[addressParts.length - 2] || '';
-      }
+      const strippedAddr = stripAddressTail(changedAddress) || changedAddress;
+      updates.title = strippedAddr;
+      updates.property_suburb = extractSuburbFromAddress(changedAddress) || null;
       reviewReasons.push(`Address changed from "${project.property_address || 'unknown'}" to "${changedAddress}"`);
     }
   }
@@ -1230,7 +1271,7 @@ async function handleChanged(entities: any, orderId: string, p: any) {
       const removed = prev.filter((s: string) => !services.includes(s));
       if (added.length > 0 || removed.length > 0) {
         reviewReasons.push(`Services changed during active production${added.length ? ` — added: ${added.join(', ')}` : ''}${removed.length ? ` — removed: ${removed.join(', ')}` : ''} — please confirm billing`);
-        if (project.status !== 'pending_review') updates.pending_review_type = 'service_change';
+        updates.pending_review_type = 'service_change';
       }
     }
     updates.tonomo_raw_services = JSON.stringify(services);
@@ -1335,6 +1376,8 @@ async function handleChanged(entities: any, orderId: string, p: any) {
   }
 
   if (Object.keys(updates).length) await entities.Project.update(project.id, updates);
+  // Merge updates so notifications use fresh data (e.g. new photographer_id, agent_id)
+  const updatedProject = { ...project, ...updates };
 
   await writeAudit(entities, {
     action: 'changed', entity_type: 'Project', entity_id: project.id,
@@ -1368,8 +1411,8 @@ async function handleChanged(entities: any, orderId: string, p: any) {
       projectName: changedProjectName,
       ctaLabel: 'View Project',
       source: 'tonomo',
-      idempotencyKey: `services_changed:${orderId}:${Date.now().toString().slice(0,-4)}`,
-    }, project).catch(() => {});
+      idempotencyKey: `services_changed:${orderId}:${new Date().toISOString().split('T')[0]}`,
+    }, updatedProject).catch(() => {});
   }
 
   if (updates.products || updates.packages) {
@@ -1464,6 +1507,25 @@ async function handleOrderUpdate(entities: any, orderId: string, p: any) {
   const incomingStatus = p.orderStatus || p.order?.orderStatus;
   if (project.status === 'cancelled' && incomingStatus === 'cancelled') {
     return { summary: `Skipped order update for cancelled project ${orderId}`, skipped: true };
+  }
+
+  // Lifecycle reversal: if project is cancelled/delivered but incoming status is active, route to pending_review
+  const isCancelledOrDelivered = project.status === 'cancelled' || project.status === 'delivered' ||
+    project.tonomo_lifecycle_stage === 'cancelled' || project.pending_review_type === 'cancellation';
+  if (isCancelledOrDelivered && incomingStatus && incomingStatus !== 'cancelled' && incomingStatus !== 'complete') {
+    await entities.Project.update(project.id, {
+      status: 'pending_review',
+      pre_revision_stage: project.status,
+      pending_review_type: 'restoration',
+      pending_review_reason: `Order update received for ${project.status} project — incoming status: ${incomingStatus}. Please review and re-approve.`,
+      tonomo_lifecycle_stage: 'active',
+    });
+    await writeAudit(entities, {
+      action: 'booking_created_or_changed', entity_type: 'Project', entity_id: project.id,
+      operation: 'updated', tonomo_order_id: orderId,
+      notes: `Lifecycle reversal in handleOrderUpdate: ${project.status} → pending_review (restoration). Incoming status: ${incomingStatus}`,
+    });
+    return { summary: `Project ${orderId} moved to pending_review (restoration from handleOrderUpdate)` };
   }
 
   const overriddenFields = JSON.parse(project.manually_overridden_fields || '[]');
@@ -1641,6 +1703,12 @@ async function handleDelivered(entities: any, orderId: string, p: any) {
     source: 'tonomo',
     idempotencyKey: `delivered:${orderId}`,
   }, project).catch(() => {});
+
+  // Trigger auto-archive check (delivered + paid + tasks complete = auto-archive)
+  invokeFunction('checkAndArchiveProject', {
+    project_id: project.id,
+    triggered_by: 'tonomo_delivery',
+  }).catch(() => {});
 
   return { summary: `Project delivered for order ${orderId}` };
 }

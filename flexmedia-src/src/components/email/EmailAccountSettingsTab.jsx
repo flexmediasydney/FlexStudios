@@ -137,6 +137,8 @@ export default function EmailAccountSettingsTab() {
     onSuccess: (res) => {
       const n = res?.data?.synced ?? 0;
       queryClient.invalidateQueries({ queryKey: ["email-accounts", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
+      queryClient.invalidateQueries({ queryKey: ["email-conversations"] });
       toast.success(n > 0 ? `Synced ${n} new email${n !== 1 ? "s" : ""}.` : "Already up to date.");
     },
     onError: (err) => toast.error("Sync failed: " + err.message),

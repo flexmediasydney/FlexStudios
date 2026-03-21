@@ -2,11 +2,11 @@ import React, { useState, useMemo, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
-import { 
-  LayoutDashboard, 
-  Camera, 
-  Users, 
-  Calendar as CalendarIcon, 
+import {
+  LayoutDashboard,
+  Camera,
+  Users,
+  Calendar as CalendarIcon,
   Menu,
   X,
   Mail,
@@ -27,9 +27,15 @@ import {
   UserCheck,
   Clock,
   ChevronDown,
+  ChevronRight,
   Sun,
   Moon,
-  Monitor
+  Monitor,
+  Building2,
+  UserRound,
+  UsersRound,
+  Contact,
+  Rss,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -183,7 +189,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
     return () => window.removeEventListener("keydown", handler);
   }, [sidebarOpen]);
 
-  // Navigation structure with sections — role-aware filtering
+  // Navigation structure — role-aware, with parent/child nesting
   const navigationSections = useMemo(() => {
     if (!user) return [];
     const role = user.role;
@@ -198,8 +204,12 @@ function LayoutContent({ currentPageName, children, onBack }) {
           can("Dashboard") && { name: "Dashboard", href: "Dashboard", icon: LayoutDashboard },
           can("Calendar") && { name: "Calendar", href: "Calendar", icon: CalendarIcon },
           can("Inbox") && { name: "Inbox", href: "Inbox", icon: Mail, badge: navBadges.Inbox },
-          can("NotificationsPage") && { name: "Notifications", href: "NotificationsPage", icon: Bell, badge: navBadges.NotificationsPage },
-          can("NotificationsPulse") && { name: "Notification Pulse", href: "NotificationsPulse", icon: Activity, subItem: true },
+          can("NotificationsPage") && {
+            name: "Notifications", href: "NotificationsPage", icon: Bell, badge: navBadges.NotificationsPage,
+            children: [
+              can("NotificationsPulse") && { name: "Pulse", href: "NotificationsPulse", icon: Activity },
+            ].filter(Boolean)
+          },
         ].filter(Boolean)
       },
       {
@@ -208,12 +218,23 @@ function LayoutContent({ currentPageName, children, onBack }) {
         collapsible: true,
         items: [
           can("Projects") && { name: "Projects", href: "Projects", icon: Camera },
-          can("TonomoIntegrationDashboard") && { name: "Bookings Engine", href: "TonomoIntegrationDashboard", icon: Bot, badge: navBadges.TonomoIntegrationDashboard },
-          can("TonomoPulse") && { name: "Live Feed", href: "TonomoPulse", subItem: true },
-          can("ClientAgents") && { name: "Contacts", href: "ClientAgents", icon: Users },
-          can("Organisations") && { name: "Organisations", href: "Organisations", subItem: true },
-          can("Teams") && { name: "Teams", href: "Teams", subItem: true },
-          can("People") && { name: "People", href: "People", subItem: true },
+          can("TonomoIntegrationDashboard") && {
+            name: "Bookings Engine", href: "TonomoIntegrationDashboard", icon: Bot, badge: navBadges.TonomoIntegrationDashboard,
+            children: [
+              can("TonomoPulse") && { name: "Live Feed", href: "TonomoPulse", icon: Rss },
+            ].filter(Boolean)
+          },
+        ].filter(Boolean)
+      },
+      (can("ClientAgents") || can("Organisations") || can("People") || can("Teams")) && {
+        id: 'contacts',
+        label: 'Contacts',
+        collapsible: true,
+        items: [
+          can("ClientAgents") && { name: "Overview", href: "ClientAgents", icon: Users },
+          can("Organisations") && { name: "Organisations", href: "Organisations", icon: Building2 },
+          can("Teams") && { name: "Teams", href: "Teams", icon: UsersRound },
+          can("People") && { name: "People", href: "People", icon: UserRound },
         ].filter(Boolean)
       },
       can("Analytics") && {
@@ -238,19 +259,19 @@ function LayoutContent({ currentPageName, children, onBack }) {
         label: 'Settings',
         collapsible: true,
         items: [
-          can("SettingsProductsPackages") && { name: "Products & Packages", href: "SettingsProductsPackages", subItem: true },
-          can("SettingsPriceMatrix") && { name: "Price Matrix", href: "SettingsPriceMatrix", subItem: true },
-          can("SettingsOrganisation") && { name: "Organisation", href: "SettingsOrganisation", subItem: true },
-          can("SettingsAutomationRules") && { name: "Automation Rules", href: "SettingsAutomationRules", subItem: true },
-          can("SettingsRevisionTemplates") && { name: "Request Templates", href: "SettingsRevisionTemplates", subItem: true },
-          can("SettingsIntegrations") && { name: "Integrations", href: "SettingsIntegrations", subItem: true },
-          can("EmailSyncSettings") && { name: "Email Sync", href: "EmailSyncSettings", subItem: true },
-          can("SettingsTonomoIntegration") && { name: "Bookings Setup", href: "SettingsTonomoIntegration", subItem: true },
-          can("SettingsTonomoMappings") && { name: "Mappings", href: "SettingsTonomoMappings", subItem: true },
-          can("SettingsNotifications") && { name: "Notifications", href: "SettingsNotifications", subItem: true },
-          can("BusinessRequirementsDocument") && { name: "BRD", href: "BusinessRequirementsDocument", subItem: true },
-          can("SettingsSystemHealth") && { name: "System Diagnostics", href: "SettingsSystemHealth", subItem: true },
-          can("SettingsTeamsUsers") && { name: "Teams & Users", href: "SettingsTeamsUsers", subItem: true },
+          can("SettingsProductsPackages") && { name: "Products & Packages", href: "SettingsProductsPackages" },
+          can("SettingsPriceMatrix") && { name: "Price Matrix", href: "SettingsPriceMatrix" },
+          can("SettingsOrganisation") && { name: "Organisation", href: "SettingsOrganisation" },
+          can("SettingsAutomationRules") && { name: "Automation Rules", href: "SettingsAutomationRules" },
+          can("SettingsRevisionTemplates") && { name: "Request Templates", href: "SettingsRevisionTemplates" },
+          can("SettingsIntegrations") && { name: "Integrations", href: "SettingsIntegrations" },
+          can("EmailSyncSettings") && { name: "Email Sync", href: "EmailSyncSettings" },
+          can("SettingsTonomoIntegration") && { name: "Bookings Setup", href: "SettingsTonomoIntegration" },
+          can("SettingsTonomoMappings") && { name: "Mappings", href: "SettingsTonomoMappings" },
+          can("SettingsNotifications") && { name: "Notifications", href: "SettingsNotifications" },
+          can("BusinessRequirementsDocument") && { name: "BRD", href: "BusinessRequirementsDocument" },
+          can("SettingsSystemHealth") && { name: "System Diagnostics", href: "SettingsSystemHealth" },
+          can("SettingsTeamsUsers") && { name: "Teams & Users", href: "SettingsTeamsUsers" },
         ].filter(Boolean)
       },
     ].filter(Boolean);
@@ -265,41 +286,81 @@ function LayoutContent({ currentPageName, children, onBack }) {
     }));
   };
 
-  const NavLink = ({ item }) => {
+  // Track which parent items have their children expanded
+  const [expandedParents, setExpandedParents] = useState({});
+  const toggleParent = (name) => setExpandedParents(prev => ({ ...prev, [name]: !prev[name] }));
+
+  const NavLink = ({ item, isChild }) => {
     const isActive = currentPageName === item.href;
-    
+    const hasChildren = item.children && item.children.length > 0;
+    const isParentExpanded = expandedParents[item.name];
+    // A parent is "active" if it or any of its children is active
+    const isChildActive = hasChildren && item.children.some(c => currentPageName === c.href);
+    const isEffectivelyActive = isActive || isChildActive;
+
     return (
-      <Link
-        to={createPageUrl(item.href)}
-        onClick={() => setSidebarOpen(false)}
-        className={cn(
-          "group flex items-center gap-2.5 px-3 py-2.5 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-[0.98] min-h-[44px]",
-          isActive 
-            ? "bg-primary text-primary-foreground font-semibold shadow-md" 
-            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground font-medium",
-          item.subItem && "ml-0 pl-3 text-xs py-2 opacity-90"
+      <div>
+        <div className="flex items-center">
+          <Link
+            to={createPageUrl(item.href)}
+            onClick={() => setSidebarOpen(false)}
+            className={cn(
+              "group flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-[0.98] flex-1 min-h-[40px]",
+              isActive
+                ? "bg-primary text-primary-foreground font-semibold shadow-md"
+                : isChildActive
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground font-medium",
+              isChild && "text-[13px] py-1.5 min-h-[34px]"
+            )}
+            title={item.name}
+            aria-current={isActive ? "page" : undefined}
+          >
+            {item.icon && (
+              <item.icon className={cn(
+                "h-4 w-4 flex-shrink-0 transition-all duration-150",
+                isChild && "h-3.5 w-3.5",
+                isActive ? "drop-shadow-sm" : "group-hover:scale-110"
+              )} />
+            )}
+            <span className="truncate flex-1">{item.name}</span>
+            {item.badge > 0 && (
+              <span className={cn(
+                "ml-auto flex items-center justify-center text-[10px] font-bold rounded-full min-w-[20px] h-5 px-1.5 tabular-nums",
+                isActive
+                  ? "bg-primary-foreground/20 text-primary-foreground"
+                  : "bg-red-100 text-red-700"
+              )}>
+                {item.badge > 99 ? '99+' : item.badge}
+              </span>
+            )}
+          </Link>
+          {hasChildren && (
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleParent(item.name); }}
+              className={cn(
+                "p-1.5 rounded-md transition-colors flex-shrink-0 mr-1",
+                isEffectivelyActive
+                  ? "text-primary hover:bg-primary/10"
+                  : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/40"
+              )}
+              title={`${isParentExpanded ? 'Hide' : 'Show'} ${item.name} sub-items`}
+            >
+              <ChevronRight className={cn(
+                "h-3.5 w-3.5 transition-transform duration-200",
+                isParentExpanded && "rotate-90"
+              )} />
+            </button>
+          )}
+        </div>
+        {hasChildren && isParentExpanded && (
+          <div className="ml-4 pl-2 mt-0.5 space-y-0.5 border-l border-border/50">
+            {item.children.map(child => (
+              <NavLink key={child.name} item={child} isChild />
+            ))}
+          </div>
         )}
-        title={item.name}
-        aria-current={isActive ? "page" : undefined}
-      >
-        {item.icon && (
-          <item.icon className={cn(
-            "h-4 w-4 flex-shrink-0 transition-all duration-150", 
-            isActive ? "drop-shadow-sm" : "group-hover:scale-110"
-          )} />
-        )}
-        <span className="truncate flex-1">{item.name}</span>
-        {item.badge > 0 && (
-          <span className={cn(
-            "ml-auto flex items-center justify-center text-[10px] font-bold rounded-full min-w-[20px] h-5 px-1.5 tabular-nums",
-            isActive
-              ? "bg-primary-foreground/20 text-primary-foreground"
-              : "bg-red-100 text-red-700"
-          )}>
-            {item.badge > 99 ? '99+' : item.badge}
-          </span>
-        )}
-      </Link>
+      </div>
     );
   };
 

@@ -51,7 +51,7 @@ function fmtRevenue(val) {
 }
 
 function lastActivityInfo(agent) {
-  const lastContact = agent.last_contacted_at || agent.last_contact_date;
+  const lastContact = agent.last_contacted_at;
   if (!lastContact) return { label: "Never", days: Infinity, color: "text-muted-foreground" };
   const days = differenceInDays(new Date(), new Date(lastContact));
   let color = "text-emerald-600";
@@ -425,8 +425,8 @@ const ContactRow = React.memo(function ContactRow({
                 </span>
               </TooltipTrigger>
               <TooltipContent side="top" className="text-xs">
-                {agent.last_contacted_at || agent.last_contact_date
-                  ? `Last contacted ${formatDistanceToNow(new Date(agent.last_contacted_at || agent.last_contact_date), { addSuffix: true })}`
+                {agent.last_contacted_at
+                  ? `Last contacted ${formatDistanceToNow(new Date(agent.last_contacted_at), { addSuffix: true })}`
                   : "No contact recorded"}
                 {isIdle && <p className="text-amber-600 font-medium mt-0.5">Idle contact - follow up needed</p>}
               </TooltipContent>

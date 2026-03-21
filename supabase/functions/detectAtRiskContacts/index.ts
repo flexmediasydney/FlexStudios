@@ -20,7 +20,7 @@ Deno.serve(async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
 
-    const agents = await entities.Agent.list('-created_date', 1000);
+    const agents = await entities.Agent.list('-created_at', 1000);
     const watchedAgents = agents.filter((a: any) =>
       a.relationship_state === 'Active' || a.relationship_state === 'Prospecting'
     );
@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
       const agentProjects = projects.filter((p: any) => p.agent_id === agent.id);
 
       const latestMs = agentProjects.reduce((latest: number, p: any) => {
-        const d = p.shoot_date || p.created_date;
+        const d = p.shoot_date || p.created_at;
         if (!d) return latest;
         const t = new Date(d).getTime();
         return t > latest ? t : latest;
@@ -47,8 +47,8 @@ Deno.serve(async (req) => {
         ? Math.floor((now - latestMs) / (24 * 60 * 60 * 1000))
         : null;
 
-      const createdDaysAgo = agent.created_date
-        ? Math.floor((now - new Date(agent.created_date).getTime()) / (24 * 60 * 60 * 1000))
+      const createdDaysAgo = agent.created_at
+        ? Math.floor((now - new Date(agent.created_at).getTime()) / (24 * 60 * 60 * 1000))
         : 0;
 
       const shouldBeAtRisk =
@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
 
     // Notify admins about newly at-risk contacts
     if (newlyAtRisk.length > 0) {
-      const adminUsers = await entities.User.list('-created_date', 200);
+      const adminUsers = await entities.User.list('-created_at', 200);
       const admins = adminUsers.filter((u: any) =>
         u.role === 'master_admin' || u.role === 'admin'
       );
@@ -87,7 +87,7 @@ Deno.serve(async (req) => {
           is_dismissed: false,
           source: 'at_risk_detection',
           idempotency_key: `at_risk_daily:${new Date().toISOString().slice(0, 10)}`,
-          created_date: new Date().toISOString(),
+          created_at: new Date().toISOString(),
         }).catch(() => {});
       }
     }

@@ -2,7 +2,7 @@ export const DATE_FIELD_REGISTRY = {
   dateOnly: {
     Project:         ['shoot_date', 'delivery_date'],
     ProjectTask:     ['due_date'],
-    Agent:           ['became_active_date', 'became_dormant_date', 'last_contact_date', 'next_follow_up_date', 'onboarding_date'],
+    Agent:           ['became_active_date', 'became_dormant_date', 'next_follow_up_date', 'onboarding_date'],
     RevisionRequest: ['due_date', 'requested_date'],
     PriceMatrix:     ['snapshot_date'],
   },

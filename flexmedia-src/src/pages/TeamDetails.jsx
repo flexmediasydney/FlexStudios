@@ -2,25 +2,46 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useNavigate, Link } from 'react-router-dom';
 import { useSmartEntityData } from '@/components/hooks/useSmartEntityData';
-import { useEntityList } from '@/components/hooks/useEntityData';
+import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
 import { api } from '@/api/supabaseClient';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
+import { cn } from '@/lib/utils';
 import { fmtDate, fmtTimestampCustom, fixTimestamp, formatRelative } from '@/components/utils/dateUtils';
 import {
-  ArrowLeft, ChevronDown,
-  MessageSquare, Activity, AlertCircle, Trash2, Calendar, User, Copy, Check
+  ArrowLeft, ChevronDown, Mail, Phone, Building2,
+  MessageSquare, Activity, AlertCircle, Plus, Trash2, Calendar, User, Paperclip, Pencil,
+  FileText, Users
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import UnifiedNotesPanel from '@/components/notes/UnifiedNotesPanel';
-import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
-import TeamDetailsTab from '@/components/agencies/TeamDetailsTab';
 import ProjectStatusBadge from '@/components/dashboard/ProjectStatusBadge';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import EntityEmailTab from '@/components/email/EntityEmailTab';
-import EmailActivityLog from '@/components/email/EmailActivityLog';
+import ContactAuditLog from '@/components/contacts/ContactAuditLog';
+import ContactActivityLog from '@/components/contacts/ContactActivityLog';
+import ContactFiles from '@/components/contacts/ContactFiles';
+import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
+
+// ── Tab definitions (Pipedrive-style, matching PersonDetails) ────────────────
+const TABS = [
+  { id: 'notes', label: 'Notes', icon: FileText },
+  { id: 'email', label: 'Email', icon: Mail },
+  { id: 'files', label: 'Files', icon: Paperclip },
+  { id: 'members', label: 'Members', icon: Users },
+  { id: 'activities', label: 'Activities', icon: Calendar },
+];
+
+// ── History sub-filter tabs for Notes unified view ───────────────────────────
+const HISTORY_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'notes', label: 'Notes' },
+  { id: 'activity', label: 'Activities' },
+  { id: 'emails', label: 'Emails' },
+  { id: 'changelog', label: 'Changelog' },
+];
 
 const STATE_BADGE = {
   Active: 'bg-green-100 text-green-800 border-green-200',
@@ -60,50 +81,6 @@ function fmtMoney(val) {
   return `A$${Math.round(val)}`;
 }
 
-function FieldRow({ label, value, href, copyable = true }) {
-  const [copied, setCopied] = React.useState(false);
-  if (!value) return null;
-
-  const handleCopy = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
-  return (
-    <div className="flex items-center justify-between py-1.5 px-4 group hover:bg-muted/30 transition-colors">
-      <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
-      <div className="flex items-center gap-1 min-w-0 ml-3">
-        {href ? (
-          <a href={href} target="_blank" rel="noopener noreferrer"
-            className="text-[12px] font-semibold text-primary hover:underline truncate"
-            title={value}>
-            {value}
-          </a>
-        ) : (
-          <span className="text-[12px] font-semibold text-foreground truncate" title={value}>{value}</span>
-        )}
-        {copyable && (
-          <button
-            onClick={handleCopy}
-            className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5 rounded hover:bg-muted active:scale-95"
-            title={`Copy ${label}`}
-            aria-label={`Copy ${label}`}
-          >
-            {copied
-              ? <Check className="h-3 w-3 text-green-600" />
-              : <Copy className="h-3 w-3 text-muted-foreground" />
-            }
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function ErrorState({ navigate, title, message }) {
   return (
     <div className="p-8">
@@ -121,17 +98,17 @@ function ErrorState({ navigate, title, message }) {
   );
 }
 
-function Section({ title, badge, children, defaultOpen = true, noPadding = false }) {
+function Section({ title, badge, children, defaultOpen = true }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border-b border-border/50">
       <button
-        className="flex items-center gap-2 w-full px-4 py-2 text-[11px] font-semibold text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-all duration-200 text-left"
+        className="flex items-center gap-2 w-full px-4 py-2.5 text-xs font-semibold text-foreground hover:text-primary hover:bg-muted/40 transition-all duration-200 text-left"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
       >
-        <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${!open && '-rotate-90'}`} />
-        <span>{title}</span>
+        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ${!open && '-rotate-90'}`} />
+        <span className="uppercase tracking-wide">{title}</span>
         {badge > 0 && (
           <span className="ml-0.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">
             {badge}
@@ -139,10 +116,92 @@ function Section({ title, badge, children, defaultOpen = true, noPadding = false
         )}
       </button>
       {open && (
-        <div className={noPadding ? 'pb-2 animate-in fade-in duration-200' : 'px-4 pb-3 animate-in fade-in duration-200'}>
+        <div className="px-4 pb-4 animate-in fade-in duration-200">
           {children}
         </div>
       )}
+    </div>
+  );
+}
+
+function InlineField({ label, value, field, onSave, type = 'text', options, placeholder, icon: Icon, viewRender }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  const inputRef = useRef(null);
+  useEffect(() => { setDraft(value || ''); }, [value]);
+  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+  const save = () => { setEditing(false); if (draft !== (value || '')) onSave(field, draft); };
+
+  const displayValue = type === 'select' && options
+    ? (options.find(o => (o.value ?? o) === value)?.label ?? value)
+    : value;
+
+  if (type === 'select') {
+    if (editing) {
+      return (
+        <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+          {label && <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1">{Icon && <Icon className="h-3 w-3" />} {label}</label>}
+          <select ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
+            className="flex-1 text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
+            {options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
+          </select>
+        </div>
+      );
+    }
+    return (
+      <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+        {label && <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1">{Icon && <Icon className="h-3 w-3" />} {label}</label>}
+        <div className="flex-1 min-w-0 flex items-start gap-1">
+          {viewRender || (
+            <span className={cn("text-sm flex-1", displayValue ? "text-foreground" : "text-muted-foreground/40")}>
+              {displayValue || '\u2014'}
+            </span>
+          )}
+          <button
+            onClick={() => setEditing(true)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted shrink-0"
+            title={`Edit ${label}`}
+          >
+            <Pencil className="h-3 w-3 text-muted-foreground" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (type === 'textarea' && editing) {
+    return (
+      <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+        <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">{label}</label>
+        <textarea ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
+          rows={3} className="flex-1 text-sm border rounded px-2 py-1.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none" />
+      </div>
+    );
+  }
+  return (
+    <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+      <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1">
+        {Icon && <Icon className="h-3 w-3" />} {label}
+      </label>
+      <div className="flex-1 min-w-0 flex items-start gap-1">
+        {editing ? (
+          <input ref={inputRef} type={type === 'date' ? 'date' : type === 'number' ? 'number' : 'text'}
+            value={draft} onChange={e => setDraft(e.target.value)} onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+            placeholder={placeholder} className="w-full text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+        ) : (
+          <>
+            <span className={cn("text-sm flex-1", displayValue ? "text-foreground" : "text-muted-foreground/40")}>
+              {displayValue || '\u2014'}
+            </span>
+            <button
+              onClick={() => setEditing(true)}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted shrink-0"
+              title={`Edit ${label}`}
+            >
+              <Pencil className="h-3 w-3 text-muted-foreground" />
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -308,13 +367,16 @@ export default function TeamDetails() {
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const teamId = urlParams.get('id');
-  const tabsRef = useRef(null);
-
   // Remember last selected tab
   const [activeTab, setActiveTab] = useState(() => {
     const saved = sessionStorage.getItem(`tab-team-${teamId}`);
-    return saved || 'notes';
+    // Map old tab values to new ones
+    if (saved === 'activity' || saved === 'interactions' || saved === 'audit') return 'notes';
+    if (saved === 'emails') return 'email';
+    const validTabs = TABS.map(t => t.id);
+    return validTabs.includes(saved) ? saved : 'notes';
   });
+  const [historyFilter, setHistoryFilter] = useState('all');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [emailActivities, setEmailActivities] = useState([]);
 
@@ -344,6 +406,7 @@ export default function TeamDetails() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
   const { data: agency } = useSmartEntityData('Agency', team?.agency_id);
+  const { data: agencies = [] } = useEntityList('Agency', 'name');
 
   const memberFilter = useCallback(a => a.current_team_id === teamId, [teamId]);
   const projectFilter = useCallback(
@@ -405,6 +468,39 @@ export default function TeamDetails() {
     }
   };
 
+  const handleFieldSave = async (field, value) => {
+    try {
+      const oldValue = team[field];
+      const updates = { [field]: value || null };
+      if (field === 'agency_id') {
+        const newAgency = agencies.find(a => a.id === value);
+        updates.agency_name = newAgency?.name || null;
+      }
+      await api.entities.Team.update(team.id, updates);
+
+      // Write audit log
+      const user = await api.auth.me();
+      await api.entities.AuditLog.create({
+        entity_type: 'team',
+        entity_id: team.id,
+        entity_name: team.name,
+        action: 'update',
+        changed_fields: [{ field, old_value: oldValue || '', new_value: value || '' }],
+        user_name: user?.full_name || '',
+        user_email: user?.email || '',
+      }).catch(() => {}); // non-fatal
+
+      refetchEntityList('Team');
+    } catch (err) {
+      toast.error(`Failed to save ${field}`);
+    }
+  };
+
+  const agencyOptions = useMemo(() => [
+    { value: '', label: 'No agency' },
+    ...agencies.map(a => ({ value: a.id, label: a.name }))
+  ], [agencies]);
+
   if (!teamId) {
     window.location.href = createPageUrl('Teams');
     return null;
@@ -421,7 +517,7 @@ export default function TeamDetails() {
           <div className="h-5 w-16 rounded-full bg-muted animate-pulse" />
         </div>
         <div className="flex flex-1 overflow-hidden min-h-0">
-          <div className="w-72 shrink-0 border-r bg-card p-4 space-y-4">
+          <div className="w-96 shrink-0 border-r bg-card p-4 space-y-4">
             {[1, 2, 3, 4].map(i => <div key={i} className="h-16 rounded-lg bg-muted animate-pulse" />)}
           </div>
           <div className="flex-1 p-6 space-y-4 animate-in fade-in duration-300">
@@ -449,7 +545,7 @@ export default function TeamDetails() {
   return (
     <ErrorBoundary>
     <div className="flex flex-col h-[calc(100vh-4rem)] lg:h-screen overflow-hidden bg-background">
-      {/* Header */}
+      {/* ── Header: Back + Avatar + Name + Badge ─────────────────────────── */}
       <div className="flex items-center gap-3 px-4 py-2.5 border-b bg-card shrink-0 shadow-sm z-10">
         <Button
           variant="ghost"
@@ -461,88 +557,108 @@ export default function TeamDetails() {
           <ArrowLeft className="h-4 w-4" />
         </Button>
 
-        <div className="w-px h-5 bg-border shrink-0" />
-
         <div className="h-9 w-9 rounded-lg bg-primary flex items-center justify-center shrink-0 shadow-sm">
           <span className="text-sm font-bold text-primary-foreground leading-none">
             {(team.name || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()}
           </span>
         </div>
 
-        <div className="min-w-0">
-          <h1 className="text-sm font-bold truncate leading-tight">{team.name}</h1>
-          {agency && (
-            <Link
-              to={createPageUrl(`OrgDetails?id=${agency.id}`)}
-              className="text-[11px] text-primary hover:underline truncate leading-tight block"
-            >
-              {agency.name}
-            </Link>
-          )}
-        </div>
+        <h1 className="text-base font-bold truncate leading-tight">{team.name}</h1>
+
+        {agency && (
+          <Badge className="text-[11px] shrink-0 border font-medium px-2 py-0.5 bg-blue-100 text-blue-800 border-blue-200">
+            {agency.name}
+          </Badge>
+        )}
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          {/* Stat pills */}
-          <div className="flex items-center gap-1.5 px-1">
-            <span className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-[11px] font-medium px-2.5 py-1 rounded-full transition-all duration-200 hover:bg-muted/80">
-              <span className="font-bold text-foreground">{members.length}</span> members
-            </span>
-            <span className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-[11px] font-medium px-2.5 py-1 rounded-full transition-all duration-200 hover:bg-muted/80">
-              <span className="font-bold text-foreground">{projects.length}</span> projects
-            </span>
-            {totalRev > 0 && (
-              <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 text-[11px] font-semibold px-2 py-0.5 rounded-full border border-green-100">
-                ${totalRev >= 1000000 ? `${(totalRev / 1000000).toFixed(1)}M` : totalRev >= 1000 ? `${(totalRev / 1000).toFixed(0)}k` : Math.round(totalRev)}
-              </span>
-            )}
-          </div>
-          {(() => {
-            const recentActivity = [...interactions, ...projects, ...orgNotes].reduce((latest, item) => {
-              const raw = item.created_date || item.date_time || item.last_status_change;
-              const date = raw ? new Date(fixTimestamp(raw)) : new Date(0);
-              return date > latest ? date : latest;
-            }, new Date(0));
-            if (recentActivity.getTime() === 0) return null;
-            const now = new Date();
-            const hoursAgo = Math.floor((now - recentActivity) / (1000 * 60 * 60));
-            const daysAgo = Math.floor(hoursAgo / 24);
-            let timeStr = 'just now';
-            if (hoursAgo > 0) timeStr = `${hoursAgo}h ago`;
-            if (daysAgo > 0) timeStr = `${daysAgo}d ago`;
-            return (
-              <span className="text-[11px] text-muted-foreground hidden sm:inline cursor-help" title={`Last activity: ${recentActivity.toLocaleString()}`}>
-                · {timeStr}
-              </span>
-            );
-          })()}
+          <Button
+            size="sm"
+            className="gap-1.5 h-8 text-xs font-semibold shadow-sm"
+            onClick={() => navigate(createPageUrl('Projects') + `?team=${teamId}`)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New Project
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 h-8 text-xs"
+            onClick={() => {
+              handleTabChange('notes');
+              setTimeout(() => {
+                const textarea = document.querySelector('[data-note-textarea]');
+                if (textarea) {
+                  textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  textarea.focus();
+                }
+              }, 150);
+            }}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            Add Note
+          </Button>
         </div>
       </div>
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden min-h-0">
-        {/* Left sidebar */}
-        <div className="w-72 shrink-0 border-r overflow-y-auto bg-card">
-          <div className="space-y-0">
-            {/* Team Info */}
-            <Section title="Team info" badge={0} defaultOpen noPadding>
-              <div>
+        {/* ── Left sidebar ─────────────────────────────────────────── */}
+        <div className="w-96 shrink-0 border-r overflow-y-auto bg-card">
+          {/* Name + Agency at top */}
+          <div className="px-3 pt-4 pb-3 border-b border-border/50">
+            <div className="flex items-start gap-3 mb-2">
+              <div className="h-11 w-11 rounded-lg bg-primary flex items-center justify-center shrink-0">
+                <span className="text-base font-bold text-primary-foreground leading-none">
+                  {(team.name || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <h2 className="text-lg font-bold leading-tight">{team.name || 'Unnamed'}</h2>
                 {agency && (
-                  <div className="flex items-center justify-between py-1.5 px-4 hover:bg-muted/30 transition-colors">
-                    <span className="text-[11px] text-muted-foreground shrink-0">Agency</span>
-                    <Link
-                      to={createPageUrl(`OrgDetails?id=${agency.id}`)}
-                      className="text-[12px] font-semibold text-primary hover:underline truncate ml-3"
-                    >
+                  <Link
+                    to={createPageUrl(`OrgDetails?id=${agency.id}`)}
+                    className="text-xs text-primary hover:underline truncate block mt-0.5"
+                  >
+                    {agency.name}
+                  </Link>
+                )}
+              </div>
+            </div>
+          </div>
+
+            {/* Team Info — inline editable */}
+            <Section title="Team Info" badge={0} defaultOpen>
+              <div className="space-y-0.5">
+                <InlineField label="Team Name" value={team.name} field="name" onSave={handleFieldSave} placeholder="Team name" />
+                <InlineField label="Agency" value={team.agency_id} field="agency_id" onSave={handleFieldSave} type="select" options={agencyOptions} icon={Building2}
+                  viewRender={agency ? (
+                    <Link to={createPageUrl(`OrgDetails?id=${agency.id}`)} className="text-sm text-primary hover:underline mt-0.5 block" onClick={e => e.stopPropagation()}>
                       {agency.name}
                     </Link>
-                  </div>
-                )}
-                <FieldRow label="Email" value={team.email} href={team.email ? `mailto:${team.email}` : null} />
-                <FieldRow label="Phone" value={team.phone} href={team.phone ? `tel:${team.phone}` : null} />
-                {team.notes && (
-                  <div className="py-1.5 px-4">
-                    <span className="text-[11px] text-muted-foreground">Notes</span>
-                    <p className="text-[12px] text-foreground leading-relaxed mt-0.5">{team.notes}</p>
+                  ) : undefined}
+                />
+                <InlineField label="Email" value={team.email} field="email" onSave={handleFieldSave} placeholder="Email address" icon={Mail} />
+                <InlineField label="Phone" value={team.phone} field="phone" onSave={handleFieldSave} placeholder="Phone number" icon={Phone} />
+                <InlineField label="Notes" value={team.notes} field="notes" onSave={handleFieldSave} type="textarea" placeholder="Add notes..." />
+
+                {/* Quick stats inline */}
+                {(projects.length > 0 || members.length > 0) && (
+                  <div className="flex items-start gap-2 py-1 px-3">
+                    <span className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">Stats</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
+                        {members.length} members
+                      </span>
+                      <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
+                        {projects.length} projects
+                      </span>
+                      {totalRev > 0 && (
+                        <span className="text-[11px] bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-medium border border-green-100">
+                          {fmtMoney(totalRev)} revenue
+                        </span>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -553,27 +669,22 @@ export default function TeamDetails() {
               {members.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No members assigned</p>
               ) : (
-                <div className="space-y-0.5">
+                <div className="space-y-2">
                   {members.slice(0, 10).map(member => (
                     <Link
                       key={member.id}
                       to={createPageUrl(`PersonDetails?id=${member.id}`)}
-                      className="flex items-center gap-2 py-1.5 px-1 rounded hover:bg-muted/40 transition-colors cursor-pointer"
+                      className="flex items-center gap-2 p-2 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary"
                     >
                       <div className="h-6 w-6 rounded-full bg-primary/10 text-primary text-[9px] font-bold flex items-center justify-center flex-shrink-0">
                         {(member.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-[12px] font-semibold text-foreground truncate leading-tight">
+                        <p className="text-xs font-medium text-primary hover:underline block truncate">
                           {member.name}
                         </p>
-                        {member.title && <p className="text-[10px] text-muted-foreground truncate leading-tight">{member.title}</p>}
+                        {member.title && <p className="text-[10px] text-muted-foreground truncate">{member.title}</p>}
                       </div>
-                      {member.relationship_state && (
-                        <Badge className={`text-[9px] border px-1.5 py-0 h-4 ${STATE_BADGE[member.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
-                          {member.relationship_state}
-                        </Badge>
-                      )}
                     </Link>
                   ))}
                 </div>
@@ -582,7 +693,7 @@ export default function TeamDetails() {
 
             {/* Projects */}
             {projects.length > 0 && (
-              <Section title="Active projects" badge={openProjects.length} defaultOpen={true}>
+              <Section title="Projects" badge={openProjects.length} defaultOpen={true}>
                 <div className="space-y-2">
                   {projects.slice(0, 10).map(proj => {
                     const price = proj.calculated_price || proj.price;
@@ -624,7 +735,7 @@ export default function TeamDetails() {
                 {/* Analytics */}
                 {projects.length > 0 && (
                 <div className="border-t pt-2">
-                <div className="text-[11px] font-semibold text-muted-foreground px-4 py-2">Analytics</div>
+                <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Analytics</div>
                 <SharedDashboard
                  projects={projects}
                  revisions={revisions}
@@ -634,99 +745,101 @@ export default function TeamDetails() {
                 />
                 </div>
                 )}
+
+                {/* Delete Team */}
+                <div className="border-t border-border/50 px-4 py-3">
+                  <button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="text-xs text-destructive hover:text-destructive/80 hover:underline transition-colors flex items-center gap-1.5"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    Delete Team
+                  </button>
                 </div>
                 </div>
 
-                {/* Right tabs */}
-        <div ref={tabsRef} className="flex-1 overflow-hidden bg-background">
-          <Tabs value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col min-h-0">
-            <TabsList className="grid w-full shrink-0 rounded-none border-b bg-background h-10" style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' }}>
-              <TabsTrigger value="notes" className="text-xs rounded-none gap-1 relative">
-                Notes
-                {orgNotes.length > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 bg-primary text-primary-foreground text-[9px] font-bold min-w-[14px] h-[14px] rounded-full flex items-center justify-center px-0.5">
+        {/* ── Right main area ──────────────────────────────────────── */}
+        <div className="flex-1 overflow-hidden bg-background flex flex-col">
+          {/* Pipedrive-style tab bar */}
+          <div className="flex items-center gap-0 border-b px-4 shrink-0">
+            {TABS.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => handleTabChange(tab.id)}
+                className={cn(
+                  "flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors",
+                  activeTab === tab.id
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <tab.icon className="h-4 w-4" />
+                {tab.label}
+                {tab.id === 'notes' && orgNotes.length > 0 && (
+                  <span className="bg-primary/10 text-primary text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1">
                     {orgNotes.length}
                   </span>
                 )}
-              </TabsTrigger>
-              <TabsTrigger value="emails" className="text-xs rounded-none gap-1">Emails</TabsTrigger>
-              <TabsTrigger value="activity" className="text-xs rounded-none gap-1">Activity</TabsTrigger>
-              <TabsTrigger value="details" className="text-xs rounded-none gap-1">Details</TabsTrigger>
-              <TabsTrigger value="members" className="text-xs rounded-none gap-1">Members</TabsTrigger>
-              <TabsTrigger value="interactions" className="text-xs rounded-none gap-1 relative">
-                Interactions
-                {interactions.length > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 bg-primary text-primary-foreground text-[9px] font-bold min-w-[14px] h-[14px] rounded-full flex items-center justify-center px-0.5">
-                    {interactions.length}
-                  </span>
-                )}
-              </TabsTrigger>
-            </TabsList>
+              </button>
+            ))}
+          </div>
 
-            <div className="flex-1 overflow-hidden">
-              <TabsContent value="notes" className="h-full overflow-hidden m-0 border-0">
-                <UnifiedNotesPanel
-                  teamId={teamId}
-                  contextLabel={team?.name}
-                  contextType="team"
-                  relatedProjectIds={projects.map(p => p.id)}
-                />
-              </TabsContent>
+          {/* Tab content */}
+          <div className="flex-1 overflow-hidden">
+            {/* ── Notes tab: unified feed with history sub-filters ── */}
+            {activeTab === 'notes' && (
+              <div className="h-full flex flex-col overflow-hidden">
+                {/* Notes composer at top */}
+                <div className="border-b shrink-0">
+                  <UnifiedNotesPanel
+                    agencyId={team?.agency_id}
+                    teamId={teamId}
+                    contextLabel={team?.name}
+                    contextType="team"
+                    relatedProjectIds={projects.map(p => p.id)}
+                  />
+                </div>
 
-              <TabsContent value="emails" className="h-full overflow-hidden m-0 border-0">
+                {/* History — unified activity feed with built-in filters */}
+                <div className="flex-1 overflow-y-auto">
+                  <ContactActivityLog
+                    entityType="team"
+                    entityId={teamId}
+                    entityLabel={team?.name}
+                    emailActivities={emailActivities}
+                    showChangelog
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* ── Email tab ──────────────────────────────────────── */}
+            {activeTab === 'email' && (
+              <div className="h-full overflow-hidden">
                 <EntityEmailTab
                   entityType="team"
                   entityId={teamId}
                   entityLabel={team?.name}
                   onEmailActivity={handleEmailActivity}
+                  teamMemberIds={members.map(m => m.id)}
                 />
-              </TabsContent>
+              </div>
+            )}
 
-              <TabsContent value="activity" className="h-full overflow-y-auto m-0 border-0 p-6">
-                <div className="max-w-3xl space-y-6">
-                  {emailActivities.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold mb-3">Email Activity</h3>
-                      <EmailActivityLog
-                        emailActivities={emailActivities}
-                        entityLabel={team?.name}
-                      />
-                    </div>
-                  )}
-                  <div>
-                    <h3 className="text-sm font-semibold mb-3">All Activity</h3>
-                    <ActivityFeed interactions={interactions} projects={projects} />
-                  </div>
-                </div>
-              </TabsContent>
+            {/* ── Files tab ──────────────────────────────────────── */}
+            {activeTab === 'files' && (
+              <div className="h-full overflow-hidden">
+                <ContactFiles
+                  entityType="team"
+                  entityId={teamId}
+                  entityLabel={team?.name}
+                />
+              </div>
+            )}
 
-              <TabsContent value="details" className="h-full overflow-y-auto m-0 border-0 p-6">
-                <div className="space-y-6 max-w-3xl">
-                  <TeamDetailsTab team={team} />
-
-                  {/* Delete zone */}
-                  <div className="border-t border-destructive/20 bg-destructive/5 rounded-lg p-4 mt-6">
-                    <h3 className="text-sm font-semibold text-destructive mb-2 flex items-center gap-2">
-                      <AlertCircle className="h-4 w-4" />
-                      Delete Team
-                    </h3>
-                    <p className="text-xs text-muted-foreground mb-4">
-                      This action is permanent and cannot be undone. All associated data will be removed.
-                    </p>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => setShowDeleteConfirm(true)}
-                      className="transition-all duration-200 hover:shadow-md active:scale-95"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                      Delete Team
-                    </Button>
-                  </div>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="members" className="h-full overflow-y-auto m-0 border-0 p-6">
+            {/* ── Members tab ────────────────────────────────────── */}
+            {activeTab === 'members' && (
+              <div className="h-full overflow-y-auto p-6">
                 <div className="max-w-3xl">
                   <h2 className="text-lg font-semibold mb-4">Team Members</h2>
                   {members.length === 0 ? (
@@ -752,17 +865,20 @@ export default function TeamDetails() {
                     </div>
                   )}
                 </div>
-              </TabsContent>
+              </div>
+            )}
 
-              <TabsContent value="interactions" className="h-full overflow-hidden m-0 border-0">
-                <InteractionLogPanel
-                  prospect={team}
-                  interactions={interactions}
-                  entityType="Team"
+            {/* ── Activities/Calendar tab ─────────────────────────── */}
+            {activeTab === 'activities' && (
+              <div className="h-full overflow-hidden">
+                <EntityActivitiesTab
+                  entityType="team"
+                  entityId={teamId}
+                  entityLabel={team?.name || 'Team'}
                 />
-              </TabsContent>
-            </div>
-          </Tabs>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

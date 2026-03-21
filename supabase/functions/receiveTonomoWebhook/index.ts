@@ -93,7 +93,10 @@ function detectAction(p: any): string {
   if (p.action) return p.action;
   if (p.bookingFlow && p.user) return 'new_customer';
   if (p.orderStatus === 'complete' && p.shouldNotifyOrderCompletion === true) return 'booking_completed';
-  if (p.isValidatedForWebhook || p.orderStatus) return 'booking_created_or_changed';
+  // Require isValidatedForWebhook explicitly, or orderStatus with additional booking signals
+  // to avoid misclassifying metadata pings that happen to have orderStatus
+  if (p.isValidatedForWebhook) return 'booking_created_or_changed';
+  if (p.orderStatus && (p.orderId || p.order?.orderId || p.orderName || p.order?.orderName || p.address || p.services)) return 'booking_created_or_changed';
   return 'unknown';
 }
 

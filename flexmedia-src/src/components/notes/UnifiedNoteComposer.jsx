@@ -153,7 +153,7 @@ export default function UnifiedNoteComposer({
   };
 
   const handleSave = async () => {
-    if (!agencyId) { toast.error('Cannot save note — agency context missing'); return; }
+    if (!agencyId && !agentId && !teamId && !projectId) { toast.error('Cannot save note — no context available'); return; }
     if (checkEmpty()) return;
     const el = editorRef.current;
     const sanitized = sanitizeHtml(el.innerHTML);
@@ -187,11 +187,17 @@ export default function UnifiedNoteComposer({
           }).catch(() => {});
         }
       }
-      el.innerHTML = '';
-      setMentions([]);
-      setAttachments([]);
-      setEditorEmpty(true);
-      onSave?.();
+      if (noteId) {
+        // Editing: close the editor; parent re-renders the updated note
+        onSave?.();
+        onCancel?.();
+      } else {
+        el.innerHTML = '';
+        setMentions([]);
+        setAttachments([]);
+        setEditorEmpty(true);
+        onSave?.();
+      }
     } catch {
       toast.error('Failed to save note');
     } finally {

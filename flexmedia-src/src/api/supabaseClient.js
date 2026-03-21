@@ -195,12 +195,11 @@ function mapInput(data) {
   if ('updated_date' in mapped) { mapped.updated_at = mapped.updated_date; delete mapped.updated_date; }
   if ('received_date' in mapped) { mapped.received_at = mapped.received_date; delete mapped.received_date; }
 
-  // Strip server-managed columns to avoid Supabase errors when a full record is
-  // passed back (e.g. ActivityFeed undo restoring previous_state).
-  // 'id' is passed as a separate argument to update(); removing it from data is safe.
+  // Strip 'id' — it's passed as a separate argument to update(); removing it from data is safe.
   delete mapped.id;
-  delete mapped.created_at;
-  delete mapped.updated_at;
+  // Note: created_at and updated_at are NOT stripped. Supabase silently ignores them
+  // on insert (server defaults apply) and on update (trigger overwrites). Stripping them
+  // caused data loss when forms round-tripped full entity records.
 
   return mapped;
 }

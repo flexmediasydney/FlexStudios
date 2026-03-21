@@ -247,6 +247,8 @@ export default function EmailInboxMain() {
         toast.info('Sync already in progress — please wait a moment');
         return;
       }
+      // Reset sync countdown after manual sync
+      nextSyncRef.current = Date.now() + AUTO_SYNC_INTERVAL_MS;
       // Invalidate all email-related queries after sync
       queryClient.invalidateQueries({ queryKey: ['email-messages'] });
       queryClient.invalidateQueries({ queryKey: ['email-accounts'] });
@@ -268,9 +270,10 @@ export default function EmailInboxMain() {
     },
   });
 
-  // Background auto-sync: fetch new emails from Gmail every 5 minutes silently.
-  // The subscription hook then picks up the new EmailMessage entities automatically.
+  // Background auto-sync: fetch new emails from Gmail every 2 minutes silently.
   const lastSyncRef = useRef(null);
+  const [syncCountdown, setSyncCountdown] = useState(null);
+  const nextSyncRef = useRef(null);
   useEffect(() => {
     if (emailAccounts.length === 0 || !user?.id) return;
 
@@ -278,8 +281,8 @@ export default function EmailInboxMain() {
       const now = Date.now();
       if (lastSyncRef.current && now - lastSyncRef.current < 10000) return;
       lastSyncRef.current = now;
+      nextSyncRef.current = now + AUTO_SYNC_INTERVAL_MS;
 
-      // Sync each account individually using per-account token (correct OAuth flow)
       emailAccounts.forEach((account, idx) => {
         setTimeout(() => {
           api.functions.invoke('syncGmailMessagesForAccount', {
@@ -288,17 +291,28 @@ export default function EmailInboxMain() {
           }).then((res) => {
             if (res?.data?.synced > 0) {
               queryClient.invalidateQueries({ queryKey: ['email-messages'] });
+              queryClient.invalidateQueries({ queryKey: ['email-conversations'] });
+              queryClient.invalidateQueries({ queryKey: ['email-accounts'] });
             }
           }).catch(() => {});
         }, idx * 1500);
       });
     };
 
+    // Countdown ticker
+    const tick = setInterval(() => {
+      if (nextSyncRef.current) {
+        const remaining = Math.max(0, Math.ceil((nextSyncRef.current - Date.now()) / 1000));
+        setSyncCountdown(remaining);
+      }
+    }, 1000);
+
     const mountTimeout = setTimeout(runSync, 500);
     const interval = setInterval(runSync, AUTO_SYNC_INTERVAL_MS);
     return () => {
       clearTimeout(mountTimeout);
       clearInterval(interval);
+      clearInterval(tick);
     };
   }, [emailAccounts.length, user?.id]);
 
@@ -1256,6 +1270,11 @@ export default function EmailInboxMain() {
                {searchQuery && <Badge variant="secondary" className="text-[10px] h-4">Search active</Badge>}
                 {unreadCount > 0 && <span className="text-[10px]">• {unreadCount} unread</span>}
                 {showAttachmentsOnly && <Badge variant="secondary" className="text-[10px] h-4">Attachments only</Badge>}
+                {syncCountdown != null && syncCountdown > 0 && (
+                  <span className="text-[10px] opacity-50" title="Next auto-sync">
+                    sync {Math.floor(syncCountdown / 60)}:{String(syncCountdown % 60).padStart(2, '0')}
+                  </span>
+                )}
                </div>
 
                {/* Action Bar */}

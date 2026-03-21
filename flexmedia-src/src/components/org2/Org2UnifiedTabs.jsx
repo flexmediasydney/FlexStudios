@@ -2,20 +2,21 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { useEntityList } from '@/components/hooks/useEntityData';
-import { FileText, Activity, Info, Loader2, Mail } from 'lucide-react';
+import { FileText, Activity, Loader2, Mail, Paperclip } from 'lucide-react';
 import Org2Hierarchy from './Org2Hierarchy';
 import Org2Feed from './Org2Feed';
 import UnifiedNotesPanel from '@/components/notes/UnifiedNotesPanel';
 import PriceMatrixSummaryTable from '@/components/priceMatrix/PriceMatrixSummaryTable';
 import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
-import Org2AuditLog from './Org2AuditLog';
-import AgencyInformationTab from '@/components/agencies/AgencyInformationTab';
+import ContactAuditLog from '@/components/contacts/ContactAuditLog';
+import ContactActivityLog from '@/components/contacts/ContactActivityLog';
+import ContactFiles from '@/components/contacts/ContactFiles';
 import EmailActivityLog from '@/components/email/EmailActivityLog';
 import EntityEmailTab from '@/components/email/EntityEmailTab';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
 
-export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes, projectNotes = [], agents, teams = [], projects = [], onRefresh, activeTab: externalTab, onTabChange, emailActivities = [], onEmailActivity }) {
-  const [internalTab, setInternalTab] = useState('details');
+export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes, projectNotes = [], agents, teams = [], hierarchyLoading, projects = [], onRefresh, activeTab: externalTab, onTabChange, emailActivities = [], onEmailActivity }) {
+  const [internalTab, setInternalTab] = useState('notes');
   const activeTab = externalTab !== undefined ? externalTab : internalTab;
   const setActiveTab = (tab) => { setInternalTab(tab); onTabChange?.(tab); };
 
@@ -75,9 +76,9 @@ export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes,
         <TabsTrigger value="calendar" className="text-xs rounded-none gap-1">
           Activities
         </TabsTrigger>
-        <TabsTrigger value="details" className="text-xs rounded-none gap-1">
-          <Info className="h-3.5 w-3.5" />
-          Details
+        <TabsTrigger value="files" className="text-xs rounded-none gap-1">
+          <Paperclip className="h-3.5 w-3.5" />
+          Files
         </TabsTrigger>
         <TabsTrigger value="hierarchy" className="text-xs rounded-none">
           Hierarchy
@@ -110,28 +111,13 @@ export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes,
           />
         </TabsContent>
 
-        <TabsContent value="activity-log" className="h-full overflow-y-auto m-0 border-0 p-4">
-          <div className="max-w-3xl space-y-6">
-            {emailActivities.length > 0 && (
-              <div>
-                <h3 className="text-sm font-semibold mb-3">Email Activity</h3>
-                <EmailActivityLog
-                  emailActivities={emailActivities}
-                  entityLabel={agency?.name}
-                />
-              </div>
-            )}
-            <div>
-              <h3 className="text-sm font-semibold mb-3">All Activity</h3>
-              <Org2Feed
-                agency={agency}
-                projects={projects}
-                interactions={interactions}
-                orgNotes={notes}
-                projectNotes={projectNotes}
-              />
-            </div>
-          </div>
+        <TabsContent value="activity-log" className="h-full overflow-y-auto m-0 border-0">
+          <ContactActivityLog
+            entityType="agency"
+            entityId={agencyId}
+            entityLabel={agency?.name}
+            emailActivities={emailActivities}
+          />
         </TabsContent>
 
         <TabsContent value="emails" className="h-full overflow-hidden m-0 border-0">
@@ -140,6 +126,7 @@ export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes,
             entityId={agencyId}
             entityLabel={agency?.name}
             onEmailActivity={onEmailActivity}
+            orgAgentIds={agents.map(a => a.id)}
           />
         </TabsContent>
 
@@ -153,17 +140,27 @@ export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes,
           )}
         </TabsContent>
 
-        <TabsContent value="details" className="h-full overflow-y-auto m-0 border-0 p-4">
-          <AgencyInformationTab agency={agency} />
+        <TabsContent value="files" className="h-full overflow-hidden m-0 border-0">
+          <ContactFiles
+            entityType="agency"
+            entityId={agencyId}
+            entityLabel={agency?.name}
+          />
         </TabsContent>
 
         <TabsContent value="hierarchy" className="h-full overflow-y-auto m-0 border-0">
-          <Org2Hierarchy
-            agency={agency}
-            teams={teams}
-            agents={agents}
-            onRefresh={onRefresh}
-          />
+          {hierarchyLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <Org2Hierarchy
+              agency={agency}
+              teams={teams}
+              agents={agents}
+              onRefresh={onRefresh}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="pricing" className="h-full overflow-y-auto m-0 border-0 p-4">
@@ -212,7 +209,7 @@ export default function Org2UnifiedTabs({ agency, agencyId, interactions, notes,
         </TabsContent>
 
         <TabsContent value="audit" className="h-full overflow-y-auto m-0 border-0 p-4">
-          <Org2AuditLog agencyId={agencyId} agents={agents} teams={teams} />
+          <ContactAuditLog entityType="agency" entityId={agencyId} />
         </TabsContent>
       </div>
     </Tabs>

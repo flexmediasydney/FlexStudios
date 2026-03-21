@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
  *   never      — gray (muted)
  */
 export function LastContactIndicator({ agent, size = "sm" }) {
-  const lastContact = agent.last_contacted_at || agent.last_contact_date;
+  const lastContact = agent.last_contacted_at;
 
   const { label, colorClass, iconColor, daysAgo } = useMemo(() => {
     if (!lastContact) {

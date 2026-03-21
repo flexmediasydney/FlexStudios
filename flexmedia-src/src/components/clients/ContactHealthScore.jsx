@@ -22,16 +22,19 @@ function computeHealthScore(agent, projectCount = 0, totalRevenue = 0) {
   let revenueScore = 0;
   const breakdown = {};
 
-  // Recency score (40 pts) — based on last_contacted_at or last_contact_date
-  const lastContact = agent.last_contacted_at || agent.last_contact_date;
+  // Recency score (40 pts)
+  // Use agent's contact_frequency_days if set, otherwise default to 90 days
+  const freq = agent.contact_frequency_days != null ? agent.contact_frequency_days : 90;
+  const lastContact = agent.last_contacted_at;
   if (lastContact) {
     const daysSince = Math.max(0, (Date.now() - new Date(lastContact).getTime()) / (1000 * 60 * 60 * 24));
-    if (daysSince <= 7) recencyScore = 40;
-    else if (daysSince <= 14) recencyScore = 35;
-    else if (daysSince <= 30) recencyScore = 28;
-    else if (daysSince <= 60) recencyScore = 20;
-    else if (daysSince <= 90) recencyScore = 12;
-    else if (daysSince <= 180) recencyScore = 5;
+    // Scale thresholds relative to the contact frequency
+    if (daysSince <= freq * 0.1) recencyScore = 40;
+    else if (daysSince <= freq * 0.2) recencyScore = 35;
+    else if (daysSince <= freq * 0.5) recencyScore = 28;
+    else if (daysSince <= freq) recencyScore = 20;
+    else if (daysSince <= freq * 1.5) recencyScore = 12;
+    else if (daysSince <= freq * 2) recencyScore = 5;
     else recencyScore = 0;
     breakdown.recency = `${Math.round(daysSince)}d ago`;
   } else {

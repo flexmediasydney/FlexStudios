@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useNavigate } from 'react-router-dom';
 import { useSmartEntityData } from '@/components/hooks/useSmartEntityData';
-import { useEntityList, useEntityData } from '@/components/hooks/useEntityData';
+import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
 import { api } from '@/api/supabaseClient';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
@@ -10,14 +10,12 @@ import { fmtDate, fmtTimestampCustom, fixTimestamp, formatRelative } from '@/com
 import {
   ArrowLeft, ChevronDown, ChevronRight, Mail, Phone, Building2, Calendar,
   DollarSign, MessageSquare, FileText, Activity, Info, AlertCircle, Plus, Trash2, User, Copy, Check,
-  Bell, AlertTriangle, Clock
+  Bell, AlertTriangle, Clock, Tag, X, Hash, Star, Users, Paperclip, Pencil
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Link } from 'react-router-dom';
-import AgentInformationTab from '@/components/agencies/AgentInformationTab';
-import AgentEffectivePreferences from '@/components/agencies/AgentEffectivePreferences';
+import { cn } from '@/lib/utils';
 import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
 import ProspectTimeline from '@/components/prospecting/ProspectTimeline';
 import UnifiedNotesPanel from '@/components/notes/UnifiedNotesPanel';
@@ -27,6 +25,10 @@ import ConfirmDialog from '@/components/common/ConfirmDialog';
 import EntityEmailTab from '@/components/email/EntityEmailTab';
 import EmailActivityLog from '@/components/email/EmailActivityLog';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
+import ContactAuditLog from '@/components/contacts/ContactAuditLog';
+import ContactActivityLog from '@/components/contacts/ContactActivityLog';
+import ContactFiles from '@/components/contacts/ContactFiles';
+import { toast } from 'sonner';
 
 const STATE_BADGE = {
   Active: 'bg-green-100 text-green-800 border-green-200',
@@ -34,6 +36,156 @@ const STATE_BADGE = {
   Dormant: 'bg-amber-100 text-amber-800 border-amber-200',
   'Do Not Contact': 'bg-red-100 text-red-800 border-red-200',
 };
+
+const RELATIONSHIP_STATES = ['Active', 'Prospecting', 'Dormant', 'Do Not Contact'];
+const VALUE_OPTIONS = ['Low', 'Medium', 'High', 'Enterprise'];
+const PROSPECT_STATUSES = ['New Lead', 'Researching', 'Attempted Contact', 'Discovery Call Scheduled', 'Proposal Sent', 'Nurturing', 'Qualified', 'Unqualified', 'Converted to Client', 'Lost'];
+const SOURCES = ['Referral', 'LinkedIn', 'Web Search', 'Event', 'Manual Import', 'Networking'];
+
+// ── Inline editable field (Pipedrive side-by-side layout) ──────────────────────
+function InlineField({ label, value, field, onSave, type = 'text', options, placeholder, icon: Icon, readOnly }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  const inputRef = useRef(null);
+
+  useEffect(() => { setDraft(value || ''); }, [value]);
+  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+
+  const save = () => {
+    setEditing(false);
+    if (draft !== (value || '')) onSave(field, draft);
+  };
+
+  const displayValue = type === 'select' && options
+    ? (options.find(o => (o.value ?? o) === value)?.label ?? value)
+    : value;
+
+  return (
+    <div
+      className={cn(
+        "group flex items-start gap-2 py-1 px-3 rounded-md",
+        !readOnly && "hover:bg-muted/30"
+      )}
+    >
+      <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide">
+        {label}
+      </label>
+      <div className="flex-1 min-w-0 flex items-start gap-1">
+        {editing ? (
+          type === 'select' ? (
+            <select
+              ref={inputRef}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onBlur={save}
+              className="w-full text-sm border rounded px-2 py-0.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+            >
+              <option value="">-- Select --</option>
+              {options.map(o => (
+                <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
+              ))}
+            </select>
+          ) : type === 'textarea' ? (
+            <textarea
+              ref={inputRef}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onBlur={save}
+              rows={3}
+              className="w-full text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none"
+            />
+          ) : (
+            <input
+              ref={inputRef}
+              type={type === 'date' ? 'date' : type === 'number' ? 'number' : 'text'}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onBlur={save}
+              onKeyDown={e => e.key === 'Enter' && save()}
+              placeholder={placeholder}
+              className="w-full text-sm border rounded px-2 py-0.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+            />
+          )
+        ) : (
+          <>
+            <span className={cn(
+              "text-sm flex-1",
+              displayValue ? "text-foreground" : "text-muted-foreground/40"
+            )}>
+              {displayValue || '\u2014'}
+            </span>
+            {!readOnly && (
+              <button
+                onClick={() => setEditing(true)}
+                className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted shrink-0"
+                title={`Edit ${label}`}
+              >
+                <Pencil className="h-3 w-3 text-muted-foreground" />
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Inline editable name (large) ─────────────────────────────────────────────
+function InlineName({ value, field, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  const inputRef = useRef(null);
+
+  useEffect(() => { setDraft(value || ''); }, [value]);
+  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+
+  const save = () => {
+    setEditing(false);
+    if (draft.trim() && draft !== (value || '')) onSave(field, draft.trim());
+  };
+
+  if (editing) {
+    return (
+      <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)}
+        onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+        className="text-lg font-bold w-full border-b-2 border-primary bg-transparent outline-none py-0.5 px-0" />
+    );
+  }
+
+  return (
+    <h2 className="text-lg font-bold cursor-pointer hover:text-primary transition-colors leading-tight"
+      onClick={() => setEditing(true)} title="Click to edit name">
+      {value || 'Unnamed'}
+    </h2>
+  );
+}
+
+// ── Collapsible section (Pipedrive-style) ────────────────────────────────────
+function Section({ title, badge, children, defaultOpen = true }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-b border-border/50">
+      <button
+        className="flex items-center gap-1 w-full px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/40 transition-colors"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+      >
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !open && "-rotate-90")} />
+        {title}
+        {badge > 0 && (
+          <span className="ml-1 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+            {badge}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 animate-in fade-in duration-200">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const STAGES = [
   { key: 'to_be_scheduled', color: 'bg-gray-300' },
@@ -66,50 +218,19 @@ function fmtMoney(val) {
   return `A$${Math.round(val)}`;
 }
 
-function CopyableInfoRow({ label, value, href, Icon, copyValue }) {
-  const [copied, setCopied] = React.useState(false);
-  if (!value) return null;
-
-  const handleCopy = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    navigator.clipboard.writeText(copyValue || value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
+function PipelineBar({ status }) {
+  const currentIdx = STAGES.findIndex(s => s.key === status);
   return (
-    <div className="flex items-center justify-between py-1.5 px-4 group hover:bg-muted/30 transition-colors">
-      <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
-      <div className="flex items-center gap-1 ml-2 min-w-0">
-        {href ? (
-          <a href={href} target="_blank" rel="noopener noreferrer"
-            className="text-xs font-medium text-primary hover:underline truncate transition-colors"
-            title={value}>
-            {value}
-          </a>
-        ) : (
-          <span className="text-xs font-medium truncate text-foreground" title={value}>{value}</span>
-        )}
-        <button
-          onClick={handleCopy}
-          className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5 rounded hover:bg-muted active:scale-95"
-          title={`Copy ${label}`}
-          aria-label={`Copy ${label}`}
-        >
-          {copied
-            ? <Check className="h-2.5 w-2.5 text-green-600" />
-            : <Copy className="h-2.5 w-2.5 text-muted-foreground" />
-          }
-        </button>
-      </div>
+    <div className="flex gap-0.5 mt-2">
+      {STAGES.map((stage, i) => (
+        <div
+          key={stage.key}
+          className={`h-1.5 flex-1 rounded-sm transition-colors ${i <= currentIdx ? stage.color : 'bg-gray-100'}`}
+          title={stage.key.replace(/_/g, ' ')}
+        />
+      ))}
     </div>
   );
-}
-
-function InfoRow({ label, value, href, Icon }) {
-  return <CopyableInfoRow label={label} value={value} href={href} Icon={Icon} />;
 }
 
 function ErrorState({ navigate, title, message }) {
@@ -129,177 +250,38 @@ function ErrorState({ navigate, title, message }) {
   );
 }
 
-function Section({ title, badge, children, defaultOpen = true }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="border-b border-border/40">
-      <button
-        className="flex items-center gap-1.5 w-full px-4 py-2 text-[11px] font-semibold text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-all duration-150 text-left"
-        onClick={() => setOpen(o => !o)}
-        aria-expanded={open}
-      >
-        {open
-          ? <ChevronDown className="h-3 w-3 text-muted-foreground/70 transition-transform duration-150" />
-          : <ChevronRight className="h-3 w-3 text-muted-foreground/70 transition-transform duration-150" />
-        }
-        <span>{title}</span>
-        {badge > 0 && (
-          <span className="ml-0.5 bg-muted text-muted-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-            {badge}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div className="pb-2 animate-in fade-in duration-150">
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
+// ── Tab definitions (reduced count, Pipedrive-style) ─────────────────────────
+const TABS = [
+  { id: 'notes', label: 'Notes', icon: MessageSquare },
+  { id: 'emails', label: 'Email', icon: Mail },
+  { id: 'files', label: 'Files', icon: Paperclip },
+  { id: 'pricing', label: 'Pricing', icon: DollarSign },
+  { id: 'calendar', label: 'Activities', icon: Calendar },
+];
 
-function PipelineBar({ status }) {
-  const currentIdx = STAGES.findIndex(s => s.key === status);
-  return (
-    <div className="flex gap-0.5 mt-2">
-      {STAGES.map((stage, i) => (
-        <div
-          key={stage.key}
-          className={`h-1.5 flex-1 rounded-sm transition-colors ${i <= currentIdx ? stage.color : 'bg-gray-100'}`}
-          title={stage.key.replace(/_/g, ' ')}
-        />
-      ))}
-    </div>
-  );
-}
-
-function MiniProjectCard({ project }) {
-  const wonProjects = [project].filter(p => p.outcome === 'won');
-  const lostProjects = [project].filter(p => p.outcome === 'lost');
-  const totalClosed = wonProjects.length + lostProjects.length;
-  const winRate = totalClosed > 0 ? Math.round((wonProjects.length / totalClosed) * 100) : null;
-
-  return (
-    <Link
-      to={createPageUrl(`ProjectDetails?id=${project.id}`)}
-      className="block p-2.5 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors"
-    >
-      <div className="flex items-start justify-between gap-2 mb-1.5">
-        <div className="flex-1 min-w-0">
-          <ProjectStatusBadge status={project.status} />
-          <p className="text-xs font-medium text-foreground mt-1 truncate">{project.title}</p>
-        </div>
-      </div>
-      <PipelineBar status={project.status} />
-      <div className="flex justify-between text-[10px] text-muted-foreground mt-1.5">
-        <span>
-          {project.shoot_date ? fmtDate(project.shoot_date, 'd MMM') : '—'} →{' '}
-          {project.delivery_date ? fmtDate(project.delivery_date, 'd MMM') : '—'}
-        </span>
-        {project.calculated_price || project.price ? (
-          <span className="font-medium text-foreground">
-            ${project.calculated_price || project.price}
-          </span>
-        ) : null}
-      </div>
-      {winRate !== null && (
-        <div className="mt-2 pt-2 border-t border-border/30">
-          <div className="flex items-center justify-between text-[10px] mb-1">
-            <span className="text-muted-foreground">
-              {wonProjects.length}W / {lostProjects.length}L
-            </span>
-            <span className="font-medium text-green-600">{winRate}%</span>
-          </div>
-          <div className="w-full bg-muted rounded-full h-1">
-            {wonProjects.length > 0 && (
-              <div
-                className="h-1 bg-green-500 rounded-full"
-                style={{ width: `${winRate}%` }}
-              />
-            )}
-          </div>
-        </div>
-      )}
-    </Link>
-  );
-}
-
-function ActivityFeed({ interactions, projects }) {
-  const allEvents = useMemo(() => {
-    const items = [];
-    interactions.forEach(inter => {
-      items.push({
-        type: 'interaction',
-        data: inter,
-        date: inter.date_time || inter.created_date,
-      });
-    });
-    projects.forEach(proj => {
-      if (proj.last_status_change) {
-        items.push({
-          type: 'project_update',
-          data: proj,
-          date: proj.last_status_change,
-        });
-      }
-    });
-    return items.sort((a, b) => new Date(fixTimestamp(b.date)) - new Date(fixTimestamp(a.date)));
-  }, [interactions, projects]);
-
-  if (allEvents.length === 0) {
-    return <p className="text-sm text-muted-foreground">No activity yet</p>;
-  }
-
-  return (
-    <div className="space-y-3">
-      {allEvents.map((item, idx) => {
-        if (item.type === 'interaction') {
-          const inter = item.data;
-          return (
-            <div key={`inter-${inter.id}`} className="flex gap-3 text-sm">
-              <MessageSquare className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="text-foreground font-medium">{inter.interaction_type || 'Interaction'}</p>
-                {inter.notes && <p className="text-xs text-muted-foreground mt-0.5">{inter.notes}</p>}
-                <p className="text-xs text-muted-foreground mt-1">
-                  {formatRelative(fixTimestamp(inter.date_time || inter.created_date))}
-                </p>
-              </div>
-            </div>
-          );
-        } else if (item.type === 'project_update') {
-          const proj = item.data;
-          return (
-            <div key={`proj-${proj.id}`} className="flex gap-3 text-sm">
-              <Activity className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="text-foreground font-medium">{proj.title}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Status changed to <span className="font-medium capitalize">{proj.status.replace(/_/g, ' ')}</span>
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {formatRelative(fixTimestamp(proj.last_status_change))}
-                </p>
-              </div>
-            </div>
-          );
-        }
-      })}
-    </div>
-  );
-}
+// ── History sub-filter tabs for Notes unified view ───────────────────────────
+const HISTORY_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'notes', label: 'Notes' },
+  { id: 'activity', label: 'Activities' },
+  { id: 'emails', label: 'Emails' },
+  { id: 'changelog', label: 'Changelog' },
+];
 
 export default function PersonDetails() {
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const agentId = urlParams.get('id');
-  const tabsRef = useRef(null);
 
   // Remember last selected tab
   const [activeTab, setActiveTab] = useState(() => {
     const saved = sessionStorage.getItem(`tab-person-${agentId}`);
+    // Map old tab values to new ones
+    if (saved === 'activity' || saved === 'interactions' || saved === 'timeline' || saved === 'audit') return 'notes';
+    if (saved === 'details') return 'notes';
     return saved || 'notes';
   });
+  const [historyFilter, setHistoryFilter] = useState('all');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [emailActivities, setEmailActivities] = useState([]);
 
@@ -329,6 +311,100 @@ export default function PersonDetails() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
   const { data: agency } = useSmartEntityData('Agency', agent?.current_agency_id);
+  const { data: allAgencies = [] } = useEntityList('Agency', 'name');
+  const { data: allTeams = [] } = useEntityList('Team', 'name');
+
+  const availableTeams = useMemo(() =>
+    allTeams.filter(t => t.agency_id === (agent?.current_agency_id || '')),
+    [allTeams, agent?.current_agency_id]
+  );
+
+  // Tag management state
+  const [newTag, setNewTag] = useState('');
+
+  // ── Auto-save handler (Pipedrive-style) ──────────────────────────────────
+  const handleFieldSave = useCallback(async (field, value) => {
+    if (!agent) return;
+    try {
+      const oldValue = agent[field];
+      const payload = { [field]: value || null };
+      if (field === 'current_agency_id') {
+        const ag = allAgencies.find(a => a.id === value);
+        payload.current_agency_name = ag?.name || '';
+        payload.current_team_id = '';
+        payload.current_team_name = '';
+      }
+      if (field === 'current_team_id') {
+        const tm = allTeams.find(t => t.id === value);
+        payload.current_team_name = tm?.name || '';
+      }
+      await api.entities.Agent.update(agent.id, payload);
+
+      const user = await api.auth.me();
+      await api.entities.AuditLog.create({
+        entity_type: 'agent',
+        entity_id: agent.id,
+        entity_name: agent.name,
+        action: 'update',
+        changed_fields: [{ field, old_value: oldValue || '', new_value: value || '' }],
+        user_name: user?.full_name || '',
+        user_email: user?.email || '',
+      }).catch(() => {});
+
+      refetchEntityList('Agent');
+    } catch (err) {
+      toast.error(`Failed to save ${field}`);
+    }
+  }, [agent, allAgencies, allTeams]);
+
+  const handleAddTag = useCallback(async () => {
+    if (!newTag.trim() || !agent) return;
+    const oldTags = agent.tags || [];
+    const tags = [...oldTags, newTag.trim()];
+    try {
+      await api.entities.Agent.update(agent.id, { tags });
+
+      const user = await api.auth.me();
+      await api.entities.AuditLog.create({
+        entity_type: 'agent',
+        entity_id: agent.id,
+        entity_name: agent.name,
+        action: 'update',
+        changed_fields: [{ field: 'tags', old_value: oldTags, new_value: tags }],
+        user_name: user?.full_name || '',
+        user_email: user?.email || '',
+      }).catch(() => {});
+
+      refetchEntityList('Agent');
+      setNewTag('');
+    } catch (err) {
+      toast.error('Failed to add tag');
+    }
+  }, [agent, newTag]);
+
+  const handleRemoveTag = useCallback(async (tagToRemove) => {
+    if (!agent) return;
+    const oldTags = agent.tags || [];
+    const tags = oldTags.filter(t => t !== tagToRemove);
+    try {
+      await api.entities.Agent.update(agent.id, { tags });
+
+      const user = await api.auth.me();
+      await api.entities.AuditLog.create({
+        entity_type: 'agent',
+        entity_id: agent.id,
+        entity_name: agent.name,
+        action: 'update',
+        changed_fields: [{ field: 'tags', old_value: oldTags, new_value: tags }],
+        user_name: user?.full_name || '',
+        user_email: user?.email || '',
+      }).catch(() => {});
+
+      refetchEntityList('Agent');
+    } catch (err) {
+      toast.error('Failed to remove tag');
+    }
+  }, [agent]);
 
   const interactionFilter = useCallback(e => e.entity_type === 'Agent' && e.entity_id === agentId, [agentId]);
   const projectFilter = useCallback(e => e.agent_id === agentId, [agentId]);
@@ -420,20 +496,15 @@ export default function PersonDetails() {
       <div className="flex flex-col h-[calc(100vh-4rem)] lg:h-screen overflow-hidden bg-background">
         <div className="flex items-center gap-3 px-5 py-3 border-b bg-card shrink-0 shadow-sm">
           <div className="h-8 w-8 rounded-md bg-muted animate-pulse" />
-          <div className="w-px h-5 bg-border" />
-          <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
           <div className="h-5 w-48 rounded bg-muted animate-pulse" />
           <div className="h-5 w-16 rounded-full bg-muted animate-pulse" />
         </div>
         <div className="flex flex-1 overflow-hidden min-h-0">
-          <div className="w-72 shrink-0 border-r bg-card p-4 space-y-4">
+          <div className="w-96 shrink-0 border-r bg-card p-4 space-y-4">
             {[1, 2, 3, 4].map(i => <div key={i} className="h-16 rounded-lg bg-muted animate-pulse" />)}
           </div>
           <div className="flex-1 p-6 space-y-4 animate-in fade-in duration-300">
             <div className="h-8 w-64 rounded bg-muted animate-pulse" />
-            <div className="grid grid-cols-3 gap-4">
-              {[1, 2, 3].map(i => <div key={i} className="h-24 rounded-xl bg-muted animate-pulse" />)}
-            </div>
             <div className="h-48 rounded-xl bg-muted animate-pulse" />
           </div>
         </div>
@@ -454,7 +525,7 @@ export default function PersonDetails() {
   return (
     <ErrorBoundary>
     <div className="flex flex-col h-[calc(100vh-4rem)] lg:h-screen overflow-hidden bg-background">
-      {/* Header */}
+      {/* ── Header: Back + Name + State Badge ─────────────────────────── */}
       <div className="flex items-center gap-3 px-4 py-2.5 border-b bg-card shrink-0 shadow-sm z-10">
         <Button
           variant="ghost"
@@ -466,399 +537,405 @@ export default function PersonDetails() {
           <ArrowLeft className="h-4 w-4" />
         </Button>
 
-        <div className="w-px h-5 bg-border shrink-0" />
-
         <div className="h-9 w-9 rounded-lg bg-primary flex items-center justify-center shrink-0 shadow-sm">
           <span className="text-sm font-bold text-primary-foreground leading-none">
             {(agent.name || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()}
           </span>
         </div>
 
-        <div className="min-w-0">
-          <h1 className="text-sm font-bold truncate leading-tight">{agent.name}</h1>
-          {agent.title && <p className="text-[11px] text-muted-foreground truncate leading-tight">{agent.title}</p>}
-        </div>
+        <h1 className="text-base font-bold truncate leading-tight">{agent.name}</h1>
 
         {agent.relationship_state && (
           <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
-            {agent.relationship_state}
+            {agent.relationship_state.toUpperCase()}
           </Badge>
         )}
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          {/* Stat pills */}
-          <div className="flex items-center gap-1.5 px-1">
-            <button
-              onClick={() => navigate(createPageUrl('Projects') + `?agent=${agentId}`)}
-              className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-[11px] font-medium px-2.5 py-1 rounded-full transition-all duration-200 hover:bg-primary/10 hover:text-primary cursor-pointer"
-              title="View all projects for this person"
-            >
-              <span className="font-bold text-foreground">{projects.length}</span> projects
-            </button>
-            <span className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-[11px] font-medium px-2.5 py-1 rounded-full transition-all duration-200 hover:bg-muted/80">
-              <span className="font-bold text-foreground">{interactions.length}</span> interactions
-            </span>
-            {totalRev > 0 && (
-              <span className="inline-flex items-center gap-1 bg-green-50 text-green-700 text-[11px] font-semibold px-2 py-0.5 rounded-full border border-green-100">
-                ${totalRev >= 1000000 ? `${(totalRev / 1000000).toFixed(1)}M` : totalRev >= 1000 ? `${(totalRev / 1000).toFixed(0)}k` : Math.round(totalRev)}
-              </span>
-            )}
-            {avgBookingValue && (
-              <span className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-[11px] font-medium px-2.5 py-1 rounded-full">
-                avg <span className="font-bold text-foreground">
-                  ${avgBookingValue >= 1000 ? `${(avgBookingValue / 1000).toFixed(0)}k` : avgBookingValue}
-                </span>
-              </span>
-            )}
-            {bookingFrequency && (
-              <span className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-[11px] font-medium px-2.5 py-1 rounded-full">
-                <span className="font-bold text-foreground">{bookingFrequency}</span>/mo
-              </span>
-            )}
-            {contactHealth === 'risk' && (
-              <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-700 text-[11px] font-semibold px-2 py-0.5 rounded-full border border-amber-200">
-                <AlertTriangle className="h-3 w-3" />
-                {daysSinceLastBooking}d since last booking
-              </span>
-            )}
-          </div>
-          {(() => {
-            const recentActivity = [...interactions, ...projects, ...orgNotes].reduce((latest, item) => {
-              const raw = item.created_date || item.date_time || item.last_status_change;
-              const date = raw ? new Date(fixTimestamp(raw)) : new Date(0);
-              return date > latest ? date : latest;
-            }, new Date(0));
-            if (recentActivity.getTime() === 0) return null;
-            const now = new Date();
-            const hoursAgo = Math.floor((now - recentActivity) / (1000 * 60 * 60));
-            const daysAgo = Math.floor(hoursAgo / 24);
-            let timeStr = 'just now';
-            if (hoursAgo > 0) timeStr = `${hoursAgo}h ago`;
-            if (daysAgo > 0) timeStr = `${daysAgo}d ago`;
-            return (
-              <span className="text-[11px] text-muted-foreground hidden sm:inline cursor-help" title={`Last activity: ${recentActivity.toLocaleString()}`}>
-                · {timeStr}
-              </span>
-            );
-          })()}
+          <Button
+            size="sm"
+            className="gap-1.5 h-8 text-xs font-semibold shadow-sm"
+            onClick={() => navigate(createPageUrl('Projects') + `?agent=${agentId}`)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New Project
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 h-8 text-xs"
+            onClick={() => {
+              handleTabChange('notes');
+              setTimeout(() => {
+                const textarea = document.querySelector('[data-note-textarea]');
+                if (textarea) {
+                  textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  textarea.focus();
+                }
+              }, 150);
+            }}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            Add Note
+          </Button>
         </div>
       </div>
 
-      {/* Body */}
+      {/* ── Body ──────────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden min-h-0">
-        {/* Left sidebar */}
-        <div className="w-72 shrink-0 border-r overflow-y-auto bg-card scrollbar-thin">
-          <div className="space-y-0">
-            {/* Contact Details */}
-             <Section title="Contact details" badge={0} defaultOpen>
-               <div>
-                 {/* State row */}
-                 <div className="flex items-center justify-between py-1.5 px-4">
-                   <span className="text-[11px] text-muted-foreground">State</span>
-                   <Badge className={`text-[10px] border ${STATE_BADGE[agent.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
-                     {agent.relationship_state || 'Unknown'}
-                   </Badge>
-                 </div>
-
-                 <InfoRow label="Email" value={agent.email} href={agent.email ? `mailto:${agent.email}` : null} />
-                 <InfoRow label="Phone" value={agent.phone} href={agent.phone ? `tel:${agent.phone}` : null} />
-
-                 {agent.last_contacted_at && (
-                   <InfoRow
-                     label="Last contacted"
-                     value={fmtDate(agent.last_contacted_at, 'd MMM yyyy')}
-                   />
-                 )}
-
-                 {agent.contact_frequency_days && (
-                   <div className="flex items-center justify-between py-1.5 px-4">
-                     <span className="text-[11px] text-muted-foreground">Contact every</span>
-                     <div className="flex items-center gap-1.5 ml-2">
-                       <span className="text-xs font-medium">{agent.contact_frequency_days}d</span>
-                       {contactHealth && (
-                         <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
-                           contactHealth === 'ok'   ? 'bg-green-100 text-green-700' :
-                           contactHealth === 'warn' ? 'bg-amber-100 text-amber-700' :
-                                                      'bg-red-100 text-red-700'
-                         }`}>
-                           {contactHealth === 'ok'   ? 'On track' :
-                            contactHealth === 'warn' ? 'Due' :
-                            `${daysSinceLastBooking}d overdue`}
-                         </span>
-                       )}
-                     </div>
-                   </div>
-                 )}
-
-                 {agent.title && (
-                   <InfoRow label="Title" value={agent.title} />
-                 )}
-
-                {agency && (
-                  <div className="flex items-center justify-between py-1.5 px-4">
-                    <span className="text-[11px] text-muted-foreground">Agency</span>
-                    <Link
-                      to={createPageUrl(`OrgDetails?id=${agency.id}`)}
-                      className="text-xs font-medium text-primary hover:underline truncate ml-2"
-                    >
-                      {agency.name}
-                    </Link>
-                  </div>
-                )}
-
-                {agent.value_potential && (
-                  <div className="flex items-center justify-between py-1.5 px-4">
-                    <span className="text-[11px] text-muted-foreground">Value</span>
-                    <Badge variant="secondary" className="text-[10px]">
-                      {agent.value_potential}
-                    </Badge>
-                  </div>
-                )}
-
-                 {Array.isArray(agent.tags) && agent.tags.length > 0 && (
-                   <div className="flex flex-wrap gap-1 py-1.5 px-4">
-                     {agent.tags.map((tag, i) => (
-                       <span
-                         key={i}
-                         className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50"
-                       >
-                         {tag}
-                       </span>
-                     ))}
-                   </div>
-                 )}
-
-                {agent.notes && (
-                  <div className="py-1.5 px-4">
-                    <p className="text-[11px] text-muted-foreground mb-0.5">Notes</p>
-                    <p className="text-xs text-foreground/80 leading-relaxed">{agent.notes}</p>
-                  </div>
+        {/* ── Left sidebar ─────────────────────────────────────────── */}
+        <div className="w-96 shrink-0 border-r overflow-y-auto bg-card">
+          {/* Name + Title + State at top */}
+          <div className="px-3 pt-4 pb-3 border-b border-border/50">
+            <div className="flex items-start gap-3 mb-2">
+              <div className="h-11 w-11 rounded-lg bg-primary flex items-center justify-center shrink-0">
+                <span className="text-base font-bold text-primary-foreground leading-none">
+                  {(agent.name || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <InlineName value={agent.name} field="name" onSave={handleFieldSave} />
+                {agent.title && (
+                  <p className="text-xs text-muted-foreground truncate">{agent.title}</p>
                 )}
               </div>
-            </Section>
+            </div>
+            {agent.relationship_state && (
+              <Badge className={`text-[10px] border font-semibold px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+                {agent.relationship_state.toUpperCase()}
+              </Badge>
+            )}
+          </div>
 
-            {/* Projects */}
-            {projects.length > 0 && (
-              <Section title="Projects" badge={openProjects.length} defaultOpen={true}>
-                <div className="space-y-1 px-4">
-                  {projects.slice(0, 10).map(proj => {
-                    const price = proj.calculated_price || proj.price;
-                    return (
+          {/* Summary section */}
+          <Section title="Summary" defaultOpen>
+            <InlineField label="Title" value={agent.title} field="title" onSave={handleFieldSave}
+              placeholder="Add job title..." />
+            <InlineField label="Email" value={agent.email} field="email" onSave={handleFieldSave}
+              placeholder="Add email..." />
+            <InlineField label="Phone" value={agent.phone} field="phone" onSave={handleFieldSave}
+              placeholder="Add phone..." />
+            <InlineField label="Organisation" value={agent.current_agency_id} field="current_agency_id"
+              onSave={handleFieldSave} type="select"
+              options={allAgencies.map(a => ({ value: a.id, label: a.name }))} />
+            <InlineField label="Team" value={agent.current_team_id} field="current_team_id"
+              onSave={handleFieldSave} type="select"
+              options={[{ value: '', label: 'No team' }, ...availableTeams.map(t => ({ value: t.id, label: t.name }))]} />
+            <InlineField label="State" value={agent.relationship_state} field="relationship_state"
+              onSave={handleFieldSave} type="select" options={RELATIONSHIP_STATES} />
+
+            {/* Quick stats inline */}
+            {(projects.length > 0 || totalRev > 0) && (
+              <div className="flex items-start gap-2 py-1 px-3">
+                <span className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">Stats</span>
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
+                    {projects.length} projects
+                  </span>
+                  {totalRev > 0 && (
+                    <span className="text-[11px] bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-medium border border-green-100">
+                      {fmtMoney(totalRev)} revenue
+                    </span>
+                  )}
+                  {avgBookingValue && (
+                    <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
+                      avg {fmtMoney(avgBookingValue)}
+                    </span>
+                  )}
+                  {bookingFrequency && (
+                    <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
+                      {bookingFrequency}/mo
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </Section>
+
+          {/* Details section */}
+          <Section title="Details" defaultOpen={false}>
+            <InlineField label="Prospect Status" value={agent.status} field="status"
+              onSave={handleFieldSave} type="select" options={PROSPECT_STATUSES} />
+            <InlineField label="Source" value={agent.source} field="source"
+              onSave={handleFieldSave} type="select" options={SOURCES} />
+            <InlineField label="Last Contacted" value={agent.last_contacted_at ? fmtDate(agent.last_contacted_at, 'd MMM yyyy') : ''}
+              field="last_contacted_at" onSave={(field, val) => handleFieldSave(field, val ? new Date(val).toISOString() : null)}
+              type="date" placeholder="Not contacted yet" />
+            <InlineField label="Frequency (days)" value={agent.contact_frequency_days ? String(agent.contact_frequency_days) : ''}
+              field="contact_frequency_days" onSave={(field, val) => handleFieldSave(field, val ? Number(val) : null)}
+              type="number" placeholder="e.g. 30" />
+            {contactHealth && (
+              <div className="flex items-start gap-2 py-1 px-3">
+                <span className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">Health</span>
+                <span className={cn(
+                  "text-[10px] font-medium px-1.5 py-0.5 rounded-full",
+                  contactHealth === 'ok'   ? 'bg-green-100 text-green-700' :
+                  contactHealth === 'warn' ? 'bg-amber-100 text-amber-700' :
+                                              'bg-red-100 text-red-700'
+                )}>
+                  {contactHealth === 'ok'   ? 'On track' :
+                   contactHealth === 'warn' ? 'Due for contact' :
+                   `Overdue - ${daysSinceLastBooking}d ago`}
+                </span>
+              </div>
+            )}
+            <InlineField label="Next Follow-up" value={agent.next_follow_up_date ? String(agent.next_follow_up_date).substring(0, 10) : ''}
+              field="next_follow_up_date" onSave={(field, val) => handleFieldSave(field, val ? new Date(val).toISOString() : null)}
+              type="date" placeholder="Set follow-up..." />
+            <InlineField label="Value Potential" value={agent.value_potential} field="value_potential"
+              onSave={handleFieldSave} type="select"
+              options={VALUE_OPTIONS} />
+            <div className="flex items-start gap-2 py-1 px-3">
+              <span className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">Club Flex</span>
+              <button
+                onClick={() => handleFieldSave('club_flex', !agent.club_flex)}
+                className={cn(
+                  "text-[10px] px-2 py-0.5 rounded-full border font-medium transition-colors",
+                  agent.club_flex
+                    ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200'
+                    : 'bg-muted text-muted-foreground border-border hover:bg-muted/80'
+                )}
+              >
+                {agent.club_flex ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+            <InlineField label="Became Active" value={agent.became_active_date ? String(agent.became_active_date).substring(0, 10) : ''}
+              field="became_active_date" onSave={handleFieldSave} type="date" placeholder="Not set" />
+            <InlineField label="Became Dormant" value={agent.became_dormant_date ? String(agent.became_dormant_date).substring(0, 10) : ''}
+              field="became_dormant_date" onSave={handleFieldSave} type="date" placeholder="Not set" />
+            <InlineField label="Added" value={agent.created_date ? fmtTimestampCustom(agent.created_date, { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+              field="created_date" onSave={() => {}} readOnly />
+          </Section>
+
+          {/* Notes section */}
+          <Section title="Notes" defaultOpen={!!(agent.notes || agent.discovery_call_notes)}>
+            <InlineField label="General" value={agent.notes} field="notes"
+              onSave={handleFieldSave} type="textarea" placeholder="Click to add notes..." />
+            <InlineField label="Discovery" value={agent.discovery_call_notes} field="discovery_call_notes"
+              onSave={handleFieldSave} type="textarea" placeholder="Click to add discovery notes..." />
+            <InlineField label="Unqualified" value={agent.reason_unqualified} field="reason_unqualified"
+              onSave={handleFieldSave} type="textarea" placeholder="If unqualified, explain why..." />
+          </Section>
+
+          {/* Tags section */}
+          <Section title="Tags" defaultOpen={!!(agent.tags?.length)}>
+            <div className="space-y-2">
+              {(agent.tags || []).length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {agent.tags.map((tag, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                      {tag}
+                      <button onClick={() => handleRemoveTag(tag)} className="hover:text-destructive transition-colors" title="Remove tag">
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-1">
+                <input
+                  value={newTag}
+                  onChange={e => setNewTag(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddTag()}
+                  placeholder="Add tag..."
+                  className="flex-1 text-xs border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                />
+                <button onClick={handleAddTag} disabled={!newTag.trim()}
+                  className="text-xs px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-30 transition-colors">
+                  <Plus className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+          </Section>
+
+          {/* Projects section */}
+          {projects.length > 0 && (
+            <Section title="Projects" badge={openProjects.length} defaultOpen>
+              <div className="space-y-2">
+                {projects.slice(0, 10).map(proj => {
+                  const price = proj.calculated_price || proj.price;
+                  return (
+                    <div key={proj.id} className={`rounded-lg border-l-4 border border-l-current bg-background p-2.5 hover:shadow-md hover:bg-muted/20 transition-all duration-200 group ${STATUS_BORDER[proj.status] || 'border-l-gray-300'}`}>
                       <Link
-                        key={proj.id}
                         to={createPageUrl("ProjectDetails") + `?id=${proj.id}`}
-                        className={`block rounded-md border-l-[3px] bg-background px-2.5 py-2 hover:bg-muted/40 transition-colors ${STATUS_BORDER[proj.status] || 'border-l-gray-300'}`}
+                        className="text-xs font-semibold hover:text-primary line-clamp-2 leading-tight block group-hover:text-primary transition-colors"
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-xs font-medium text-foreground line-clamp-1 leading-tight flex-1 min-w-0">
-                            {proj.title}
-                          </p>
-                          {price && <span className="text-[11px] font-semibold text-foreground shrink-0">{fmtMoney(price)}</span>}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-1">
-                          <ProjectStatusBadge status={proj.status} />
-                          {proj.shoot_date && (
-                            <span className="text-[10px] text-muted-foreground">
-                              {fmtDate(proj.shoot_date, 'd MMM yy')}
-                            </span>
-                          )}
-                        </div>
+                        {proj.title}
                       </Link>
-                    );
-                  })}
-                </div>
-              </Section>
-            )}
-
-            {/* Dates */}
-            {(agent.created_date || agent.became_active_date || agent.became_dormant_date) && (
-            <Section title="Dates" badge={0} defaultOpen={false}>
-              <div>
-              {agent.created_date && (
-                <div className="flex items-center justify-between py-1.5 px-4">
-                  <span className="text-[11px] text-muted-foreground">Added</span>
-                  <span className="text-xs font-medium">
-                    {fmtTimestampCustom(agent.created_date, {
-                      day: 'numeric',
-                      month: 'short',
-                      year: 'numeric',
-                    })}
-                  </span>
-                </div>
-              )}
-              {agent.became_active_date && (
-                <div className="flex items-center justify-between py-1.5 px-4">
-                  <span className="text-[11px] text-muted-foreground">Active since</span>
-                  <span className="text-xs font-medium text-green-600">
-                    {fmtDate(agent.became_active_date, 'MMM yyyy')}
-                  </span>
-                </div>
-              )}
-              {agent.became_dormant_date && (
-                <div className="flex items-center justify-between py-1.5 px-4">
-                  <span className="text-[11px] text-muted-foreground">Dormant since</span>
-                  <span className="text-xs font-medium text-amber-600">
-                    {fmtDate(agent.became_dormant_date, 'MMM yyyy')}
-                  </span>
-                </div>
-              )}
+                      {proj.agent_name && (
+                        <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                          <User className="h-2.5 w-2.5" />{proj.agent_name}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
+                          {proj.status?.replace(/_/g, ' ').toUpperCase()}
+                        </span>
+                        {price && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
+                      </div>
+                      {(proj.shoot_date || proj.delivery_date) && (
+                        <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">
+                          <Calendar className="h-2.5 w-2.5 shrink-0" />
+                          {proj.shoot_date && <span>{fmtDate(proj.shoot_date, 'd MMM yy')}</span>}
+                          {proj.shoot_date && proj.delivery_date && <span>&rarr;</span>}
+                          {proj.delivery_date && <span>{fmtDate(proj.delivery_date, 'd MMM yy')}</span>}
+                        </div>
+                      )}
+                      <PipelineBar status={proj.status} />
+                    </div>
+                  );
+                })}
+                {projects.length > 10 && (
+                  <button
+                    onClick={() => navigate(createPageUrl('Projects') + `?agent=${agentId}`)}
+                    className="w-full text-center text-xs text-primary hover:text-primary/80 font-medium py-2 mt-1 rounded-md hover:bg-primary/5 transition-colors"
+                  >
+                    View all {projects.length} projects
+                  </button>
+                )}
               </div>
             </Section>
+          )}
+
+          {/* Analytics */}
+          {projects.length > 0 && (
+            <div className="border-t pt-2">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2">Analytics</div>
+              <SharedDashboard
+                projects={projects}
+                revisions={revisions}
+                projectTasks={projectTasks}
+                taskTimeLogs={taskTimeLogs}
+                entityLabel={agent?.name || 'Person'}
+              />
+            </div>
+          )}
+
+          {/* Delete Contact */}
+          <div className="px-3 py-4 border-t border-border/50">
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="text-xs text-destructive/60 hover:text-destructive transition-colors flex items-center gap-1"
+            >
+              <Trash2 className="h-3 w-3" />
+              Delete Contact
+            </button>
+          </div>
+        </div>
+
+        {/* ── Right main area ──────────────────────────────────────── */}
+        <div className="flex-1 overflow-hidden bg-background flex flex-col">
+          {/* Pipedrive-style tab bar */}
+          <div className="flex items-center gap-0 border-b px-4 shrink-0">
+            {TABS.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => handleTabChange(tab.id)}
+                className={cn(
+                  "flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors",
+                  activeTab === tab.id
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <tab.icon className="h-4 w-4" />
+                {tab.label}
+                {tab.id === 'notes' && orgNotes.length > 0 && (
+                  <span className="bg-primary/10 text-primary text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1">
+                    {orgNotes.length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          <div className="flex-1 overflow-hidden">
+            {/* ── Notes tab: unified feed with history sub-filters ── */}
+            {activeTab === 'notes' && (
+              <div className="h-full flex flex-col overflow-hidden">
+                {/* Notes composer at top */}
+                <div className="border-b shrink-0">
+                  <UnifiedNotesPanel
+                    agentId={agentId}
+                    contextLabel={agent?.name}
+                    contextType="agent"
+                    relatedProjectIds={projects.map(p => p.id)}
+                  />
+                </div>
+
+                {/* History — unified activity feed with built-in filters */}
+                <div className="flex-1 overflow-y-auto">
+                  <ContactActivityLog
+                    entityType="agent"
+                    entityId={agent.id}
+                    entityLabel={agent.name}
+                    emailActivities={emailActivities}
+                    showChangelog
+                  />
+                </div>
+              </div>
             )}
 
-              {/* Analytics */}
-              {projects.length > 0 && (
-              <Section title="Analytics" badge={0} defaultOpen={false}>
-               <div className="px-4">
-               <SharedDashboard
-                 projects={projects}
-                 revisions={revisions}
-                 projectTasks={projectTasks}
-                 taskTimeLogs={taskTimeLogs}
-                 entityLabel={agent?.name || 'Person'}
-               />
-               </div>
-              </Section>
-              )}
+            {/* ── Email tab ──────────────────────────────────────── */}
+            {activeTab === 'emails' && (
+              <div className="h-full overflow-hidden">
+                <EntityEmailTab
+                  entityType="agent"
+                  entityId={agentId}
+                  entityLabel={agent?.name}
+                  onEmailActivity={handleEmailActivity}
+                />
               </div>
+            )}
+
+            {/* ── Files tab ──────────────────────────────────────── */}
+            {activeTab === 'files' && (
+              <div className="h-full overflow-hidden">
+                <ContactFiles
+                  entityType="agent"
+                  entityId={agentId}
+                  entityLabel={agent?.name}
+                />
               </div>
+            )}
 
-              {/* Right tabs */}
-              <div ref={tabsRef} className="flex-1 overflow-hidden bg-background">
-              <Tabs value={activeTab} onValueChange={handleTabChange} className="h-full flex flex-col min-h-0">
-             <TabsList className="grid w-full shrink-0 rounded-none border-b bg-background h-10" style={{ gridTemplateColumns: 'repeat(8, minmax(0, 1fr))' }}>
-               <TabsTrigger value="notes" className="text-xs rounded-none gap-1 relative">
-                 Notes
-                 {orgNotes.length > 0 && (
-                   <span className="absolute -top-0.5 -right-0.5 bg-primary text-primary-foreground text-[9px] font-bold min-w-[14px] h-[14px] rounded-full flex items-center justify-center px-0.5">
-                     {orgNotes.length}
-                   </span>
-                 )}
-               </TabsTrigger>
-               <TabsTrigger value="emails" className="text-xs rounded-none gap-1">Emails</TabsTrigger>
-               <TabsTrigger value="activity" className="text-xs rounded-none gap-1">Activity</TabsTrigger>
-               <TabsTrigger value="details" className="text-xs rounded-none gap-1">Details</TabsTrigger>
-               <TabsTrigger value="pricing" className="text-xs rounded-none gap-1">Pricing</TabsTrigger>
-               <TabsTrigger value="interactions" className="text-xs rounded-none gap-1 relative">
-                 Interactions
-                 {interactions.length > 0 && (
-                   <span className="absolute -top-0.5 -right-0.5 bg-primary text-primary-foreground text-[9px] font-bold min-w-[14px] h-[14px] rounded-full flex items-center justify-center px-0.5">
-                     {interactions.length}
-                   </span>
-                 )}
-               </TabsTrigger>
-               <TabsTrigger value="timeline" className="text-xs rounded-none gap-1">Timeline</TabsTrigger>
-               <TabsTrigger value="calendar" className="text-xs rounded-none gap-1">Activities</TabsTrigger>
-             </TabsList>
+            {/* ── Pricing tab ────────────────────────────────────── */}
+            {activeTab === 'pricing' && (
+              <div className="h-full overflow-y-auto p-6">
+                <div className="max-w-4xl">
+                  <h2 className="text-lg font-semibold mb-4">Pricing Matrix</h2>
+                  {priceMatrices.length > 0 ? (
+                    <PriceMatrixSummaryTable priceMatrices={priceMatrices} />
+                  ) : (
+                    <div className="bg-muted rounded-lg p-6 text-center">
+                      <p className="text-sm text-muted-foreground mb-3">
+                        No custom pricing configured for this person yet.
+                      </p>
+                      {agency && (
+                        <p className="text-xs text-muted-foreground">
+                          Using <Link to={createPageUrl(`OrgDetails?id=${agency.id}`)} className="text-primary hover:underline">
+                            {agency.name}
+                          </Link> agency-level pricing.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
-             <div className="flex-1 overflow-hidden min-h-0">
-               <TabsContent value="notes" className="h-full overflow-hidden m-0 border-0">
-                 <UnifiedNotesPanel
-                   agentId={agentId}
-                   contextLabel={agent?.name}
-                   contextType="agent"
-                   relatedProjectIds={projects.map(p => p.id)}
-                 />
-               </TabsContent>
-
-               <TabsContent value="emails" className="h-full overflow-hidden m-0 border-0">
-                 <EntityEmailTab
-                   entityType="agent"
-                   entityId={agentId}
-                   entityLabel={agent?.name}
-                   onEmailActivity={handleEmailActivity}
-                 />
-               </TabsContent>
-
-               <TabsContent value="activity" className="h-full overflow-y-auto m-0 border-0 p-6">
-                 <div className="max-w-3xl space-y-6">
-                   {emailActivities.length > 0 && (
-                     <div>
-                       <h3 className="text-sm font-semibold mb-3">Email Activity</h3>
-                       <EmailActivityLog
-                         emailActivities={emailActivities}
-                         entityLabel={agent?.name}
-                       />
-                     </div>
-                   )}
-                   <div>
-                     <h3 className="text-sm font-semibold mb-3">All Activity</h3>
-                     <ActivityFeed interactions={interactions} projects={projects} />
-                   </div>
-                 </div>
-               </TabsContent>
-
-               <TabsContent value="details" className="h-full overflow-y-auto m-0 border-0 p-6">
-                 <div className="space-y-6 max-w-3xl">
-                   <AgentInformationTab agent={agent} />
-
-                   {/* Delete zone */}
-                   <div className="border-t border-destructive/20 bg-destructive/5 rounded-lg p-4 mt-6">
-                     <h3 className="text-sm font-semibold text-destructive mb-2 flex items-center gap-2">
-                       <AlertCircle className="h-4 w-4" />
-                       Delete Person
-                     </h3>
-                     <p className="text-xs text-muted-foreground mb-4">
-                       This action is permanent and cannot be undone. All associated data will be removed.
-                     </p>
-                     <Button
-                       variant="destructive"
-                       size="sm"
-                       onClick={() => setShowDeleteConfirm(true)}
-                       className="transition-all duration-200 hover:shadow-md active:scale-95"
-                     >
-                       <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                       Delete Person
-                     </Button>
-                   </div>
-                 </div>
-               </TabsContent>
-
-               <TabsContent value="pricing" className="h-full overflow-y-auto m-0 border-0 p-6">
-                 <div className="max-w-4xl">
-                   <h2 className="text-lg font-semibold mb-4">Pricing Matrix</h2>
-                   {priceMatrices.length > 0 ? (
-                     <PriceMatrixSummaryTable priceMatrices={priceMatrices} />
-                   ) : (
-                     <div className="bg-muted rounded-lg p-6 text-center">
-                       <p className="text-sm text-muted-foreground mb-3">
-                         No custom pricing configured for this person yet.
-                       </p>
-                       {agency && (
-                         <p className="text-xs text-muted-foreground">
-                           Using <Link to={createPageUrl(`OrgDetails?id=${agency.id}`)} className="text-primary hover:underline">
-                             {agency.name}
-                           </Link> agency-level pricing.
-                         </p>
-                       )}
-                     </div>
-                   )}
-                 </div>
-               </TabsContent>
-
-               <TabsContent value="interactions" className="h-full overflow-hidden m-0 border-0">
-                 <InteractionLogPanel
-                   prospect={agent}
-                   interactions={interactions}
-                   entityType="Agent"
-                 />
-               </TabsContent>
-
-               <TabsContent value="timeline" className="h-full overflow-hidden m-0 border-0">
-                 <ProspectTimeline prospect={agent} interactions={interactions} />
-               </TabsContent>
-
-               <TabsContent value="calendar" className="h-full overflow-hidden m-0 border-0">
-                 {activeTab === 'calendar' && (
-                   <EntityActivitiesTab
-                     entityType="agent"
-                     entityId={agent?.id}
-                     entityLabel={agent?.name || 'Person'}
-                   />
-                 )}
-               </TabsContent>
-             </div>
-          </Tabs>
+            {/* ── Activities/Calendar tab ─────────────────────────── */}
+            {activeTab === 'calendar' && (
+              <div className="h-full overflow-hidden">
+                <EntityActivitiesTab
+                  entityType="agent"
+                  entityId={agent?.id}
+                  entityLabel={agent?.name || 'Person'}
+                />
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

@@ -164,8 +164,8 @@ export default function ClientAgents() {
 
   const idleCount = useMemo(() => {
     return agents.filter(a => {
-      const lc = a.last_contacted_at || a.last_contact_date;
-      if (!lc) return true;
+      const lc = a.last_contacted_at;
+      if (!lc) return false;
       return differenceInDays(new Date(), new Date(lc)) > 30;
     }).length;
   }, [agents]);
@@ -193,8 +193,8 @@ export default function ClientAgents() {
     let result = searchFiltered;
     if (activeFilters.has("idle")) {
       result = result.filter(a => {
-        const lc = a.last_contacted_at || a.last_contact_date;
-        if (!lc) return true;
+        const lc = a.last_contacted_at;
+        if (!lc) return false;
         return differenceInDays(new Date(), new Date(lc)) > 30;
       });
     }

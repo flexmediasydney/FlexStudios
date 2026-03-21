@@ -70,6 +70,20 @@ export default function AgencyForm({ agency, open, onClose }) {
         });
         result = await api.entities.Agency.update(agency.id, data);
         auditAction = "update";
+
+        // Cascade agency name change to denormalized fields on agents and teams
+        if (data.name && data.name !== agency.name) {
+          try {
+            const agencyAgents = await api.entities.Agent.filter({ current_agency_id: agency.id });
+            await Promise.all(agencyAgents.map(a =>
+              api.entities.Agent.update(a.id, { current_agency_name: data.name })
+            ));
+            const agencyTeams = await api.entities.Team.filter({ agency_id: agency.id });
+            await Promise.all(agencyTeams.map(t =>
+              api.entities.Team.update(t.id, { agency_name: data.name })
+            ));
+          } catch { /* non-fatal — denormalized fields will be stale until next edit */ }
+        }
       } else {
         result = await api.entities.Agency.create(data);
         auditAction = "create";

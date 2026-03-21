@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
 import { Mail, Plus, Search, Reply, Archive, Trash2, Lock, Users, Clock } from 'lucide-react';
@@ -29,6 +29,8 @@ export default function EntityEmailTab({
   entityId,
   entityLabel,
   onEmailActivity,
+  teamMemberIds,   // optional: array of agent IDs for team-level scoping
+  orgAgentIds,     // optional: array of agent IDs for org-level scoping
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMessages, setSelectedMessages] = useState(new Set());
@@ -38,26 +40,39 @@ export default function EntityEmailTab({
   const queryClient = useQueryClient();
   const { columns, fitToScreen } = useColumnManager();
 
-  // Filter EmailMessages by entity
-  const buildEmailFilters = useCallback(() => {
-    const filters = {};
-    if (entityType === 'agency') {
-      filters.agency_id = entityId;
-    } else if (entityType === 'team') {
-      // Team emails: from team members or linked to org
-      // For now, filter by shared visibility + search in related projects
-      filters.visibility = 'shared';
-    } else if (entityType === 'agent') {
-      filters.agent_id = entityId;
-    }
-    return filters;
-  }, [entityType, entityId]);
-
+  // Filter EmailMessages by entity — properly scoped to the entity level
   const { data: messages = [], isLoading: messagesLoading } = useQuery({
-    queryKey: ['emails', entityType, entityId],
+    queryKey: ['emails', entityType, entityId, teamMemberIds?.length, orgAgentIds?.length],
     queryFn: async () => {
-      const filters = buildEmailFilters();
-      return await api.entities.EmailMessage.filter(filters, '-received_at', 100);
+      if (entityType === 'agent') {
+        // Person level: only emails where this agent is linked
+        return await api.entities.EmailMessage.filter({ agent_id: entityId }, '-received_at', 200);
+      }
+      if (entityType === 'agency') {
+        // Org level: emails linked to this agency OR any of its agents
+        const byAgency = await api.entities.EmailMessage.filter({ agency_id: entityId }, '-received_at', 200);
+        if (orgAgentIds?.length) {
+          const byAgents = await api.entities.EmailMessage.filter({}, '-received_at', 500);
+          const agentIdSet = new Set(orgAgentIds);
+          const agentEmails = byAgents.filter(m => m.agent_id && agentIdSet.has(m.agent_id));
+          // Merge and deduplicate
+          const seen = new Set(byAgency.map(m => m.id));
+          const merged = [...byAgency];
+          for (const m of agentEmails) {
+            if (!seen.has(m.id)) { merged.push(m); seen.add(m.id); }
+          }
+          return merged.sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
+        }
+        return byAgency;
+      }
+      if (entityType === 'team') {
+        // Team level: only emails linked to agents within this team
+        if (!teamMemberIds?.length) return [];
+        const allEmails = await api.entities.EmailMessage.filter({}, '-received_at', 500);
+        const memberIdSet = new Set(teamMemberIds);
+        return allEmails.filter(m => m.agent_id && memberIdSet.has(m.agent_id));
+      }
+      return [];
     },
     staleTime: 2 * 60 * 1000,
   });

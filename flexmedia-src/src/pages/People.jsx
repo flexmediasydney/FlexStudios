@@ -1,14 +1,20 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useEntityList } from '@/components/hooks/useEntityData';
+import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
+import { api } from '@/api/supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
-import { Plus, Search, Mail, Phone, Building2, ExternalLink, List, LayoutGrid } from 'lucide-react';
+import { Plus, Search, Mail, Phone, Building2, ExternalLink, List, LayoutGrid, Tag, Clock, AlertTriangle, MailX, Zap, Users, Activity } from 'lucide-react';
 import { createPageUrl } from '@/utils';
+import { differenceInDays } from 'date-fns';
+import { toast } from 'sonner';
 import AgentForm from '@/components/clients/AgentForm';
 import EntityDataTable from '@/components/common/EntityDataTable';
+import SmartFilterBar from '@/components/common/SmartFilterBar';
+import BulkActionBar from '@/components/common/BulkActionBar';
+import ContactActivityPanel from '@/components/clients/ContactActivityPanel';
 import { cn } from '@/lib/utils';
 
 const STATE_STYLES = {
@@ -31,8 +37,6 @@ const STATUS_STYLES = {
   'Lost': 'bg-gray-100 text-gray-500',
 };
 
-const FILTER_STATES = ['All', 'Active', 'Prospecting', 'Dormant', 'Do Not Contact'];
-
 function fmtRevenue(n) {
   if (!n) return '$0';
   if (n >= 1000000) return `$${(n/1000000).toFixed(1)}m`;
@@ -40,13 +44,35 @@ function fmtRevenue(n) {
   return `$${Math.round(n)}`;
 }
 
+function daysSinceLabel(dateStr) {
+  if (!dateStr) return { text: 'Never', color: 'text-muted-foreground/40' };
+  const days = differenceInDays(new Date(), new Date(dateStr));
+  if (days < 0) return { text: 'Today', color: 'text-green-600' };
+  if (days === 0) return { text: 'Today', color: 'text-green-600' };
+  if (days < 7) return { text: `${days}d ago`, color: 'text-green-600' };
+  if (days < 30) return { text: `${days}d ago`, color: 'text-yellow-600' };
+  if (days < 60) return { text: `${days}d ago`, color: 'text-orange-500' };
+  return { text: `${days}d ago`, color: 'text-red-500' };
+}
+
 export default function People() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [filterState, setFilterState] = useState('All');
   const [view, setView] = useState('table');
   const [showForm, setShowForm] = useState(false);
   const [editingAgent, setEditingAgent] = useState(null);
+
+  // Smart filter state
+  const [activeFilters, setActiveFilters] = useState(new Set());
+  const [tagFilter, setTagFilter] = useState(null);
+  const [orgFilter, setOrgFilter] = useState(null);
+
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  // Activity panel
+  const [activityAgent, setActivityAgent] = useState(null);
 
   // Open new contact form when ?new=true is in URL
   useEffect(() => {
@@ -63,6 +89,7 @@ export default function People() {
 
   const { data: agents = [], loading } = useEntityList('Agent', 'name');
   const { data: projects = [] } = useEntityList('Project', null, 5000);
+  const { data: agencies = [] } = useEntityList('Agency', 'name');
 
   const projectsByAgent = useMemo(() => {
     const m = {};
@@ -86,16 +113,69 @@ export default function People() {
     dnc: agents.filter(a => a.relationship_state === 'Do Not Contact').length,
   }), [agents]);
 
-  const filtered = useMemo(() => agents.filter(a => {
+  // Smart filter counts
+  const filterCounts = useMemo(() => ({
+    idle: agents.filter(a => { const lc = a.last_contacted_at; if (!lc) return false; return differenceInDays(new Date(), new Date(lc)) > 30; }).length,
+    at_risk: agents.filter(a => a.is_at_risk === true).length,
+    active: agents.filter(a => a.relationship_state === 'Active').length,
+    prospecting: agents.filter(a => a.relationship_state === 'Prospecting').length,
+    no_email: agents.filter(a => !a.email).length,
+  }), [agents]);
+
+  // Unique tags
+  const allTags = useMemo(() => {
+    const s = new Set();
+    agents.forEach(a => { if (Array.isArray(a.tags)) a.tags.forEach(t => s.add(t)); });
+    return Array.from(s).sort();
+  }, [agents]);
+
+  // ─── Filtering pipeline ───
+  // Stage 1: search
+  const searchFiltered = useMemo(() => {
+    if (!search) return agents;
     const q = search.toLowerCase();
-    const matchSearch = !search ||
+    return agents.filter(a =>
       a?.name?.toLowerCase().includes(q) ||
       a?.email?.toLowerCase().includes(q) ||
       a?.current_agency_name?.toLowerCase().includes(q) ||
-      a?.current_team_name?.toLowerCase().includes(q);
-    const matchState = filterState === 'All' || a.relationship_state === filterState;
-    return matchSearch && matchState;
-  }), [agents, search, filterState]);
+      a?.current_team_name?.toLowerCase().includes(q) ||
+      (Array.isArray(a?.tags) && a.tags.some(t => t.toLowerCase().includes(q))) ||
+      a?.notes?.toLowerCase().includes(q)
+    );
+  }, [agents, search]);
+
+  // Stage 2: smart filters + tag/org dropdowns
+  const filtered = useMemo(() => {
+    let result = searchFiltered;
+    if (activeFilters.has("idle")) result = result.filter(a => { const lc = a.last_contacted_at; return lc && differenceInDays(new Date(), new Date(lc)) > 30; });
+    if (activeFilters.has("at_risk")) result = result.filter(a => a.is_at_risk === true);
+    if (activeFilters.has("active")) result = result.filter(a => a.relationship_state === "Active");
+    if (activeFilters.has("prospecting")) result = result.filter(a => a.relationship_state === "Prospecting");
+    if (activeFilters.has("no_email")) result = result.filter(a => !a.email);
+    if (tagFilter) result = result.filter(a => Array.isArray(a.tags) && a.tags.includes(tagFilter));
+    if (orgFilter) result = result.filter(a => a.current_agency_id === orgFilter);
+    return result;
+  }, [searchFiltered, activeFilters, tagFilter, orgFilter]);
+
+  // ─── Selection handlers ───
+  const toggleSelect = (id) => setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleSelectAll = () => setSelectedIds(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(a => a.id)));
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const handleBulkStateChange = async (newState) => {
+    if (selectedIds.size === 0) return;
+    setBulkLoading(true);
+    try {
+      await Promise.all(Array.from(selectedIds).map(id => api.entities.Agent.update(id, { relationship_state: newState })));
+      refetchEntityList("Agent");
+      toast.success(`Updated ${selectedIds.size} contact${selectedIds.size > 1 ? 's' : ''} to ${newState}`);
+    } catch {
+      toast.error('Some updates failed');
+    } finally {
+      clearSelection();
+      setBulkLoading(false);
+    }
+  };
 
   const columns = [
     {
@@ -145,6 +225,13 @@ export default function People() {
       },
     },
     {
+      key: 'last_contacted_at', label: 'Last Activity', sortable: true, width: '100px',
+      render: (row) => {
+        const { text, color } = daysSinceLabel(row.last_contacted_at);
+        return <span className={cn("text-xs font-medium tabular-nums", color)}>{text}</span>;
+      },
+    },
+    {
       key: 'email', label: 'Email', sortable: true,
       render: (row) => row.email
         ? <a href={`mailto:${row.email}`} className="text-xs text-primary hover:underline truncate max-w-[160px] block" onClick={e => e.stopPropagation()}>{row.email}</a>
@@ -157,10 +244,13 @@ export default function People() {
         : <span className="text-muted-foreground/30 text-xs">—</span>,
     },
     {
-      key: '_actions', label: '', width: '90px', noClick: true, align: 'right',
+      key: '_actions', label: '', width: '110px', noClick: true, align: 'right',
       render: (row) => (
         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={e => { e.stopPropagation(); setEditingAgent(row); setShowForm(true); }}>Edit</Button>
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); setActivityAgent(row); }} aria-label="Activity panel" title="Activity panel">
+            <Activity className="h-3 w-3" />
+          </Button>
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); navigate(createPageUrl('PersonDetails') + '?id=' + row.id); }} aria-label="View person details">
             <ExternalLink className="h-3 w-3" />
           </Button>
@@ -200,14 +290,6 @@ export default function People() {
             </>
           )}
         </div>
-        <div className="flex gap-1">
-          {FILTER_STATES.map(s => (
-            <button key={s} onClick={() => setFilterState(s)}
-              className={cn("px-3 py-1 rounded-md text-xs font-medium transition-colors", filterState === s ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
-              {s}
-            </button>
-          ))}
-        </div>
         <span className="text-xs text-muted-foreground ml-auto">{filtered.length} shown</span>
         <div className="flex items-center border rounded-md overflow-hidden">
           <button onClick={() => setView('table')} title="Table view" aria-label="Table view" className={cn("px-2 py-1.5 transition-colors", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
@@ -219,11 +301,50 @@ export default function People() {
         </div>
       </div>
 
+      {/* Smart filter bar */}
+      <div className="px-6 py-2.5 border-b shrink-0 bg-muted/10">
+        <SmartFilterBar
+          quickFilters={[
+            { id: 'idle', label: 'Idle 30+d', icon: Clock, count: filterCounts.idle },
+            { id: 'at_risk', label: 'At Risk', icon: AlertTriangle, count: filterCounts.at_risk },
+            { id: 'active', label: 'Active', icon: Zap, count: filterCounts.active },
+            { id: 'prospecting', label: 'Prospecting', icon: Users, count: filterCounts.prospecting },
+            { id: 'no_email', label: 'No Email', icon: MailX, count: filterCounts.no_email },
+          ]}
+          activeFilters={activeFilters}
+          onToggleFilter={(id) => setActiveFilters(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })}
+          dropdownFilters={[
+            { id: 'tag', label: 'Tag', icon: Tag, options: allTags.map(t => ({ value: t, label: t })), value: tagFilter, onChange: setTagFilter },
+            { id: 'org', label: 'Organisation', icon: Building2, options: agencies.map(a => ({ value: a.id, label: a.name })), value: orgFilter, onChange: setOrgFilter },
+          ]}
+          onClearAll={() => { setActiveFilters(new Set()); setTagFilter(null); setOrgFilter(null); }}
+          totalCount={agents.length}
+          filteredCount={filtered.length}
+        />
+      </div>
+
       <div className="flex-1 overflow-auto px-6 py-4">
+        {/* Bulk action bar */}
+        <BulkActionBar
+          selectedCount={selectedIds.size}
+          actions={[{ label: 'Set State', options: ['Active', 'Prospecting', 'Dormant', 'Do Not Contact'], onAction: handleBulkStateChange }]}
+          onClear={clearSelection}
+          loading={bulkLoading}
+        />
+
         {view === 'table' ? (
-          <EntityDataTable columns={columns} data={filtered} loading={loading}
+          <EntityDataTable
+            columns={columns}
+            data={filtered}
+            loading={loading}
+            selectable
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+            onToggleSelectAll={toggleSelectAll}
             onRowClick={row => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}
-            emptyMessage={search ? 'No people match your search' : 'No people added yet'} pageSize={100} />
+            emptyMessage={search ? 'No people match your search' : 'No people added yet'}
+            pageSize={100}
+          />
         ) : (
           <>
             {loading && (
@@ -264,6 +385,10 @@ export default function People() {
       </div>
 
       <AgentForm agent={editingAgent} open={showForm} onClose={() => { setShowForm(false); setEditingAgent(null); }} />
+
+      {activityAgent && (
+        <ContactActivityPanel agent={activityAgent} onClose={() => setActivityAgent(null)} />
+      )}
     </div>
   );
 }

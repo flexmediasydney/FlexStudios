@@ -43,7 +43,7 @@ function toForm(agent) {
     value_potential: agent.value_potential || '',
     media_needs: agent.media_needs || [],
     club_flex: agent.club_flex || false,
-    last_contact_date: toInputDT(agent.last_contact_date),
+    last_contacted_at: toInputDT(agent.last_contacted_at),
     next_follow_up_date: toInputDT(agent.next_follow_up_date),
     notes: agent.notes || '',
     discovery_call_notes: agent.discovery_call_notes || '',
@@ -126,7 +126,7 @@ export default function AgentInformationTab({ agent }) {
         value_potential: formData.value_potential,
         media_needs: formData.media_needs,
         club_flex: formData.club_flex,
-        last_contact_date: formData.last_contact_date ? new Date(formData.last_contact_date).toISOString() : null,
+        last_contacted_at: formData.last_contacted_at ? new Date(formData.last_contacted_at).toISOString() : null,
         next_follow_up_date: formData.next_follow_up_date ? new Date(formData.next_follow_up_date).toISOString() : null,
         notes: formData.notes,
         discovery_call_notes: formData.discovery_call_notes,
@@ -331,7 +331,7 @@ export default function AgentInformationTab({ agent }) {
       <Section title="Follow-up">
         <Grid>
           <Field label="Last Contact Date">
-            {editing ? <Input type="datetime-local" value={formData.last_contact_date} onChange={e => set('last_contact_date', e.target.value)} /> : <Val>{safeFmt(agent.last_contact_date, 'MMM d, yyyy HH:mm')}</Val>}
+            {editing ? <Input type="datetime-local" value={formData.last_contacted_at} onChange={e => set('last_contacted_at', e.target.value)} /> : <Val>{safeFmt(agent.last_contacted_at, 'MMM d, yyyy HH:mm')}</Val>}
           </Field>
           <Field label="Next Follow-up Date">
             {editing ? <Input type="datetime-local" value={formData.next_follow_up_date} onChange={e => set('next_follow_up_date', e.target.value)} /> : <Val>{safeFmt(agent.next_follow_up_date, 'MMM d, yyyy HH:mm')}</Val>}

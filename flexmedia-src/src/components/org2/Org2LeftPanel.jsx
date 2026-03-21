@@ -1,13 +1,19 @@
-import React, { useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
+import { toast } from "sonner";
 import {
-  ChevronDown, ChevronRight, Calendar,
-  User, ExternalLink, Edit2, AlertCircle,
-  Copy, Check
+  ChevronDown, ChevronRight, MapPin, Mail, Phone, Calendar,
+  User, ExternalLink, MessageCircle, DollarSign, AlertCircle,
+  Copy, Check, Trash2, Pencil
 } from "lucide-react";
 import { fmtDate, fmtTimestampCustom, isOverdue, parseDate, todaySydney } from "@/components/utils/dateUtils";
+
+function cn(...classes) { return classes.filter(Boolean).join(' '); }
 
 const STAGES = [
   { key: 'to_be_scheduled', color: 'bg-gray-300' },
@@ -33,6 +39,114 @@ const STATUS_BORDER = {
   delivered: 'border-l-green-500',
 };
 
+const RELATIONSHIP_STATES = [
+  { value: 'Prospecting', label: 'Prospecting' },
+  { value: 'Active', label: 'Active' },
+  { value: 'Dormant', label: 'Dormant' },
+  { value: 'Do Not Contact', label: 'Do Not Contact' },
+];
+
+const STATE_COLORS = {
+  Active: "bg-green-100 text-green-800",
+  Prospecting: "bg-blue-100 text-blue-800",
+  Dormant: "bg-amber-100 text-amber-800",
+  "Do Not Contact": "bg-red-100 text-red-800",
+};
+
+/* ── InlineField ── click-to-edit field (Pipedrive pattern) ─────────────── */
+function InlineField({ label, value, field, onSave, type = 'text', options, placeholder, icon: Icon }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  const inputRef = useRef(null);
+  useEffect(() => { setDraft(value || ''); }, [value]);
+  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+  const save = () => { setEditing(false); if (draft !== (value || '')) onSave(field, draft); };
+
+  const displayValue = type === 'select' && options
+    ? (options.find(o => (o.value ?? o) === value)?.label ?? value)
+    : value;
+
+  if (type === 'select' && editing) {
+    return (
+      <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+        <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">{label}</label>
+        <select ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
+          className="flex-1 text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
+          {options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
+        </select>
+      </div>
+    );
+  }
+  if (type === 'textarea' && editing) {
+    return (
+      <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+        <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">{label}</label>
+        <textarea ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
+          rows={3} className="flex-1 text-sm border rounded px-2 py-1.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none" />
+      </div>
+    );
+  }
+  return (
+    <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+      <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1">
+        {Icon && <Icon className="h-3 w-3" />} {label}
+      </label>
+      <div className="flex-1 min-w-0 flex items-start gap-1">
+        {editing ? (
+          <input ref={inputRef} type={type === 'date' ? 'date' : type === 'number' ? 'number' : 'text'}
+            value={draft} onChange={e => setDraft(e.target.value)} onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+            placeholder={placeholder} className="w-full text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+        ) : (
+          <>
+            <span className={cn("text-sm flex-1", displayValue ? "text-foreground" : "text-muted-foreground/40")}>
+              {displayValue || '\u2014'}
+            </span>
+            <button
+              onClick={() => setEditing(true)}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted shrink-0"
+              title={`Edit ${label}`}
+            >
+              <Pencil className="h-3 w-3 text-muted-foreground" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── InlineNameField ── large editable org name ─────────────────────────── */
+function InlineNameField({ value, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  const inputRef = useRef(null);
+  useEffect(() => { setDraft(value || ''); }, [value]);
+  useEffect(() => { if (editing && inputRef.current) { inputRef.current.focus(); inputRef.current.select(); } }, [editing]);
+  const save = () => {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== (value || '')) onSave('name', trimmed);
+    else setDraft(value || '');
+  };
+
+  if (editing) {
+    return (
+      <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)}
+        onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+        className="w-full text-base font-bold border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+    );
+  }
+  return (
+    <h2
+      className="text-base font-bold text-foreground cursor-pointer hover:text-primary transition-colors leading-tight"
+      onClick={() => setEditing(true)}
+      title="Click to edit name"
+    >
+      {value || 'Unnamed Organisation'}
+    </h2>
+  );
+}
+
 function PipelineBar({ status }) {
   const currentIdx = STAGES.findIndex(s => s.key === status);
   return (
@@ -52,24 +166,24 @@ function Section({ title, badge, children, defaultOpen = true, action }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border-b border-border/50">
-      <div className="flex items-center justify-between px-4 py-2">
+      <div className="flex items-center justify-between px-4 py-2.5">
         <button
-          className="flex items-center gap-1.5 flex-1 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors text-left"
+          className="flex items-center gap-2 flex-1 text-xs font-semibold text-foreground hover:text-primary transition-colors text-left"
           onClick={() => setOpen(o => !o)}
         >
           {open
-            ? <ChevronDown className="h-3 w-3" />
-            : <ChevronRight className="h-3 w-3" />}
-          <span>{title}</span>
+            ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+          <span className="uppercase tracking-wide">{title}</span>
           {badge !== undefined && badge > 0 && (
-            <span className="ml-0.5 bg-muted text-muted-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+            <span className="ml-0.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
               {badge}
             </span>
           )}
         </button>
         {action && <div className="ml-2">{action}</div>}
       </div>
-      {open && <div className="pb-1">{children}</div>}
+      {open && <div className="px-4 pb-4">{children}</div>}
     </div>
   );
 }
@@ -88,34 +202,33 @@ function CopyableInfoRow({ label, value, href, Icon, copyValue }) {
   };
 
   return (
-    <div className="flex items-center justify-between py-1.5 px-4 group hover:bg-muted/30 transition-colors">
-      <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
-      <div className="flex items-center gap-1 min-w-0 ml-3 justify-end">
-        {href ? (
-          <a href={href} target="_blank" rel="noopener noreferrer"
-            className="text-[12px] font-semibold text-primary hover:underline flex items-center gap-1 truncate">
-            {value} <ExternalLink className="h-2.5 w-2.5 shrink-0" />
-          </a>
-        ) : (
-          <span className="text-[12px] font-semibold text-foreground truncate">{value}</span>
-        )}
-        <button
-          onClick={handleCopy}
-          className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5 rounded hover:bg-muted"
-          title={`Copy ${label}`}
-        >
-          {copied
-            ? <Check className="h-2.5 w-2.5 text-green-600" />
-            : <Copy className="h-2.5 w-2.5 text-muted-foreground" />
-          }
-        </button>
+    <div className="flex items-start gap-2 text-xs group">
+      {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />}
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-0.5">{label}</p>
+        <div className="flex items-center gap-1">
+          {href ? (
+            <a href={href} target="_blank" rel="noopener noreferrer"
+              className="text-primary hover:underline flex items-center gap-1 font-medium truncate">
+              {value} <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+            </a>
+          ) : (
+            <p className="font-medium truncate text-foreground flex-1">{value}</p>
+          )}
+          <button
+            onClick={handleCopy}
+            className="opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0 p-0.5 rounded hover:bg-muted"
+            title={`Copy ${label}`}
+          >
+            {copied
+              ? <Check className="h-2.5 w-2.5 text-green-600" />
+              : <Copy className="h-2.5 w-2.5 text-muted-foreground" />
+            }
+          </button>
+        </div>
       </div>
     </div>
   );
-}
-
-function InfoRow({ label, value, href, Icon }) {
-  return <CopyableInfoRow label={label} value={value} href={href} Icon={Icon} />;
 }
 
 function fmtMoney(val) {
@@ -126,25 +239,19 @@ function fmtMoney(val) {
 }
 
 function safeFmt(iso, pat) {
-  // Use fmtDate for date-only strings, fmtTimestampCustom for full timestamps
   if (!iso) return null;
   if (String(iso).length <= 10) return fmtDate(iso, pat);
   return fmtTimestampCustom(iso, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-const STATE_COLORS = {
-  Active: "bg-green-100 text-green-800",
-  Prospecting: "bg-blue-100 text-blue-800",
-  Dormant: "bg-amber-100 text-amber-800",
-  "Do Not Contact": "bg-red-100 text-red-800",
-};
-
 export default function Org2LeftPanel({
   agency, agents = [], teams = [], projects = [], onEditAgency,
   totalOrgRev = 0, avgOrgBookingValue = null,
   activeAgents = [], dormantAgents = [], atRiskAgents = [],
-  revenueByAgent = []
+  revenueByAgent = [],
+  onFieldSave,
 }) {
+   const navigate = useNavigate();
    const openProjects  = projects.filter(p => p.outcome === 'open');
    const wonProjects   = projects.filter(p => p.outcome === 'won');
    const lostProjects  = projects.filter(p => p.outcome === 'lost');
@@ -153,75 +260,122 @@ export default function Org2LeftPanel({
    const closedCount   = wonProjects.length + lostProjects.length;
    const winRate       = closedCount > 0 ? Math.round((wonProjects.length / closedCount) * 100) : null;
 
+   /* Auto-save handler — used by InlineField */
+   const handleFieldSave = async (field, value) => {
+     if (onFieldSave) { onFieldSave(field, value); return; }
+     try {
+       const oldValue = agency[field];
+       await api.entities.Agency.update(agency.id, { [field]: value || null });
+
+       // Write audit log
+       const user = await api.auth.me();
+       await api.entities.AuditLog.create({
+         entity_type: 'agency',
+         entity_id: agency.id,
+         entity_name: agency.name,
+         action: 'update',
+         changed_fields: [{ field, old_value: oldValue || '', new_value: value || '' }],
+         user_name: user?.full_name || '',
+         user_email: user?.email || '',
+       }).catch(() => {}); // non-fatal
+
+       refetchEntityList('Agency');
+     } catch (err) {
+       toast.error(`Failed to save ${field}`);
+     }
+   };
+
+   /* Delete handler */
+   const [confirmDelete, setConfirmDelete] = useState(false);
+   const handleDelete = async () => {
+     if (!confirmDelete) { setConfirmDelete(true); return; }
+     try {
+       await api.entities.Agency.delete(agency.id);
+       refetchEntityList('Agency');
+       toast.success('Organisation deleted');
+       navigate(createPageUrl('Organisations'));
+     } catch (err) {
+       toast.error(err.message || 'Failed to delete');
+     }
+   };
+
+   const toInputDate = (iso) => iso ? String(iso).substring(0, 10) : '';
+
    return (
      <div className="text-sm flex flex-col h-full">
        <div className="flex-1 overflow-y-auto">
-         {/* Details */}
-         <Section 
-           title="Details" 
-           defaultOpen={true}
-           action={onEditAgency && (
-             <Button 
-               size="sm" 
-               variant="ghost" 
-               className="h-6 w-6 p-0"
-               onClick={onEditAgency}
-               title="Edit agency details"
-             >
-               <Edit2 className="h-3.5 w-3.5" />
-             </Button>
-           )}
-         >
-           <div>
-             <InfoRow label="Status" value={agency.relationship_state || 'Unknown'} />
-             <InfoRow label="Email" value={agency.email} href={agency.email ? `mailto:${agency.email}` : null} />
-             <InfoRow label="Phone" value={agency.phone} href={agency.phone ? `tel:${agency.phone}` : null} />
-             <InfoRow label="Address" value={agency.address} />
-             <InfoRow label="Onboarding" value={safeFmt(agency.onboarding_date, 'dd MMM yyyy')} />
-             <InfoRow label="Marketing contact" value={agency.primary_marketing_contact} />
-             <InfoRow label="Accounts contact" value={agency.primary_accounts_contact} />
-             <InfoRow label="Primary partner" value={agency.primary_partner} />
-             <InfoRow label="WhatsApp" value={agency.whatsapp_group_chat ? "Open group chat" : null} href={agency.whatsapp_group_chat} />
-             <InfoRow label="Pricing agreement" value={agency.pricing_agreement} />
-             {agency.notes && (
-               <div className="mx-4 mb-2 p-2 rounded-md bg-muted/40 text-[11px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
-                 {agency.notes}
-               </div>
-             )}
+         {/* ── Inline-editable Details ── */}
+         <Section title="Details" defaultOpen={true}>
+           <div className="space-y-1">
+             {/* Organisation Name — prominent inline edit */}
+             <div className="pb-2 mb-1 border-b border-border/40">
+               <InlineNameField value={agency.name} onSave={handleFieldSave} />
+             </div>
+
+             {/* Relationship State */}
+             <InlineField
+               label="Relationship State"
+               value={agency.relationship_state || ''}
+               field="relationship_state"
+               onSave={handleFieldSave}
+               type="select"
+               options={RELATIONSHIP_STATES}
+             />
+
+             {/* Contact info */}
+             <InlineField label="Email" value={agency.email} field="email" onSave={handleFieldSave} icon={Mail} placeholder="Add email..." />
+             <InlineField label="Phone" value={agency.phone} field="phone" onSave={handleFieldSave} icon={Phone} placeholder="Add phone..." />
+             <InlineField label="Address" value={agency.address} field="address" onSave={handleFieldSave} icon={MapPin} placeholder="Add address..." />
+
+             {/* Dates */}
+             <InlineField label="Onboarding Date" value={toInputDate(agency.onboarding_date)} field="onboarding_date" onSave={handleFieldSave} type="date" icon={Calendar} placeholder="Set date..." />
+
+             {/* Key contacts */}
+             <InlineField label="Marketing Contact" value={agency.primary_marketing_contact} field="primary_marketing_contact" onSave={handleFieldSave} icon={User} placeholder="Add contact..." />
+             <InlineField label="Accounts Contact" value={agency.primary_accounts_contact} field="primary_accounts_contact" onSave={handleFieldSave} icon={User} placeholder="Add contact..." />
+             <InlineField label="Primary Partner" value={agency.primary_partner} field="primary_partner" onSave={handleFieldSave} icon={User} placeholder="Add partner..." />
+             <InlineField label="WhatsApp Group" value={agency.whatsapp_group_chat} field="whatsapp_group_chat" onSave={handleFieldSave} icon={MessageCircle} placeholder="Add link..." />
+             <InlineField label="Pricing Agreement" value={agency.pricing_agreement} field="pricing_agreement" onSave={handleFieldSave} icon={DollarSign} placeholder="Add pricing info..." />
+
+             {/* Notes */}
+             <InlineField label="Notes" value={agency.notes} field="notes" onSave={handleFieldSave} type="textarea" placeholder="Add notes..." />
            </div>
          </Section>
 
          {/* Organisation insights */}
          <Section title="Organisation insights" defaultOpen>
-           <div>
-             {/* People health */}
-             <div className="flex items-center justify-between py-1.5 px-4">
-               <span className="text-[11px] text-muted-foreground">People</span>
-               <div className="flex items-center gap-1.5">
+           <div className="space-y-2.5">
+
+             {/* Agent health breakdown */}
+             <div>
+               <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
+                 People ({agents.length})
+               </p>
+               <div className="flex gap-1.5 flex-wrap">
                  {activeAgents.length > 0 && (
-                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">
+                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200">
                      {activeAgents.length} active
                    </span>
                  )}
                  {dormantAgents.length > 0 && (
-                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold">
+                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
                      {dormantAgents.length} dormant
                    </span>
                  )}
                  {atRiskAgents.length > 0 && (
-                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
+                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
                      {atRiskAgents.length} at risk
                    </span>
                  )}
                </div>
              </div>
 
-             {/* Revenue rows */}
+             {/* Revenue summary */}
              {totalOrgRev > 0 && (
-               <>
-                 <div className="flex items-center justify-between py-1.5 px-4">
-                   <span className="text-[11px] text-muted-foreground">Total revenue</span>
-                   <span className="text-[12px] font-semibold text-green-700">
+               <div className="space-y-1 pt-1 border-t">
+                 <div className="flex items-center justify-between text-xs">
+                   <span className="text-muted-foreground">Total revenue</span>
+                   <span className="font-semibold text-green-700">
                      ${totalOrgRev >= 1000000
                        ? `${(totalOrgRev / 1000000).toFixed(1)}M`
                        : totalOrgRev >= 1000
@@ -230,39 +384,39 @@ export default function Org2LeftPanel({
                    </span>
                  </div>
                  {avgOrgBookingValue && (
-                   <div className="flex items-center justify-between py-1.5 px-4">
-                     <span className="text-[11px] text-muted-foreground">Avg booking value</span>
-                     <span className="text-[12px] font-semibold">
+                   <div className="flex items-center justify-between text-xs">
+                     <span className="text-muted-foreground">Avg booking value</span>
+                     <span className="font-medium">
                        ${avgOrgBookingValue >= 1000
                          ? `${(avgOrgBookingValue / 1000).toFixed(0)}k`
                          : avgOrgBookingValue}
                      </span>
                    </div>
                  )}
-                 <div className="flex items-center justify-between py-1.5 px-4">
-                   <span className="text-[11px] text-muted-foreground">Total bookings</span>
-                   <span className="text-[12px] font-semibold">{projects.length}</span>
+                 <div className="flex items-center justify-between text-xs">
+                   <span className="text-muted-foreground">Total bookings</span>
+                   <span className="font-medium">{projects.length}</span>
                  </div>
-               </>
+               </div>
              )}
 
-             {/* Top performers */}
+             {/* Top agents by revenue */}
              {revenueByAgent.length > 0 && (
-               <div className="border-t border-border/30 mt-1 pt-1">
-                 <div className="py-1 px-4">
-                   <span className="text-[11px] text-muted-foreground">Top performers</span>
-                 </div>
+               <div className="pt-1 border-t">
+                 <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
+                   Top performers
+                 </p>
                  {revenueByAgent.slice(0, 4).map(({ agent, rev, count }) => (
                    <div
                      key={agent.id}
-                     className="flex items-center justify-between py-1 px-4"
+                     className="flex items-center justify-between text-xs py-1 border-b border-dashed border-border/50 last:border-0"
                    >
-                     <span className="text-[12px] truncate text-foreground font-medium max-w-[120px]">
+                     <span className="truncate text-foreground max-w-[120px] font-medium">
                        {agent.name}
                      </span>
-                     <div className="flex items-center gap-2 shrink-0">
-                       <span className="text-[11px] text-muted-foreground">{count}x</span>
-                       <span className="text-[12px] font-semibold text-green-700">
+                     <div className="flex items-center gap-2 flex-shrink-0">
+                       <span className="text-muted-foreground">{count}×</span>
+                       <span className="font-semibold text-green-700">
                          ${rev >= 1000 ? `${(rev / 1000).toFixed(0)}k` : rev}
                        </span>
                      </div>
@@ -273,19 +427,19 @@ export default function Org2LeftPanel({
 
              {/* Website */}
              {agency?.website && (
-               <div className="flex items-center justify-between py-1.5 px-4 border-t border-border/30 mt-1">
-                 <span className="text-[11px] text-muted-foreground">Website</span>
+               <div className="pt-1 border-t">
                  <a
                    href={agency.website}
                    target="_blank"
                    rel="noopener noreferrer"
-                   className="text-[12px] font-semibold text-primary hover:underline flex items-center gap-1 truncate ml-3"
+                   className="text-xs text-blue-600 hover:underline flex items-center gap-1"
                  >
+                   <ExternalLink className="h-3 w-3" />
                    {agency.website.replace(/^https?:\/\//, '')}
-                   <ExternalLink className="h-2.5 w-2.5 shrink-0" />
                  </a>
                </div>
              )}
+
            </div>
          </Section>
 
@@ -303,7 +457,7 @@ export default function Org2LeftPanel({
 
         if (overdue.length > 0 || dueThisWeek.length > 0) {
           return (
-            <div className="border-l-2 border-amber-400 bg-amber-50/50 mx-4 px-3 py-2 rounded text-xs space-y-1 mb-2">
+            <div className="border-l-2 border-amber-400 bg-amber-50/50 px-3 py-2 rounded text-xs space-y-1 mb-3">
               {overdue.length > 0 && (
                 <div className="flex items-center gap-2 text-red-700">
                   <AlertCircle className="h-3 w-3" />
@@ -324,7 +478,7 @@ export default function Org2LeftPanel({
 
       {/* Projects — open count only */}
       <Section title={`Projects${openProjects.length < projects.length ? ` (${openProjects.length} open)` : ''}`} badge={openProjects.length}>
-        <div className="space-y-2 px-4">
+        <div className="space-y-2">
           {openProjects.length === 0 && (
             <p className="text-xs text-muted-foreground italic">No open projects</p>
           )}
@@ -414,7 +568,7 @@ export default function Org2LeftPanel({
 
       {/* Teams */}
       <Section title="Teams" badge={teams.length}>
-        <div className="space-y-0.5 px-4">
+        <div className="space-y-0.5">
           {teams.length === 0 && (
             <p className="text-xs text-muted-foreground italic">No teams linked</p>
           )}
@@ -443,7 +597,7 @@ export default function Org2LeftPanel({
       {/* People Summary — all relationship states */}
       {agents.length > 0 && (
         <div className="px-4 pt-1 pb-1 flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] font-semibold text-muted-foreground">People</span>
+          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">People</span>
           {[
             { state: 'Active', cls: 'bg-green-100 text-green-700', label: 'active' },
             { state: 'Prospecting', cls: 'bg-blue-100 text-blue-700', label: 'prospecting' },
@@ -463,7 +617,7 @@ export default function Org2LeftPanel({
 
       {/* People */}
       <Section title="People" badge={agents.length}>
-        <div className="space-y-0.5 px-4">
+        <div className="space-y-0.5">
           {agents.length === 0 && (
             <p className="text-xs text-muted-foreground italic">No people linked</p>
           )}
@@ -498,14 +652,23 @@ export default function Org2LeftPanel({
           </Section>
           </div>
 
-          {/* Created date - bottom */}
-          <div className="border-t mt-2 px-4 py-3 flex items-center justify-between text-[11px] text-muted-foreground">
-            {safeFmt(agency.created_date, 'dd MMM yyyy') ? (
-              <span>Added {safeFmt(agency.created_date, 'dd MMM yyyy')}</span>
-            ) : <span />}
-            {agency.became_active_date && (
-              <span className="text-green-600 font-medium">Active since {safeFmt(agency.became_active_date, 'MMM yyyy')}</span>
-            )}
+          {/* Created date + Delete - bottom */}
+          <div className="border-t mt-2 px-4 py-3 space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              {safeFmt(agency.created_date, 'dd MMM yyyy') ? (
+                <span>Added {safeFmt(agency.created_date, 'dd MMM yyyy')}</span>
+              ) : <span />}
+              {agency.became_active_date && (
+                <span className="text-green-600 font-medium">Active since {safeFmt(agency.became_active_date, 'MMM yyyy')}</span>
+              )}
+            </div>
+            <button
+              onClick={handleDelete}
+              className="flex items-center gap-1.5 text-[11px] text-red-500 hover:text-red-700 transition-colors w-full"
+            >
+              <Trash2 className="h-3 w-3" />
+              {confirmDelete ? 'Click again to confirm deletion' : 'Delete Organisation'}
+            </button>
           </div>
           </div>
           );

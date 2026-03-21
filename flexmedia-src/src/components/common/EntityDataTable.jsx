@@ -10,6 +10,10 @@ export default function EntityDataTable({
   loading = false,
   pageSize = 75,
   emptyMessage = "No records found",
+  selectable = false,
+  selectedIds,          // Set
+  onToggleSelect,       // (id) => void
+  onToggleSelectAll,    // () => void
 }) {
   const [page, setPage] = useState(0);
   const [sortKey, setSortKey] = useState(null);
@@ -79,6 +83,17 @@ export default function EntityDataTable({
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b bg-muted/40">
+                {selectable && (
+                  <th className="px-2 py-2.5 w-10 text-center" onClick={e => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
+                      checked={data.length > 0 && selectedIds?.size === data.length}
+                      ref={el => { if (el) el.indeterminate = selectedIds?.size > 0 && selectedIds.size < data.length; }}
+                      onChange={() => onToggleSelectAll?.()}
+                    />
+                  </th>
+                )}
                 {columns.map(col => (
                   <th
                     key={col.key}
@@ -106,7 +121,7 @@ export default function EntityDataTable({
             <tbody>
               {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} className="py-16 text-center text-sm text-muted-foreground">
+                  <td colSpan={columns.length + (selectable ? 1 : 0)} className="py-16 text-center text-sm text-muted-foreground">
                     {emptyMessage}
                   </td>
                 </tr>
@@ -119,6 +134,16 @@ export default function EntityDataTable({
                   )}
                   onClick={() => onRowClick?.(row)}
                 >
+                  {selectable && (
+                    <td className="px-2 py-2 w-10 text-center" onClick={e => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
+                        checked={selectedIds?.has(row.id) || false}
+                        onChange={() => onToggleSelect?.(row.id)}
+                      />
+                    </td>
+                  )}
                   {columns.map(col => (
                     <td
                       key={col.key}

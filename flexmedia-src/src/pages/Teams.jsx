@@ -2,11 +2,13 @@ import { useState, useMemo } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, Search, Mail, Phone, Building2, ExternalLink, List, LayoutGrid } from 'lucide-react';
+import { Plus, Search, Mail, Phone, Building2, ExternalLink, List, LayoutGrid, UsersRound, UserRound } from 'lucide-react';
 import { createPageUrl } from '@/utils';
 import { useNavigate } from 'react-router-dom';
 import TeamForm from '@/components/clients/TeamForm';
 import EntityDataTable from '@/components/common/EntityDataTable';
+import SmartFilterBar from '@/components/common/SmartFilterBar';
+import BulkActionBar from '@/components/common/BulkActionBar';
 import { cn } from '@/lib/utils';
 
 function fmtRevenue(n) {
@@ -24,6 +26,14 @@ export default function Teams() {
   const [editingTeam, setEditingTeam] = useState(null);
   const [preselectedAgencyId, setPreselectedAgencyId] = useState(null);
 
+  // Smart filters + agency dropdown
+  const [activeFilters, setActiveFilters] = useState(new Set());
+  const [agencyFilter, setAgencyFilter] = useState(null);
+
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+
   const { data: teams = [], loading } = useEntityList('Team', 'name');
   const { data: agencies = [] } = useEntityList('Agency', 'name');
   const { data: agents = [] } = useEntityList('Agent', 'name');
@@ -33,6 +43,12 @@ export default function Teams() {
     const m = {};
     agents.forEach(a => { if (a.current_team_id) { if (!m[a.current_team_id]) m[a.current_team_id] = []; m[a.current_team_id].push(a); } });
     return m;
+  }, [agents]);
+
+  const agentCountByTeam = useMemo(() => {
+    const map = {};
+    agents.forEach(a => { if (a.current_team_id) { map[a.current_team_id] = (map[a.current_team_id] || 0) + 1; } });
+    return map;
   }, [agents]);
 
   const projectsByAgent = useMemo(() => {
@@ -52,13 +68,50 @@ export default function Teams() {
     return m;
   }, [teams, agentsByTeam, projectsByAgent]);
 
-  const filtered = useMemo(() => teams.filter(t => {
-    const q = search.toLowerCase();
-    return !search ||
-      t?.name?.toLowerCase().includes(q) ||
-      t?.agency_name?.toLowerCase().includes(q) ||
-      t?.email?.toLowerCase().includes(q);
-  }), [teams, search]);
+  const filterCounts = useMemo(() => ({
+    has_members: teams.filter(t => (agentCountByTeam[t.id] || 0) > 0).length,
+    empty: teams.filter(t => (agentCountByTeam[t.id] || 0) === 0).length,
+  }), [teams, agentCountByTeam]);
+
+  const filtered = useMemo(() => {
+    let result = teams;
+
+    // Search
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter(t =>
+        t?.name?.toLowerCase().includes(q) ||
+        t?.agency_name?.toLowerCase().includes(q) ||
+        t?.email?.toLowerCase().includes(q)
+      );
+    }
+
+    // Smart filters
+    if (activeFilters.has('has_members')) result = result.filter(t => (agentCountByTeam[t.id] || 0) > 0);
+    if (activeFilters.has('empty')) result = result.filter(t => (agentCountByTeam[t.id] || 0) === 0);
+
+    // Agency dropdown
+    if (agencyFilter) result = result.filter(t => t.agency_id === agencyFilter);
+
+    return result;
+  }, [teams, search, activeFilters, agencyFilter, agentCountByTeam]);
+
+  // Selection handlers
+  const handleToggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map(t => t.id)));
+    }
+  };
 
   const columns = [
     {
@@ -144,11 +197,42 @@ export default function Teams() {
         </div>
       </div>
 
+      {/* Smart Filter Bar */}
+      <div className="px-6 py-2 border-b shrink-0">
+        <SmartFilterBar
+          quickFilters={[
+            { id: 'has_members', label: 'Has Members', icon: UsersRound, count: filterCounts.has_members },
+            { id: 'empty', label: 'Empty', icon: UserRound, count: filterCounts.empty },
+          ]}
+          activeFilters={activeFilters}
+          onToggleFilter={(id) => setActiveFilters(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })}
+          dropdownFilters={[
+            { id: 'agency', label: 'Organisation', icon: Building2, options: agencies.map(a => ({ value: a.id, label: a.name })), value: agencyFilter, onChange: setAgencyFilter },
+          ]}
+          onClearAll={() => { setActiveFilters(new Set()); setAgencyFilter(null); }}
+          totalCount={teams.length}
+          filteredCount={filtered.length}
+        />
+      </div>
+
       <div className="flex-1 overflow-auto px-6 py-4">
+        {/* Bulk Action Bar */}
+        <BulkActionBar
+          selectedCount={selectedIds.size}
+          onClear={() => setSelectedIds(new Set())}
+          loading={bulkLoading}
+          actions={[]}
+        />
+
         {view === 'table' ? (
           <EntityDataTable columns={columns} data={filtered} loading={loading}
             onRowClick={row => navigate(createPageUrl('TeamDetails') + '?id=' + row.id)}
-            emptyMessage={search ? 'No teams match your search' : 'No teams yet'} pageSize={100} />
+            emptyMessage={search ? 'No teams match your search' : 'No teams yet'} pageSize={100}
+            selectable
+            selectedIds={selectedIds}
+            onToggleSelect={handleToggleSelect}
+            onToggleSelectAll={handleToggleSelectAll}
+          />
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filtered.map(row => (

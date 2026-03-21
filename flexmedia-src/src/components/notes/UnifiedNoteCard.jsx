@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
-import { Building2, MapPin, User, Users, Pin, Edit, Trash2, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
+import { Building2, MapPin, User, Users, Pin, Edit, Trash2, MessageSquare, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { api } from '@/api/supabaseClient';
 import { toast } from 'sonner';
 import ActionMenu from '@/components/common/ActionMenu';
@@ -92,7 +92,7 @@ function ReplyBubble({ reply }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5">
            <span className="text-xs font-semibold text-foreground">{reply.author_name || 'Unknown'}</span>
-           <span className="text-[10px] text-muted-foreground">{reply._created_date_relative || ''}</span>
+           <span className="text-[10px] text-muted-foreground">{relativeTime(reply.created_at || reply.created_date)}</span>
          </div>
         {reply.content_html ? (
           <div
@@ -112,6 +112,8 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [repliesExpanded, setRepliesExpanded] = useState(true);
+  const [pinLoading, setPinLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const isLegacy = note._isLegacy;
   const canEdit = !isLegacy && (note.author_email === currentUser?.email || isMasterAdmin);
@@ -129,23 +131,34 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
     : null;
 
   const handleTogglePin = async () => {
+    setPinLoading(true);
     try {
       await api.entities.OrgNote.update(note.id, { is_pinned: !note.is_pinned });
-    } catch { toast.error('Failed to update pin'); }
+      onRefresh?.();
+    } catch {
+      toast.error('Failed to update pin');
+    } finally {
+      setPinLoading(false);
+    }
   };
 
   const handleDelete = async () => {
+    setDeleteLoading(true);
     try {
       await api.entities.OrgNote.delete(note.id);
       onRefresh?.();
-    } catch { toast.error('Failed to delete note'); }
+    } catch {
+      toast.error('Failed to delete note');
+    } finally {
+      setDeleteLoading(false);
+    }
   };
 
   const menuActions = [
     ...(canEdit ? [
       { label: 'Edit', icon: Edit, onClick: () => setIsEditing(true) },
       { separator: true },
-      { label: 'Delete', icon: Trash2, onClick: () => setShowDeleteConfirm(true), danger: true },
+      { label: deleteLoading ? 'Deleting...' : 'Delete', icon: Trash2, onClick: () => setShowDeleteConfirm(true), danger: true, disabled: deleteLoading },
     ] : []),
   ];
 
@@ -189,14 +202,17 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
           <div className="flex items-center gap-0.5 shrink-0">
             <button
               onClick={handleTogglePin}
+              disabled={pinLoading}
               title={note.is_pinned ? 'Unpin' : 'Pin'}
               className={`p-1.5 rounded-md transition-colors ${
                 note.is_pinned
                   ? 'text-amber-500 hover:bg-amber-50'
                   : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-              }`}
+              } ${pinLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-              <Pin className={`h-3.5 w-3.5 ${note.is_pinned ? 'fill-amber-400' : ''}`} />
+              {pinLoading
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Pin className={`h-3.5 w-3.5 ${note.is_pinned ? 'fill-amber-400' : ''}`} />}
             </button>
             {menuActions.length > 0 && <ActionMenu actions={menuActions} />}
           </div>

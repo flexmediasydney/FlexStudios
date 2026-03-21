@@ -97,7 +97,7 @@ export default function ContactActivityPanel({ agent, onClose }) {
   );
 
   const lastContactInfo = useMemo(() => {
-    const lc = agent?.last_contacted_at || agent?.last_contact_date;
+    const lc = agent?.last_contacted_at;
     if (!lc) return { label: "Never contacted", color: "text-muted-foreground", isIdle: true };
     const days = differenceInDays(new Date(), new Date(lc));
     let color = "text-emerald-600";

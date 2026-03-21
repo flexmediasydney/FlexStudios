@@ -94,6 +94,16 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
         });
         result = await api.entities.Team.update(team.id, payload);
         auditAction = "update";
+
+        // Cascade team name change to denormalized fields on agents
+        if (payload.name && payload.name !== team.name) {
+          try {
+            const teamAgents = await api.entities.Agent.filter({ current_team_id: team.id });
+            await Promise.all(teamAgents.map(a =>
+              api.entities.Agent.update(a.id, { current_team_name: payload.name })
+            ));
+          } catch { /* non-fatal */ }
+        }
       } else {
         result = await api.entities.Team.create(payload);
         auditAction = "create";

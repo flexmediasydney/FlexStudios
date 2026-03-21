@@ -1,14 +1,18 @@
 import { useState, useMemo } from 'react';
-import { useEntityList } from '@/components/hooks/useEntityData';
+import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
-import { Plus, Search, Building2, MapPin, Mail, Phone, ExternalLink, List, LayoutGrid } from 'lucide-react';
+import { Plus, Search, Building2, MapPin, Mail, Phone, ExternalLink, List, LayoutGrid, Clock, AlertTriangle, Zap, Users, UsersRound, UserRound } from 'lucide-react';
 import { createPageUrl } from '@/utils';
+import { api } from '@/api/supabaseClient';
+import { toast } from 'sonner';
 import AgencyForm from '@/components/clients/AgencyForm';
 import EntityDataTable from '@/components/common/EntityDataTable';
+import SmartFilterBar from '@/components/common/SmartFilterBar';
+import BulkActionBar from '@/components/common/BulkActionBar';
 import { cn } from '@/lib/utils';
 
 const STATE_STYLES = {
@@ -18,8 +22,6 @@ const STATE_STYLES = {
   'Do Not Contact': 'bg-red-50 text-red-700 border-red-200',
 };
 
-const FILTER_STATES = ['All', 'Active', 'Prospecting', 'Dormant', 'Do Not Contact'];
-
 function fmtRevenue(n) {
   if (!n) return '$0';
   if (n >= 1000000) return `$${(n/1000000).toFixed(1)}m`;
@@ -27,13 +29,29 @@ function fmtRevenue(n) {
   return `$${Math.round(n)}`;
 }
 
+function fmtRelativeDate(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+  return `${Math.floor(diffDays / 365)}y ago`;
+}
+
 export default function Organisations() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [filterState, setFilterState] = useState('All');
+  const [activeFilters, setActiveFilters] = useState(new Set());
   const [view, setView] = useState('table');
   const [showForm, setShowForm] = useState(false);
   const [editingAgency, setEditingAgency] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const { data: agencies = [], loading } = useEntityList('Agency', 'name');
   const { data: teams = [] } = useEntityList('Team', 'name');
@@ -46,9 +64,21 @@ export default function Organisations() {
     return m;
   }, [teams]);
 
+  const teamCountByAgency = useMemo(() => {
+    const m = {};
+    teams.forEach(t => { if (t.agency_id) { m[t.agency_id] = (m[t.agency_id] || 0) + 1; } });
+    return m;
+  }, [teams]);
+
   const agentsByAgency = useMemo(() => {
     const m = {};
     agents.forEach(a => { if (!m[a.current_agency_id]) m[a.current_agency_id] = []; m[a.current_agency_id].push(a); });
+    return m;
+  }, [agents]);
+
+  const agentCountByAgency = useMemo(() => {
+    const m = {};
+    agents.forEach(a => { if (a.current_agency_id) { m[a.current_agency_id] = (m[a.current_agency_id] || 0) + 1; } });
     return m;
   }, [agents]);
 
@@ -60,6 +90,26 @@ export default function Organisations() {
     return m;
   }, [projects]);
 
+  const lastActivityByAgency = useMemo(() => {
+    const m = {};
+    agents.forEach(a => {
+      if (a.current_agency_id && a.last_contacted_at) {
+        if (!m[a.current_agency_id] || a.last_contacted_at > m[a.current_agency_id]) {
+          m[a.current_agency_id] = a.last_contacted_at;
+        }
+      }
+    });
+    return m;
+  }, [agents]);
+
+  const filterCounts = useMemo(() => ({
+    active: agencies.filter(a => a.relationship_state === 'Active').length,
+    prospecting: agencies.filter(a => a.relationship_state === 'Prospecting').length,
+    dormant: agencies.filter(a => a.relationship_state === 'Dormant').length,
+    has_teams: agencies.filter(a => (teamCountByAgency[a.id] || 0) > 0).length,
+    has_people: agencies.filter(a => (agentCountByAgency[a.id] || 0) > 0).length,
+  }), [agencies, teamCountByAgency, agentCountByAgency]);
+
   const stats = useMemo(() => ({
     total: agencies.length,
     active: agencies.filter(a => a.relationship_state === 'Active').length,
@@ -68,12 +118,64 @@ export default function Organisations() {
     dnc: agencies.filter(a => a.relationship_state === 'Do Not Contact').length,
   }), [agencies]);
 
-  const filtered = useMemo(() => agencies.filter(a => {
-    const q = search.toLowerCase();
-    const matchSearch = !search || a?.name?.toLowerCase().includes(q) || a?.email?.toLowerCase().includes(q) || a?.address?.toLowerCase().includes(q);
-    const matchState = filterState === 'All' || a.relationship_state === filterState;
-    return matchSearch && matchState;
-  }), [agencies, search, filterState]);
+  const filtered = useMemo(() => {
+    let result = agencies;
+
+    // Search filter
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter(a =>
+        a?.name?.toLowerCase().includes(q) ||
+        a?.email?.toLowerCase().includes(q) ||
+        a?.address?.toLowerCase().includes(q)
+      );
+    }
+
+    // Smart filters
+    if (activeFilters.has('active')) result = result.filter(a => a.relationship_state === 'Active');
+    if (activeFilters.has('prospecting')) result = result.filter(a => a.relationship_state === 'Prospecting');
+    if (activeFilters.has('dormant')) result = result.filter(a => a.relationship_state === 'Dormant');
+    if (activeFilters.has('has_teams')) result = result.filter(a => (teamCountByAgency[a.id] || 0) > 0);
+    if (activeFilters.has('has_people')) result = result.filter(a => (agentCountByAgency[a.id] || 0) > 0);
+
+    return result;
+  }, [agencies, search, activeFilters, teamCountByAgency, agentCountByAgency]);
+
+  // Selection handlers
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map(r => r.id)));
+    }
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const handleBulkStateChange = async (newState) => {
+    if (selectedIds.size === 0) return;
+    setBulkLoading(true);
+    try {
+      const ids = [...selectedIds];
+      await Promise.all(ids.map(id => api.update('Agency', id, { relationship_state: newState })));
+      toast.success(`Updated ${ids.length} organisation${ids.length > 1 ? 's' : ''} to ${newState}`);
+      refetchEntityList('Agency');
+      clearSelection();
+    } catch (err) {
+      console.error('Bulk state change failed:', err);
+      toast.error('Failed to update organisations');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
 
   const columns = [
     {
@@ -112,6 +214,17 @@ export default function Organisations() {
         const r = revenueByAgency[row.id] || 0;
         return r > 0
           ? <span className="tabular-nums text-xs font-medium text-foreground">{fmtRevenue(r)}</span>
+          : <span className="text-muted-foreground/30 text-xs">—</span>;
+      },
+    },
+    {
+      key: 'last_activity', label: 'Last Activity', sortable: true, width: '100px',
+      sortValue: (row) => lastActivityByAgency[row.id] || '',
+      render: (row) => {
+        const d = lastActivityByAgency[row.id];
+        const label = fmtRelativeDate(d);
+        return label
+          ? <span className="text-xs text-muted-foreground tabular-nums">{label}</span>
           : <span className="text-muted-foreground/30 text-xs">—</span>;
       },
     },
@@ -172,14 +285,20 @@ export default function Organisations() {
             </button>
           )}
         </div>
-        <div className="flex gap-1">
-          {FILTER_STATES.map(s => (
-            <button key={s} onClick={() => setFilterState(s)}
-              className={cn("px-3 py-1 rounded-md text-xs font-medium transition-colors", filterState === s ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
-              {s}
-            </button>
-          ))}
-        </div>
+        <SmartFilterBar
+          quickFilters={[
+            { id: 'active', label: 'Active', icon: Zap, count: filterCounts.active },
+            { id: 'prospecting', label: 'Prospecting', icon: Users, count: filterCounts.prospecting },
+            { id: 'dormant', label: 'Dormant', icon: Clock, count: filterCounts.dormant },
+            { id: 'has_teams', label: 'Has Teams', icon: UsersRound, count: filterCounts.has_teams },
+            { id: 'has_people', label: 'Has People', icon: UserRound, count: filterCounts.has_people },
+          ]}
+          activeFilters={activeFilters}
+          onToggleFilter={(id) => setActiveFilters(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })}
+          onClearAll={() => setActiveFilters(new Set())}
+          totalCount={agencies.length}
+          filteredCount={filtered.length}
+        />
         <span className="text-xs text-muted-foreground ml-auto">{filtered.length} shown</span>
         <div className="flex items-center border rounded-md overflow-hidden">
           <button onClick={() => setView('table')} title="Table view" aria-label="Table view" className={cn("px-2 py-1.5 transition-colors", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
@@ -192,10 +311,27 @@ export default function Organisations() {
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-4">
+        <BulkActionBar
+          selectedCount={selectedIds.size}
+          onClear={clearSelection}
+          loading={bulkLoading}
+          actions={[
+            {
+              label: 'Set State',
+              options: ['Active', 'Prospecting', 'Dormant'],
+              onAction: (opt) => handleBulkStateChange(opt),
+            },
+          ]}
+        />
         {view === 'table' ? (
           <EntityDataTable columns={columns} data={filtered} loading={loading}
             onRowClick={row => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}
-            emptyMessage={search ? 'No organisations match your search' : 'No organisations yet'} pageSize={100} />
+            emptyMessage={search ? 'No organisations match your search' : 'No organisations yet'} pageSize={100}
+            selectable
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+            onToggleSelectAll={toggleSelectAll}
+          />
         ) : (
           <>
             {loading && (
