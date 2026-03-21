@@ -7,7 +7,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Tag, Check, X, Pencil, Trash2, Plus } from "lucide-react";
+import { Tag, Check, Minus, X, Pencil, Trash2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -20,6 +20,7 @@ import LabelBadge, { ColorDotPicker, LABEL_COLORS } from "./LabelBadge";
 export default function LabelSelectorRobust({
   emailAccountId,
   selectedLabels = [],
+  indeterminateLabels = [], // Labels that SOME (but not all) selected items have (tri-state)
   onLabelsChange,
   isAdmin = false,
   compact = false,
@@ -93,9 +94,20 @@ export default function LabelSelectorRobust({
   );
 
   const handleLabelToggle = (labelName) => {
-    const newLabels = selectedLabels.includes(labelName)
-      ? selectedLabels.filter((l) => l !== labelName)
-      : [...selectedLabels, labelName];
+    const isSelected = selectedLabels.includes(labelName);
+    const isIndeterminate = indeterminateLabels.includes(labelName);
+
+    let newLabels;
+    if (isSelected) {
+      // Checked → unchecked (remove)
+      newLabels = selectedLabels.filter((l) => l !== labelName);
+    } else if (isIndeterminate) {
+      // Indeterminate → checked (add to all)
+      newLabels = [...selectedLabels, labelName];
+    } else {
+      // Unchecked → checked (add)
+      newLabels = [...selectedLabels, labelName];
+    }
     onLabelsChange(newLabels);
   };
 
@@ -207,6 +219,7 @@ export default function LabelSelectorRobust({
           ) : (
             filteredLabels.map((label) => {
               const isSelected = selectedLabels.includes(label.name);
+              const isIndeterminate = indeterminateLabels.includes(label.name);
               const isEditing = editingLabel?.id === label.id;
 
               if (isEditing) {
@@ -245,14 +258,17 @@ export default function LabelSelectorRobust({
                   className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-50 border-b last:border-b-0 group cursor-pointer transition-colors"
                   onClick={() => handleLabelToggle(label.name)}
                 >
-                  {/* Checkbox */}
+                  {/* Checkbox — tri-state: checked / indeterminate / unchecked */}
                   <div className={cn(
                     "w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-all",
                     isSelected
                       ? "bg-blue-600 border-blue-600"
+                      : isIndeterminate
+                      ? "bg-blue-400 border-blue-400"
                       : "border-slate-300 group-hover:border-slate-400"
                   )}>
                     {isSelected && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
+                    {isIndeterminate && !isSelected && <Minus className="h-3 w-3 text-white" strokeWidth={3} />}
                   </div>
 
                   {/* Color dot + name */}

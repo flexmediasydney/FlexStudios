@@ -262,27 +262,50 @@ export default function BulkActionBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Labels — LabelSelectorRobust is already a Popover, render directly */}
+        {/* Labels — tri-state bulk support (Gmail-style: checked/indeterminate/unchecked) */}
         {(() => {
           const firstThreadId = Array.from(selectedMessages)[0];
           const firstThread = threads.find(t => t.threadId === firstThreadId);
           const account = emailAccounts.find(a => a.id === firstThread?.email_account_id);
           if (!firstThread || !account) return null;
 
+          // Compute label state across ALL selected threads for tri-state display
+          const selectedThreads = Array.from(selectedMessages).map(tid => threads.find(th => th.threadId === tid)).filter(Boolean);
+          const totalSelected = selectedThreads.length;
+          // Count how many selected threads have each label
+          const labelCounts = {};
+          selectedThreads.forEach(t => {
+            const threadLabels = t.messages[0]?.labels || [];
+            threadLabels.forEach(l => { labelCounts[l] = (labelCounts[l] || 0) + 1; });
+          });
+          // Labels ALL selected threads have → checked; SOME → indeterminate
+          const allLabels = Object.keys(labelCounts).filter(l => labelCounts[l] === totalSelected);
+          const someLabels = Object.keys(labelCounts).filter(l => labelCounts[l] > 0 && labelCounts[l] < totalSelected);
+
           return (
             <LabelSelectorRobust
               emailAccountId={account.id}
-              selectedLabels={firstThread.messages[0]?.labels || []}
-              onLabelsChange={(labels) => {
-                const allMessages = Array.from(selectedMessages).flatMap(tid => {
-                  const t = threads.find(th => th.threadId === tid);
-                  return t?.messages || [];
+              selectedLabels={allLabels}
+              indeterminateLabels={someLabels}
+              onLabelsChange={(newLabels) => {
+                // Apply additive/subtractive: compute per-thread what labels to set
+                const allMessages = [];
+                selectedThreads.forEach(t => {
+                  const currentLabels = t.messages[0]?.labels || [];
+                  // Add labels that are in newLabels but not in current
+                  // Remove labels that were in selectedLabels (fully checked) but not in newLabels
+                  const added = newLabels.filter(l => !allLabels.includes(l) && !someLabels.includes(l));
+                  const removed = [...allLabels, ...someLabels].filter(l => !newLabels.includes(l));
+                  let updatedLabels = [...new Set([...currentLabels, ...added])].filter(l => !removed.includes(l));
+                  t.messages.forEach(m => {
+                    allMessages.push({ id: m.id, labels: updatedLabels });
+                  });
                 });
                 Promise.all(
-                  allMessages.map(m => api.entities.EmailMessage.update(m.id, { labels }))
+                  allMessages.map(({ id, labels }) => api.entities.EmailMessage.update(id, { labels }))
                 ).then(() => {
                   toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
-                  onRefetch(); // Refresh inbox list to reflect label changes
+                  onRefetch();
                 }).catch(() => {
                   toast.error("Failed to update labels");
                 });
