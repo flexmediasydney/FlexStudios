@@ -48,6 +48,14 @@ const sanitizeEmailHtml = (html) => {
   clean = clean.replace(/<base\b[^>]*>/gi, '');
   // Strip <form> tags (phishing risk)
   clean = clean.replace(/<\/?form\b[^>]*>/gi, '');
+  // Auto-link plain text URLs that aren't already inside <a> tags
+  // Split by existing tags to avoid linking URLs that are already href values
+  clean = clean.replace(
+    /(?<![="'>])(https?:\/\/[^\s<>"']+)/gi,
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+  );
+  // Ensure ALL links open in new tab (some emails have <a> without target)
+  clean = clean.replace(/<a\s(?![^>]*target=)/gi, '<a target="_blank" rel="noopener noreferrer" ');
   return clean;
 };
 import { toast } from "sonner";
