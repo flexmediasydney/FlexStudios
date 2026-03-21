@@ -149,6 +149,7 @@ Deno.serve(async (req) => {
 
     // If attachments are provided, build a multipart/mixed MIME message
     let email: string;
+    const failedAttachments: Array<{ filename: string; error: string }> = [];
     if (allAttachments.length > 0) {
       const boundary = `boundary_${crypto.randomUUID().replace(/-/g, '')}`;
       headerLines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
@@ -171,10 +172,18 @@ Deno.serve(async (req) => {
 
           const attResponse = await fetch(url);
           if (!attResponse.ok) {
-            console.warn(`Failed to download attachment: ${url} (${attResponse.status})`);
+            const errMsg = `Download failed: HTTP ${attResponse.status} ${attResponse.statusText}`;
+            console.warn(`Failed to download attachment "${filename}": ${url} (${attResponse.status})`);
+            failedAttachments.push({ filename, error: errMsg });
             continue;
           }
           const attBytes = new Uint8Array(await attResponse.arrayBuffer());
+          if (attBytes.length === 0) {
+            const errMsg = 'Downloaded file is empty (0 bytes)';
+            console.warn(`Attachment "${filename}" downloaded but empty: ${url}`);
+            failedAttachments.push({ filename, error: errMsg });
+            continue;
+          }
           const attBase64 = btoa(Array.from(attBytes, (b) => String.fromCharCode(b)).join(''));
 
           // RFC 2047 encode filename if it contains non-ASCII characters
@@ -192,8 +201,22 @@ Deno.serve(async (req) => {
             wrapBase64(attBase64)
           );
         } catch (attErr: any) {
-          console.warn(`Failed to process attachment:`, attErr?.message);
+          const filename = att.filename || 'unknown';
+          const errMsg = attErr?.message || 'Unknown error';
+          console.warn(`Failed to process attachment "${filename}":`, errMsg);
+          failedAttachments.push({ filename, error: errMsg });
         }
+      }
+
+      // If ALL attachments failed to download, abort — don't send email without them
+      if (failedAttachments.length === allAttachments.length) {
+        const failDetails = failedAttachments.map(f => `"${f.filename}": ${f.error}`).join('; ');
+        return errorResponse(
+          `All ${allAttachments.length} attachment(s) failed to download and could not be sent. ` +
+          `Details: ${failDetails}. ` +
+          `This may be caused by storage permissions — ensure the Supabase Storage bucket is public.`,
+          422
+        );
       }
 
       parts.push(`--${boundary}--`);
@@ -274,7 +297,16 @@ Deno.serve(async (req) => {
       }).catch(() => {});
     }
 
-    return jsonResponse({ success: true, messageId: result.id });
+    // Report partial attachment failures alongside successful send
+    const response_payload: Record<string, any> = { success: true, messageId: result.id };
+    if (allAttachments.length > 0 && failedAttachments.length > 0) {
+      response_payload.warnings = failedAttachments.map(
+        f => `Attachment "${f.filename}" was not sent: ${f.error}`
+      );
+      response_payload.attachmentsSent = allAttachments.length - failedAttachments.length;
+      response_payload.attachmentsFailed = failedAttachments.length;
+    }
+    return jsonResponse(response_payload);
   } catch (error: any) {
     const statusCode = error.message.includes('Unauthorized') ? 401 :
                        error.message.includes('not found') ? 404 : 500;
