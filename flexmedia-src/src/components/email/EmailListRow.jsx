@@ -129,24 +129,36 @@ export default function EmailListRow({
   const attachments = thread.messages[0]?.attachments || [];
   const displayDate = formatEmailDate(thread.lastMessage);
 
-  // Smart attachment filtering: exclude tiny files (<5KB) and common system icons
+  // Collect all real attachments across ALL messages in the thread
+  const allAttachments = thread.messages.flatMap(m => m.attachments || []);
+
+  // Smart attachment filtering: exclude system junk but keep real files
   const isGarbage = (att) => {
-    if (!att) return true;
-    const size = att.size || 0;
+    if (!att || !att.filename) return true;
     const name = (att.filename || '').toLowerCase();
-    
-    // Exclude files under 5KB (likely icons/metadata)
-    if (size < 5120) return true;
-    
-    // Common junk files
-    if (name.match(/\.(gif|png|jpg|jpeg|webp)$/) && size < 50000) return true; // Tiny images
+    const size = att.size || 0;
+
+    // Always keep files with attachment_id (Gmail reference — downloadable)
+    // Size 0 is normal for Gmail attachments (size unknown until fetched)
+
+    // Common junk: signature images, tracking pixels, smime
     if (name.match(/^(image|icon|logo|flag|pixel|spacer|blank)/i)) return true;
     if (name.includes('signature') || name.includes('smime')) return true;
-    
+
+    // Only filter by size if size is actually known (>0) and tiny
+    if (size > 0 && size < 5120) {
+      // Still keep PDFs, docs, spreadsheets, calendars regardless of size
+      if (name.match(/\.(pdf|doc|docx|xls|xlsx|csv|ics|zip|rar)$/)) return false;
+      return true;
+    }
+
+    // Tiny known-size images (tracking pixels etc)
+    if (size > 0 && size < 50000 && name.match(/\.(gif|png|jpg|jpeg|webp)$/)) return true;
+
     return false;
   };
-  
-  const realAttachments = attachments.filter(att => !isGarbage(att));
+
+  const realAttachments = allAttachments.filter(att => !isGarbage(att));
 
   const totalRowWidth = columns.reduce((sum, c) => sum + (c.width ?? 0), 0);
   const isShared = thread.messages[0]?.visibility === 'shared';
