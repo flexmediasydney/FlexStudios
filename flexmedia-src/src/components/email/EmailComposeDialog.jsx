@@ -292,6 +292,7 @@ export default function EmailComposeDialog({
     return [];
   });
   const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
   const [uploadProgress, setUploadProgress] = useState(null); // null | 'uploading'
   const [uploadingFiles, setUploadingFiles] = useState([]); // [{name, status: 'uploading'|'done'|'error'}]
   const fileInputRef = React.useRef(null);
@@ -558,20 +559,31 @@ export default function EmailComposeDialog({
     setAttachments((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  // ── Drag & drop handlers ──────────────────────────────────────────────────
+  // ── Drag & drop handlers (full-dialog drop zone) ─────────────────────────
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer?.types?.includes('Files')) {
+      setIsDragOver(true);
+    }
+  };
   const handleDragOver = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(true);
   };
   const handleDragLeave = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(false);
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setIsDragOver(false);
+    }
   };
   const handleDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
+    dragCounterRef.current = 0;
     setIsDragOver(false);
     if (e.dataTransfer?.files?.length) {
       addFiles(e.dataTransfer.files);
@@ -680,7 +692,26 @@ export default function EmailComposeDialog({
   return (
     <>
       <Dialog open onOpenChange={onClose}>
-        <DialogContent className="max-w-6xl h-[92vh] flex flex-col p-0 bg-white">
+        <DialogContent
+          className="max-w-6xl h-[92vh] flex flex-col p-0 bg-white relative"
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {/* Full-dialog drag & drop overlay (Gmail-style) */}
+          {isDragOver && (
+            <div className="absolute inset-0 bg-blue-50/70 backdrop-blur-[2px] border-[3px] border-dashed border-blue-400 rounded-lg flex items-center justify-center z-50 pointer-events-none transition-all duration-150">
+              <div className="flex flex-col items-center gap-3 bg-white/80 px-10 py-8 rounded-2xl shadow-lg border border-blue-200">
+                <div className="h-14 w-14 rounded-full bg-blue-100 flex items-center justify-center">
+                  <Upload className="h-7 w-7 text-blue-600" />
+                </div>
+                <span className="text-lg font-semibold text-blue-700">Drop files here</span>
+                <span className="text-sm text-blue-500">Max 10 MB per file &middot; 25 MB total</span>
+              </div>
+            </div>
+          )}
+
           {/* Header */}
           <div className="flex items-center justify-between border-b bg-gradient-to-r from-slate-50 to-white px-6 py-5 shadow-sm">
             <div className="flex items-center gap-4">
@@ -831,13 +862,8 @@ export default function EmailComposeDialog({
                   }} />
                 </div>
 
-                {/* Rich Text Editor — also acts as drag & drop zone */}
-                <div
-                  className={`space-y-2 flex-1 flex flex-col relative ${isDragOver ? 'ring-2 ring-blue-400 ring-offset-2 rounded-lg' : ''}`}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                >
+                {/* Rich Text Editor */}
+                <div className="space-y-2 flex-1 flex flex-col">
                   <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
                     Message
                   </label>
@@ -849,17 +875,6 @@ export default function EmailComposeDialog({
                     placeholder="Write your message..."
                     className="bg-white rounded border-2 border-slate-200 flex-1 [&>.ql-container]:h-full [&>.ql-toolbar]:border-b-2 [&>.ql-toolbar]:border-slate-200"
                   />
-
-                  {/* Drag overlay */}
-                  {isDragOver && (
-                    <div className="absolute inset-0 bg-blue-50/80 border-2 border-dashed border-blue-400 rounded-lg flex items-center justify-center z-20 pointer-events-none">
-                      <div className="flex flex-col items-center gap-2 text-blue-600">
-                        <Upload className="h-8 w-8" />
-                        <span className="text-sm font-semibold">Drop files to attach</span>
-                        <span className="text-xs text-blue-500">Max 10 MB per file, 25 MB total</span>
-                      </div>
-                    </div>
-                  )}
 
                   {body && /\{\{[^}]+\}\}/.test(body) && (
                     <div className="bg-amber-50 border border-amber-200 rounded p-3 flex gap-2 text-xs text-amber-800">
