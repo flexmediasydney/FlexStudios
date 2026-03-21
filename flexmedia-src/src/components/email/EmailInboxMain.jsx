@@ -662,21 +662,23 @@ export default function EmailInboxMain() {
       // # = delete
       if (e.key === '#' && selectedMessages.size > 0 && filterView !== 'deleted') {
         e.preventDefault();
-        if (confirm(`Delete ${selectedMessages.size} email(s)?`)) {
-          const accountIds = Array.from(new Set(
-            Array.from(selectedMessages).map(msgId => {
-              const thread = currentThreads.find(t => t.threadId === msgId);
-              return thread?.email_account_id;
-            }).filter(Boolean)
-          ));
+        const count = selectedMessages.size;
+        const threadIds = Array.from(selectedMessages);
+        const accountIds = Array.from(new Set(
+          threadIds.map(msgId => {
+            const thread = currentThreads.find(t => t.threadId === msgId);
+            return thread?.email_account_id;
+          }).filter(Boolean)
+        ));
+        {
           Promise.all(accountIds.map(accId =>
             api.functions.invoke('deleteEmails', {
-              threadIds: Array.from(selectedMessages),
+              threadIds,
               emailAccountId: accId,
               permanently: false
             })
           )).then(() => {
-            toast.success("Deleted");
+            toast.success(`Deleted ${count} email${count !== 1 ? 's' : ''}`);
             setSelectedMessages(new Set());
           });
         }

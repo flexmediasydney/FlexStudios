@@ -73,7 +73,7 @@ export default function EmailLinkStats({ messageBody, messageId }) {
                     <TooltipContent side="right" className="max-w-xs">
                       <div className="text-xs space-y-1">
                         <p className="font-medium">{link.count} click{link.count !== 1 ? 's' : ''}</p>
-                        <p className="text-muted-foreground">Last click: {format(new Date(), 'MMM d, h:mm a')}</p>
+                        <p className="text-muted-foreground">Last click: {format(new Date(linkClicks.filter(c => c.url === link.url).sort((a, b) => new Date(b.clicked_at || b.created_at) - new Date(a.clicked_at || a.created_at))[0]?.clicked_at || linkClicks.filter(c => c.url === link.url)[0]?.created_at || new Date()), 'MMM d, h:mm a')}</p>
                       </div>
                     </TooltipContent>
                   </Tooltip>

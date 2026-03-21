@@ -275,8 +275,8 @@ export default function BulkActionBar({
                variant="outline" 
                size="sm" 
                className="gap-1.5 h-8 text-xs"
-               disabled={selectedCount !== 1 || isProcessing}
-               title="Manage labels (select one email)"
+               disabled={selectedCount === 0 || isProcessing}
+               title="Manage labels"
              >
                <Tag className="h-3.5 w-3.5" />
                Labels
@@ -284,42 +284,41 @@ export default function BulkActionBar({
              </Button>
            </PopoverTrigger>
            <PopoverContent align="end" className="w-72 p-0" onOpenAutoFocus={(e) => e.preventDefault()}>
-            {selectedCount === 1 ? (
-              <>
-                {Array.from(selectedMessages).map(threadId => {
-                  const thread = threads.find(t => t.threadId === threadId);
-                  const account = emailAccounts.find(a => a.id === thread?.email_account_id);
-                  if (!thread || !thread.messages || thread.messages.length === 0 || !account) return null;
+            {(() => {
+              // Get first selected thread to determine account and current labels
+              const firstThreadId = Array.from(selectedMessages)[0];
+              const firstThread = threads.find(t => t.threadId === firstThreadId);
+              const account = emailAccounts.find(a => a.id === firstThread?.email_account_id);
+              if (!firstThread || !account) return <div className="p-3 text-xs text-muted-foreground">No valid emails selected</div>;
 
-                  return (
-                    <div key={threadId} className="p-3">
-                      <LabelSelectorRobust
-                        emailAccountId={account.id}
-                        selectedLabels={thread.messages[0]?.labels || []}
-                        onLabelsChange={(labels) => {
-                          Promise.all(
-                            thread.messages.map(m =>
-                              api.entities.EmailMessage.update(m.id, { labels })
-                            )
-                          ).then(() => {
-                            toast.success("Labels updated");
-                            setLabelPopoverOpen(false);
-                          }).catch(() => {
-                            toast.error("Failed to update labels");
-                          });
-                        }}
-                        isAdmin={user?.role === "master_admin"}
-                        compact={true}
-                      />
-                    </div>
-                  );
-                })}
-              </>
-            ) : (
-              <div className="p-3 text-xs text-muted-foreground">
-                Select one email to manage labels
-              </div>
-            )}
+              return (
+                <div className="p-3">
+                  {selectedCount > 1 && (
+                    <p className="text-xs text-muted-foreground mb-2 font-medium">Apply labels to {selectedCount} emails</p>
+                  )}
+                  <LabelSelectorRobust
+                    emailAccountId={account.id}
+                    selectedLabels={firstThread.messages[0]?.labels || []}
+                    onLabelsChange={(labels) => {
+                      const allMessages = Array.from(selectedMessages).flatMap(tid => {
+                        const t = threads.find(th => th.threadId === tid);
+                        return t?.messages || [];
+                      });
+                      Promise.all(
+                        allMessages.map(m => api.entities.EmailMessage.update(m.id, { labels }))
+                      ).then(() => {
+                        toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
+                        setLabelPopoverOpen(false);
+                      }).catch(() => {
+                        toast.error("Failed to update labels");
+                      });
+                    }}
+                    isAdmin={user?.role === "master_admin"}
+                    compact={true}
+                  />
+                </div>
+              );
+            })()}
           </PopoverContent>
         </Popover>
 

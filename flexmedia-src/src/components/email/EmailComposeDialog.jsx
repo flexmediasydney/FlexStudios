@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { api, supabase } from "@/api/supabaseClient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -212,6 +212,7 @@ export default function EmailComposeDialog({
   defaultProjectTitle,
   // Backward-compat: simple compose passes account object directly
   account: accountProp,
+  defaultBodyPrefix = '',
 }) {
   // Normalise aliases so callers can use either name
   const email = emailProp || originalMessage || null;
@@ -250,6 +251,21 @@ export default function EmailComposeDialog({
   // For reply / replyAll, insert quoted original message
   const initialBody = (type === "reply" || type === "replyAll") ? buildQuotedReplyHtml(email) : "";
   const [body, setBody] = useState(initialBody);
+
+  // Handle quick reply template injection
+  const prevPrefixRef = useRef(defaultBodyPrefix);
+  useEffect(() => {
+    if (defaultBodyPrefix && defaultBodyPrefix !== prevPrefixRef.current) {
+      // Prepend template body before the quoted reply
+      const quotedStart = body.indexOf('<div class="gmail_quote">') || body.indexOf('<blockquote');
+      if (quotedStart > 0) {
+        setBody(`<p>${defaultBodyPrefix}</p><br/>` + body.slice(quotedStart));
+      } else {
+        setBody(`<p>${defaultBodyPrefix}</p><br/>` + body);
+      }
+      prevPrefixRef.current = defaultBodyPrefix;
+    }
+  }, [defaultBodyPrefix]);
   const [linkedProject, setLinkedProject] = useState(defaultProjectId || projectId || "");
   const [linkedProjectTitle, setLinkedProjectTitle] = useState(defaultProjectTitle || "");
   const [isPrivate, setIsPrivate] = useState(true);

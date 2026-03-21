@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 const DEFAULT_COLUMNS = [
   { id: 'checkbox',    label: '',        width: 36,  order: 0, resizable: false, minWidth: 36,  maxWidth: 36  },
@@ -13,15 +13,43 @@ const DEFAULT_COLUMNS = [
 
 const STORAGE_KEY = 'email-inbox-columns';
 
+const loadSavedColumns = () => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return null;
+    const parsed = JSON.parse(saved);
+    // Merge saved widths/order into defaults (handles new columns added later)
+    return DEFAULT_COLUMNS.map(def => {
+      const saved = parsed.find(s => s.id === def.id);
+      if (!saved) return def;
+      return { ...def, width: saved.width || def.width, order: saved.order ?? def.order };
+    });
+  } catch {
+    return null;
+  }
+};
+
 export const useColumnManager = () => {
-  const [columns, setColumns] = useState(DEFAULT_COLUMNS);
+  const [columns, setColumns] = useState(() => loadSavedColumns() || DEFAULT_COLUMNS);
   const [isDragging, setIsDragging] = useState(null);
   const [isResizing, setIsResizing] = useState(null);
   const saveTimeoutRef = useRef(null);
 
+  // Debounced save to localStorage
+  const saveToStorage = useCallback((cols) => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      try {
+        const toSave = cols.map(({ id, width, order }) => ({ id, width, order }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+      } catch {}
+    }, 300);
+  }, []);
 
-
-
+  // Save whenever columns change
+  useEffect(() => {
+    saveToStorage(columns);
+  }, [columns, saveToStorage]);
 
   const reorderColumns = (draggedId, targetId) => {
     const draggedIdx = columns.findIndex(c => c.id === draggedId);
@@ -51,6 +79,7 @@ export const useColumnManager = () => {
 
   const resetToDefault = () => {
     setColumns(DEFAULT_COLUMNS);
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
   };
 
   const fitToScreen = (containerWidth) => {

@@ -21,10 +21,6 @@ export default function FieldInsertMenu({ onInsert }) {
       { label: "Phone", value: "{{agent_phone}}", icon: User },
       { label: "Company", value: "{{agent_company}}", icon: Building2 },
     ],
-    Team: [
-      { label: "Team Name", value: "{{team_name}}", icon: Users },
-      { label: "Team Email", value: "{{team_email}}", icon: Users },
-    ],
     Agency: [
       { label: "Agency Name", value: "{{agency_name}}", icon: Building2 },
       { label: "Agency Email", value: "{{agency_email}}", icon: Building2 },

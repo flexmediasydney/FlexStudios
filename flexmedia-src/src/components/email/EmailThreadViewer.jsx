@@ -78,6 +78,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const [showRaw, setShowRaw] = useState(false);
   const [collapseOldQuotes, setCollapseOldQuotes] = useState(true);
   const [showSnoozeDialog, setShowSnoozeDialog] = useState(false);
+  const [quickReplyBody, setQuickReplyBody] = useState('');
   const [showForward, setShowForward] = useState(false);
   const queryClient = useQueryClient();
   const latestMessageRef = useRef(null);
@@ -456,11 +457,16 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     }).catch(() => {}); // Silent — don't surface errors for background action
   }, [thread.threadId, account?.id]);
 
-  // Track email opens
+  // Track email opens (deduped: max once per 5 minutes per message)
+  const lastOpenLogRef = useRef({});
   useEffect(() => {
     if (!msg?.id || !account?.id) return;
-    
-    // Log as opened
+
+    const now = Date.now();
+    const lastLog = lastOpenLogRef.current[msg.id];
+    if (lastLog && now - lastLog < 5 * 60 * 1000) return; // Skip if logged within 5 min
+
+    lastOpenLogRef.current[msg.id] = now;
     api.functions.invoke('logEmailActivity', {
       email_message_id: msg.id,
       email_account_id: account.id,
@@ -1102,15 +1108,18 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                 </button>
               </div>
               <QuickReplyTemplates
-                onTemplateSelect={() => {}}
+                onTemplateSelect={(template) => {
+                  setQuickReplyBody(template.body || template.content || '');
+                }}
                 compact={true}
               />
               <EmailComposeReply
                 thread={thread}
                 account={account}
-                onClose={() => { setReplyExpanded(false); latestMessageRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
+                onClose={() => { setReplyExpanded(false); setQuickReplyBody(''); latestMessageRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
                 onReplyMode={() => {}}
                 emailAccounts={emailAccounts}
+                defaultBodyPrefix={quickReplyBody}
               />
             </div>
           )}

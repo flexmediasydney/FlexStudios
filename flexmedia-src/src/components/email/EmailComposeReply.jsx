@@ -13,6 +13,7 @@ export default function EmailComposeReply({
   onClose,
   onReplyMode,
   emailAccounts = [],
+  defaultBodyPrefix = '',
   ...rest
 }) {
   const latestMsg = thread?.messages?.[thread.messages.length - 1] || thread?.messages?.[0];
@@ -36,6 +37,7 @@ export default function EmailComposeReply({
       type="reply"
       onClose={onClose}
       onSent={onClose}
+      defaultBodyPrefix={defaultBodyPrefix}
       {...rest}
     />
   );
