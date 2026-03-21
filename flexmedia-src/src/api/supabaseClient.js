@@ -523,6 +523,55 @@ const usersApi = {
 /**
  * The api object — Supabase-backed client that replaces the old Base44 SDK.
  */
+// ─── File Upload (integrations.Core.UploadFile shim) ─────────────────────────
+// Replaces Base44's built-in file upload with Supabase Storage.
+// Accepts either a File object or a base64 data URL string.
+// Returns { file_url } matching the Base44 API contract.
+
+const integrationsApi = {
+  Core: {
+    UploadFile: async ({ file }) => {
+      const bucket = 'media-delivery';
+      const ts = Date.now();
+      let fileBlob, fileName, mimeType;
+
+      if (file instanceof File || file instanceof Blob) {
+        // Direct File object
+        fileBlob = file;
+        fileName = file.name || `upload_${ts}`;
+        mimeType = file.type || 'application/octet-stream';
+      } else if (typeof file === 'string' && file.startsWith('data:')) {
+        // Base64 data URL: "data:mime/type;base64,AAAA..."
+        const [header, b64Data] = file.split(',');
+        mimeType = header.match(/data:([^;]+)/)?.[1] || 'application/octet-stream';
+        const ext = mimeType.split('/')[1]?.split('+')[0] || 'bin';
+        fileName = `upload_${ts}.${ext}`;
+        const byteChars = atob(b64Data);
+        const byteArray = new Uint8Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+        fileBlob = new Blob([byteArray], { type: mimeType });
+      } else {
+        throw new Error('UploadFile: expected a File object or base64 data URL string');
+      }
+
+      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath = `uploads/${ts}_${safeName}`;
+
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .upload(filePath, fileBlob, { contentType: mimeType });
+
+      if (error) throw new Error(`Upload failed: ${error.message}`);
+
+      const { data: urlData } = supabase.storage
+        .from(bucket)
+        .getPublicUrl(data.path);
+
+      return { file_url: urlData.publicUrl };
+    },
+  },
+};
+
 export const api = {
   entities: entitiesProxy,
 
@@ -534,6 +583,7 @@ export const api = {
   functions: functionsApi,
   auth: authApi,
   users: usersApi,
+  integrations: integrationsApi,
 
   // Expose raw Supabase clients for edge cases during migration
   _supabase: supabase,
