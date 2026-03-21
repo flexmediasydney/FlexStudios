@@ -236,7 +236,7 @@ const saveMessage = async (entities: any, account: any, fullMsg: any, headers: a
       is_sent: fullMsg.labelIds?.includes('SENT') || false,
       attachments: extractAttachments(fullMsg.payload),
       received_at: new Date(parseInt(fullMsg.internalDate)).toISOString(),
-      visibility: 'private',
+      visibility: account.default_visibility || 'private',
       ...(threadProjectLink ? {
         project_id: threadProjectLink.project_id,
         project_title: threadProjectLink.project_title,

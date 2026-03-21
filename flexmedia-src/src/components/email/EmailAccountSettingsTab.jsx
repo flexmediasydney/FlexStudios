@@ -624,6 +624,56 @@ export default function EmailAccountSettingsTab() {
                       </div>
                     </label>
                   ))}
+
+                  {/* Backfill button — apply default visibility to all existing emails */}
+                  {selectedAccount.default_visibility === 'shared' && (
+                    <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-xs text-blue-800 font-medium mb-2">
+                        Apply to existing emails?
+                      </p>
+                      <p className="text-xs text-blue-600 mb-3">
+                        This will update all historical emails for this account to "shared" visibility so your team can see them in linked projects.
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-blue-300 text-blue-700 hover:bg-blue-100"
+                        onClick={async () => {
+                          const confirmed = confirm(
+                            `This will change ALL existing emails for ${selectedAccount.email_address} to "shared" visibility. This cannot be undone.\n\nContinue?`
+                          );
+                          if (!confirmed) return;
+                          try {
+                            toast.loading('Updating existing emails...', { id: 'backfill-visibility' });
+                            const emails = await api.entities.EmailMessage.filter({
+                              email_account_id: selectedAccount.id,
+                              visibility: 'private'
+                            });
+                            if (emails.length === 0) {
+                              toast.success('All emails are already shared', { id: 'backfill-visibility' });
+                              return;
+                            }
+                            // Batch update in chunks of 50
+                            const chunkSize = 50;
+                            let updated = 0;
+                            for (let i = 0; i < emails.length; i += chunkSize) {
+                              const chunk = emails.slice(i, i + chunkSize);
+                              await Promise.all(
+                                chunk.map(e => api.entities.EmailMessage.update(e.id, { visibility: 'shared' }))
+                              );
+                              updated += chunk.length;
+                              toast.loading(`Updated ${updated} of ${emails.length} emails...`, { id: 'backfill-visibility' });
+                            }
+                            toast.success(`${emails.length} emails updated to shared visibility`, { id: 'backfill-visibility' });
+                          } catch (err) {
+                            toast.error('Failed to update emails: ' + (err?.message || 'Unknown error'), { id: 'backfill-visibility' });
+                          }
+                        }}
+                      >
+                        Apply to all existing emails
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
