@@ -1397,8 +1397,23 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       <SnoozeDialog
         open={showSnoozeDialog}
         onOpenChange={setShowSnoozeDialog}
-        onSnooze={(option) => {
-          toast.success(`Email snoozed ${option.label}`);
+        onSnooze={async (option) => {
+          try {
+            const snoozeTime = option.snooze_until;
+            await Promise.all(
+              thread.messages.map(msg =>
+                api.entities.EmailMessage.update(msg.id, { snoozed_until: snoozeTime })
+              )
+            );
+            queryClient.invalidateQueries({ queryKey: ['email-messages'] });
+            const formatted = new Date(snoozeTime).toLocaleString(undefined, {
+              weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+            });
+            toast.success(`Snoozed until ${formatted}`);
+          } catch (err) {
+            console.error('Snooze failed:', err);
+            toast.error('Failed to snooze email');
+          }
         }}
       />
 

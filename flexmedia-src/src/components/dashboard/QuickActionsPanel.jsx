@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Plus, FileText, Users, Calendar, Mail, UserPlus, Send, Zap } from "lucide-react";
 
-export default function QuickActionsPanel({ urgentCount, onNewProject, onNewContact, onComposeEmail, onViewCalendar, onViewInbox }) {
+export default function QuickActionsPanel({ urgentCount, onNewProject, onNewContact, onComposeEmail, onViewCalendar, onViewInbox, onViewReports }) {
   const actions = [
     {
       icon: Plus,
@@ -45,7 +45,7 @@ export default function QuickActionsPanel({ urgentCount, onNewProject, onNewCont
       icon: FileText,
       label: "Reports",
       description: "View analytics",
-      onClick: () => {},
+      onClick: onViewReports,
       variant: "outline"
     }
   ];

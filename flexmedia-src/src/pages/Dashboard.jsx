@@ -638,6 +638,7 @@ export default function Dashboard() {
               onComposeEmail={() => navigate(createPageUrl("Inbox") + "?compose=true")}
               onViewCalendar={() => navigate(createPageUrl("Calendar"))}
               onViewInbox={() => navigate(createPageUrl("Inbox"))}
+              onViewReports={() => navigate(createPageUrl("Analytics"))}
             />
             
             {/* Recent Activity Compact */}

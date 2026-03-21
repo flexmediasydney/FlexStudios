@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -47,6 +47,19 @@ export default function People() {
   const [view, setView] = useState('table');
   const [showForm, setShowForm] = useState(false);
   const [editingAgent, setEditingAgent] = useState(null);
+
+  // Open new contact form when ?new=true is in URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('new') === 'true') {
+      setShowForm(true);
+      params.delete('new');
+      const newUrl = params.toString()
+        ? `${window.location.pathname}?${params.toString()}`
+        : window.location.pathname;
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, []);
 
   const { data: agents = [], loading } = useEntityList('Agent', 'name');
   const { data: projects = [] } = useEntityList('Project', null, 5000);

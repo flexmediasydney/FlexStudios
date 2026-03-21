@@ -118,6 +118,20 @@ export default function EmailInboxMain() {
     return () => clearInterval(timer);
   }, [filterView]);
 
+  // Open compose dialog when ?compose=true is in URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('compose') === 'true') {
+      setShowCompose(true);
+      // Clean up the URL param so refreshing doesn't re-open
+      params.delete('compose');
+      const newUrl = params.toString()
+        ? `${window.location.pathname}?${params.toString()}`
+        : window.location.pathname;
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, []);
+
   // Debounce search query
   useEffect(() => {
     const timer = setTimeout(() => {
