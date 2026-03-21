@@ -116,19 +116,20 @@ const refreshAccessToken = async (clientId: string, clientSecret: string, refres
 };
 
 // --- Fetch and save a single Gmail message (shared by full sync and history sync) ---
+// Returns: 'saved' if new message saved, 'skipped' if already exists, 'failed' if fetch/save error
 async function fetchAndSaveMessage(
   accessToken: string,
   gmailMessageId: string,
   account: any,
   entities: any,
   admin: any,
-): Promise<boolean> {
+): Promise<'saved' | 'skipped' | 'failed'> {
   // Check if already exists
   const existing = await entities.EmailMessage.filter({
     gmail_message_id: gmailMessageId,
     email_account_id: account.id
   }, null, 1);
-  if (existing.length > 0) return false;
+  if (existing.length > 0) return 'skipped';
 
   // Inherit project link from sibling messages in same thread
   // We need the threadId first, so fetch the message
@@ -137,7 +138,7 @@ async function fetchAndSaveMessage(
     { headers: { 'Authorization': `Bearer ${accessToken}` } }
   );
 
-  if (!msgResponse || !msgResponse.ok) return false;
+  if (!msgResponse || !msgResponse.ok) return 'failed';
 
   const fullMsg = await msgResponse.json();
   const headers = parseHeaders(fullMsg.payload.headers || []);
@@ -236,7 +237,35 @@ async function fetchAndSaveMessage(
     } catch { /* non-fatal */ }
   }
 
-  return true;
+  return 'saved';
+}
+
+// --- Retry pass for failed messages (one extra attempt each) ---
+async function retryFailedMessages(
+  failedIds: string[],
+  accessToken: string,
+  account: any,
+  entities: any,
+  admin: any,
+): Promise<{ retried: number; stillFailed: number }> {
+  let retried = 0;
+  let stillFailed = 0;
+  console.log(`Retrying ${failedIds.length} failed messages for ${account.email_address}`);
+  for (const msgId of failedIds) {
+    try {
+      const result = await fetchAndSaveMessage(accessToken, msgId, account, entities, admin);
+      if (result === 'saved') retried++;
+      else if (result === 'failed') stillFailed++;
+      await sleep(GMAIL_RATE_LIMIT_DELAY);
+    } catch (error: any) {
+      console.error(`Retry still failed for message ${msgId}:`, error?.message);
+      stillFailed++;
+    }
+  }
+  if (stillFailed > 0) {
+    console.warn(`${stillFailed} messages still failed after retry for ${account.email_address}`);
+  }
+  return { retried, stillFailed };
 }
 
 // --- Full sync: list messages via query, fetch new ones ---
@@ -245,27 +274,38 @@ async function fullSync(
   account: any,
   entities: any,
   admin: any,
+  options?: { historyExpiredFallback?: boolean },
 ): Promise<{ synced: number; latestHistoryId: string | null }> {
   let synced = 0;
   let latestHistoryId: string | null = null;
 
   // Build query based on last sync
+  // When falling back from expired history, use a wider 60-day window to catch missed messages
+  const isHistoryFallback = options?.historyExpiredFallback === true;
   let query = '';
   if (account.last_sync) {
     const lastSyncDate = new Date(account.last_sync);
-    const syncFromDate = new Date(lastSyncDate.getTime() - 30 * 60 * 1000);
+    // Normal: 30 min lookback. History fallback: 60 days lookback to catch missed messages
+    const lookbackMs = isHistoryFallback
+      ? 60 * 24 * 60 * 60 * 1000
+      : 30 * 60 * 1000;
+    const syncFromDate = new Date(lastSyncDate.getTime() - lookbackMs);
     const timestamp = Math.floor(syncFromDate.getTime() / 1000);
     query = `after:${timestamp}`;
+    if (isHistoryFallback) {
+      console.log(`History expired fallback: using 60-day window from ${syncFromDate.toISOString()} for ${account.email_address}`);
+    }
   } else if (account.sync_start_date) {
     const date = new Date(account.sync_start_date);
     const timestamp = Math.floor(date.getTime() / 1000);
     query = `after:${timestamp}`;
   } else {
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    query = `after:${Math.floor(thirtyDaysAgo.getTime() / 1000)}`;
+    const defaultDays = isHistoryFallback ? 60 : 30;
+    const lookbackDate = new Date(Date.now() - defaultDays * 24 * 60 * 60 * 1000);
+    query = `after:${Math.floor(lookbackDate.getTime() / 1000)}`;
   }
 
-  const MAX_MESSAGES_PER_SYNC = 500;
+  const MAX_MESSAGES_PER_SYNC = 2000;
   let messageIds: any[] = [];
   let pageToken: string | null = null;
 
@@ -320,19 +360,28 @@ async function fullSync(
     }
   }
 
-  // Process in batches
+  // Process in batches, collecting failed message IDs for retry
+  const failedIds: string[] = [];
   for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
     const batch = messageIds.slice(i, i + BATCH_SIZE);
 
     for (const msg of batch) {
       try {
-        const saved = await fetchAndSaveMessage(accessToken, msg.id, account, entities, admin);
-        if (saved) synced++;
+        const result = await fetchAndSaveMessage(accessToken, msg.id, account, entities, admin);
+        if (result === 'saved') synced++;
+        else if (result === 'failed') failedIds.push(msg.id);
         await sleep(GMAIL_RATE_LIMIT_DELAY);
       } catch (error: any) {
         console.error(`Error processing message ${msg.id}:`, error);
+        failedIds.push(msg.id);
       }
     }
+  }
+
+  // Retry pass for transiently failed messages
+  if (failedIds.length > 0) {
+    const retryResult = await retryFailedMessages(failedIds, accessToken, account, entities, admin);
+    synced += retryResult.retried;
   }
 
   return { synced, latestHistoryId };
@@ -423,17 +472,20 @@ async function syncViaHistory(
     addedMessageIds.delete(id);
   }
 
-  // Process new messages (messagesAdded)
+  // Process new messages (messagesAdded), collecting failures for retry
+  const failedIds: string[] = [];
   const addedList = [...addedMessageIds];
   for (let i = 0; i < addedList.length; i += BATCH_SIZE) {
     const batch = addedList.slice(i, i + BATCH_SIZE);
     for (const msgId of batch) {
       try {
-        const saved = await fetchAndSaveMessage(accessToken, msgId, account, entities, admin);
-        if (saved) synced++;
+        const result = await fetchAndSaveMessage(accessToken, msgId, account, entities, admin);
+        if (result === 'saved') synced++;
+        else if (result === 'failed') failedIds.push(msgId);
         await sleep(GMAIL_RATE_LIMIT_DELAY);
       } catch (error: any) {
         console.error(`Error processing added message ${msgId}:`, error);
+        failedIds.push(msgId);
       }
     }
   }
@@ -517,11 +569,13 @@ async function syncViaHistory(
       if (record.messagesAdded) {
         for (const added of record.messagesAdded) {
           try {
-            const saved = await fetchAndSaveMessage(accessToken, added.message.id, account, entities, admin);
-            if (saved) synced++;
+            const result = await fetchAndSaveMessage(accessToken, added.message.id, account, entities, admin);
+            if (result === 'saved') synced++;
+            else if (result === 'failed') failedIds.push(added.message.id);
             await sleep(GMAIL_RATE_LIMIT_DELAY);
           } catch (error: any) {
             console.error(`Error processing added message ${added.message.id}:`, error);
+            failedIds.push(added.message.id);
           }
         }
       }
@@ -575,6 +629,12 @@ async function syncViaHistory(
     }
 
     nextPageToken = pageData.nextPageToken;
+  }
+
+  // Retry pass for transiently failed messages
+  if (failedIds.length > 0) {
+    const retryResult = await retryFailedMessages(failedIds, accessToken, account, entities, admin);
+    synced += retryResult.retried;
   }
 
   return { synced, latestHistoryId, fallbackToFull: false };
@@ -743,10 +803,10 @@ Deno.serve(async (req) => {
 
         if (historyResult.fallbackToFull) {
           // History expired — clear stale history_id FIRST to prevent infinite 404 loop
-          console.log(`Falling back to full sync for ${account.email_address}`);
+          console.log(`Falling back to full sync for ${account.email_address} (history ID expired, using 60-day window)`);
           syncMode = 'full_fallback';
           await entities.EmailAccount.update(account.id, { history_id: null });
-          const fullResult = await fullSync(accessToken, account, entities, admin);
+          const fullResult = await fullSync(accessToken, account, entities, admin, { historyExpiredFallback: true });
           synced = fullResult.synced;
           latestHistoryId = fullResult.latestHistoryId;
         } else {
@@ -765,14 +825,19 @@ Deno.serve(async (req) => {
       await upsertConversations(admin, account.id);
 
       // Update account metadata with rich sync metrics (Email-04)
+      const now = new Date().toISOString();
+      const isFullSync = syncMode === 'full' || syncMode === 'full_fallback';
       await entities.EmailAccount.update(account.id, {
-        last_sync: new Date().toISOString(),
-        last_sync_at: new Date().toISOString(),
+        last_sync: now,
+        last_sync_at: now,
         last_sync_message_count: synced,
+        last_sync_mode: syncMode,
         total_synced_count: (account.total_synced_count || 0) + synced,
         sync_error_count: 0,
         last_sync_error: null,
         sync_health: 'ok',
+        // Track full syncs separately for debugging sync gaps
+        ...(isFullSync ? { last_full_sync_at: now } : {}),
         // Store the latest historyId for next incremental sync
         ...(latestHistoryId ? { history_id: latestHistoryId } : {}),
       });

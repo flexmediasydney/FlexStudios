@@ -671,7 +671,7 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
   if (!existing) {
     const autoStatus = sharedData.shoot_date ? 'scheduled' : 'to_be_scheduled';
 
-    project = await entities.Project.create({
+    const createPayload = {
       ...sharedData,
       status: canAutoApprove ? autoStatus : 'pending_review',
       pending_review_type: canAutoApprove ? null : 'new_booking',
@@ -682,8 +682,35 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
       auto_approved: canAutoApprove ? true : false,
       tonomo_deliverable_link: sharedData.tonomo_deliverable_link || null,
       tonomo_deliverable_path: sharedData.tonomo_deliverable_path || null,
-    });
-    operation = 'created';
+    };
+
+    try {
+      project = await entities.Project.create(createPayload);
+      operation = 'created';
+    } catch (createErr: any) {
+      // Unique constraint violation (23505) on tonomo_order_id — another request created it first.
+      // Re-fetch the existing project and fall through to an update instead.
+      const isDuplicate = createErr?.code === '23505' ||
+        createErr?.message?.includes('duplicate key') ||
+        createErr?.message?.includes('unique constraint') ||
+        createErr?.message?.includes('uq_projects_tonomo_order_id');
+      if (!isDuplicate) throw createErr;
+
+      console.log(`[idempotency] Duplicate tonomo_order_id=${orderId} — falling back to update`);
+      const reFetched = await findProjectByOrderId(entities, orderId);
+      if (!reFetched) throw new Error(`Unique constraint hit for ${orderId} but re-fetch returned null`);
+
+      const overriddenFields = JSON.parse(reFetched.manually_overridden_fields || '[]');
+      const safeData = filterOverriddenFields(sharedData, overriddenFields);
+      if (reFetched.status !== 'pending_review') {
+        delete safeData.status;
+        delete safeData.pending_review_reason;
+        delete safeData.pending_review_type;
+      }
+      await entities.Project.update(reFetched.id, safeData);
+      project = { ...reFetched, ...safeData };
+      operation = 'updated_after_race';
+    }
 
   } else if (lifecycleReversalDetected) {
     const reviewType = determineReviewType(existing.status, existing.tonomo_lifecycle_stage, isAdditionalAppointment, originAction);
