@@ -3,6 +3,10 @@ import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Plus, Tag, X, Edit2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -185,14 +189,32 @@ export default function LabelSelectorRobust({
                     >
                       <Edit2 className="h-3 w-3" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-destructive hover:text-destructive"
-                      onClick={() => deleteLabelMutation.mutate(label.id)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogTitle>Delete "{label.name}"?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This label will be removed from all emails.
+                        </AlertDialogDescription>
+                        <div className="flex justify-end gap-3 mt-4">
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-destructive hover:bg-destructive/90"
+                            onClick={() => deleteLabelMutation.mutate(label.id)}
+                          >
+                            Delete
+                          </AlertDialogAction>
+                        </div>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </div>
                 )}
               </div>

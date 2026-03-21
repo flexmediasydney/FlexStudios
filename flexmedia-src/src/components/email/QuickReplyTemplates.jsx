@@ -12,6 +12,10 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { MessageSquare, Plus, Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -212,15 +216,31 @@ export default function QuickReplyTemplates({ onTemplateSelect, compact = false 
                       {t.body}
                     </p>
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteTemplate(t.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <Trash2 className="h-3 w-3 text-destructive" />
-                  </button>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button
+                        onClick={(e) => e.stopPropagation()}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Trash2 className="h-3 w-3 text-destructive" />
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogTitle>Delete "{t.name}"?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This quick reply template will be permanently removed.
+                      </AlertDialogDescription>
+                      <div className="flex justify-end gap-3 mt-4">
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive hover:bg-destructive/90"
+                          onClick={() => deleteTemplate(t.id)}
+                        >
+                          Delete
+                        </AlertDialogAction>
+                      </div>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
               </div>
             ))

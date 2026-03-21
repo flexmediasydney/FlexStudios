@@ -36,6 +36,10 @@ import {
   File as FileGenericIcon,
   Upload,
 } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import FieldInsertMenu from "./FieldInsertMenu";
 import TemplateSelector from "./TemplateSelector";
@@ -909,20 +913,89 @@ export default function EmailComposeDialog({
                   )}
                 </div>
 
-                <Button
-                  onClick={() => {
-                    if (sendMutation.isPending || isLoading || uploadProgress === 'uploading') return;
-                    sendMutation.mutate();
-                  }}
-                  disabled={isLoading || sendMutation.isPending || uploadProgress === 'uploading' || !recipients.trim() || !subject.trim()}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md hover:shadow-lg active:scale-95 transition-all"
-                  size="lg"
-                >
-                  {(sendMutation.isPending || isLoading) && (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  )}
-                  {sendMutation.isPending ? "Sending…" : (type === "forward" ? "Forward" : "Send")}
-                </Button>
+                <div className="flex items-center">
+                  <Button
+                    onClick={() => {
+                      if (sendMutation.isPending || isLoading || uploadProgress === 'uploading') return;
+                      sendMutation.mutate();
+                    }}
+                    disabled={isLoading || sendMutation.isPending || uploadProgress === 'uploading' || !recipients.trim() || !subject.trim()}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md hover:shadow-lg active:scale-95 transition-all rounded-r-none"
+                    size="lg"
+                  >
+                    {(sendMutation.isPending || isLoading) && (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    )}
+                    {sendMutation.isPending ? "Sending…" : (type === "forward" ? "Forward" : "Send")}
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="default"
+                        size="lg"
+                        className="bg-blue-600 hover:bg-blue-700 text-white rounded-l-none border-l border-blue-500 px-2"
+                        disabled={isLoading || sendMutation.isPending || !recipients.trim() || !subject.trim()}
+                      >
+                        <Clock className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                      <div className="px-3 py-1.5">
+                        <p className="text-xs font-semibold text-muted-foreground">Schedule Send</p>
+                      </div>
+                      <DropdownMenuSeparator />
+                      {[
+                        { label: 'In 1 hour', hours: 1 },
+                        { label: 'In 2 hours', hours: 2 },
+                        { label: 'Tomorrow morning (9 AM)', hours: null, preset: 'tomorrow_morning' },
+                        { label: 'Tomorrow afternoon (2 PM)', hours: null, preset: 'tomorrow_afternoon' },
+                        { label: 'Next Monday (9 AM)', hours: null, preset: 'next_monday' },
+                      ].map(opt => (
+                        <DropdownMenuItem key={opt.label} onClick={async () => {
+                          let sendAt;
+                          const now = new Date();
+                          if (opt.hours) {
+                            sendAt = new Date(now.getTime() + opt.hours * 60 * 60 * 1000);
+                          } else if (opt.preset === 'tomorrow_morning') {
+                            sendAt = new Date(now); sendAt.setDate(sendAt.getDate() + 1);
+                            sendAt.setHours(9, 0, 0, 0);
+                          } else if (opt.preset === 'tomorrow_afternoon') {
+                            sendAt = new Date(now); sendAt.setDate(sendAt.getDate() + 1);
+                            sendAt.setHours(14, 0, 0, 0);
+                          } else if (opt.preset === 'next_monday') {
+                            sendAt = new Date(now);
+                            const daysUntilMonday = (8 - sendAt.getDay()) % 7 || 7;
+                            sendAt.setDate(sendAt.getDate() + daysUntilMonday);
+                            sendAt.setHours(9, 0, 0, 0);
+                          }
+                          try {
+                            await api.entities.ScheduledEmail.create({
+                              email_account_id: selectedAccount,
+                              to: recipients,
+                              cc: cc?.trim() || null,
+                              bcc: bcc?.trim() || null,
+                              subject,
+                              body,
+                              attachments: attachments.length > 0 ? attachments : null,
+                              send_at: sendAt.toISOString(),
+                              status: 'pending',
+                              in_reply_to: (type === "reply" || type === "replyAll") ? email?.gmail_message_id : null,
+                              thread_id: (type === "reply" || type === "replyAll") ? email?.gmail_thread_id : null,
+                              created_by: user?.id,
+                            });
+                            toast.success(`Scheduled for ${sendAt.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`);
+                            onClose?.();
+                          } catch (err) {
+                            toast.error('Failed to schedule: ' + (err?.message || 'Unknown error'));
+                          }
+                        }}>
+                          <Clock className="h-4 w-4 mr-2" />
+                          {opt.label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </div>
             </div>
 

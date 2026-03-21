@@ -25,6 +25,15 @@ Deno.serve(async (req) => {
       return errorResponse('Invalid visibility value', 400);
     }
 
+    // Verify account ownership
+    const accountCheck = await entities.EmailAccount.filter({
+      id: emailAccountId,
+      assigned_to_user_id: user.id
+    });
+    if (accountCheck.length === 0) {
+      return errorResponse('Forbidden: you do not own this email account', 403);
+    }
+
     const messages = await entities.EmailMessage.filter({
       email_account_id: emailAccountId,
       gmail_thread_id: { $in: threadIds },

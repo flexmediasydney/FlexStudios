@@ -9,6 +9,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  HoverCard, HoverCardContent, HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { ChevronDown, Plus, Settings, FileText, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EditTemplateModal from "./EditTemplateModal";
@@ -52,21 +55,22 @@ export default function TemplateSelector({ onSelectTemplate, onSaveAsTemplate })
             {filteredTemplates.length > 0 ? (
               <div className="max-h-64 overflow-y-auto space-y-1">
                 {filteredTemplates.map((template) => (
-                  <button
-                    key={template.id}
-                    onClick={() => {
-                      onSelectTemplate(template);
-                      setOpen(false);
-                      setSearch("");
-                    }}
-                    className="w-full flex items-center justify-between p-2 rounded hover:bg-muted text-left group"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{template.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {template.subject}
-                      </p>
-                    </div>
+                  <HoverCard key={template.id} openDelay={300} closeDelay={100}>
+                    <HoverCardTrigger asChild>
+                      <button
+                        onClick={() => {
+                          onSelectTemplate(template);
+                          setOpen(false);
+                          setSearch("");
+                        }}
+                        className="w-full flex items-center justify-between p-2 rounded hover:bg-muted text-left group"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{template.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {template.subject}
+                          </p>
+                        </div>
                     <div className="flex items-center gap-1 flex-shrink-0 ml-2">
                       {!template.is_shared && (
                         <Lock className="h-3 w-3 text-muted-foreground" />
@@ -84,6 +88,15 @@ export default function TemplateSelector({ onSelectTemplate, onSaveAsTemplate })
                       </button>
                     </div>
                   </button>
+                    </HoverCardTrigger>
+                    <HoverCardContent side="right" className="w-72 p-3">
+                      <p className="text-xs font-semibold mb-1">{template.name}</p>
+                      {template.subject && <p className="text-xs text-muted-foreground mb-2">Subject: {template.subject}</p>}
+                      <div className="text-xs text-muted-foreground line-clamp-6 prose prose-xs"
+                        dangerouslySetInnerHTML={{ __html: (template.body || '').replace(/<[^>]*>/g, ' ').slice(0, 300) }}
+                      />
+                    </HoverCardContent>
+                  </HoverCard>
                 ))}
               </div>
             ) : (

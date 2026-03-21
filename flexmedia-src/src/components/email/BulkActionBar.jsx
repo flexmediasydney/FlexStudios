@@ -23,6 +23,7 @@ import {
   ChevronDown,
   Tag,
   X,
+  Loader2,
 } from "lucide-react";
 import { api } from "@/api/supabaseClient";
 import { toast } from "sonner";
@@ -157,10 +158,17 @@ export default function BulkActionBar({
   return (
     <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 p-3 rounded-lg shadow-sm animate-in slide-in-from-top-1 duration-200">
       <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1.5 bg-blue-100 px-2.5 py-1 rounded-full">
-          <span className="text-xs font-bold text-blue-800">{selectedCount}</span>
-          <span className="text-xs text-blue-600">selected</span>
-        </div>
+        {isProcessing ? (
+          <div className="flex items-center gap-1.5 bg-amber-100 px-2.5 py-1 rounded-full animate-pulse">
+            <Loader2 className="h-3 w-3 animate-spin text-amber-700" />
+            <span className="text-xs font-medium text-amber-700">Processing...</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 bg-blue-100 px-2.5 py-1 rounded-full">
+            <span className="text-xs font-bold text-blue-800">{selectedCount}</span>
+            <span className="text-xs text-blue-600">selected</span>
+          </div>
+        )}
         <Button
           variant="ghost"
           size="sm"

@@ -10,15 +10,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-export default function EmailLinkStats({ messageBody }) {
-  const { data: linkClicks = [], isLoading } = useQuery({
-    queryKey: ['email-link-stats', messageBody],
-    queryFn: async () => {
-      // This would normally come from EmailMessage
-      // For now return empty - would need message ID
-      return [];
-    },
-    enabled: false // Disabled until integrated properly
+export default function EmailLinkStats({ messageBody, messageId }) {
+  const { data: linkClicks = [] } = useQuery({
+    queryKey: ['email-link-clicks', messageId],
+    queryFn: () => api.entities.EmailLinkClick.filter({ email_message_id: messageId }),
+    enabled: !!messageId,
   });
 
   // Parse links from email body (simple implementation)
@@ -37,7 +33,8 @@ export default function EmailLinkStats({ messageBody }) {
       if (existing) {
         existing.count++;
       } else {
-        links.push({ url, text, count: 0 });
+        const clickCount = linkClicks.filter(c => c.url === url).length;
+        links.push({ url, text, count: clickCount });
       }
     }
     

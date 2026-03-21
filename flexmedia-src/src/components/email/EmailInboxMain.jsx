@@ -43,6 +43,9 @@ import { useEntitySubscriptionWithFilter } from "@/components/hooks/useEntitySub
 
 import ProjectLinkDialogForInbox from "./ProjectLinkDialogForInbox";
 import LabelSelectorRobust from "./LabelSelectorRobust";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import EmailListContainer from "./EmailListContainer";
 import EmailListControls from "./EmailListControls";
 import { useColumnManager } from "./useColumnManager";
@@ -76,6 +79,7 @@ export default function EmailInboxMain() {
   const [sortBy, setSortBy] = useState('newest');
   const [showAttachmentsOnly, setShowAttachmentsOnly] = useState(false);
   const [showReply, setShowReply] = useState(false);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const MAX_UNDO_STACK = 20;
   const SEARCH_DEBOUNCE_MS = 300;
   const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -465,7 +469,9 @@ export default function EmailInboxMain() {
       const subjectMatch = rawQuery.match(/subject:(\S+)/);
       const hasAttachment = rawQuery.includes('has:attachment');
       const labelMatch = rawQuery.match(/label:(\S+)/);
-      
+      const isUnread = rawQuery.includes('is:unread');
+      const isStarred = rawQuery.includes('is:starred');
+
       // Remove operators from query for general search
       const cleanQuery = rawQuery
         .replace(/from:\S+/g, '')
@@ -473,6 +479,8 @@ export default function EmailInboxMain() {
         .replace(/subject:\S+/g, '')
         .replace(/has:attachment/g, '')
         .replace(/label:\S+/g, '')
+        .replace(/is:unread/g, '')
+        .replace(/is:starred/g, '')
         .trim();
       
       result = result.filter(t => {
@@ -504,6 +512,8 @@ export default function EmailInboxMain() {
             const hasLabel = t.messages.some(m => m.labels?.some(l => l.toLowerCase().includes(labelTerm)));
             if (!hasLabel) return false;
           }
+          if (isUnread && t.unreadCount === 0) return false;
+          if (isStarred && !t.is_starred) return false;
 
           // General text search across ALL messages in thread (if cleanQuery exists)
           // Use plain .includes() for literal matching — no regex escaping needed.
@@ -574,8 +584,10 @@ export default function EmailInboxMain() {
   // Keyboard shortcuts (must be after filteredThreads is defined)
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Ignore if user is typing in an input
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      // Ignore if user is typing in an input or contenteditable (ReactQuill)
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      // Ignore if a dialog/modal is open (compose, etc.)
+      if (showCompose) return;
 
       // Capture references to avoid stale closures
       const currentFilteredThreads = filteredThreads;
@@ -696,6 +708,32 @@ export default function EmailInboxMain() {
            // Select the first one if nothing selected
            setSelectedMessages(new Set([currentFilteredThreads[0].threadId]));
          }
+       }
+
+       // u = mark as unread
+       if (e.key === 'u' && selectedMessages.size > 0) {
+         e.preventDefault();
+         const accountIds = Array.from(new Set(
+           Array.from(selectedMessages).map(msgId => {
+             const thread = currentThreads.find(t => t.threadId === msgId);
+             return thread?.email_account_id;
+           }).filter(Boolean)
+         ));
+         Promise.all(accountIds.map(accId =>
+           api.functions.invoke('markEmailsAsUnread', {
+             threadIds: Array.from(selectedMessages),
+             emailAccountId: accId
+           })
+         )).then(() => {
+           toast.success("Marked as unread");
+           setSelectedMessages(new Set());
+         });
+       }
+
+       // ? = show keyboard shortcuts help
+       if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
+         e.preventDefault();
+         setShowKeyboardHelp(true);
        }
 
        // Escape = close thread viewer or clear search
@@ -1007,7 +1045,7 @@ export default function EmailInboxMain() {
                 <div className="flex-1 relative max-w-lg" ref={searchContainerRef}>
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
                   <Input
-                      placeholder="Search emails... (/ to focus)"
+                      placeholder="Search... from: to: has:attachment is:unread (/ to focus, ? for help)"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       onFocus={() => setSearchFocused(true)}
@@ -1293,6 +1331,36 @@ export default function EmailInboxMain() {
            account={emailAccounts.find(a => a.id === linkProjectThread.email_account_id)}
          />
        )}
+
+       {/* Keyboard Shortcuts Help */}
+       <Dialog open={showKeyboardHelp} onOpenChange={setShowKeyboardHelp}>
+         <DialogContent className="max-w-md">
+           <DialogHeader>
+             <DialogTitle>Keyboard Shortcuts</DialogTitle>
+           </DialogHeader>
+           <div className="grid grid-cols-2 gap-y-2 gap-x-6 text-sm">
+             {[
+               ['c', 'Compose new email'],
+               ['r', 'Reply to thread'],
+               ['/', 'Focus search bar'],
+               ['j', 'Next email'],
+               ['k', 'Previous email'],
+               ['Enter', 'Open selected email'],
+               ['x', 'Select email'],
+               ['a / e', 'Archive selected'],
+               ['u', 'Mark as unread'],
+               ['#', 'Delete selected'],
+               ['Esc', 'Close / deselect'],
+               ['?', 'Show this help'],
+             ].map(([key, desc]) => (
+               <div key={key} className="contents">
+                 <kbd className="px-2 py-0.5 bg-muted border rounded text-xs font-mono text-center w-fit">{key}</kbd>
+                 <span className="text-muted-foreground">{desc}</span>
+               </div>
+             ))}
+           </div>
+         </DialogContent>
+       </Dialog>
       </div>
       );
       }

@@ -16,6 +16,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import ReactQuill from "react-quill";
@@ -178,20 +182,34 @@ export default function EditTemplateModal({ template, onClose }) {
           {/* Action Buttons */}
           <div className="flex items-center justify-between pt-4 border-t">
             {template && (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => {
-                  if (confirm("Delete this template?")) {
-                    deleteMutation.mutate();
-                  }
-                }}
-                disabled={deleteMutation.isPending}
-                className="gap-2"
-              >
-                <Trash2 className="h-3 w-3" />
-                Delete
-              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={deleteMutation.isPending}
+                    className="gap-2"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogTitle>Delete "{template.name}"?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This template will be permanently removed and cannot be recovered.
+                  </AlertDialogDescription>
+                  <div className="flex justify-end gap-3 mt-4">
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive hover:bg-destructive/90"
+                      onClick={() => deleteMutation.mutate()}
+                    >
+                      Delete
+                    </AlertDialogAction>
+                  </div>
+                </AlertDialogContent>
+              </AlertDialog>
             )}
             <div className="flex gap-2 ml-auto">
               <Button variant="outline" onClick={onClose}>

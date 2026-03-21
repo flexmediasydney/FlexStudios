@@ -72,7 +72,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [replyExpanded, setReplyExpanded] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState(new Set([thread.messages[thread.messages.length - 1]?.id]));
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('email-sidebar-collapsed') === 'true'; } catch { return false; }
+  });
   const [showRaw, setShowRaw] = useState(false);
   const [collapseOldQuotes, setCollapseOldQuotes] = useState(true);
   const [showSnoozeDialog, setShowSnoozeDialog] = useState(false);
