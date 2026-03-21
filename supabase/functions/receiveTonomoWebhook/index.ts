@@ -31,7 +31,9 @@ Deno.serve(async (req) => {
     req.headers.forEach((value, key) => { headers[key] = value; });
 
     const action = detectAction(payload);
-    const orderId = payload.orderId || payload.order?.orderId || payload.id || null;
+    // CRITICAL: Never fall back to payload.id — that's the appointment/event ID, not the order ID.
+    // Using it would cause every appointment-level event (time change, people change) to create a duplicate project.
+    const orderId = payload.orderId || payload.order?.orderId || null;
     const signals = extractSignals(payload);
     const summary = buildSummary(payload, action);
 

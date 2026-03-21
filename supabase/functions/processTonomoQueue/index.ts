@@ -525,6 +525,18 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
 
   const existing = await findProjectByOrderId(entities, orderId);
 
+  // GUARD: If orderId matches the event/appointment ID (p.id), it's not a real order ID.
+  // This is a defensive check — the receiver should never pass p.id as orderId anymore,
+  // but if it does (e.g. from old queue items), refuse to create a new project.
+  if (!existing && eventId && orderId === eventId) {
+    await writeAudit(entities, {
+      action: originAction, entity_type: 'Project', entity_id: null,
+      operation: 'skipped', tonomo_order_id: orderId,
+      notes: `orderId "${orderId}" matches the appointment event ID — refusing to create project. This is an appointment-level event, not a new booking.`,
+    });
+    return { summary: `Skipped — orderId ${orderId} is an event ID, not an order ID`, skipped: true };
+  }
+
   const { isNew: isAdditionalAppointment, updatedIds: allAppointmentIds } = trackAppointment(
     existing?.tonomo_appointment_ids,
     eventId
@@ -1355,6 +1367,17 @@ async function handleOrderUpdate(entities: any, orderId: string, p: any) {
   const project = await findProjectByOrderId(entities, orderId);
 
   if (!project) {
+    // GUARD: If orderId matches the event/appointment ID, refuse to create
+    const eventId = p.id;
+    if (eventId && orderId === eventId) {
+      await writeAudit(entities, {
+        action: 'booking_created_or_changed', entity_type: 'Project', entity_id: null,
+        operation: 'skipped', tonomo_order_id: orderId,
+        notes: `orderId "${orderId}" matches event ID — refusing to create from handleOrderUpdate`,
+      });
+      return { summary: `Skipped — orderId ${orderId} is an event ID`, skipped: true };
+    }
+
     // STRICT: Only create a project from booking_created_or_changed if the payload has
     // sufficient data indicating this is a genuine new booking — not just a metadata update.
     const orderName = p.order?.orderName || p.orderName || null;
@@ -1749,7 +1772,9 @@ async function findProjectByOrderId(entities: any, orderId: string) {
 }
 
 function extractOrderIdFromPayload(p: any) {
-  return p.orderId || p.order?.orderId || p.id || '';
+  // CRITICAL: Never fall back to p.id — that's the appointment/event ID, not the order ID.
+  // Using it causes duplicate projects for appointment-level events (time change, people change).
+  return p.orderId || p.order?.orderId || '';
 }
 
 function extractQtyFromTierName(tierName: string) {
