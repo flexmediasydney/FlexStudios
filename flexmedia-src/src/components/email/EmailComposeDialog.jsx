@@ -292,7 +292,8 @@ export default function EmailComposeDialog({
     return [];
   });
   const [isDragOver, setIsDragOver] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(null); // null | 'uploading' | 'done'
+  const [uploadProgress, setUploadProgress] = useState(null); // null | 'uploading'
+  const [uploadingFiles, setUploadingFiles] = useState([]); // [{name, status: 'uploading'|'done'|'error'}]
   const fileInputRef = React.useRef(null);
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [templateName, setTemplateName] = useState("");
@@ -487,13 +488,18 @@ export default function EmailComposeDialog({
     }
 
     setUploadProgress('uploading');
-    const uploaded = [];
+    // Show per-file upload status
+    const fileStatuses = fileList.map(f => ({ name: f.name, status: 'uploading' }));
+    setUploadingFiles(fileStatuses);
 
-    try {
-      const userId = user?.id || 'anonymous';
-      const ts = Date.now();
+    const userId = user?.id || 'anonymous';
+    const ts = Date.now();
+    let successCount = 0;
 
-      for (const file of fileList) {
+    // Upload each file independently — don't lose successful ones if a later file fails
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      try {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
         const filePath = `${userId}/${ts}_${safeName}`;
 
@@ -507,26 +513,39 @@ export default function EmailComposeDialog({
           .from('email-attachments')
           .getPublicUrl(uploadData.path);
 
-        uploaded.push({
+        // Add this file immediately to attachments (don't wait for batch)
+        const uploaded = {
           filename: file.name,
           mime_type: file.type,
           size: file.size,
           file_url: urlData.publicUrl,
-        });
-      }
+        };
+        setAttachments((prev) => [...prev, uploaded]);
+        successCount++;
 
-      setAttachments((prev) => [...prev, ...uploaded]);
-      toast.success(
-        uploaded.length === 1
-          ? `${uploaded[0].filename} attached`
-          : `${uploaded.length} files attached`
-      );
-    } catch (error) {
-      console.error('Attachment upload error:', error);
-      toast.error(error?.message || "Failed to upload attachment");
-    } finally {
-      setUploadProgress(null);
+        // Update per-file status to done
+        setUploadingFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: 'done' } : f));
+      } catch (error) {
+        console.error(`Attachment upload error for "${file.name}":`, error);
+        toast.error(`Failed to upload "${file.name}": ${error?.message || 'Unknown error'}`);
+        // Mark this file as failed but continue with remaining files
+        setUploadingFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: 'error' } : f));
+      }
     }
+
+    if (successCount > 0 && successCount === fileList.length) {
+      toast.success(
+        successCount === 1
+          ? `${fileList[0].name} attached`
+          : `${successCount} files attached`
+      );
+    } else if (successCount > 0) {
+      toast.warning(`${successCount} of ${fileList.length} files attached`);
+    }
+
+    setUploadProgress(null);
+    // Clear per-file statuses after a brief delay so user sees final state
+    setTimeout(() => setUploadingFiles([]), 1500);
   };
 
   const handleAttachFile = (e) => {
@@ -853,11 +872,20 @@ export default function EmailComposeDialog({
                   )}
                 </div>
 
-                {/* Upload progress indicator */}
-                {uploadProgress === 'uploading' && (
-                  <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 font-medium animate-in fade-in duration-200">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Uploading files...
+                {/* Per-file upload progress indicator */}
+                {uploadingFiles.length > 0 && (
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5 animate-in fade-in duration-200">
+                    <p className="text-xs font-semibold text-blue-700">
+                      {uploadProgress === 'uploading' ? 'Uploading...' : 'Upload complete'}
+                    </p>
+                    {uploadingFiles.map((f, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs">
+                        {f.status === 'uploading' && <Loader2 className="h-3 w-3 animate-spin text-blue-600 flex-shrink-0" />}
+                        {f.status === 'done' && <Check className="h-3 w-3 text-green-600 flex-shrink-0" />}
+                        {f.status === 'error' && <AlertTriangle className="h-3 w-3 text-red-500 flex-shrink-0" />}
+                        <span className={f.status === 'error' ? 'text-red-600 line-through' : 'text-blue-700'}>{f.name}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
 

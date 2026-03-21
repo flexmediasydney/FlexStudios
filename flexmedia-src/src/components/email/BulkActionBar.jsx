@@ -282,6 +282,7 @@ export default function BulkActionBar({
                   allMessages.map(m => api.entities.EmailMessage.update(m.id, { labels }))
                 ).then(() => {
                   toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
+                  onRefetch(); // Refresh inbox list to reflect label changes
                 }).catch(() => {
                   toast.error("Failed to update labels");
                 });

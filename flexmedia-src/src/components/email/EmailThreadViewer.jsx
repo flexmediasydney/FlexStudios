@@ -341,13 +341,19 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const updateLabelsMutation = useMutation({
    mutationFn: (labels) =>
      Promise.all(freshThread.messages.map(m => api.entities.EmailMessage.update(m.id, { labels }))),
+   onMutate: (newLabels) => {
+     // Optimistic update — immediately reflect label changes in UI
+     setLiveMessages(prev => prev.map(m => ({ ...m, labels: newLabels })));
+   },
    onSuccess: (_, newLabels) => {
+     // Invalidate both thread and inbox list queries so inbox reflects changes
      queryClient.invalidateQueries({ queryKey: ["email-thread"] });
+     queryClient.invalidateQueries({ queryKey: ["email-messages"] });
      if (msg?.id) {
        const oldLabels = msg.labels || [];
        const addedLabels = newLabels.filter(l => !oldLabels.includes(l));
        const removedLabels = oldLabels.filter(l => !newLabels.includes(l));
-       
+
        if (addedLabels.length > 0) {
          api.functions.invoke('logEmailActivity', {
            email_message_id: msg.id,
@@ -371,7 +377,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
      }
      toast.success("Labels updated");
    },
-   onError: () => {
+   onError: (_, __, context) => {
+     // Revert optimistic update on error
+     queryClient.invalidateQueries({ queryKey: ["email-messages"] });
      toast.error("Failed to update labels");
    }
   });
