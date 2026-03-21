@@ -77,11 +77,10 @@ Deno.serve(async (req) => {
       );
       const seen = new Map();
       const toSupersede: string[] = [];
-      const CREATE_ACTIONS = new Set(['scheduled', 'booking_created_or_changed']);
       for (const item of sorted) {
-        const key = CREATE_ACTIONS.has(item.action)
-          ? `create:${item.order_id}`
-          : `${item.action}:${item.order_id}:${item.event_id || ''}`;
+        // Each action type gets its own dedup key — don't collapse 'scheduled' and
+        // 'booking_created_or_changed' since they carry different data (appointment vs order level).
+        const key = `${item.action}:${item.order_id}:${item.event_id || ''}`;
         if (seen.has(key)) toSupersede.push(seen.get(key).id);
         seen.set(key, item);
       }
@@ -525,13 +524,30 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
 
   const existing = await findProjectByOrderId(entities, orderId);
 
+  // GUARD: If orderId matches the event/appointment ID (p.id), it's not a real order ID.
+  // This is a defensive check — the receiver should never pass p.id as orderId anymore,
+  // but if it does (e.g. from old queue items), refuse to create a new project.
+  if (!existing && eventId && orderId === eventId) {
+    await writeAudit(entities, {
+      action: originAction, entity_type: 'Project', entity_id: null,
+      operation: 'skipped', tonomo_order_id: orderId,
+      notes: `orderId "${orderId}" matches the appointment event ID — refusing to create project. This is an appointment-level event, not a new booking.`,
+    });
+    return { summary: `Skipped — orderId ${orderId} is an event ID, not an order ID`, skipped: true };
+  }
+
   const { isNew: isAdditionalAppointment, updatedIds: allAppointmentIds } = trackAppointment(
     existing?.tonomo_appointment_ids,
     eventId
   );
 
   const lifecycleReversalDetected =
-    existing && (existing.status === 'cancelled' || existing.status === 'delivered');
+    existing && (
+      existing.status === 'cancelled' ||
+      existing.status === 'delivered' ||
+      existing.tonomo_lifecycle_stage === 'cancelled' ||
+      existing.pending_review_type === 'cancellation'
+    );
 
   let staffAssignment: Record<string, any> = {};
   if (resolvedPhotographers.length > 0) {
@@ -626,7 +642,8 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
 
   if (startTime) {
     const shootDt = new Date(startTime);
-    const newDate = shootDt.toISOString().split('T')[0];
+    // Use Sydney-local date to avoid off-by-one: UTC midnight != Sydney midnight
+    const sydneyDateStr = shootDt.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' }); // en-CA gives YYYY-MM-DD
     const shootTimeStr = shootDt.toLocaleTimeString('en-AU', {
       timeZone: 'Australia/Sydney',
       hour: '2-digit',
@@ -636,12 +653,10 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
     sharedData.shoot_time = shootTimeStr;
 
     if (!existing || !isAdditionalAppointment) {
-      sharedData.shoot_date = newDate;
+      sharedData.shoot_date = sydneyDateStr;
     } else {
-      const existingCalEvents = await entities.CalendarEvent.list('-start_time', 200).catch(() => []);
-      const projectEvents = existingCalEvents.filter(
-        (ev: any) => ev.project_id === existing.id && !ev.is_done
-      );
+      const projectEvents = (await entities.CalendarEvent.filter({ project_id: existing.id }, '-start_time', 100).catch(() => []))
+        .filter((ev: any) => !ev.is_done);
       const futureTimes = [
         startTime,
         ...projectEvents
@@ -774,7 +789,7 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
   // ── CREATE CALENDAR EVENT FOR THIS APPOINTMENT ──────────────────────────────
   if (eventId && startTime) {
     try {
-      const existingCalEvents = await entities.CalendarEvent.list('-start_time', 200).catch(() => []);
+      const existingCalEvents = await entities.CalendarEvent.filter({ project_id: project.id }, '-start_time', 100).catch(() => []);
       const alreadyExists = existingCalEvents.some(
         (ev: any) => ev.google_event_id === eventId || ev.tonomo_appointment_id === eventId
       );
@@ -917,18 +932,21 @@ async function handleScheduled(entities: any, orderId: string, p: any, originAct
     const hasMappingGaps = productGapNames.length > 0 || mappingGaps.length > 0;
     const noPhotographer = unresolvedPhotographers.length > 0 || !sharedData.photographer_id;
 
-    fireAdminNotif(entities, {
-      type: 'booking_arrived_pending_review',
-      category: 'tonomo',
-      severity: hasUrgent ? 'critical' : 'info',
-      title: hasUrgent ? `Urgent booking — ${notifProjectName}` : `New booking arrived — ${notifProjectName}`,
-      message: `${isNewBooking ? 'New Tonomo booking' : 'Updated booking'} is pending review.${hasUrgent ? ' Shoot is within 24 hours.' : ''}`,
-      projectId: notifProjectId,
-      projectName: notifProjectName,
-      ctaLabel: 'Review Booking',
-      source: 'tonomo',
-      idempotencyKey: `booking_arrived:${orderId}:${Date.now().toString().slice(0,-4)}`,
-    }).catch(() => {});
+    // Only send "pending review" notification if NOT auto-approved (avoid double notification)
+    if (!canAutoApprove) {
+      fireAdminNotif(entities, {
+        type: 'booking_arrived_pending_review',
+        category: 'tonomo',
+        severity: hasUrgent ? 'critical' : 'info',
+        title: hasUrgent ? `Urgent booking — ${notifProjectName}` : `New booking arrived — ${notifProjectName}`,
+        message: `${isNewBooking ? 'New Tonomo booking' : 'Updated booking'} is pending review.${hasUrgent ? ' Shoot is within 24 hours.' : ''}`,
+        projectId: notifProjectId,
+        projectName: notifProjectName,
+        ctaLabel: 'Review Booking',
+        source: 'tonomo',
+        idempotencyKey: `booking_arrived:${orderId}:${Date.now().toString().slice(0,-4)}`,
+      }).catch(() => {});
+    }
 
     if (hasMappingGaps) {
       fireAdminNotif(entities, {
@@ -1023,7 +1041,7 @@ async function handleRescheduled(entities: any, orderId: string, p: any) {
 
   if (startTime && !overriddenFields.includes('shoot_date')) {
     const rescheduleDt = new Date(startTime);
-    updates.shoot_date = rescheduleDt.toISOString().split('T')[0];
+    updates.shoot_date = rescheduleDt.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
     updates.shoot_time = rescheduleDt.toLocaleTimeString('en-AU', {
       timeZone: 'Australia/Sydney',
       hour: '2-digit',
@@ -1031,6 +1049,30 @@ async function handleRescheduled(entities: any, orderId: string, p: any) {
       hour12: false,
     });
   }
+  // Update photographer if included in reschedule payload
+  const rescheduledPhotographers = p.photographers || [];
+  if (rescheduledPhotographers.length > 0) {
+    updates.tonomo_photographer_ids = JSON.stringify(rescheduledPhotographers);
+    const allMappings = await loadMappingTable(entities);
+    const servicesA = p.order?.services_a_la_cart || p.services_a_la_cart || [];
+    const servicesB = p.order?.services || p.services || [];
+    const reschServices = [...new Set([...servicesA, ...servicesB])].filter(Boolean);
+    const { resolvedPhotographers, unresolvedPhotographers } = await resolveMappingsMulti(entities, { photographers: rescheduledPhotographers }, allMappings);
+    if (resolvedPhotographers.length > 0) {
+      const bookingTypes = detectBookingTypes(reschServices.length > 0 ? reschServices : JSON.parse(project.tonomo_raw_services || '[]'));
+      const staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes);
+      for (const [field, userId] of Object.entries(staffAssignment)) {
+        if (userId && !overriddenFields.includes(field)) updates[field] = userId;
+      }
+    }
+    if (unresolvedPhotographers.length > 0) {
+      updates.pre_revision_stage = project.status;
+      updates.status = 'pending_review';
+      updates.pending_review_type = 'staff_change';
+      updates.pending_review_reason = `Photographer reassigned during reschedule but not found: ${unresolvedPhotographers.join(', ')}`;
+    }
+  }
+
   if (startTime) {
     const hoursUntilShoot = (startTime - Date.now()) / 3600000;
     updates.urgent_review = hoursUntilShoot <= 24 && hoursUntilShoot > 0;
@@ -1046,16 +1088,35 @@ async function handleRescheduled(entities: any, orderId: string, p: any) {
 
   if (eventId && startTime) {
     try {
-      const existingCalEvents = await entities.CalendarEvent.list('-start_time', 200).catch(() => []);
-      const appointmentEvent = existingCalEvents.find(
-        (ev: any) => (ev.google_event_id === eventId || ev.tonomo_appointment_id === eventId) &&
-                     ev.project_id === project.id
+      const projectCalEvents = await entities.CalendarEvent.filter({ project_id: project.id }, '-start_time', 100).catch(() => []);
+      const appointmentEvent = projectCalEvents.find(
+        (ev: any) => ev.google_event_id === eventId || ev.tonomo_appointment_id === eventId
       );
       if (appointmentEvent) {
         const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
         await entities.CalendarEvent.update(appointmentEvent.id, {
           start_time: new Date(startTime).toISOString(),
           end_time: endTime ? new Date(endTime).toISOString() : null,
+        });
+      } else {
+        // CalendarEvent not found — create one as fallback (original scheduled may have failed)
+        const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
+        await entities.CalendarEvent.create({
+          title: project.title || `Shoot — ${orderId}`,
+          description: `Tonomo appointment (created during reschedule) for order ${orderId}`,
+          start_time: new Date(startTime).toISOString(),
+          end_time: endTime ? new Date(endTime).toISOString() : null,
+          location: project.property_address || '',
+          google_event_id: eventId,
+          tonomo_appointment_id: eventId,
+          project_id: project.id,
+          activity_type: 'shoot',
+          is_synced: false,
+          is_done: false,
+          auto_linked: true,
+          link_source: 'tonomo_webhook',
+          link_confidence: 'exact',
+          event_source: 'tonomo',
         });
       }
     } catch (calErr: any) {
@@ -1147,6 +1208,21 @@ async function handleChanged(entities: any, orderId: string, p: any) {
     else if (!agentId) reviewReasons.push(`Agent reassigned to "${agent.displayName || agent.email || 'unknown'}" but not found — manual assignment required`);
   }
 
+  // Update address if changed in Tonomo
+  const changedAddress = p.address?.formatted_address || p.location || p.order?.property_address?.formatted_address;
+  if (changedAddress && !overriddenFields.includes('property_address')) {
+    if (changedAddress !== project.property_address) {
+      updates.property_address = changedAddress;
+      updates.title = changedAddress;
+      // Extract suburb from address (last part before state/postcode)
+      const addressParts = changedAddress.split(',').map((s: string) => s.trim());
+      if (addressParts.length >= 2) {
+        updates.property_suburb = addressParts[addressParts.length - 2] || '';
+      }
+      reviewReasons.push(`Address changed from "${project.property_address || 'unknown'}" to "${changedAddress}"`);
+    }
+  }
+
   if (services.length > 0 && !overriddenFields.includes('tonomo_raw_services')) {
     if (ACTIVE_STAGES.includes(project.status)) {
       const prev = JSON.parse(project.tonomo_raw_services || '[]');
@@ -1164,10 +1240,9 @@ async function handleChanged(entities: any, orderId: string, p: any) {
   const appointmentEventId = p.id;
   if (appointmentEventId && Object.keys(updates).length > 0) {
     try {
-      const existingCalEvents = await entities.CalendarEvent.list('-start_time', 200).catch(() => []);
-      const appointmentEvent = existingCalEvents.find(
-        (ev: any) => (ev.google_event_id === appointmentEventId || ev.tonomo_appointment_id === appointmentEventId) &&
-                     ev.project_id === project.id
+      const projectCalEvents = await entities.CalendarEvent.filter({ project_id: project.id }, '-start_time', 100).catch(() => []);
+      const appointmentEvent = projectCalEvents.find(
+        (ev: any) => ev.google_event_id === appointmentEventId || ev.tonomo_appointment_id === appointmentEventId
       );
       if (appointmentEvent) {
         const calUpdates: Record<string, any> = {};
@@ -1355,6 +1430,17 @@ async function handleOrderUpdate(entities: any, orderId: string, p: any) {
   const project = await findProjectByOrderId(entities, orderId);
 
   if (!project) {
+    // GUARD: If orderId matches the event/appointment ID, refuse to create
+    const eventId = p.id;
+    if (eventId && orderId === eventId) {
+      await writeAudit(entities, {
+        action: 'booking_created_or_changed', entity_type: 'Project', entity_id: null,
+        operation: 'skipped', tonomo_order_id: orderId,
+        notes: `orderId "${orderId}" matches event ID — refusing to create from handleOrderUpdate`,
+      });
+      return { summary: `Skipped — orderId ${orderId} is an event ID`, skipped: true };
+    }
+
     // STRICT: Only create a project from booking_created_or_changed if the payload has
     // sufficient data indicating this is a genuine new booking — not just a metadata update.
     const orderName = p.order?.orderName || p.orderName || null;
@@ -1530,6 +1616,31 @@ async function handleDelivered(entities: any, orderId: string, p: any) {
       payment_status: p.paymentStatus,
     },
   });
+
+  // Fire trackProjectStageChange so timers, notifications, task cleanup, and automation all run
+  if (updates.status && updates.status !== project.status) {
+    invokeFunction('trackProjectStageChange', {
+      projectId: project.id,
+      old_data: { status: project.status },
+      actor_id: null,
+      actor_name: 'Tonomo Delivery',
+    }).catch(() => {});
+  }
+
+  // Notify staff about delivery
+  const deliveryProjectName = project.title || project.property_address || 'Project';
+  fireRoleNotif(entities, ['project_owner', 'photographer', 'master_admin'], {
+    type: 'booking_delivered',
+    category: 'tonomo',
+    severity: 'info',
+    title: `Delivered — ${deliveryProjectName}`,
+    message: `Deliverables received from Tonomo.${p.invoice_amount ? ` Final invoice: $${p.invoice_amount}.` : ''}`,
+    projectId: project.id,
+    projectName: deliveryProjectName,
+    ctaLabel: 'View Project',
+    source: 'tonomo',
+    idempotencyKey: `delivered:${orderId}`,
+  }, project).catch(() => {});
 
   return { summary: `Project delivered for order ${orderId}` };
 }
@@ -1749,7 +1860,9 @@ async function findProjectByOrderId(entities: any, orderId: string) {
 }
 
 function extractOrderIdFromPayload(p: any) {
-  return p.orderId || p.order?.orderId || p.id || '';
+  // CRITICAL: Never fall back to p.id — that's the appointment/event ID, not the order ID.
+  // Using it causes duplicate projects for appointment-level events (time change, people change).
+  return p.orderId || p.order?.orderId || '';
 }
 
 function extractQtyFromTierName(tierName: string) {
