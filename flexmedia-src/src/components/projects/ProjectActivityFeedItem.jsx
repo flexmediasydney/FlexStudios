@@ -3,7 +3,7 @@ import { api } from '@/api/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   MessageSquare, Mail, Activity, Pin, ChevronDown, ChevronUp,
-  MoreVertical, Lock, Users, Reply, Share2, ArrowRight, Trash2, EyeOff
+  MoreVertical, Lock, Users, Reply, Share2, ArrowRight, Trash2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
