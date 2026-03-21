@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Paperclip, Users, Star } from "lucide-react";
+import { Paperclip, Users } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -10,7 +10,6 @@ import {
 
 const COLUMN_META = {
   checkbox:    { label: null,                               tooltip: null },
-  star:        { label: <Star className="h-3 w-3" />,      tooltip: "Starred" },
   from:        { label: "From",                             tooltip: null },
   subject:     { label: "Subject",                          tooltip: null },
   attachments: { label: <Paperclip className="h-3 w-3" />, tooltip: "Attachments" },
@@ -77,7 +76,7 @@ export default function EmailListHeader({
       >
         {columns.map((col) => {
           const meta = COLUMN_META[col.id] || { label: col.label || col.id, tooltip: null };
-          const isIconOnly = col.id === "attachments" || col.id === "visibility" || col.id === "star";
+          const isIconOnly = col.id === "attachments" || col.id === "visibility";
           const isDraggingThis = draggedId === col.id;
 
           if (col.id === "checkbox") {

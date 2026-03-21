@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { 
   ArrowLeft, Reply, ReplyAll, Forward, Archive, Trash2,
   MoreVertical, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Lock, Users, Copy, Star, Clock, ChevronsUpDown, Tag,
+  Lock, Users, Copy, Clock, ChevronsUpDown, Tag,
   Loader2, Eye, EyeOff, RefreshCw, AlertCircle, Maximize2, Minimize2
 } from "lucide-react";
 import {
@@ -418,30 +418,6 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     }
   });
 
-  const setStarredMutation = useMutation({
-    mutationFn: async (starred) => {
-      await Promise.all(
-        freshThread.messages.map(m =>
-          api.entities.EmailMessage.update(m.id, { is_starred: starred })
-        )
-      );
-      return starred;
-    },
-    onSuccess: (starred) => {
-      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
-      if (msg?.id) {
-        api.functions.invoke('logEmailActivity', {
-          email_message_id: msg.id,
-          email_account_id: account?.id,
-          action_type: starred ? 'starred' : 'unstarred',
-          description: `Email ${starred ? 'starred' : 'unstarred'}`
-        }).catch(err => console.error('Failed to log activity:', err));
-      }
-      toast.success(starred ? "Starred" : "Unstarred");
-    },
-    onError: () => toast.error("Failed to update star")
-  });
-
   const linkProjectMutation = useMutation({
     mutationFn: (projectData) => 
       Promise.all(freshThread.messages.map(m =>
@@ -697,21 +673,6 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
             </Button>
 
             <div className="h-5 w-px bg-slate-200 mx-0.5" />
-
-            {/* Star */}
-            <button
-              onClick={() => setStarredMutation.mutate(!msg.is_starred)}
-              className={cn(
-                "h-8 w-8 rounded-lg flex items-center justify-center transition-all active:scale-95",
-                msg.is_starred
-                  ? "text-amber-500 bg-amber-50 hover:bg-amber-100"
-                  : "text-slate-400 hover:text-amber-400 hover:bg-amber-50"
-              )}
-              aria-label={msg.is_starred ? "Remove star" : "Star this thread"}
-              title={msg.is_starred ? "Unstar" : "Star"}
-            >
-              <Star className={cn("h-4 w-4 transition-all", msg.is_starred && "fill-current")} />
-            </button>
 
             {/* Visibility */}
             <button

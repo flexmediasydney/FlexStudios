@@ -161,9 +161,6 @@ export default function EmailDetailSidebar({ thread, onProjectLinkClick, onProje
             <p className="text-muted-foreground font-bold uppercase tracking-wider mb-2">From</p>
             <p className="font-medium truncate text-sm text-foreground">{msg.from_name || msg.from}</p>
           </div>
-          {msg.is_starred && (
-            <Badge className="w-fit bg-amber-100 text-amber-800 font-bold">⭐ Starred</Badge>
-          )}
         </CardContent>
       </Card>
     </div>

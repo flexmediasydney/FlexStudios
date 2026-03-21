@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
-import { Mail, Plus, Search, Reply, Archive, Trash2, Lock, Users, Star, Clock } from 'lucide-react';
+import { Mail, Plus, Search, Reply, Archive, Trash2, Lock, Users, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -80,7 +80,6 @@ export default function EntityEmailTab({
           from_email: msg.from,
           lastMessage: msg.received_at,
           unreadCount: msg.is_unread ? 1 : 0,
-          is_starred: msg.is_starred,
           messages: [msg],
           project_id: msg.project_id,
           project_title: msg.project_title,
@@ -136,20 +135,6 @@ export default function EntityEmailTab({
       queryClient.invalidateQueries({ queryKey: ['emails', entityType, entityId] });
     },
   });
-
-  const handleToggleStar = async (thread) => {
-    const msg = thread.messages[0];
-    if (!msg) return;
-    try {
-      await updateMessageMutation.mutateAsync({
-        messageId: msg.id,
-        updates: { is_starred: !thread.is_starred },
-      });
-      onEmailActivity?.('star_toggled', { threadId: thread.threadId, starred: !thread.is_starred });
-    } catch {
-      toast.error('Failed to update star');
-    }
-  };
 
   const handleToggleVisibility = async (thread, newVisibility) => {
     const msg = thread.messages[0];
@@ -301,7 +286,6 @@ export default function EntityEmailTab({
           labelData={[]}
           onLinkProject={handleLinkProject}
           onToggleVisibility={handleToggleVisibility}
-          onToggleStar={handleToggleStar}
         />
       </div>
 

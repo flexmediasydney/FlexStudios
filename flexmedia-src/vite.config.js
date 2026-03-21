@@ -21,6 +21,7 @@ export default defineConfig({
       '@pages': path.resolve(__dirname, './src/pages'),
       '@utils': path.resolve(__dirname, './src/utils'),
     },
+    dedupe: ['react', 'react-dom'], // Prevents duplicate React in worktrees
   },
   build: {
     target: 'es2020',

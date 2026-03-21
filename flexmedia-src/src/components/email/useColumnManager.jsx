@@ -2,13 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 const DEFAULT_COLUMNS = [
   { id: 'checkbox',    label: '',        width: 36,  order: 0, resizable: false, minWidth: 36,  maxWidth: 36  },
-  { id: 'star',        label: '',        width: 28,  order: 1, resizable: false, minWidth: 28,  maxWidth: 28  },
-  { id: 'from',        label: 'From',    width: 160, order: 2, resizable: true,  minWidth: 100, maxWidth: 240 },
-  { id: 'subject',     label: 'Subject', width: 400, order: 3, resizable: true,  minWidth: 200, maxWidth: 9999, flex: true },
-  { id: 'attachments', label: '',        width: 28,  order: 4, resizable: false, minWidth: 28,  maxWidth: 28  },
-  { id: 'visibility',  label: '',        width: 32,  order: 5, resizable: false, minWidth: 32,  maxWidth: 32  },
-  { id: 'date',        label: 'Date',    width: 76,  order: 6, resizable: false, minWidth: 76,  maxWidth: 76  },
-  { id: 'actions',     label: 'Project', width: 150, order: 7, resizable: true, minWidth: 100, maxWidth: 220 },
+  { id: 'from',        label: 'From',    width: 160, order: 1, resizable: true,  minWidth: 100, maxWidth: 240 },
+  { id: 'subject',     label: 'Subject', width: 400, order: 2, resizable: true,  minWidth: 200, maxWidth: 9999, flex: true },
+  { id: 'attachments', label: '',        width: 28,  order: 3, resizable: false, minWidth: 28,  maxWidth: 28  },
+  { id: 'visibility',  label: '',        width: 32,  order: 4, resizable: false, minWidth: 32,  maxWidth: 32  },
+  { id: 'date',        label: 'Date',    width: 76,  order: 5, resizable: false, minWidth: 76,  maxWidth: 76  },
+  { id: 'actions',     label: 'Project', width: 150, order: 6, resizable: true, minWidth: 100, maxWidth: 220 },
 ];
 
 const STORAGE_KEY = 'email-inbox-columns';

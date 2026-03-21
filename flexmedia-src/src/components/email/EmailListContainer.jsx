@@ -20,7 +20,6 @@ export default function EmailListContainer({
   emailAccounts = [],
   onLinkProject,
   onToggleVisibility,
-  onToggleStar,
   onContextMenu,
   onReorderColumns,
   onResizeColumn,
@@ -132,7 +131,6 @@ export default function EmailListContainer({
                   emailAccounts={emailAccounts}
                   onLinkProject={onLinkProject}
                   onToggleVisibility={onToggleVisibility}
-                  onToggleStar={onToggleStar}
                   onContextMenu={onContextMenu}
                 />
               </div>

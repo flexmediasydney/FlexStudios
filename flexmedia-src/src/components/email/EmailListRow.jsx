@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { Paperclip, Lock, Users, Star, Link2, Archive, Trash2, Copy, Eye, EyeOff } from "lucide-react";
+import { Paperclip, Lock, Users, Link2, Archive, Trash2, Copy, Eye, EyeOff } from "lucide-react";
 import {
   HoverCard,
   HoverCardContent,
@@ -37,7 +37,6 @@ export default function EmailListRow({
   emailAccounts = [],
   onLinkProject,
   onToggleVisibility,
-  onToggleStar,
   onContextMenu,
 }) {
   const stripHtml = (html) => {
@@ -128,7 +127,6 @@ export default function EmailListRow({
   const priority = thread.messages[0]?.priority;
   const priorityClass = priorityConfig[priority] || '';
   const isUnread = thread.unreadCount > 0;
-  const isStarred = thread.is_starred;
   const labels = thread.messages[0]?.labels || [];
   const attachments = thread.messages[0]?.attachments || [];
   const displayDate = formatEmailDate(thread.lastMessage);
@@ -214,36 +212,6 @@ export default function EmailListRow({
           </div>
         );
       })()}
-
-      {/* Star — fully wired */}
-      {columns.some(c => c.id === 'star') && (
-        <TooltipProvider delayDuration={400}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                className={cn(
-                  "flex-shrink-0 w-8 h-8 flex items-center justify-center transition-all duration-150 rounded-lg",
-                  "hover:bg-amber-100/60 active:scale-95",
-                  isStarred
-                    ? "opacity-100 text-amber-500"
-                    : "opacity-40 group-hover:opacity-70 hover:!opacity-100 text-muted-foreground"
-                )}
-                onClick={(e) => { e.stopPropagation(); onToggleStar?.(thread); }}
-                aria-label={isStarred ? "Remove star" : "Star this email"}
-                title={isStarred ? "Remove star" : "Star this email"}
-              >
-                <Star className={cn(
-                  "h-4 w-4 transition-all",
-                  isStarred ? "fill-current" : ""
-                )} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              {isStarred ? "Remove star" : "Star"}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
 
       {/* From */}
       {columns.some(c => c.id === 'from') && (() => {
@@ -513,13 +481,6 @@ export default function EmailListRow({
           <Eye className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
           Open thread
         </ContextMenuItem>
-        <ContextMenuItem
-          onClick={(e) => { e.stopPropagation(); onToggleStar?.(thread); }}
-        >
-          <Star className={cn("h-3.5 w-3.5 mr-2", isStarred ? "text-amber-400 fill-amber-400" : "text-muted-foreground")} />
-          {isStarred ? "Remove star" : "Star"}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
         <ContextMenuItem
           onClick={(e) => { e.stopPropagation(); onToggleVisibility?.(thread, isShared ? 'private' : 'shared'); }}
         >

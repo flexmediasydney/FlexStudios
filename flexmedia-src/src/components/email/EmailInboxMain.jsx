@@ -457,7 +457,6 @@ export default function EmailInboxMain() {
           agency_name: msg.agency_name,
           lastMessage: msg.received_at,
           unreadCount: msg.is_unread ? 1 : 0,
-          is_starred: msg.is_starred,
           messages: [msg],
           project_id: msg.project_id,
           project_title: msg.project_title,
@@ -500,7 +499,6 @@ export default function EmailInboxMain() {
       const hasAttachment = rawQuery.includes('has:attachment');
       const labelMatch = rawQuery.match(/label:(\S+)/);
       const isUnread = rawQuery.includes('is:unread');
-      const isStarred = rawQuery.includes('is:starred');
 
       // Remove operators from query for general search
       const cleanQuery = rawQuery
@@ -510,7 +508,6 @@ export default function EmailInboxMain() {
         .replace(/has:attachment/g, '')
         .replace(/label:\S+/g, '')
         .replace(/is:unread/g, '')
-        .replace(/is:starred/g, '')
         .trim();
       
       result = result.filter(t => {
@@ -543,7 +540,6 @@ export default function EmailInboxMain() {
             if (!hasLabel) return false;
           }
           if (isUnread && t.unreadCount === 0) return false;
-          if (isStarred && !t.is_starred) return false;
 
           // General text search across ALL messages in thread (if cleanQuery exists)
           // Use plain .includes() for literal matching — no regex escaping needed.
@@ -1292,19 +1288,6 @@ export default function EmailInboxMain() {
                     );
                   } catch {
                     toast.error('Failed to update visibility');
-                  }
-                }}
-                onToggleStar={async (thread) => {
-                  try {
-                    const msg = thread.messages[0];
-                    if (!msg) return;
-                    const newStarred = !thread.is_starred;
-                    await updateMessageMutation.mutateAsync({
-                      messageId: msg.id,
-                      updates: { is_starred: newStarred },
-                    });
-                  } catch {
-                    toast.error('Failed to update star');
                   }
                 }}
                 onReorderColumns={reorderColumns}
