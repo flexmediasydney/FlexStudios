@@ -29,10 +29,9 @@ import TaskManagement from "@/components/projects/TaskManagement";
 import ChatPanel from "@/components/chat/ChatPanel";
 import MediaDeliveryManager from "@/components/projects/MediaDeliveryManager";
 import ProjectProductsPackages from "@/components/projects/ProjectProductsPackages";
-import UnifiedNotesPanel from "@/components/notes/UnifiedNotesPanel";
 import EffortLoggingTab from "@/components/projects/EffortLoggingTab";
 import ProjectCalendarEvents from "@/components/projects/ProjectCalendarEvents";
-import ProjectHistorySection from "@/components/projects/ProjectHistorySection";
+import ProjectActivityHub from "@/components/projects/ProjectActivityHub";
 import ProjectStaffBar from "@/components/projects/ProjectStaffBar";
 import ProjectPresenceIndicator from "@/components/projects/ProjectPresenceIndicator";
 import EmailComposeDialog from "@/components/email/EmailComposeDialog";
@@ -147,9 +146,11 @@ export default function ProjectDetails() {
    const [pendingBackwardStage, setPendingBackwardStage] = useState(null);
 
    // Tab state — persisted in URL ?tab= param so reload preserves active tab
+   const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'tonomo']);
    const [activeTab, setActiveTab] = useState(() => {
      const params = new URLSearchParams(window.location.search);
-     return params.get('tab') || 'tasks';
+     const tab = params.get('tab');
+     return tab && VALID_TABS.has(tab) ? tab : 'tasks';
    });
    // projectRaw loaded below, so initialize without conditional tonomo tab
    const [mountedTabs, setMountedTabs] = useState(new Set([
@@ -1266,10 +1267,9 @@ export default function ProjectDetails() {
 
           <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <div className="overflow-x-auto border-b bg-muted/30">
-              <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${project.source === 'tonomo' ? 'sm:grid-cols-7' : 'sm:grid-cols-6'} h-auto bg-transparent`}>
+              <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${project.source === 'tonomo' ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} h-auto bg-transparent`}>
                 <TabsTrigger value="tasks"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tasks</TabsTrigger>
                 <TabsTrigger value="revisions" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Requests</TabsTrigger>
-                <TabsTrigger value="notes"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Notes</TabsTrigger>
                 <TabsTrigger value="effort"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Effort</TabsTrigger>
                 <TabsTrigger value="calendar"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Calendar</TabsTrigger>
                 <TabsTrigger value="media"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Media</TabsTrigger>
@@ -1294,22 +1294,6 @@ export default function ProjectDetails() {
                 </ErrorBoundary>
               ) : (
                 <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-32 bg-muted rounded"/><div className="h-24 bg-muted rounded"/></div>
-              )}
-            </TabsContent>
-
-            <TabsContent value="notes" className="h-full flex flex-col">
-              {mountedTabs.has("notes") ? (
-                <div className="min-h-[600px] flex flex-col">
-                  <ErrorBoundary><UnifiedNotesPanel
-                    projectId={projectId}
-                    agencyId={project.agency_id}
-                    contextLabel={project.title || project.property_address || 'Project'}
-                    contextType="project"
-                    showContextOnNotes={false}
-                  /></ErrorBoundary>
-                </div>
-              ) : (
-                <div className="p-4 space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/4"/><div className="h-48 bg-muted rounded"/></div>
               )}
             </TabsContent>
 
@@ -1340,8 +1324,8 @@ export default function ProjectDetails() {
             )}
           </Tabs>
 
-          {/* History Section */}
-          <ErrorBoundary><ProjectHistorySection projectId={projectId} /></ErrorBoundary>
+          {/* Activity Hub — Pipedrive-style compose + unified feed */}
+          <ErrorBoundary><ProjectActivityHub projectId={projectId} project={project} /></ErrorBoundary>
         </div>
 
         {/* Sidebar */}

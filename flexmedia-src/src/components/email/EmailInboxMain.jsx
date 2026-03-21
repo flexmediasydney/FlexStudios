@@ -88,6 +88,8 @@ export default function EmailInboxMain() {
   const MAX_UNDO_STACK = 20;
   const SEARCH_DEBOUNCE_MS = 300;
   const AUTO_SYNC_INTERVAL_MS = 2 * 60 * 1000;
+  const SYNC_COOLDOWN_MS = 5000;
+  const lastManualSyncRef = useRef(0);
   const MAX_THREADS_TO_DISPLAY = 500;
   const containerRef = useRef(null);
   const sidebarScrollRef = useRef(null);
@@ -218,6 +220,12 @@ export default function EmailInboxMain() {
   const syncMutation = useMutation({
     mutationFn: async () => {
       if (!user?.id || emailAccounts.length === 0) throw new Error('No accounts connected');
+      // Debounce guard: skip if synced less than 5 seconds ago
+      const now = Date.now();
+      if (now - lastManualSyncRef.current < SYNC_COOLDOWN_MS) {
+        return { synced: 0, errors: 0, skipped: true, accountNames: [] };
+      }
+      lastManualSyncRef.current = now;
       const results = await Promise.allSettled(
         emailAccounts.map(account =>
           api.functions.invoke('syncGmailMessagesForAccount', {
@@ -228,18 +236,31 @@ export default function EmailInboxMain() {
       );
       const synced = results.reduce((sum, r) => sum + (r.value?.data?.synced || 0), 0);
       const errors = results.filter(r => r.status === 'rejected').length;
-      return { synced, errors };
+      const accountNames = emailAccounts.map(a => a.email_address || a.display_name);
+      const errorDetails = results
+        .map((r, i) => r.status === 'rejected' ? emailAccounts[i]?.email_address : null)
+        .filter(Boolean);
+      return { synced, errors, skipped: false, accountNames, errorDetails };
     },
-    onSuccess: ({ synced, errors }) => {
-      // Always refetch messages after sync to pick up new data
+    onSuccess: ({ synced, errors, skipped, accountNames, errorDetails }) => {
+      if (skipped) {
+        toast.info('Sync already in progress — please wait a moment');
+        return;
+      }
+      // Invalidate all email-related queries after sync
       queryClient.invalidateQueries({ queryKey: ['email-messages'] });
       queryClient.invalidateQueries({ queryKey: ['email-accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['email-conversations'] });
+      const acctSummary = accountNames?.length > 1
+        ? ` across ${accountNames.length} accounts`
+        : accountNames?.length === 1 ? ` (${accountNames[0]})` : '';
       if (synced > 0) {
-        toast.success(`Synced ${synced} new email${synced !== 1 ? 's' : ''}`);
+        toast.success(`Synced ${synced} new email${synced !== 1 ? 's' : ''}${acctSummary}`);
       } else if (errors > 0) {
-        toast.error(`Sync completed with ${errors} account error${errors !== 1 ? 's' : ''} — check email settings`);
+        const failedAccts = errorDetails?.join(', ') || `${errors} account(s)`;
+        toast.error(`Sync failed for ${failedAccts} — check email settings`);
       } else {
-        toast.success('Inbox up to date');
+        toast.success(`Inbox up to date${acctSummary}`);
       }
     },
     onError: (error) => {
@@ -965,20 +986,15 @@ export default function EmailInboxMain() {
         {/* Footer */}
         <div className="p-3 border-t space-y-2">
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             onClick={() => syncMutation.mutate()}
             disabled={syncMutation.isPending}
-            className="w-full gap-2 h-8 text-xs relative"
+            className="w-full gap-2 h-8 text-xs justify-start hover:bg-muted"
             title={syncMutation.isPending ? "Syncing..." : "Sync now"}
           >
             <RefreshCw className={cn("h-3.5 w-3.5", syncMutation.isPending && 'animate-spin')} />
-            {syncMutation.isPending ? (
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-1 h-1 rounded-full bg-primary animate-pulse" />
-                Syncing...
-              </span>
-            ) : 'Sync'}
+            {syncMutation.isPending ? 'Syncing...' : 'Sync'}
           </Button>
           <Button 
             variant="ghost" 
@@ -1096,10 +1112,29 @@ export default function EmailInboxMain() {
                      {/* Search hints dropdown removed — not needed */}
                 </div>
 
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="h-9 w-9" 
+                <TooltipProvider delayDuration={300}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9"
+                        onClick={() => syncMutation.mutate()}
+                        disabled={syncMutation.isPending}
+                      >
+                        <RefreshCw className={cn("h-4 w-4", syncMutation.isPending && "animate-spin")} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      <p>{syncMutation.isPending ? "Syncing..." : "Refresh inbox"}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
                   onClick={handleUndo}
                   disabled={undoStack.length === 0}
                   title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].type}` : "Nothing to undo"}
