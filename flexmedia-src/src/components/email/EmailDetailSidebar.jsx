@@ -32,11 +32,14 @@ export default function EmailDetailSidebar({ thread, onProjectLinkClick, onProje
   });
 
   const assignMutation = useMutation({
-    mutationFn: (userId) =>
-      api.functions.invoke("assignEmailToUser", {
-        threadId: thread.threadId,
-        userId,
-      }),
+    mutationFn: async (userId) => {
+      // Update all messages in the thread with the assigned user
+      await Promise.all(
+        thread.messages.map(m =>
+          api.entities.EmailMessage.update(m.id, { assigned_to: userId })
+        )
+      );
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       if (messageId) {
