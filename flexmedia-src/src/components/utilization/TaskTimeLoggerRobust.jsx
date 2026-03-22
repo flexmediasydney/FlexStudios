@@ -10,7 +10,7 @@ import ManualTimeEntryDialog from '@/components/projects/ManualTimeEntryDialog';
 const INACTIVITY_TIMEOUT = 1800; // 30 minutes
 const ACTIVITY_CHECK_INTERVAL = 10000; // Check every 10 seconds
 const MAX_SESSION_DURATION = 28800; // 8 hours max per session
-const DB_SYNC_INTERVAL = 3000; // Sync to DB every 3 seconds (more frequent for reliability)
+const DB_SYNC_INTERVAL = 15000; // Sync to DB every 15 seconds (reduced from 3s to lower DB load)
 const LOCAL_TIMER_INTERVAL = 1000; // Update UI timer every 1 second
 
 export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, currentUser }) {

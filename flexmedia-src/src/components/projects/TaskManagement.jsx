@@ -277,12 +277,19 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   const UPLOADED_STAGES_FOR_CREATE = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
 
   const createMutation = useMutation({
-    mutationFn: (data) => api.entities.ProjectTask.create({ ...data, project_id: projectId, order: Date.now() }),
+    mutationFn: (data) => {
+      const cleaned = { ...data, project_id: projectId, order: Date.now() };
+      // Remove empty string fields that would fail as UUIDs in PostgREST
+      if (!cleaned.assigned_to) delete cleaned.assigned_to;
+      if (!cleaned.assigned_to_name) delete cleaned.assigned_to_name;
+      if (!cleaned.due_date) delete cleaned.due_date;
+      return api.entities.ProjectTask.create(cleaned);
+    },
     onSuccess: (created, variables) => {
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       setShowAddDialog(false);
-      setNewTask({ title: "", description: "" });
+      setNewTask({ title: "", description: "", task_type: "back_office", assigned_to: "", assigned_to_name: "", due_date: null });
       logActivity('task_added', `Task added: "${variables.title}"`);
 
       // Notify the assignee if it's a specific user (not the person creating the task)
@@ -630,7 +637,10 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       )}
 
       {/* Add Task Dialog */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+      <Dialog open={showAddDialog} onOpenChange={(open) => {
+        setShowAddDialog(open);
+        if (!open) setNewTask({ title: "", description: "", task_type: "back_office", assigned_to: "", assigned_to_name: "", due_date: null });
+      }}>
         <DialogContent className="max-w-md" onKeyDown={(e) => {
           if (e.key === 'Escape') setShowAddDialog(false);
           if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (newTask.title?.trim()) createMutation.mutate({ ...newTask, task_type: newTask.task_type || "back_office" }); }

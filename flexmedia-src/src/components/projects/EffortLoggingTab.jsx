@@ -30,8 +30,12 @@ export default function EffortLoggingTab({ projectId, project }) {
 
   const isClosed = ['delivered', 'cancelled'].includes(project?.status);
 
-  const { timeLogs, groupedLogs } = useEffortLogs(projectId);
+  const { timeLogs: rawTimeLogs, groupedLogs } = useEffortLogs(projectId);
   const { data: tasks = [] } = useEntityList("ProjectTask", null, 200, (t) => t.project_id === projectId);
+
+  // Exclude effort logs belonging to deleted tasks
+  const deletedTaskIds = new Set(tasks.filter(t => t.is_deleted).map(t => t.id));
+  const timeLogs = rawTimeLogs.filter(log => !deletedTaskIds.has(log.task_id));
 
   const toggleExpand = (id) => {
     const newSet = new Set(expandedLogs);

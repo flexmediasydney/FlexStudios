@@ -1,3 +1,4 @@
+import { invokeFunction } from '../../_shared/supabase.ts';
 import {
   findProjectByOrderId,
   writeAudit,
@@ -19,6 +20,14 @@ export async function handleCancelled(entities: any, orderId: string, p: any) {
   if (project.status !== 'pending_review') updates.pre_revision_stage = project.status;
 
   await entities.Project.update(project.id, updates);
+
+  // Stop running timers on cancellation
+  invokeFunction('trackProjectStageChange', {
+    project_id: project.id,
+    from_stage: project.status,
+    to_stage: 'pending_review',
+  }).catch(() => {});
+
   await writeAudit(entities, {
     action: 'canceled', entity_type: 'Project', entity_id: project.id, operation: 'cancelled',
     tonomo_order_id: orderId, notes: `Moved to pending_review for cancellation confirmation. Was: ${project.status}`,

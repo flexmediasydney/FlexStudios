@@ -185,6 +185,10 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
     const safeDbTimers = dbTimers.map(t => {
       if (!t.exit_time && !isCurrent) {
         // Orphaned open timer for a non-current stage — treat as closed
+        // Actually close the orphaned timer in DB
+        api.entities.ProjectStageTimer.update(t.id, {
+          exit_time: t.updated_date || new Date().toISOString(),
+        }).catch(() => {});
         return {
           ...t,
           exit_time: t.updated_date || new Date().toISOString(),

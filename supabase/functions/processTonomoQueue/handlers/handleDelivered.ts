@@ -35,6 +35,17 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
   if (p.invoice_link) updates.tonomo_invoice_link = p.invoice_link;
   if (p.invoice_amount != null && !overriddenFields.includes('tonomo_invoice_amount')) updates.tonomo_invoice_amount = p.invoice_amount ? parseFloat(p.invoice_amount) : null;
 
+  // Auto-complete all active tasks on delivery
+  const tasks = await entities.ProjectTask.filter({ project_id: project.id });
+  for (const task of tasks) {
+    if (!task.is_completed && !task.is_deleted) {
+      await entities.ProjectTask.update(task.id, {
+        is_completed: true,
+        completed_at: new Date().toISOString(),
+      });
+    }
+  }
+
   await entities.Project.update(project.id, updates);
   await writeAudit(entities, {
     action: 'booking_completed', entity_type: 'Project', entity_id: project.id, operation: 'updated',

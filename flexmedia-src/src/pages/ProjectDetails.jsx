@@ -75,6 +75,24 @@ const propertyTypeLabels = {
   land: "Land/Lot"
 };
 
+// Valid forward transitions — defines allowed next stages from each stage.
+// Not enforced yet (backward confirmation is sufficient for now), but
+// available for future gating / UI filtering of the stage pipeline.
+const VALID_FORWARD_TRANSITIONS = {
+  pending_review: ['to_be_scheduled', 'scheduled', 'cancelled'],
+  to_be_scheduled: ['scheduled', 'cancelled'],
+  scheduled: ['onsite', 'cancelled'],
+  onsite: ['uploaded', 'cancelled'],
+  uploaded: ['submitted', 'cancelled'],
+  submitted: ['in_progress', 'cancelled'],
+  in_progress: ['in_production', 'cancelled'],
+  in_production: ['ready_for_partial', 'in_revision', 'delivered', 'cancelled'],
+  ready_for_partial: ['in_revision', 'delivered', 'cancelled'],
+  in_revision: ['delivered', 'cancelled'],
+  delivered: [],
+  cancelled: ['pending_review'], // allow reactivation
+};
+
 function InvoicedAmountInput({ value, onSave, isPending }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -460,6 +478,14 @@ export default function ProjectDetails() {
        }).catch(err => console.warn('logOnsiteEffortOnUpload failed:', err?.message));
      }
 
+     // Mark all active tasks as cancelled when project is cancelled
+     if (newStatus === 'cancelled') {
+       const activeTasks = (projectTasks || []).filter(t => !t.is_deleted && !t.is_completed);
+       for (const task of activeTasks) {
+         api.entities.ProjectTask.update(task.id, { is_completed: true, completed_at: new Date().toISOString() }).catch(() => {});
+       }
+     }
+
      // Check if project qualifies for auto-archive when delivered
      if (newStatus === 'delivered') {
        setTimeout(() => {
@@ -763,6 +789,13 @@ export default function ProjectDetails() {
               onClick={async () => {
                 try {
                   await api.entities.Project.update(projectId, { is_archived: false, archived_at: null });
+                  api.entities.ProjectActivity.create({
+                    project_id: projectId,
+                    action: 'unarchived',
+                    description: 'Project unarchived',
+                    user_name: user?.full_name,
+                    user_email: user?.email,
+                  }).catch(() => {});
                   toast.success('Project unarchived');
                 } catch (err) {
                   toast.error(err?.message || 'Failed to unarchive');
@@ -1064,7 +1097,17 @@ export default function ProjectDetails() {
                 <AlertDialogAction
                   className="bg-orange-600 hover:bg-orange-700"
                   onClick={() => {
-                    if (pendingBackwardStage) updateStatusMutation.mutate(pendingBackwardStage);
+                    if (pendingBackwardStage) {
+                      // Log a distinct activity for backward status regressions
+                      api.entities.ProjectActivity.create({
+                        project_id: project.id,
+                        action: 'status_regressed',
+                        description: `Status moved backward from ${stageLabel(project.status)} to ${stageLabel(pendingBackwardStage)}`,
+                        user_name: user?.full_name,
+                        user_email: user?.email,
+                      }).catch(() => {});
+                      updateStatusMutation.mutate(pendingBackwardStage);
+                    }
                     setPendingBackwardStage(null);
                   }}
                 >
