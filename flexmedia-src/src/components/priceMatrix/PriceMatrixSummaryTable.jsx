@@ -4,7 +4,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Separator } from "@/components/ui/separator";
 
 const roundToNearestFive = (value) => Math.ceil(value / 5) * 5;
-const applyDiscount = (price, pct) => roundToNearestFive(price * (1 - pct / 100));
+// Match backend: round the DISCOUNT amount to nearest 5, then subtract
+const applyDiscount = (price, pct) => Math.max(0, price - roundToNearestFive(price * pct / 100));
 
 function fmt(val) {
   return `$${(Number(val) || 0).toFixed(2)}`;

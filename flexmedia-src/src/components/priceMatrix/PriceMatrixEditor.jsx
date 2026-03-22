@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,17 +15,22 @@ const safeNum = (val) => { const n = parseFloat(val); return isFinite(n) && n >=
 const clamp = (val, min, max) => Math.min(Math.max(safeNum(val), min), max);
 
 export default function PriceMatrixEditor({ priceMatrix }) {
-  const queryClient = useQueryClient();
   const [isExpanded, setIsExpanded] = useState(false);
   const [localData, setLocalData] = useState(null);
   const [showActivity, setShowActivity] = useState(false);
   const [activeSection, setActiveSection] = useState("overrides"); // "overrides" | "summary"
+  const [lastSavedJson, setLastSavedJson] = useState(null);
 
   useEffect(() => {
+    const incomingJson = JSON.stringify(priceMatrix);
     setLocalData(prev => {
-      if (!prev) return priceMatrix;
-      const hasUnsaved = JSON.stringify(prev) !== JSON.stringify(priceMatrix);
-      return hasUnsaved ? prev : priceMatrix;
+      if (!prev) { setLastSavedJson(incomingJson); return priceMatrix; }
+      // Only accept real-time updates if user has NO unsaved changes
+      const localJson = JSON.stringify(prev);
+      const hasUnsavedChanges = lastSavedJson && localJson !== lastSavedJson;
+      if (hasUnsavedChanges) return prev; // protect unsaved work
+      setLastSavedJson(incomingJson);
+      return priceMatrix;
     });
   }, [priceMatrix]);
 
@@ -67,6 +72,8 @@ export default function PriceMatrixEditor({ priceMatrix }) {
         product_percent: Math.min(100, Math.max(0, parseFloat(data.blanket_discount?.product_percent) || 0)),
         package_percent: Math.min(100, Math.max(0, parseFloat(data.blanket_discount?.package_percent) || 0)),
       };
+      // Enforce mutual exclusion: default mode disables blanket
+      if (data.use_default_pricing) validatedBlanket.enabled = false;
       const payload = {
         ...data,
         product_pricing: validatedProductPricing,
@@ -82,10 +89,11 @@ export default function PriceMatrixEditor({ priceMatrix }) {
         new_state: payload
       }).catch(() => {});
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("Pricing saved");
-      queryClient.invalidateQueries({ queryKey: ["price-matrix"] });
-      queryClient.invalidateQueries({ queryKey: ["price-matrix-audit", priceMatrix.id] });
+      setLastSavedJson(JSON.stringify(localData));
+      await refetchEntityList("PriceMatrix");
+      refetchEntityList("PriceMatrixAuditLog");
     },
     onError: (error) => toast.error("Failed to save: " + (error?.message || "Unknown error"))
   });
@@ -308,7 +316,15 @@ export default function PriceMatrixEditor({ priceMatrix }) {
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-muted-foreground">Mode:</span>
               <button
-                onClick={() => canEdit && setField("use_default_pricing", !useDefault)}
+                onClick={() => {
+                  if (!canEdit) return;
+                  if (!useDefault) {
+                    // Switching TO default: explicitly disable blanket discount
+                    setLocalData(prev => ({ ...prev, use_default_pricing: true, blanket_discount: { ...(prev.blanket_discount || {}), enabled: false } }));
+                  } else {
+                    setField("use_default_pricing", false);
+                  }
+                }}
                 disabled={!canEdit}
                 className={`text-xs px-2 py-0.5 rounded border transition-colors ${useDefault ? "bg-secondary border-border font-medium" : "bg-transparent border-transparent text-muted-foreground hover:bg-muted"}`}
               >
@@ -360,8 +376,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                     <Input
                       type="number" step="1" min="0" max="100"
                       value={localData.blanket_discount?.product_percent ?? 0}
-                      onChange={(e) => setField("blanket_discount.product_percent", safeNum(e.target.value))}
-                      onBlur={(e) => setField("blanket_discount.product_percent", clamp(e.target.value, 0, 100))}
+                      onChange={(e) => setField("blanket_discount.product_percent", clamp(e.target.value, 0, 100))}
                       className="h-7 w-20 text-xs bg-white border-amber-200"
                     />
                     <span className="text-xs text-amber-700">%</span>
@@ -371,8 +386,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                     <Input
                       type="number" step="1" min="0" max="100"
                       value={localData.blanket_discount?.package_percent ?? 0}
-                      onChange={(e) => setField("blanket_discount.package_percent", safeNum(e.target.value))}
-                      onBlur={(e) => setField("blanket_discount.package_percent", clamp(e.target.value, 0, 100))}
+                      onChange={(e) => setField("blanket_discount.package_percent", clamp(e.target.value, 0, 100))}
                       className="h-7 w-20 text-xs bg-white border-amber-200"
                     />
                     <span className="text-xs text-amber-700">%</span>
