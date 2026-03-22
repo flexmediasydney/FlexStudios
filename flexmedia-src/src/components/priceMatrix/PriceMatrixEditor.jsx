@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
+import { usePermissions } from "@/components/auth/PermissionGuard";
 import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -42,7 +43,9 @@ export default function PriceMatrixEditor({ priceMatrix }) {
     queryFn: () => api.auth.me(),
     staleTime: 60000,
   });
-  const canEdit = currentUser?.role === "admin" || currentUser?.role === "master_admin";
+  const { canEditPriceMatrix, canViewPriceMatrixPricing, priceMatrixAccess } = usePermissions();
+  const canEdit = canEditPriceMatrix;
+  const canSeePrices = canViewPriceMatrixPricing;
 
   const saveMutation = useMutation({
     mutationFn: async (data) => {
@@ -281,7 +284,12 @@ export default function PriceMatrixEditor({ priceMatrix }) {
 
         {/* Controls */}
         <div className="flex items-center gap-1 flex-shrink-0">
-          {!canEdit && <Lock className="h-3.5 w-3.5 text-muted-foreground" />}
+          {!canEdit && (
+            <Badge variant="outline" className="text-[10px] h-5 flex items-center gap-1 text-muted-foreground">
+              <Lock className="h-3 w-3" />
+              {canSeePrices ? "Read Only" : "Structure Only"}
+            </Badge>
+          )}
           {canEdit && hasChanges && (
             <>
               <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setLocalData(priceMatrix); toast.info("Changes discarded"); }} disabled={saveMutation.isPending}>
@@ -418,6 +426,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                   newProducts={newProducts}
                   newPackages={newPackages}
                   canEdit={canEdit}
+                  canSeePrices={canSeePrices}
                 />
               )}
 
@@ -434,7 +443,15 @@ export default function PriceMatrixEditor({ priceMatrix }) {
   );
 }
 
-function PriceInput({ value, onChange, onBlur, readOnly }) {
+function PriceInput({ value, onChange, onBlur, readOnly, masked }) {
+  if (masked) {
+    return (
+      <div className="flex items-center">
+        <span className="text-xs text-muted-foreground mr-0.5">$</span>
+        <span className="h-7 w-20 text-xs flex items-center text-muted-foreground">***</span>
+      </div>
+    );
+  }
   return (
     <div className="flex items-center">
       <span className="text-xs text-muted-foreground mr-0.5">$</span>
@@ -448,7 +465,8 @@ function PriceInput({ value, onChange, onBlur, readOnly }) {
   );
 }
 
-function OverridesTable({ activeProducts, activePackages, getProductPricing, getPackagePricing, toggleProductOverride, togglePackageOverride, setProductField, setPackageField, newProducts, newPackages, canEdit }) {
+function OverridesTable({ activeProducts, activePackages, getProductPricing, getPackagePricing, toggleProductOverride, togglePackageOverride, setProductField, setPackageField, newProducts, newPackages, canEdit, canSeePrices = true }) {
+  const masked = !canSeePrices;
   return (
     <div>
       {/* Products table */}
@@ -507,6 +525,7 @@ function OverridesTable({ activeProducts, activePackages, getProductPricing, get
                                 onChange={(e) => canEdit && setProductField(product.id, field, e.target.value)}
                                 onBlur={(e) => canEdit && setProductField(product.id, field, clamp(e.target.value, 0, Infinity))}
                                 readOnly={!canEdit}
+                                masked={masked}
                               />
                               {drifted && (
                                 <div className="text-xs text-amber-600 flex items-center gap-0.5 mt-0.5">
@@ -576,6 +595,7 @@ function OverridesTable({ activeProducts, activePackages, getProductPricing, get
                                 onChange={(e) => canEdit && setPackageField(pkg.id, field, e.target.value)}
                                 onBlur={(e) => canEdit && setPackageField(pkg.id, field, clamp(e.target.value, 0, Infinity))}
                                 readOnly={!canEdit}
+                                masked={masked}
                               />
                               {drifted && (
                                 <div className="text-xs text-amber-600 flex items-center gap-0.5 mt-0.5">

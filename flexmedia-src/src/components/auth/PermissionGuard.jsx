@@ -72,6 +72,14 @@ export function usePermissions() {
     canSeePriceMatrix: isAdminOrEmployee,
     canSeeInvoicing: isAdminOrEmployee,
 
+    // Price Matrix access levels: "edit" | "view_with_pricing" | "view_without_pricing" | "none"
+    // master_admin → edit, employee → view_with_pricing (default), contractor → none
+    // Can be overridden per-user via user_permissions table
+    priceMatrixAccess: isMasterAdmin ? "edit" : isEmployee ? "view_with_pricing" : "none",
+    canEditPriceMatrix: isMasterAdmin,
+    canViewPriceMatrixPricing: isAdminOrEmployee,
+    canViewPriceMatrixStructure: isAdminOrEmployee,
+
     // Contacts & CRM
     canManageContacts: isAdminOrEmployee,
     canSeeProspecting: isAdminOrEmployee,
