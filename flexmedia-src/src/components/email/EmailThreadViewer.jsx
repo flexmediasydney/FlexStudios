@@ -49,9 +49,10 @@ const sanitizeEmailHtml = (html) => {
   // Strip <form> tags (phishing risk)
   clean = clean.replace(/<\/?form\b[^>]*>/gi, '');
   // Auto-link plain text URLs that aren't already inside <a> tags
-  // Only skip URLs inside attribute values (preceded by = or quotes), NOT after > (tag close)
+  // Skip URLs inside attribute values (preceded by = or quotes) AND URLs
+  // that appear as text content within existing <a> tags (preceded by >)
   clean = clean.replace(
-    /(?<![="'])(https?:\/\/[^\s<>"']+)/gi,
+    /(?<![="'>])(https?:\/\/[^\s<>"']+)/gi,
     '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
   );
   // Ensure ALL links open in new tab (some emails have <a> without target)
@@ -83,7 +84,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const [replyExpanded, setReplyExpanded] = useState(false);
   const [replyMode, setReplyMode] = useState('reply'); // 'reply' | 'replyAll'
   const [replyToMessage, setReplyToMessage] = useState(null); // specific message to reply to
-  const [expandedMessages, setExpandedMessages] = useState(new Set([thread.messages[thread.messages.length - 1]?.id]));
+  const [expandedMessages, setExpandedMessages] = useState(() => {
+    const lastId = thread.messages[thread.messages.length - 1]?.id;
+    return lastId ? new Set([lastId]) : new Set();
+  });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem('email-sidebar-collapsed') === 'true'; } catch { return false; }
   });
@@ -113,7 +117,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
 
   // Reset state when navigating between threads (J/K keys)
   useEffect(() => {
-    setExpandedMessages(new Set([thread.messages[thread.messages.length - 1]?.id]));
+    const lastId = thread.messages[thread.messages.length - 1]?.id;
+    setExpandedMessages(lastId ? new Set([lastId]) : new Set());
     setLiveMessages(thread.messages);
     setReplyExpanded(false);
     setReplyMode('reply');
@@ -347,7 +352,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
      Promise.all(freshThread.messages.map(m => api.entities.EmailMessage.update(m.id, { labels }))),
    onMutate: (newLabels) => {
      // Optimistic update — immediately reflect label changes in UI
+     const previousMessages = [...liveMessages];
      setLiveMessages(prev => prev.map(m => ({ ...m, labels: newLabels })));
+     return { previousMessages };
    },
    onSuccess: (_, newLabels) => {
      // Invalidate both thread and inbox list queries so inbox reflects changes
@@ -383,6 +390,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
    },
    onError: (_, __, context) => {
      // Revert optimistic update on error
+     if (context?.previousMessages) {
+       setLiveMessages(context.previousMessages);
+     }
      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
      toast.error("Failed to update labels");
    }

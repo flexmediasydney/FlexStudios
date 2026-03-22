@@ -45,7 +45,7 @@ export default function InternalTeamsManagement() {
       return api.entities.InternalTeam.create(data);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(["internal_teams"]);
+      queryClient.invalidateQueries({ queryKey: ["internal_teams"] });
       toast.success(editingTeam ? "Team updated" : "Team created");
       handleClose();
     },
@@ -55,7 +55,8 @@ export default function InternalTeamsManagement() {
   const deleteMutation = useMutation({
     mutationFn: (id) => api.entities.InternalTeam.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries(["internal_teams"]);
+      queryClient.invalidateQueries({ queryKey: ["internal_teams"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       toast.success("Team deleted");
       setDeletingTeam(null);
     },
@@ -70,7 +71,7 @@ export default function InternalTeamsManagement() {
         description: team.description || "",
         color: team.color || "#3b82f6",
         team_function: team.team_function || "",
-        is_active: team.is_active
+        is_active: team.is_active !== false
       });
     } else {
       setEditingTeam(null);
@@ -109,9 +110,18 @@ export default function InternalTeamsManagement() {
     saveMutation.mutate({ ...formData, name: formData.name.trim() });
   };
 
-  const getTeamMembers = (teamId) => {
-    return users.filter(u => u.internal_team_id === teamId);
-  };
+  const teamMembersMap = useMemo(() => {
+    const map = new Map();
+    for (const u of users) {
+      if (u.internal_team_id) {
+        if (!map.has(u.internal_team_id)) map.set(u.internal_team_id, []);
+        map.get(u.internal_team_id).push(u);
+      }
+    }
+    return map;
+  }, [users]);
+
+  const getTeamMembers = (teamId) => teamMembersMap.get(teamId) || [];
 
   const filteredTeams = useMemo(() =>
     teams.filter(t =>
@@ -123,8 +133,8 @@ export default function InternalTeamsManagement() {
 
   const stats = useMemo(() => ({
     total: teams.length,
-    active: teams.filter(t => t.is_active).length,
-    totalMembers: users.length,
+    active: teams.filter(t => t.is_active !== false).length,
+    totalMembers: users.filter(u => u.internal_team_id).length,
   }), [teams, users]);
 
   return (
@@ -324,6 +334,16 @@ export default function InternalTeamsManagement() {
                   className="flex-1"
                 />
               </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="is_active"
+                checked={formData.is_active}
+                onChange={(e) => setFormData(prev => ({ ...prev, is_active: e.target.checked }))}
+                className="h-4 w-4 accent-primary"
+              />
+              <Label htmlFor="is_active">Active</Label>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>

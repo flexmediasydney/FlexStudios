@@ -120,32 +120,31 @@ export default function CalendarPage() {
   const queryClient = useQueryClient();
 
   // Countdown to next DB refresh (60s) and next Google sync (5min)
+  // Tick every 5s to reduce unnecessary re-renders (was 1s)
   const [dbCountdown, setDbCountdown] = useState(60);
   const [syncCountdown, setSyncCountdown] = useState(300);
   const dbCountdownRef = useRef(null);
   const syncCountdownRef = useRef(null);
 
   useEffect(() => {
-    // DB countdown — resets every 60s
     setDbCountdown(60);
     dbCountdownRef.current = setInterval(() => {
       setDbCountdown(s => {
-        if (s <= 1) { return 60; }
-        return s - 1;
+        if (s <= 5) { return 60; }
+        return s - 5;
       });
-    }, 1000);
+    }, 5000);
     return () => clearInterval(dbCountdownRef.current);
   }, []);
 
   useEffect(() => {
-    // Google sync countdown — resets every 5 min
     setSyncCountdown(300);
     syncCountdownRef.current = setInterval(() => {
       setSyncCountdown(s => {
-        if (s <= 1) { return 300; }
-        return s - 1;
+        if (s <= 5) { return 300; }
+        return s - 5;
       });
-    }, 1000);
+    }, 5000);
     return () => clearInterval(syncCountdownRef.current);
   }, []);
 
@@ -464,13 +463,10 @@ export default function CalendarPage() {
     }
   }, []);
 
+  // Single-click on empty cell: no action (avoids accidental dialog opens)
   const handleCellClick = useCallback((date, userId = null) => {
-    // Single-click still works for quick creation
-    const d = new Date(date);
-    d.setSeconds(0, 0);
-    setDefaultStart(d.toISOString());
-    setEditingEvent(null);
-    setDialogOpen(true);
+    // Intentionally no-op on single click to prevent accidental creation.
+    // Use double-click or the "+ New" button to create events.
   }, []);
 
   const handleCellDoubleClick = useCallback((date, userId = null) => {

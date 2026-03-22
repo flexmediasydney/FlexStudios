@@ -91,12 +91,13 @@ export default function NotificationsPage() {
   }, [filtered]);
 
   function handleNavigate(n) {
+    // Mark read first (fire-and-forget), then navigate
+    if (!n.is_read) markRead(n.id);
     if (!n.cta_url) return;
     try {
       const params = n.cta_params ? JSON.parse(n.cta_params) : {};
       navigate(createPageUrl(n.cta_url) + (params.id ? `?id=${params.id}` : ""));
     } catch { /* ignore */ }
-    if (!n.is_read) markRead(n.id);
   }
 
   function toggleSelect(id) {
@@ -108,12 +109,19 @@ export default function NotificationsPage() {
   }
 
   async function bulkMarkRead() {
-    await Promise.all(Array.from(selected).map(id => markRead(id)));
+    const ids = Array.from(selected);
+    // Process in batches of 10 to avoid overwhelming the API
+    for (let i = 0; i < ids.length; i += 10) {
+      await Promise.all(ids.slice(i, i + 10).map(id => markRead(id)));
+    }
     setSelected(new Set());
   }
 
   async function bulkDismiss() {
-    await Promise.all(Array.from(selected).map(id => dismiss(id)));
+    const ids = Array.from(selected);
+    for (let i = 0; i < ids.length; i += 10) {
+      await Promise.all(ids.slice(i, i + 10).map(id => dismiss(id)));
+    }
     setSelected(new Set());
   }
 
@@ -340,7 +348,7 @@ export default function NotificationsPage() {
                                       {n.project_name}
                                     </button>
                                   )}
-                                  <Badge className="text-[10px] h-4 capitalize" variant="outline">{n.category.replace(/_/g, ' ')}</Badge>
+                                  <Badge className="text-[10px] h-4 capitalize" variant="outline">{(n.category || 'system').replace(/_/g, ' ')}</Badge>
                                   {n.cta_url && (
                                     <span className="text-xs text-primary font-medium ml-auto flex items-center gap-0.5
                                       opacity-0 group-hover:opacity-100 transition-opacity">

@@ -90,10 +90,17 @@ export function NotificationProvider({ children }) {
   }, [currentUser?.id, fetchNotifications]);
 
   const markRead = useCallback(async (notificationId) => {
+    let wasUnread = false;
     setNotifications(prev =>
-      prev.map(n => n.id === notificationId ? { ...n, is_read: true } : n)
+      prev.map(n => {
+        if (n.id === notificationId) {
+          if (!n.is_read) wasUnread = true;
+          return { ...n, is_read: true };
+        }
+        return n;
+      })
     );
-    setUnreadCount(prev => Math.max(0, prev - 1));
+    if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
     try {
       await api.entities.Notification.update(notificationId, {
         is_read: true,
@@ -119,15 +126,20 @@ export function NotificationProvider({ children }) {
   }, [notifications, fetchNotifications]);
 
   const dismiss = useCallback(async (notificationId) => {
-    setNotifications(prev => prev.filter(n => n.id !== notificationId));
-    setUnreadCount(prev => {
-      const wasUnread = notifications.find(n => n.id === notificationId && !n.is_read);
-      return wasUnread ? Math.max(0, prev - 1) : prev;
+    let wasUnread = false;
+    setNotifications(prev => {
+      const target = prev.find(n => n.id === notificationId);
+      if (target && !target.is_read) wasUnread = true;
+      return prev.filter(n => n.id !== notificationId);
+    });
+    // Defer unreadCount update to next microtask so wasUnread is set
+    queueMicrotask(() => {
+      if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
     });
     try {
       await api.entities.Notification.update(notificationId, { is_dismissed: true });
     } catch { fetchNotifications(true); }
-  }, [notifications, fetchNotifications]);
+  }, [fetchNotifications]);
 
   const refresh = useCallback(() => fetchNotifications(false), [fetchNotifications]);
 

@@ -369,7 +369,8 @@ export default function Dashboard() {
       days.push({
         date: dateStr,
         actual: isPast ? dayRevenue : null,
-        forecast: !isPast ? dayRevenue || (Math.random() * 5000 + 2000) : null
+        // Use a deterministic seed based on day offset to prevent flickering on re-render
+        forecast: !isPast ? dayRevenue || (((i * 2654435761) >>> 0) % 5000 + 2000) : null
       });
     }
     return days;

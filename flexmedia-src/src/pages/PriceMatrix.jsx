@@ -43,7 +43,8 @@ export default function PriceMatrixPage() {
     if (projectTypes.length === 1 && !selectedProjectTypeId) {
       setSelectedProjectTypeId(projectTypes[0].id);
     }
-  }, [projectTypes, selectedProjectTypeId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectTypes.length]);
 
   const selectedProjectType = projectTypes.find(t => t.id === selectedProjectTypeId) || null;
 

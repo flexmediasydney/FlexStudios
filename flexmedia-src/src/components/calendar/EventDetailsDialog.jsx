@@ -54,6 +54,7 @@ export default function EventDetailsDialog({
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [markingDone, setMarkingDone] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const { data: projects = [] } = useQuery({
     queryKey: ["projects-for-cal"],
@@ -257,23 +258,28 @@ export default function EventDetailsDialog({
   };
 
   const handleDelete = async () => {
-    if (!event?.id || !confirm("Delete this activity?")) return;
+    if (!event?.id || deleting || !confirm("Delete this activity?")) return;
 
-    // Trigger Google Calendar delete before local delete.
-    // Server-side function enforces: only flexmedia events, only the creator.
+    setDeleting(true);
     try {
-      await api.functions.invoke('deleteCalendarEventFromGoogle', {
-        calendar_event_id: event.id,
-      });
-    } catch (err) {
-      console.warn('deleteCalendarEventFromGoogle skipped:', err?.message);
-      toast.error('Failed to remove event from Google Calendar. Deleting locally.');
-    }
+      // Trigger Google Calendar delete before local delete.
+      // Server-side function enforces: only flexmedia events, only the creator.
+      try {
+        await api.functions.invoke('deleteCalendarEventFromGoogle', {
+          calendar_event_id: event.id,
+        });
+      } catch (err) {
+        console.warn('deleteCalendarEventFromGoogle skipped:', err?.message);
+        toast.error('Failed to remove event from Google Calendar. Deleting locally.');
+      }
 
-    await api.entities.CalendarEvent.delete(event.id);
-    invalidateAll();
-    onSave?.();
-    onClose();
+      await api.entities.CalendarEvent.delete(event.id);
+      invalidateAll();
+      onSave?.();
+      onClose();
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const invalidateAll = () => {
@@ -364,7 +370,14 @@ export default function EventDetailsDialog({
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" onKeyDown={(e) => {
-        if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (editable) handleSubmit(e); }
+        if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          if (editable) {
+            // Trigger native form validation via requestSubmit (unlike handleSubmit directly)
+            const form = e.currentTarget.querySelector('form');
+            if (form) form.requestSubmit();
+          }
+        }
       }}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 flex-wrap justify-between">
@@ -735,7 +748,7 @@ export default function EventDetailsDialog({
           <DialogFooter className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex gap-2">
               {event?.id && editable && (
-                <Button type="button" variant="destructive" size="sm" onClick={handleDelete} className="hover:shadow-sm transition-shadow">
+                <Button type="button" variant="destructive" size="sm" onClick={handleDelete} disabled={deleting} className="hover:shadow-sm transition-shadow">
                   Delete
                 </Button>
               )}

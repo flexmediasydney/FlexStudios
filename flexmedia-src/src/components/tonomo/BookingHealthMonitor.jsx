@@ -91,12 +91,18 @@ export default function BookingHealthMonitor() {
     };
   }, [queue]);
 
-  // Heartbeat freshness
+  // Heartbeat freshness — re-evaluate periodically, not just when settings change
+  const [freshnessTick, setFreshnessTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setFreshnessTick(t => t + 1), 30000); // tick every 30s
+    return () => clearInterval(timer);
+  }, []);
+
   const heartbeatFresh = useMemo(() => {
     if (!settings?.heartbeat_at) return false;
     const hb = parseTS(settings.heartbeat_at);
     return hb && (Date.now() - hb.getTime()) < 10 * 60 * 1000; // within 10 min
-  }, [settings]);
+  }, [settings, freshnessTick]);
 
   return (
     <Card className="overflow-hidden">

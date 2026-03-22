@@ -187,15 +187,27 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/**
+ * Strip dangerous tags/attributes from email body before embedding in quoted reply.
+ * Prevents script injection via the compose editor.
+ */
+function sanitizeBodyForQuote(html) {
+  if (!html) return "";
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '')
+    .replace(/(href|src)\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"');
+}
+
 function buildQuotedReplyHtml(msg) {
   if (!msg) return "";
   const sender = escapeHtml(msg.from_name || msg.from || "unknown");
   const date = msg.received_at
     ? new Date(msg.received_at).toLocaleString("en-AU", { timeZone: "Australia/Sydney" })
     : "";
-  // Body is already HTML from the original email — it passes through ReactQuill's
-  // sanitization layer, so we don't double-escape it here.
-  return `<br/><br/><div style="border-left: 2px solid #ccc; padding-left: 12px; margin-left: 4px; color: #666;"><p>On ${escapeHtml(date)}, ${sender} wrote:</p>${msg.body || ""}</div>`;
+  const safeBody = sanitizeBodyForQuote(msg.body || "");
+  return `<br/><br/><div style="border-left: 2px solid #ccc; padding-left: 12px; margin-left: 4px; color: #666;"><p>On ${escapeHtml(date)}, ${sender} wrote:</p>${safeBody}</div>`;
 }
 
 export default function EmailComposeDialog({
@@ -412,8 +424,6 @@ export default function EmailComposeDialog({
         throw new Error("Subject required");
       }
 
-      setIsLoading(true);
-
       const idemKey = buildIdempotencyKey(recipients, subject, body);
       const response = await api.functions.invoke("sendGmailMessage", {
         emailAccountId: selectedAccount,
@@ -431,7 +441,6 @@ export default function EmailComposeDialog({
         idempotency_key: idemKey,
       });
 
-      setIsLoading(false);
       return response;
     },
     onSuccess: () => {
@@ -471,7 +480,6 @@ export default function EmailComposeDialog({
     },
     onError: (error) => {
       toast.error(error.message || "Failed to send email");
-      setIsLoading(false);
     },
   });
 
@@ -1016,14 +1024,14 @@ export default function EmailComposeDialog({
                 <div className="flex items-center">
                   <Button
                     onClick={() => {
-                      if (sendMutation.isPending || isLoading || uploadProgress === 'uploading') return;
+                      if (sendMutation.isPending || uploadProgress === 'uploading') return;
                       sendMutation.mutate();
                     }}
                     disabled={isLoading || sendMutation.isPending || uploadProgress === 'uploading' || !recipients.trim() || !subject.trim()}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md hover:shadow-lg active:scale-95 transition-all rounded-r-none"
                     size="lg"
                   >
-                    {(sendMutation.isPending || isLoading) && (
+                    {(sendMutation.isPending) && (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     )}
                     {sendMutation.isPending ? "Sending…" : (type === "forward" ? "Forward" : "Send")}

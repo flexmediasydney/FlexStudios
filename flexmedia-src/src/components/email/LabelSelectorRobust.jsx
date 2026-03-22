@@ -70,19 +70,35 @@ export default function LabelSelectorRobust({
   });
 
   const deleteLabelMutation = useMutation({
-    mutationFn: (labelId) => api.entities.EmailLabel.delete(labelId),
-    onSuccess: () => {
+    mutationFn: async (labelId) => {
+      // Find the label name before deleting so we can remove it from selections
+      const label = labels.find(l => l.id === labelId);
+      await api.entities.EmailLabel.delete(labelId);
+      return { deletedName: label?.name };
+    },
+    onSuccess: ({ deletedName }) => {
       queryClient.invalidateQueries({ queryKey: ["email-labels", emailAccountId] });
+      // Remove the deleted label from the current selection
+      if (deletedName && selectedLabels.includes(deletedName)) {
+        onLabelsChange(selectedLabels.filter(l => l !== deletedName));
+      }
       toast.success("Label deleted");
     },
     onError: () => toast.error("Failed to delete label"),
   });
 
   const updateLabelMutation = useMutation({
-    mutationFn: ({ id, name, color }) =>
-      api.entities.EmailLabel.update(id, { name, color }),
-    onSuccess: () => {
+    mutationFn: async ({ id, name, color }) => {
+      const oldLabel = labels.find(l => l.id === id);
+      await api.entities.EmailLabel.update(id, { name, color });
+      return { oldName: oldLabel?.name, newName: name };
+    },
+    onSuccess: ({ oldName, newName }) => {
       queryClient.invalidateQueries({ queryKey: ["email-labels", emailAccountId] });
+      // Update selectedLabels if the renamed label was selected
+      if (oldName && newName && oldName !== newName && selectedLabels.includes(oldName)) {
+        onLabelsChange(selectedLabels.map(l => l === oldName ? newName : l));
+      }
       setEditingLabel(null);
       toast.success("Label updated");
     },

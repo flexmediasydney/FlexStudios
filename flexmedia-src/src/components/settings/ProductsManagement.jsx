@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, GitBranch, History, Camera, BookOpen, LayoutList, Grid3x3, Trello } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,7 +132,8 @@ export default function ProductsManagement() {
       return result;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      // useEntityList uses shared cache (not react-query), so use refetchEntityList
+      refetchEntityList("Product");
       const action = editingProduct ? "updated" : "created";
       toast.success(`Product "${editingProduct?.name || pendingSaveData?.name}" ${action}`);
       handleClose();
@@ -159,16 +160,11 @@ export default function ProductsManagement() {
 
   const deleteMutation = useMutation({
     mutationFn: async (product) => {
-      const impact = await api.functions.invoke('analyzeProductImpact', {
-        productId: product.id,
-        productName: product.name
-      }).catch(() => null);
-      
       await api.entities.Product.delete(product.id);
       await logChange("delete", { id: product.id, name: product.name }, product, null);
-      return impact?.data;
     },
     onSuccess: () => {
+      refetchEntityList("Product");
       toast.success(`Product "${deletingProduct?.name}" deleted`);
       setDeletingProduct(null);
     },

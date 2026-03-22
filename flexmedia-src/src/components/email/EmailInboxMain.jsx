@@ -142,15 +142,18 @@ export default function EmailInboxMain() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
   
-  // Enforce undo stack limit
+  // Enforce undo stack limit using functional updater to avoid infinite loops
   useEffect(() => {
     if (undoStack.length > MAX_UNDO_STACK) {
-      setUndoStack(undoStack.slice(-MAX_UNDO_STACK));
+      setUndoStack(prev => prev.length > MAX_UNDO_STACK ? prev.slice(-MAX_UNDO_STACK) : prev);
     }
+  }, [undoStack.length]);
+
+  useEffect(() => {
     if (redoStack.length > MAX_UNDO_STACK) {
-      setRedoStack(redoStack.slice(-MAX_UNDO_STACK));
+      setRedoStack(prev => prev.length > MAX_UNDO_STACK ? prev.slice(-MAX_UNDO_STACK) : prev);
     }
-  }, [undoStack.length, redoStack.length]);
+  }, [redoStack.length]);
 
   const {
     columns,
@@ -354,8 +357,9 @@ export default function EmailInboxMain() {
   const handleUndo = async () => {
     if (undoStack.length === 0) return;
     const lastAction = undoStack[undoStack.length - 1];
-    setRedoStack([...redoStack, lastAction]);
-    setUndoStack(undoStack.slice(0, -1));
+    // Use functional updaters to avoid stale closure issues (e.g., called from toast action)
+    setRedoStack(prev => [...prev, lastAction]);
+    setUndoStack(prev => prev.slice(0, -1));
     
     // Reverse the action
     if (lastAction.type === 'delete') {

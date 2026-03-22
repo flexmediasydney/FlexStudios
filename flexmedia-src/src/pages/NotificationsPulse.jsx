@@ -249,12 +249,20 @@ export default function NotificationsPulse() {
             return (
               <div
                 key={n.id}
+                role={n.project_id ? "button" : undefined}
+                tabIndex={n.project_id ? 0 : undefined}
                 className={`flex items-start gap-3 p-3 rounded-lg border transition-colors
                   ${!n.is_read ? sc.bg || "bg-blue-50/30 border-blue-100 dark:bg-blue-950/10" : "border-border/40 hover:bg-muted/30"}
                   ${n.project_id ? "cursor-pointer" : ""}
                 `}
                 onClick={() => {
                   if (n.project_id) navigate(createPageUrl("ProjectDetails") + `?id=${n.project_id}`);
+                }}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ' ') && n.project_id) {
+                    e.preventDefault();
+                    navigate(createPageUrl("ProjectDetails") + `?id=${n.project_id}`);
+                  }
                 }}
               >
                 <Icon className={`h-4 w-4 mt-0.5 flex-shrink-0 ${sc.color}`} />
