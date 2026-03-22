@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useQuery } from "@tanstack/react-query";
@@ -14,6 +14,15 @@ import { cn } from "@/lib/utils";
 import { useEffortLogs, formatDuration, getStatusColor } from "./useEffortLogging";
 import TimerLogActions from "./TimerLogActions";
 import TimerLogDetailModal from "./TimerLogDetailModal";
+
+/** Compute live seconds for a log, accounting for running timers whose total_seconds is stale */
+function computeLiveSeconds(log) {
+  if (!log) return 0;
+  if (log.status === 'running' && log.is_active && log.start_time) {
+    return Math.max(0, Math.floor((Date.now() - new Date(log.start_time).getTime()) / 1000) - (log.paused_duration || 0));
+  }
+  return log.total_seconds || 0;
+}
 
 export default function EffortLoggingTab({ projectId, project }) {
   const [expandedLogs, setExpandedLogs] = useState(new Set());
@@ -36,6 +45,15 @@ export default function EffortLoggingTab({ projectId, project }) {
   // Exclude effort logs belonging to deleted tasks
   const deletedTaskIds = new Set(tasks.filter(t => t.is_deleted).map(t => t.id));
   const timeLogs = rawTimeLogs.filter(log => !deletedTaskIds.has(log.task_id));
+
+  // Tick every second when any timer is running to keep durations live
+  const [, setTick] = useState(0);
+  const hasRunning = timeLogs.some(log => log.is_active && log.status === 'running');
+  useEffect(() => {
+    if (!hasRunning) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasRunning]);
 
   const toggleExpand = (id) => {
     const newSet = new Set(expandedLogs);
@@ -101,6 +119,7 @@ export default function EffortLoggingTab({ projectId, project }) {
               variant={viewMode === "cards" ? "default" : "outline"}
               onClick={() => setViewMode("cards")}
               className="h-8 w-8 p-0"
+              aria-label="Card view"
             >
               <Layout className="h-4 w-4" />
             </Button>
@@ -109,6 +128,7 @@ export default function EffortLoggingTab({ projectId, project }) {
               variant={viewMode === "table" ? "default" : "outline"}
               onClick={() => setViewMode("table")}
               className="h-8 w-8 p-0"
+              aria-label="Table view"
             >
               <List className="h-4 w-4" />
             </Button>
@@ -196,9 +216,9 @@ export default function EffortLoggingTab({ projectId, project }) {
                   {filteredLogs.length} {filteredLogs.length === 1 ? "entry" : "entries"}
                 </p>
                 {viewMode === "cards" ? (
-                   <CardViewContent groupedLogs={filteredGroupedLogs} tasks={tasks} expandedLogs={expandedLogs} toggleExpand={toggleExpand} onLogClick={setSelectedLog} currentUser={user} isMasterAdmin={isMasterAdmin} />
+                   <CardViewContent groupedLogs={filteredGroupedLogs} tasks={tasks} expandedLogs={expandedLogs} toggleExpand={toggleExpand} onLogClick={setSelectedLog} currentUser={currentUser} isMasterAdmin={isMasterAdmin} />
                  ) : (
-                   <TableViewContent timeLogs={filteredLogs} tasks={tasks} onLogClick={setSelectedLog} currentUser={user} isMasterAdmin={isMasterAdmin} />
+                   <TableViewContent timeLogs={filteredLogs} tasks={tasks} onLogClick={setSelectedLog} currentUser={currentUser} isMasterAdmin={isMasterAdmin} />
                  )}
                 </>
                 )}
@@ -212,7 +232,7 @@ export default function EffortLoggingTab({ projectId, project }) {
                 <TimerLogDetailModal 
                 log={selectedLog} 
                 onClose={() => setSelectedLog(null)}
-                currentUser={user}
+                currentUser={currentUser}
                 isMasterAdmin={isMasterAdmin}
                 />
                 )}
@@ -226,7 +246,7 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
       {Object.entries(groupedLogs).map(([groupKey, logs]) => {
         const isExpanded = expandedLogs.has(groupKey);
         const parentLog = logs[0];
-        const totalLoggedTime = logs.reduce((sum, log) => sum + (log.total_seconds || 0), 0);
+        const totalLoggedTime = logs.reduce((sum, log) => sum + computeLiveSeconds(log), 0);
         const isMultiSession = logs.length > 1;
         const colors = getStatusColor(parentLog.status);
         const taskTitle = tasks.find(t => t.id === parentLog.task_id)?.title || parentLog.task_id?.slice(0, 8);
@@ -289,7 +309,7 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground font-medium">Total Time</p>
-                      <p className="font-bold text-sm">{isMultiSession ? formatDuration(totalLoggedTime) : formatDuration(parentLog.total_seconds)}</p>
+                      <p className="font-bold text-sm">{isMultiSession ? formatDuration(totalLoggedTime) : formatDuration(computeLiveSeconds(parentLog))}</p>
                     </div>
                   </div>
 
@@ -316,7 +336,7 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
                          Session {idx + 1}
                        </span>
                        <span className="text-xs font-mono font-bold">
-                         {formatDuration(log.total_seconds)}
+                         {formatDuration(computeLiveSeconds(log))}
                        </span>
                      </div>
                      <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
@@ -389,7 +409,7 @@ function TableViewContent({ timeLogs, tasks, onLogClick, currentUser, isMasterAd
                   {fmtTimestampCustom(log.end_time, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
                 </TableCell>
                 <TableCell className="text-right font-bold">
-                  {formatDuration(log.total_seconds)}
+                  {formatDuration(computeLiveSeconds(log))}
                 </TableCell>
                 <TableCell onClick={(e) => e.stopPropagation()}>
                   <TimerLogActions log={log} currentUser={currentUser} isMasterAdmin={isMasterAdmin} />

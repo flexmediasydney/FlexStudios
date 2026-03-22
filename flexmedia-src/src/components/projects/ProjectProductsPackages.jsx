@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, AlertCircle, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/api/supabaseClient";
 import { useProjectItemsManager } from "./hooks/useProjectItemsManager";
 import AddItemsDialog from "./AddItemsDialog";
@@ -347,8 +348,11 @@ export default function ProjectProductsPackages({ project }) {
       api.functions.invoke('recalculateProjectPricingServerSide', {
         project_id: project.id,
       }).catch(() => {});
+
+      toast.success("Products & packages saved");
     } catch (err) {
       setError(err.message || 'Failed to save changes');
+      toast.error(err.message || 'Failed to save changes');
     }
   };
 

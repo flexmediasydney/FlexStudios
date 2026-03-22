@@ -614,7 +614,17 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-4" onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
+        if (e.key === 'Escape') {
+          // Bug fix: warn before closing if there are unsaved changes
+          if (unsavedChanges) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.confirm('You have unsaved changes. Discard and close?')) {
+              onClose();
+            }
+          }
+          // If no unsaved changes, let the Dialog's default Escape handler close it
+        }
         if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSubmit(e); }
       }}>
         <DialogHeader className="pb-3 border-b">

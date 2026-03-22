@@ -175,10 +175,13 @@ function calculateEffortMetrics(timeLogs, projectTasks, projectRevisions) {
      }
    });
 
-  // Calculate actual effort by role for tasks vs revisions
+  // Build set of known (non-deleted) task IDs to exclude effort from deleted tasks
+  const knownTaskIds = new Set(projectTasks.map(t => t.id));
+
+  // Calculate actual effort by role for tasks vs revisions (exclude logs from deleted/unknown tasks)
   const taskActByRole = {};
   const revisionActByRole = {};
-  timeLogs.filter(log => !log.task_deleted).forEach(log => {
+  timeLogs.filter(log => knownTaskIds.has(log.task_id)).forEach(log => {
     const role = log.role || 'admin';
     const seconds = computeLogSeconds(log);
     if (revisionTaskIds.has(log.task_id)) {

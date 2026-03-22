@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,6 +14,22 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
   const [hours, setHours] = useState("");
   const [minutes, setMinutes] = useState("");
   const [error, setError] = useState("");
+
+  // Reset form when dialog opens
+  useEffect(() => {
+    if (open) {
+      setHours("");
+      setMinutes("");
+      setError("");
+    }
+  }, [open]);
+
+  // Block non-integer characters in number inputs (e, +, -, .)
+  const blockNonInteger = (e) => {
+    if (['e', 'E', '+', '-', '.'].includes(e.key)) {
+      e.preventDefault();
+    }
+  };
 
   // Validate role param (before mutation)
   const validRole = role && ["photographer", "videographer", "image_editor", "video_editor", "admin"].includes(role)
@@ -98,7 +114,10 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
       setError("");
       if (onClose) onClose();
     },
-    onError: (err) => toast.error(err?.message || "Failed to log time entry"),
+    onError: (err) => {
+      setError(err?.message || "Failed to log time entry");
+      toast.error(err?.message || "Failed to log time entry");
+    },
   });
 
   // Now we can safely guard against invalid props
@@ -129,8 +148,10 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
                 type="number"
                 min="0"
                 max="24"
+                step="1"
                 value={hours}
                 onChange={(e) => setHours(e.target.value)}
+                onKeyDown={blockNonInteger}
                 placeholder="0"
                 className="mt-1.5 h-9"
                 disabled={mutation.isPending}
@@ -144,8 +165,10 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
                 type="number"
                 min="0"
                 max="59"
+                step="1"
                 value={minutes}
                 onChange={(e) => setMinutes(e.target.value)}
+                onKeyDown={blockNonInteger}
                 placeholder="0"
                 className="mt-1.5 h-9"
                 disabled={mutation.isPending}

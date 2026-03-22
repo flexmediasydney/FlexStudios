@@ -282,7 +282,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
                   "relative flex flex-col items-center justify-center h-12 transition-all duration-200 select-none outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary active:scale-95",
                   isFirst ? "pl-4 pr-6 min-w-[90px]" : isLast ? "pl-6 pr-4 min-w-[90px]" : "px-5 min-w-[90px]",
                   bgClass, hoverClass,
-                  canEdit ? "cursor-pointer" : "cursor-default",
+                  canEdit ? "cursor-pointer" : "cursor-default opacity-90",
                   isCurrent && "ring-2 ring-[#1a73e8]/30"
                 )}
                 style={{ clipPath, marginLeft: index === 0 ? 0 : "-2px" }}

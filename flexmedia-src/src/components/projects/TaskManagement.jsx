@@ -647,8 +647,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
         }}>
           <DialogHeader><DialogTitle>Add Task</DialogTitle></DialogHeader>
           <div className="space-y-3">
-             <Input placeholder="Task title *" value={newTask.title} onChange={e => setNewTask(p => ({ ...p, title: e.target.value }))} autoFocus />
-             <Textarea placeholder="Description (optional)" value={newTask.description || ""} onChange={e => setNewTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} />
+             <Input placeholder="Task title *" value={newTask.title} onChange={e => setNewTask(p => ({ ...p, title: e.target.value }))} autoFocus aria-label="Task title" disabled={createMutation.isPending} />
+             <Textarea placeholder="Description (optional)" value={newTask.description || ""} onChange={e => setNewTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} aria-label="Task description" disabled={createMutation.isPending} />
              <p className="text-xs text-muted-foreground text-right">{(newTask.description || "").length}/500</p>
              <div>
                <label className="text-xs font-medium block mb-1.5">Task Type</label>
@@ -704,8 +704,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
           <DialogContent className="max-w-md">
             <DialogHeader><DialogTitle>Edit Task</DialogTitle></DialogHeader>
             <div className="space-y-3">
-               <Input value={editingTask.title || ""} onChange={e => setEditingTask(p => ({ ...p, title: e.target.value }))} />
-               <Textarea value={editingTask.description || ""} onChange={e => setEditingTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} />
+               <Input value={editingTask.title || ""} onChange={e => setEditingTask(p => ({ ...p, title: e.target.value }))} disabled={updateMutation.isPending} aria-label="Task title" />
+               <Textarea value={editingTask.description || ""} onChange={e => setEditingTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} disabled={updateMutation.isPending} aria-label="Task description" />
                <p className="text-xs text-muted-foreground text-right">{(editingTask.description || "").length}/500</p>
                <div>
                  <label className="text-xs font-medium block mb-1.5">Task Type</label>
@@ -792,7 +792,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
               </Popover>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setEditingTask(null)}>Cancel</Button>
+              <Button variant="outline" onClick={() => setEditingTask(null)} disabled={updateMutation.isPending}>Cancel</Button>
               <Button 
                 disabled={!editingTask?.title?.trim() || updateMutation.isPending} 
                 onClick={() => editingTask && updateMutation.mutate({ id: editingTask.id, data: { title: editingTask.title, description: editingTask.description, task_type: editingTask.task_type || "back_office", assigned_to: editingTask.assigned_to, assigned_to_name: editingTask.assigned_to_name, assigned_to_team_id: editingTask.assigned_to_team_id, assigned_to_team_name: editingTask.assigned_to_team_name, due_date: editingTask.due_date, depends_on_task_ids: editingTask.depends_on_task_ids || [], is_manually_set_due_date: !!editingTask.due_date } })}
@@ -815,8 +815,9 @@ export default function TaskManagement({ projectId, project, canEdit }) {
             : "This task will be permanently deleted."
         }
         confirmText={deleteMutation.isPending ? "Deleting…" : "Delete"}
-        onConfirm={() => deleteConfirm && deleteMutation.mutate(deleteConfirm.id)}
-        onCancel={() => setDeleteConfirm(null)}
+        confirmDisabled={deleteMutation.isPending}
+        onConfirm={() => deleteConfirm && !deleteMutation.isPending && deleteMutation.mutate(deleteConfirm.id)}
+        onCancel={() => { if (!deleteMutation.isPending) setDeleteConfirm(null); }}
       />
     </div>
   );

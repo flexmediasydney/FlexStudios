@@ -9,7 +9,8 @@ import { toast } from "sonner";
 export default function TimerLogActions({ log, currentUser, isMasterAdmin }) {
   const queryClient = useQueryClient();
   const isOwner = log.user_id === currentUser?.id;
-  const canEdit = isMasterAdmin || isOwner;
+  const isActive = log.is_active && (log.status === 'running' || log.status === 'paused');
+  const canEdit = (isMasterAdmin || isOwner) && !isActive;
 
   const deleteMutation = useMutation({
     mutationFn: () => api.entities.TaskTimeLog.delete(log.id),

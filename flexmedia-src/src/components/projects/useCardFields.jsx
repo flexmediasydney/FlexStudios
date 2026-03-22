@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+// useEffect is needed to persist card field selections to localStorage
 
 export const ALL_CARD_FIELDS = [
   { id: "agency_name",    label: "Agency",        group: "Client" },
@@ -31,8 +32,24 @@ const STORAGE_KEY = "project_card_fields_v2";
 export function useCardFields() {
   // Store ONLY the ordered list of enabled IDs.
   // The order is exactly as the user arranged it.
-  // localStorage is not available in Base44 — use React state only.
-  const [enabledFields, setEnabledFields] = useState(DEFAULT_ENABLED);
+  // Bug fix: persist to localStorage so customizations survive navigation.
+  const [enabledFields, setEnabledFields] = useState(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_ENABLED;
+  });
+
+  // Sync to localStorage whenever enabledFields changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(enabledFields));
+    } catch {}
+  }, [enabledFields]);
 
   const toggleField = (id) => {
     setEnabledFields(prev => {

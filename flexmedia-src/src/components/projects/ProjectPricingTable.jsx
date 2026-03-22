@@ -132,6 +132,7 @@ export default function ProjectPricingTable({
       )
     }));
     setPendingTotal(null);
+    setCurrentPage(0);
   };
 
   const handleAddItem = (type, id) => {
@@ -172,6 +173,7 @@ export default function ProjectPricingTable({
     }
     setShowAddDialog(false);
     setPendingTotal(null);
+    setCurrentPage(0);
   };
 
   // Step 1 of save: verify with backend, show total in confirm dialog
@@ -366,10 +368,11 @@ export default function ProjectPricingTable({
   };
 
   // Debounce qty changes to avoid excessive re-renders
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const debouncedUpdateQty = useCallback((productId, newQty) => {
     const timer = setTimeout(() => handleUpdateQty(productId, newQty), 200);
     return () => clearTimeout(timer);
-  }, []);
+  }, [allProducts]);
 
   // Change detection
   const hasChanges = useMemo(() => {

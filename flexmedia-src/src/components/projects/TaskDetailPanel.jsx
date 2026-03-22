@@ -60,6 +60,13 @@ export default function TaskDetailPanel({
   };
 
   const [deadlineInput, setDeadlineInput] = useState(toLocalInput(task.due_date));
+
+  // Sync deadline input when the task prop changes (e.g. user selects a different task)
+  useEffect(() => {
+    setDeadlineInput(toLocalInput(task.due_date));
+    setEditingDeadline(false);
+  }, [task.id, task.due_date]);
+
   const { openChat } = useChat();
 
   // Live time logs for this specific task (real-time actual effort)
@@ -312,6 +319,7 @@ export default function TaskDetailPanel({
               variant="outline"
               className="h-6 text-xs px-2"
               onClick={() => onEdit(task)}
+              disabled={lockMutation.isPending}
             >
               Edit
             </Button>
@@ -330,7 +338,7 @@ export default function TaskDetailPanel({
               title={task.is_locked ? "Unlock time logging" : "Lock time logging"}
             >
               <Lock className="h-3 w-3 mr-1" />
-              {task.is_locked ? "Unlock" : "Lock"}
+              {lockMutation.isPending ? "Updating..." : task.is_locked ? "Unlock" : "Lock"}
             </Button>
             {!(task.is_locked || (task.task_type === 'onsite' && task.auto_generated)) && (
               <Button

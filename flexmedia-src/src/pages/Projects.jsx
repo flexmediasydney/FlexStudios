@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, LayoutGrid, List, Columns3, X, Camera } from "lucide-react";
@@ -36,6 +36,17 @@ export default function Projects() {
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const searchTimerRef = useRef(null);
+  const handleSearchChange = useCallback((value) => {
+    setSearchInput(value);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => setSearchQuery(value), 250);
+  }, []);
+  // Keep searchInput in sync when searchQuery is cleared programmatically
+  useEffect(() => {
+    if (searchQuery === "" && searchInput !== "") setSearchInput("");
+  }, [searchQuery]);
   const [viewMode, setViewMode] = useState("kanban");
   const [fitToScreen, setFitToScreen] = useState(false);
   const [showFieldCustomizer, setShowFieldCustomizer] = useState(false);
@@ -59,10 +70,16 @@ export default function Projects() {
   // Keyboard shortcuts: Esc to clear search, Ctrl+N for new project, Ctrl+K/G/L for view modes, ? for help
   React.useEffect(() => {
     const handler = (e) => {
+      // Bug fix: don't fire shortcuts when user is typing in an input/textarea/select
+      const tag = document.activeElement?.tagName;
+      const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || document.activeElement?.isContentEditable;
+
       if (e.key === 'Escape' && searchQuery) {
         e.preventDefault();
         setSearchQuery('');
+        setSearchInput('');
       }
+      // Modifier-based shortcuts work even inside inputs
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
         e.preventDefault();
         handleCreateNew();
@@ -79,6 +96,8 @@ export default function Projects() {
         e.preventDefault();
         setViewMode('list');
       }
+      // Non-modifier shortcuts: skip if user is typing in an input
+      if (isEditable) return;
       if ((e.shiftKey) && e.key === 'F') {
         e.preventDefault();
         if (viewMode === 'kanban') setFitToScreen(!fitToScreen);
@@ -137,6 +156,18 @@ export default function Projects() {
       : allProjects,
     [isContractor, allProjects, canAccessProject]
   );
+
+  // Bug fix: pre-compute task map BEFORE filteredProjects so sort can use it (avoids O(n*m) inside comparator)
+  const tasksByProject = useMemo(() => {
+    const map = {};
+    allTasks.forEach(t => {
+      if (!t.parent_task_id) {
+        if (!map[t.project_id]) map[t.project_id] = [];
+        map[t.project_id].push(t);
+      }
+    });
+    return map;
+  }, [allTasks]);
 
   // Memoize filtered projects to prevent excessive recalculation (Fix #10)
   const filteredProjects = useMemo(() => {
@@ -263,14 +294,32 @@ export default function Projects() {
     })
     .sort((a, b) => {
       if (sortBy === "task_deadline") {
-        const aTask = allTasks.filter(t => t.project_id === a.id).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
-        const bTask = allTasks.filter(t => t.project_id === b.id).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
+        // Bug fix: use pre-computed tasksByProject map instead of O(n) filter per comparison
+        const aTask = (tasksByProject[a.id] || []).filter(t => t.due_date).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
+        const bTask = (tasksByProject[b.id] || []).filter(t => t.due_date).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
         if (!aTask && !bTask) return 0;
         if (!aTask) return 1;
         if (!bTask) return -1;
         return new Date(fixTimestamp(aTask.due_date)) - new Date(fixTimestamp(bTask.due_date));
       } else if (sortBy === "next_activity") {
-        return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
+        // Bug fix: sort by nearest upcoming date (shoot_date or earliest incomplete task due_date)
+        const getNextActivity = (project) => {
+          const now = new Date();
+          const candidates = [];
+          if (project.shoot_date) {
+            const sd = new Date(project.shoot_date);
+            if (sd >= now) candidates.push(sd);
+          }
+          const pTasks = allTasks.filter(t => t.project_id === project.id && !t.parent_task_id);
+          pTasks.forEach(t => {
+            if (!t.is_completed && t.due_date) {
+              const d = new Date(fixTimestamp(t.due_date));
+              if (d >= now) candidates.push(d);
+            }
+          });
+          return candidates.length > 0 ? Math.min(...candidates.map(d => d.getTime())) : Infinity;
+        };
+        return getNextActivity(a) - getNextActivity(b);
       } else if (sortBy === "created_date") {
         return new Date(fixTimestamp(b.created_date)) - new Date(fixTimestamp(a.created_date));
       } else if (sortBy === "shoot_date_asc") {
@@ -280,19 +329,9 @@ export default function Projects() {
       }
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
-  }, [projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
+  }, [projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
 
-  // Pre-compute maps so table cells don't need O(n) filter per row
-  const tasksByProject = useMemo(() => {
-    const map = {};
-    allTasks.forEach(t => {
-      if (!t.parent_task_id) {
-        if (!map[t.project_id]) map[t.project_id] = [];
-        map[t.project_id].push(t);
-      }
-    });
-    return map;
-  }, [allTasks]);
+  // tasksByProject is now computed above filteredProjects (Bug fix #7)
 
   const timeLogsByProject = useMemo(() => {
     const map = {};
@@ -463,19 +502,19 @@ export default function Projects() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
         <Input
           placeholder="Search projects, addresses, clients... (Esc to clear)"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          value={searchInput}
+          onChange={(e) => handleSearchChange(e.target.value)}
           className="pl-10 pr-20 h-10 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 transition-all"
           title="Search by project title, address, or client name (Esc to clear)"
           autoComplete="off"
           spellCheck="false"
           aria-label="Search projects by title, address, or client"
         />
-        {searchQuery && (
+        {searchInput && (
          <>
-           <span className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 font-medium tabular-nums">{searchQuery.length}</span>
+           <span className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 font-medium tabular-nums">{searchInput.length}</span>
            <button
-            onClick={() => setSearchQuery("")}
+            onClick={() => { setSearchInput(""); setSearchQuery(""); }}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full p-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
             title="Clear search (Esc)"
             aria-label="Clear search"
@@ -666,7 +705,7 @@ export default function Projects() {
           onRowClick={handleEdit}
           pageSize={75}
           emptyMessage={
-            searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0)
+            searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all'
               ? "No projects match your filters"
               : "No projects yet — create your first project above"
           }
@@ -700,7 +739,7 @@ export default function Projects() {
         ) : filteredProjects.length === 0 ? (
           <Card className="p-12 text-center border-2 border-dashed bg-muted/30 shadow-sm">
             <div className="max-w-md mx-auto">
-              {searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) ? (
+              {searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all' ? (
                 <>
                   <div className="relative inline-block">
                     <Search className="h-12 w-12 mx-auto mb-3 text-muted-foreground/30" />
@@ -710,7 +749,7 @@ export default function Projects() {
                   <p className="text-muted-foreground mb-4 text-sm">
                     Try adjusting your search or filters to see more results
                   </p>
-                  <Button variant="outline" size="sm" onClick={() => { setSearchQuery(""); setFilters({}); }} className="shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9">
+                  <Button variant="outline" size="sm" onClick={() => { setSearchQuery(""); setSearchInput(""); setFilters({}); setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); }} className="shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9">
                     <X className="h-4 w-4 mr-1.5" />
                     Clear All Filters
                   </Button>
@@ -739,6 +778,8 @@ export default function Projects() {
                 products={products}
                 packages={packages}
                 fitToScreen={fitToScreen}
+                allTasks={allTasks}
+                allTimeLogs={allTimeLogs}
               />
             </ErrorBoundary>
           </div>

@@ -94,6 +94,7 @@ export default function ProjectActivityHub({ projectId, project }) {
 
   const handleNoteSaved = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['org-notes-project', projectId] });
+    queryClient.invalidateQueries({ queryKey: ['project-activities', projectId] });
   }, [queryClient, projectId]);
 
   // ── Pinned notes ──

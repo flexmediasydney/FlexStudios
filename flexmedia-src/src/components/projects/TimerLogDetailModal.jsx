@@ -18,6 +18,13 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
   const [hours, setHours] = useState(Math.floor(log.total_seconds / 3600));
   const [minutes, setMinutes] = useState(Math.floor((log.total_seconds % 3600) / 60));
 
+  // Reset edit state when a different log is viewed
+  useEffect(() => {
+    setHours(Math.floor(log.total_seconds / 3600));
+    setMinutes(Math.floor((log.total_seconds % 3600) / 60));
+    setEditMode(false);
+  }, [log.id, log.total_seconds]);
+
   const { data: task } = useQuery({
     queryKey: ["task", log.task_id],
     queryFn: () => api.entities.ProjectTask.filter({ id: log.task_id }, null, 1).then(r => r[0] || null),
@@ -25,12 +32,21 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
   });
 
   const isOwner = log.user_id === currentUser?.id;
-  const canEdit = isMasterAdmin || isOwner;
+  const isActive = log.is_active && (log.status === 'running' || log.status === 'paused');
+  const canEdit = (isMasterAdmin || isOwner) && !isActive;
+
+  // Block non-integer characters in number inputs
+  const blockNonInteger = (e) => {
+    if (['e', 'E', '+', '-', '.'].includes(e.key)) e.preventDefault();
+  };
 
   const updateMutation = useMutation({
     mutationFn: () => {
-      const totalSeconds = hours * 3600 + minutes * 60;
+      const h = Math.max(0, Math.min(24, Math.floor(Number(hours) || 0)));
+      const m = Math.max(0, Math.min(59, Math.floor(Number(minutes) || 0)));
+      const totalSeconds = h * 3600 + m * 60;
       if (totalSeconds <= 0) throw new Error("Duration must be greater than 0");
+      if (totalSeconds > 86400) throw new Error("Cannot log more than 24 hours per entry");
       return api.entities.TaskTimeLog.update(log.id, { total_seconds: totalSeconds });
     },
     onSuccess: () => {
@@ -108,24 +124,35 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
           {editMode ? (
             <div className="grid grid-cols-2 gap-3 pt-2 border-t">
               <div>
-                <Label className="text-xs">Hours</Label>
+                <Label className="text-xs" htmlFor="edit-hours">Hours (0-24)</Label>
                 <Input
+                  id="edit-hours"
                   type="number"
                   min="0"
+                  max="24"
+                  step="1"
                   value={hours}
-                  onChange={(e) => setHours(parseInt(e.target.value) || 0)}
+                  onChange={(e) => setHours(Math.min(24, Math.max(0, parseInt(e.target.value) || 0)))}
+                  onKeyDown={blockNonInteger}
                   className="mt-1 text-sm"
+                  aria-label="Hours"
+                  disabled={updateMutation.isPending}
                 />
               </div>
               <div>
-                <Label className="text-xs">Minutes</Label>
+                <Label className="text-xs" htmlFor="edit-minutes">Minutes (0-59)</Label>
                 <Input
+                  id="edit-minutes"
                   type="number"
                   min="0"
                   max="59"
+                  step="1"
                   value={minutes}
-                  onChange={(e) => setMinutes(parseInt(e.target.value) || 0)}
+                  onChange={(e) => setMinutes(Math.min(59, Math.max(0, parseInt(e.target.value) || 0)))}
+                  onKeyDown={blockNonInteger}
                   className="mt-1 text-sm"
+                  aria-label="Minutes"
+                  disabled={updateMutation.isPending}
                 />
               </div>
             </div>
@@ -133,6 +160,12 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
             <div className="pt-2 border-t">
               <p className="text-xs text-muted-foreground">Total Duration</p>
               <p className="text-2xl font-bold">{formatDuration(log.total_seconds)}</p>
+            </div>
+          )}
+
+          {isActive && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded">
+              Timer is {log.status} — pause and finish before editing.
             </div>
           )}
 
@@ -165,6 +198,7 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
                     <AlertDialogAction
                       onClick={() => deleteMutation.mutate()}
                       className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      disabled={deleteMutation.isPending}
                     >
                       {deleteMutation.isPending ? "Deleting..." : "Delete"}
                     </AlertDialogAction>

@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from "react";
 import React from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -386,11 +386,14 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
 }
 
 /* ═══════════════════════════ Main KanbanBoard ═══════════════════════════ */
-export default function KanbanBoard({ projects, products, packages, fitToScreen = false }) {
+export default function KanbanBoard({ projects, products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs }) {
   const navigate = useNavigate();
   const { enabledFields } = useCardFields();
-  const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 500);
-  const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog");
+  // Bug fix: use tasks/timeLogs from parent when available to avoid duplicate entity subscriptions
+  const { data: fallbackTasks = [] } = useEntityList(!parentTasks ? "ProjectTask" : null, "-due_date", 500);
+  const { data: fallbackTimeLogs = [] } = useEntityList(!parentTimeLogs ? "TaskTimeLog" : null);
+  const allTasks = parentTasks || fallbackTasks;
+  const allTimeLogs = parentTimeLogs || fallbackTimeLogs;
   const { prefetch: prefetchProject } = usePrefetchProjectDetails();
 
   // Filter out archived projects
@@ -507,7 +510,11 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
         }).catch(err => console.warn('logOnsiteEffortOnUpload failed:', err?.message));
       }
     },
-    onSuccess: () => toast.success('Project status updated'),
+    onSuccess: () => {
+      toast.success('Project status updated');
+      // Bug fix: invalidate project cache so the parent list and kanban reflect the new status
+      refetchEntityList('Project');
+    },
     onError: (err) => toast.error(err?.message || "Failed to update project status"),
   });
 

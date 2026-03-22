@@ -53,7 +53,12 @@ export function ActiveTimersProvider({ children, currentUser }) {
           return prev;
         } else if (event.type === 'update') {
           if (event.data.is_active && event.data.status === 'running') {
-            return prev.map(t => t.id === event.id ? event.data : t);
+            // If already tracked, update it; otherwise add it (handles resume from paused)
+            const exists = prev.some(t => t.id === event.id);
+            if (exists) {
+              return prev.map(t => t.id === event.id ? event.data : t);
+            }
+            return [...prev, event.data];
           } else {
             return prev.filter(t => t.id !== event.id);
           }

@@ -213,11 +213,13 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
     return () => clearInterval(id);
   }, [isRunning]);
 
-  // Sync running timer to DB every 3 seconds.
+  // Sync running timer to DB every 15 seconds.
   // Also enforces MAX_SESSION_DURATION — auto-finalizes if the session exceeds 8 hours
   // while the browser is left open, which prevents runaway timers on forgotten tabs.
+  const syncFailCountRef = useRef(0);
   useEffect(() => {
     if (!isRunning || !activeLog?.id) return;
+    syncFailCountRef.current = 0; // Reset on new running session
 
     dbSyncRef.current = setInterval(async () => {
       if (!componentMountedRef.current) return;
@@ -243,8 +245,17 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
       try {
         await api.entities.TaskTimeLog.update(log.id, { total_seconds: liveSeconds });
+        // Clear error on successful sync
+        if (syncFailCountRef.current > 0) {
+          syncFailCountRef.current = 0;
+          setError(null);
+        }
       } catch (e) {
-        console.warn('Sync failed, will retry:', e);
+        syncFailCountRef.current += 1;
+        console.warn(`Sync failed (attempt ${syncFailCountRef.current}):`, e);
+        if (syncFailCountRef.current >= 3) {
+          setError('Sync failed — your timer is still running locally but changes are not being saved. Check your connection.');
+        }
       }
     }, DB_SYNC_INTERVAL);
 
@@ -404,6 +415,11 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
         return;
       }
 
+      if (currentTask?.is_completed) {
+        setError('This task is already completed. Re-open it before starting a timer.');
+        return;
+      }
+
       if (isUnassigned) {
         setError('This task has no assignee. Please assign a person or team before starting the timer.');
         return;
@@ -505,9 +521,20 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
     try {
       setError(null);
 
+      // Prevent continuing if another timer is already running
+      if (hasOtherActiveTimer) {
+        setShowConcurrentWarning(true);
+        return;
+      }
+
       // Prevent continuing if task became locked
       if (currentTask?.is_locked) {
         setError('Cannot continue - task is locked');
+        return;
+      }
+
+      if (currentTask?.is_completed) {
+        setError('Task is completed. Re-open it before continuing.');
         return;
       }
 
@@ -544,7 +571,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   const estimatedSeconds = (task.estimated_minutes || 0) * 60;
   const finishedSeconds = completedLog?.total_seconds || 0;
   const performanceScore = estimatedSeconds > 0 && totalDisplaySeconds > 0
-    ? Math.round((estimatedSeconds / totalDisplaySeconds) * 100)
+    ? Math.round((totalDisplaySeconds / estimatedSeconds) * 100)
     : null;
 
   if (isLoading) {
@@ -604,10 +631,11 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
                     size="sm" 
                     variant="default" 
                     onClick={() => handleStart()} 
-                    disabled={!!conflictLog || currentTask?.is_locked || isUnassigned}
+                    disabled={!!conflictLog || currentTask?.is_locked || currentTask?.is_completed || isUnassigned}
                     className="gap-1"
                     title={
                       currentTask?.is_locked ? "This task is locked" :
+                      currentTask?.is_completed ? "This task is completed" :
                       isUnassigned ? "Assign a person or team before starting" : ""
                     }
                   >
@@ -617,10 +645,11 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
                     size="sm" 
                     variant="outline" 
                     onClick={() => setShowManualEntry(true)} 
-                    disabled={currentTask?.is_locked || isUnassigned}
+                    disabled={currentTask?.is_locked || currentTask?.is_completed || isUnassigned}
                     className="gap-1"
                     title={
                       currentTask?.is_locked ? "This task is locked" :
+                      currentTask?.is_completed ? "This task is completed" :
                       isUnassigned ? "Assign a person or team before logging time" : "Manually log time"
                     }
                   >
@@ -630,14 +659,24 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
               )}
               
               {isRunning && (
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  onClick={handlePause}
-                  className="gap-1"
-                >
-                  <Pause className="h-3 w-3" /> Pause
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handlePause}
+                    className="gap-1"
+                  >
+                    <Pause className="h-3 w-3" /> Pause
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={handleFinish}
+                    className="gap-1"
+                  >
+                    <CheckCircle className="h-3 w-3" /> Finish
+                  </Button>
+                </>
               )}
               
               {isPaused && (
