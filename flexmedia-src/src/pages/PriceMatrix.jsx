@@ -114,7 +114,7 @@ export default function PriceMatrixPage() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold tracking-tight">Price Matrix</h1>
-              <p className="text-muted-foreground mt-1">Manage custom pricing for agencies and agents</p>
+              <p className="text-muted-foreground mt-1">Manage custom pricing for organisations and people</p>
             </div>
           </div>
 
@@ -186,7 +186,7 @@ export default function PriceMatrixPage() {
             <TabsList className="flex-wrap h-auto gap-1">
               <TabsTrigger value="agency">
                 <Building className="h-4 w-4 mr-2" />
-                Agencies
+                Organisations
                 {!loading && (
                   <Badge variant="outline" className="ml-2 text-xs">
                     {agenciesWithMatrix}/{enrichedAgencies.length}
@@ -195,7 +195,7 @@ export default function PriceMatrixPage() {
               </TabsTrigger>
               <TabsTrigger value="agent">
                 <User className="h-4 w-4 mr-2" />
-                Agents
+                People
                 {!loading && (
                   <Badge variant="outline" className="ml-2 text-xs">
                     {agentsWithMatrix}/{enrichedAgents.length}
@@ -268,7 +268,7 @@ function MatrixContent({ enriched, entityType, loading, searchQuery, viewMode, c
     return (
       <Card className="p-10 text-center">
         <p className="text-muted-foreground">
-          {searchQuery ? `No ${entityType}s match "${searchQuery}"` : `No ${entityType}s found`}
+          {searchQuery ? `No ${entityType === "agency" ? "organisations" : "people"} match "${searchQuery}"` : `No ${entityType === "agency" ? "organisations" : "people"} found`}
         </p>
       </Card>
     );

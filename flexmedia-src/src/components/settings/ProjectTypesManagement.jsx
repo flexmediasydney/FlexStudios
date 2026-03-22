@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import DeleteConfirmationDialog from "../common/DeleteConfirmationDialog";
 import { toast } from "sonner";
 
 const COLORS = [
@@ -254,26 +254,14 @@ export default function ProjectTypesManagement() {
       </Dialog>
 
       {/* Delete Confirmation */}
-      <AlertDialog open={!!deletingType} onOpenChange={() => setDeletingType(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete "{deletingType?.name}"?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete this project type. Existing projects will retain their type name but may lose filtering. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteMutation.mutate(deletingType)}
-              className="bg-destructive text-destructive-foreground"
-              disabled={deleteMutation.isPending}
-            >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteConfirmationDialog
+        open={!!deletingType}
+        itemName={deletingType?.name}
+        itemType="project type"
+        isLoading={deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate(deletingType)}
+        onCancel={() => setDeletingType(null)}
+      />
     </div>
   );
 }
