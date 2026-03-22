@@ -1,7 +1,8 @@
-import { useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
+import { cn } from "@/lib/utils";
 import { format, formatDistanceToNow, parseISO } from "date-fns";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import { Badge } from "@/components/ui/badge";
@@ -199,6 +200,7 @@ export default function PriceMatrixSnapshots() {
   const [selectedForCompare, setSelectedForCompare] = useState([]);
   const [showComparison, setShowComparison] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [expandedEntity, setExpandedEntity] = useState(null);
 
   // Mutations
   const createSnapshotMutation = useMutation({
@@ -472,45 +474,122 @@ export default function PriceMatrixSnapshots() {
                       </thead>
                       <tbody>
                         {snapshot.data.map((entry, idx) => {
-                          const prodCount = Array.isArray(entry.product_pricing)
-                            ? entry.product_pricing.length
-                            : 0;
-                          const pkgCount = Array.isArray(entry.package_pricing)
-                            ? entry.package_pricing.length
-                            : 0;
+                          const prods = Array.isArray(entry.product_pricing) ? entry.product_pricing : [];
+                          const pkgs = Array.isArray(entry.package_pricing) ? entry.package_pricing : [];
                           const blanketProd = entry.blanket_discount?.product_percent ?? 0;
                           const blanketPkg = entry.blanket_discount?.package_percent ?? 0;
-                          const blanketDisplay =
-                            blanketProd || blanketPkg
-                              ? `${blanketProd}% / ${blanketPkg}%`
-                              : "\u2014";
+                          const blanketDisplay = blanketProd || blanketPkg ? `${blanketProd}% / ${blanketPkg}%` : "\u2014";
+                          const entryKey = `${snapshot.id}-${idx}`;
+                          const isEntryExpanded = expandedEntity === entryKey;
 
                           return (
-                            <tr
-                              key={idx}
-                              className={
-                                idx < snapshot.data.length - 1 ? "border-b" : ""
-                              }
-                            >
-                              <td className="px-3 py-2 font-medium">
-                                {entry.entity_name || "\u2014"}
-                              </td>
-                              <td className="px-3 py-2">
-                                <div className="flex items-center gap-1.5">
-                                  {entityTypeIcon(entry.entity_type)}
-                                  <span className="text-muted-foreground">
-                                    {entityTypeLabel(entry.entity_type)}
-                                  </span>
-                                </div>
-                              </td>
-                              <td className="px-3 py-2">{pricingModeBadge(entry)}</td>
-                              <td className="px-3 py-2 text-center">{prodCount}</td>
-                              <td className="px-3 py-2 text-center">{pkgCount}</td>
-                              <td className="px-3 py-2 text-center">{blanketDisplay}</td>
-                              <td className="px-3 py-2 text-muted-foreground">
-                                {fmtDate(entry.updated_at || entry.created_at, "dd MMM yyyy HH:mm")}
-                              </td>
-                            </tr>
+                            <React.Fragment key={idx}>
+                              <tr
+                                className={cn("cursor-pointer hover:bg-muted/30", idx < snapshot.data.length - 1 && !isEntryExpanded && "border-b")}
+                                onClick={() => setExpandedEntity(isEntryExpanded ? null : entryKey)}
+                              >
+                                <td className="px-3 py-2 font-medium">
+                                  <div className="flex items-center gap-1.5">
+                                    {isEntryExpanded ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+                                    {entry.entity_name || "\u2014"}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="flex items-center gap-1.5">
+                                    {entityTypeIcon(entry.entity_type)}
+                                    <span className="text-muted-foreground">{entityTypeLabel(entry.entity_type)}</span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2">{pricingModeBadge(entry)}</td>
+                                <td className="px-3 py-2 text-center">{prods.length}</td>
+                                <td className="px-3 py-2 text-center">{pkgs.length}</td>
+                                <td className="px-3 py-2 text-center">{blanketDisplay}</td>
+                                <td className="px-3 py-2 text-muted-foreground">
+                                  {fmtDate(entry.updated_at || entry.created_at, "dd MMM yyyy HH:mm")}
+                                </td>
+                              </tr>
+                              {isEntryExpanded && (
+                                <tr className="border-b">
+                                  <td colSpan={7} className="p-0">
+                                    <div className="bg-muted/10 px-6 py-3 space-y-3">
+                                      {/* Product line items */}
+                                      {prods.length > 0 && (
+                                        <div>
+                                          <div className="text-[10px] font-semibold uppercase text-muted-foreground mb-1.5">Product Pricing</div>
+                                          <table className="w-full text-[11px]">
+                                            <thead>
+                                              <tr className="text-muted-foreground border-b">
+                                                <th className="text-left py-1 pr-3 font-medium">Product</th>
+                                                <th className="text-center py-1 px-2 font-medium">Override</th>
+                                                <th className="text-right py-1 px-2 font-medium">Std Base</th>
+                                                <th className="text-right py-1 px-2 font-medium">Std Unit</th>
+                                                <th className="text-right py-1 px-2 font-medium">Prm Base</th>
+                                                <th className="text-right py-1 px-2 font-medium">Prm Unit</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {prods.map((p, pi) => (
+                                                <tr key={pi} className={pi < prods.length - 1 ? "border-b border-dashed" : ""}>
+                                                  <td className="py-1 pr-3 font-medium">{p.product_name || p.product_id?.slice(0, 8)}</td>
+                                                  <td className="py-1 px-2 text-center">
+                                                    {p.override_enabled ? <Badge className="text-[9px] h-4 bg-blue-100 text-blue-700">Yes</Badge> : <span className="text-muted-foreground">No</span>}
+                                                  </td>
+                                                  <td className="py-1 px-2 text-right">${p.standard_base ?? 0}</td>
+                                                  <td className="py-1 px-2 text-right">${p.standard_unit ?? 0}</td>
+                                                  <td className="py-1 px-2 text-right">${p.premium_base ?? 0}</td>
+                                                  <td className="py-1 px-2 text-right">${p.premium_unit ?? 0}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      )}
+                                      {/* Package line items */}
+                                      {pkgs.length > 0 && (
+                                        <div>
+                                          <div className="text-[10px] font-semibold uppercase text-muted-foreground mb-1.5">Package Pricing</div>
+                                          <table className="w-full text-[11px]">
+                                            <thead>
+                                              <tr className="text-muted-foreground border-b">
+                                                <th className="text-left py-1 pr-3 font-medium">Package</th>
+                                                <th className="text-center py-1 px-2 font-medium">Override</th>
+                                                <th className="text-right py-1 px-2 font-medium">Std Price</th>
+                                                <th className="text-right py-1 px-2 font-medium">Prm Price</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {pkgs.map((p, pi) => (
+                                                <tr key={pi} className={pi < pkgs.length - 1 ? "border-b border-dashed" : ""}>
+                                                  <td className="py-1 pr-3 font-medium">{p.package_name || p.package_id?.slice(0, 8)}</td>
+                                                  <td className="py-1 px-2 text-center">
+                                                    {p.override_enabled ? <Badge className="text-[9px] h-4 bg-blue-100 text-blue-700">Yes</Badge> : <span className="text-muted-foreground">No</span>}
+                                                  </td>
+                                                  <td className="py-1 px-2 text-right">${p.standard_price ?? 0}</td>
+                                                  <td className="py-1 px-2 text-right">${p.premium_price ?? 0}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      )}
+                                      {/* Blanket discount detail */}
+                                      {entry.blanket_discount?.enabled && (
+                                        <div>
+                                          <div className="text-[10px] font-semibold uppercase text-muted-foreground mb-1">Blanket Discount</div>
+                                          <div className="flex gap-4 text-[11px]">
+                                            <span>Products: <strong>{entry.blanket_discount.product_percent}%</strong></span>
+                                            <span>Packages: <strong>{entry.blanket_discount.package_percent}%</strong></span>
+                                          </div>
+                                        </div>
+                                      )}
+                                      {prods.length === 0 && pkgs.length === 0 && !entry.blanket_discount?.enabled && (
+                                        <p className="text-[11px] text-muted-foreground italic">Using master default pricing — no overrides or discounts configured.</p>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
                           );
                         })}
                       </tbody>
