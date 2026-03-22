@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { toast } from "sonner";
 import { api } from "@/api/supabaseClient";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
-import { useEntitiesData } from "@/components/hooks/useEntityData";
+import { useEntitiesData, refetchEntityList } from "@/components/hooks/useEntityData";
 import PriceMatrixEditor from "@/components/priceMatrix/PriceMatrixEditor";
 import PriceMatrixSnapshots from "@/components/priceMatrix/PriceMatrixSnapshots";
 import PriceMatrixRulebook from "@/components/priceMatrix/PriceMatrixRulebook";
@@ -80,6 +80,7 @@ export default function PriceMatrixPage() {
         blanket_discount: { enabled: false, product_percent: 0, package_percent: 0 }
       });
       toast.success(`Price matrix created for ${entity.name} (${selectedProjectType?.name})`);
+      await refetchEntityList("PriceMatrix");
     } catch {
       toast.error("Failed to create price matrix");
     } finally {
