@@ -440,7 +440,8 @@ function CompactTableRow({ entity, matrix, entityType, Icon, isLast, isCreating,
   );
 }
 
-function NoMatrixCard({ entity, entityType, onCreate, isCreating, selectedProjectType, canCreate }) {
+function NoMatrixCard({ entity, entityType, onCreate, isCreating, selectedProjectType }) {
+  const canCreate = !!selectedProjectType?.id;
   return (
     <Card className="p-4 border-dashed">
       <div className="flex items-center justify-between gap-3">
