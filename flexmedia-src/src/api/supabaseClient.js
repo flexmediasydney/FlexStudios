@@ -201,6 +201,11 @@ function mapInput(data) {
   // on insert (server defaults apply) and on update (trigger overwrites). Stripping them
   // caused data loss when forms round-tripped full entity records.
 
+  // Strip decorated shadow fields (added by decorateEntity/mapRow) that don't exist in DB
+  for (const key of Object.keys(mapped)) {
+    if (key.startsWith('_')) delete mapped[key];
+  }
+
   return mapped;
 }
 

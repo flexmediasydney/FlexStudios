@@ -228,9 +228,10 @@ export default function ProductFormDialog({ open, onClose, product, onSave, pres
 
     // Validate category exists if assigned
     if (formData.category && formData.category.trim()) {
-      const validCategories = ['photography', 'video', 'drone', 'editing', 'virtual_staging', 'other'];
-      if (!validCategories.includes(formData.category) && 
-          !productCategories.find(c => c?.name === formData.category && c.is_active !== false)) {
+      const validCategories = ['photography', 'video', 'drone', 'editing', 'virtual_staging', 'other', 'drones', 'floorplan'];
+      const categoryLower = formData.category.toLowerCase();
+      if (!validCategories.includes(categoryLower) &&
+          !productCategories.find(c => c?.name?.toLowerCase() === categoryLower && c.is_active !== false)) {
         toast.error(`Category "${formData.category}" is no longer valid. Please select another category.`);
         return;
       }
