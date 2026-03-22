@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, GitBranch } from "lucide-react";
 
@@ -68,6 +68,7 @@ export default function ProductsPage() {
   if (!canAccessSettings) {
     return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
   }
+  const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(null);
@@ -162,10 +163,12 @@ export default function ProductsPage() {
       await logChange("create", { id: result?.id, name: data.name }, null, data);
       return result;
     },
-    onSuccess: (_, data) => {
-      // Capture name from submitted data before state resets
+    onSuccess: (result, data) => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["packages"] });
+      queryClient.invalidateQueries({ queryKey: ["price-matrix"] });
       const action = editingProduct ? "updated" : "created";
-      const productName = data?.name || editingProduct?.name || "Product";
+      const productName = data?.name || "Product";
       toast.success(`Product "${productName}" ${action}`);
       handleClose();
     },
@@ -181,7 +184,7 @@ export default function ProductsPage() {
     // Check if type restriction changed — warn about existing packages/projects
     const oldTypeIds = editingProduct?.project_type_ids || [];
     const newTypeIds = data?.project_type_ids || [];
-    const isTypeChanged = JSON.stringify(oldTypeIds.sort()) !== JSON.stringify(newTypeIds.sort());
+    const isTypeChanged = JSON.stringify([...oldTypeIds].sort()) !== JSON.stringify([...newTypeIds].sort());
 
     if (isTypeChanged && newTypeIds.length > 0 && oldTypeIds.length === 0 && newTypeIds[0]) {
       // Product is now type-restricted — warn about packages/projects that may no longer be compatible
@@ -224,6 +227,9 @@ export default function ProductsPage() {
       await logChange("delete", { id: product.id, name: product.name }, product, null);
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["packages"] });
+      queryClient.invalidateQueries({ queryKey: ["price-matrix"] });
       toast.success(`Product "${deletingProduct?.name || 'Product'}" deleted`);
       setDeletingProduct(null);
     },
