@@ -51,7 +51,7 @@ export default function IntegrationsManagement() {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(["tonomo-integration"]);
+      queryClient.invalidateQueries({ queryKey: ["tonomo-integration"] });
       toast.success("Tonomo integration settings saved");
     },
     onError: (err) => {

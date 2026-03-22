@@ -155,9 +155,12 @@ function PeopleMode({ onViewAs }) {
                   <div className="text-xs font-semibold text-foreground">{req.title}</div>
                   <div className="text-[10px] text-amber-700 mt-0.5">{req.message}</div>
                 </div>
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => {
-                  api.entities.Notification.update(req.id, { is_dismissed: true }).catch(() => {});
-                  queryClient.invalidateQueries({ queryKey: ["access-requests"] });
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={async () => {
+                  try {
+                    await api.entities.Notification.update(req.id, { is_dismissed: true });
+                    queryClient.invalidateQueries({ queryKey: ["access-requests"] });
+                    toast.success("Dismissed");
+                  } catch { toast.error("Failed to dismiss"); }
                 }}>
                   Dismiss
                 </Button>

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Trash2, GripVertical } from "lucide-react";
+import { toast } from "sonner";
 
 export default function NoteTagsManagement() {
   const queryClient = useQueryClient();
@@ -18,12 +19,20 @@ export default function NoteTagsManagement() {
 
   const createMutation = useMutation({
     mutationFn: (data) => api.entities.NoteTag.create(data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["note-tags"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["note-tags"] });
+      toast.success("Tag created");
+    },
+    onError: (err) => toast.error(err?.message || "Failed to create tag"),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id) => api.entities.NoteTag.delete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["note-tags"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["note-tags"] });
+      toast.success("Tag deleted");
+    },
+    onError: (err) => toast.error(err?.message || "Failed to delete tag"),
   });
 
   const handleAdd = () => {
