@@ -123,7 +123,7 @@ Deno.serve(async (req) => {
           );
           return hasProduct || hasViaPackage;
         });
-        for (const project of affectedProjects.slice(0, 50)) {
+        for (const project of affectedProjects.slice(0, 500)) {
           invokeFunction('syncProjectTasksFromProducts', {
             project_id: project.id,
           }).catch(() => {});
@@ -132,7 +132,7 @@ Deno.serve(async (req) => {
         const pricingFields = ['standard_tier', 'premium_tier'];
         const pricingChanged = changedFields.some((f: any) => pricingFields.includes(f.field));
         if (pricingChanged) {
-          for (const project of affectedProjects.slice(0, 50)) {
+          for (const project of affectedProjects.slice(0, 500)) {
             invokeFunction('recalculateProjectPricingServerSide', {
               project_id: project.id,
             }).catch(() => {});

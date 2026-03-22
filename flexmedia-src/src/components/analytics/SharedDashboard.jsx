@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Link } from 'react-router-dom';
 import Org2MetricsCard, { calculateMetrics } from '@/components/org2/Org2MetricsCard';
 import { createPageUrl } from '@/utils';
-import { differenceInDays, parseISO, startOfMonth, endOfMonth, format } from 'date-fns';
+import { differenceInDays, parseISO, isValid, startOfMonth, endOfMonth, format } from 'date-fns';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
@@ -155,7 +155,11 @@ export default function SharedDashboard({
       .sort((a, b) => b.effortSeconds - a.effortSeconds);
 
     const delivered = projects.filter(p => p.status === 'delivered')
-      .sort((a, b) => new Date(fixTimestamp(b.delivery_date || b.updated_date) || 0) - new Date(fixTimestamp(a.delivery_date || a.updated_date) || 0));
+      .sort((a, b) => {
+        const da = fixTimestamp(b.delivery_date || b.updated_date);
+        const db = fixTimestamp(a.delivery_date || a.updated_date);
+        return (da ? new Date(da).getTime() : 0) - (db ? new Date(db).getTime() : 0);
+      });
 
     const revByStatus = revisions.reduce((acc, r) => {
       const s = r.status || 'unknown';
@@ -166,7 +170,13 @@ export default function SharedDashboard({
 
     const revisionsWithCycle = revisions
       .filter(r => r.created_date && r.updated_date)
-      .map(r => ({ ...r, cycleDays: (new Date(fixTimestamp(r.updated_date)) - new Date(fixTimestamp(r.created_date))) / (1000 * 60 * 60 * 24) }))
+      .map(r => {
+        const d1 = new Date(fixTimestamp(r.updated_date));
+        const d2 = new Date(fixTimestamp(r.created_date));
+        const cycleDays = (isNaN(d1) || isNaN(d2)) ? 0 : (d1 - d2) / (1000 * 60 * 60 * 24);
+        return { ...r, cycleDays };
+      })
+      .filter(r => !isNaN(r.cycleDays) && r.cycleDays >= 0)
       .sort((a, b) => b.cycleDays - a.cycleDays);
 
     return { thisMonth, paid, unpaid, wonProjects, turnaroundProjects, projectsWithEffort, delivered, revByStatus, revisionsWithCycle };
@@ -179,7 +189,7 @@ export default function SharedDashboard({
     { label: 'Projects', value: projects.length, icon: Briefcase, color: 'bg-amber-100 text-amber-700' },
     {
       label: 'Revenue',
-      value: fmtCurrency(drill.wonProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0)),
+      value: fmtCurrency(drill.wonProjects.reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0)),
       icon: DollarSign,
       color: 'bg-green-100 text-green-700',
     },
@@ -226,8 +236,8 @@ export default function SharedDashboard({
       }
 
       case 'Revenue': {
-        const wonRev = drill.wonProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0);
-        const paidWonRev = drill.wonProjects.filter(p => p.payment_status === 'paid').reduce((s, p) => s + (p.calculated_price || p.price || 0), 0);
+        const wonRev = drill.wonProjects.reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0);
+        const paidWonRev = drill.wonProjects.filter(p => p.payment_status === 'paid').reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0);
         return (
           <div>
             <DrillHeader title="Won Revenue" count={fmtCurrency(wonRev)} />
@@ -607,7 +617,12 @@ export default function SharedDashboard({
             if (!revisions.length) return <p className="text-xs text-muted-foreground py-2 text-center italic">No change requests yet</p>;
             const doneRevs = revisions.filter(r => r.created_date && r.updated_date);
             const avgCycle = doneRevs.length
-              ? doneRevs.reduce((s, r) => s + (new Date(fixTimestamp(r.updated_date)) - new Date(fixTimestamp(r.created_date))) / (1000 * 60 * 60 * 24), 0) / doneRevs.length
+              ? doneRevs.reduce((s, r) => {
+                  const d1 = new Date(fixTimestamp(r.updated_date));
+                  const d2 = new Date(fixTimestamp(r.created_date));
+                  const diff = (isNaN(d1) || isNaN(d2)) ? 0 : (d1 - d2) / (1000 * 60 * 60 * 24);
+                  return s + Math.max(0, diff);
+                }, 0) / doneRevs.length
               : 0;
             return (
               <div>

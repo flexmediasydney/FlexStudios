@@ -451,6 +451,11 @@ Deno.serve(async (req) => {
       }
     } catch { /* non-fatal */ }
 
+    // FIX #23: Recalculate task deadlines after all tasks are synced (for Tonomo products etc.)
+    if (createdCount > 0 || tasksToReactivate.length > 0) {
+      invokeFunction('calculateProjectTaskDeadlines', { project_id, trigger_event: 'tasks_synced' }).catch(() => {});
+    }
+
     return jsonResponse({
       success: true,
       created_count: createdCount + tasksToCreate.filter((t: any) => t.type === 'create').length,

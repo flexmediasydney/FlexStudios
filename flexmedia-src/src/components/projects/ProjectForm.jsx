@@ -489,6 +489,22 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         project_id: projectId
       }).catch(err => console.warn('Onsite effort sync skipped:', err?.message));
 
+      // Apply role defaults when products are added via form (fills photographer/editor from templates)
+      api.functions.invoke('applyProjectRoleDefaults', {
+        project_id: projectId
+      }).catch(err => console.warn('Role defaults skipped:', err?.message));
+
+      // FIX #1: Agent/agency change triggers repricing recalculation
+      if (project?.id) {
+        const agentChanged = formData.agent_id !== (initialFormData.agent_id || '');
+        const agencyChanged = formData.agency_id !== (initialFormData.agency_id || '');
+        if (agentChanged || agencyChanged) {
+          api.functions.invoke('recalculateProjectPricingServerSide', {
+            project_id: projectId
+          }).catch(() => {});
+        }
+      }
+
       // GAP-3: Notify photographer + owner when shoot date changes
       if (project?.id) {
         const shootDateChanged = formData.shoot_date !== (initialFormData.shoot_date || '');

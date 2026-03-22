@@ -374,6 +374,13 @@ export default function EmailComposeDialog({
     }
   }, [emailAccounts, selectedAccount]);
 
+  // Auto-fill recipient from linked project's agent email when composing from project context
+  React.useEffect(() => {
+    if (linkedAgent?.email && !recipients && !defaultTo) {
+      setRecipients(linkedAgent.email);
+    }
+  }, [linkedAgent?.email]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Prepopulate body for forward type
   React.useEffect(() => {
     if (type === "forward" && email && !body) {
@@ -442,6 +449,16 @@ export default function EmailComposeDialog({
         projectId: linkedProject || null,
         entityType: 'email',
       }).catch(() => {});
+      // Log as ProjectActivity so it appears on the project timeline
+      if (linkedProject) {
+        api.entities.ProjectActivity.create({
+          project_id: linkedProject,
+          action: type === "forward" ? 'email_forwarded' : 'email_sent',
+          description: `Email ${type === "forward" ? "forwarded" : "sent"}: "${subject}" to ${recipients}`,
+          user_name: user?.full_name,
+          user_email: user?.email,
+        }).catch(() => {});
+      }
       setRecipients("");
       setSubject("");
       setBody("");

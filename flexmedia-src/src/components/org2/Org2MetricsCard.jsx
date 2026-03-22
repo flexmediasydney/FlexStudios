@@ -38,8 +38,8 @@ export function calculateMetrics(projects, projectTasks = [], projectRevisions =
   // Paid vs Unpaid
   const paidProjects = projects.filter(p => p.payment_status === 'paid');
   const unpaidProjects = projects.filter(p => p.payment_status === 'unpaid');
-  const paidRevenue = paidProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0);
-  const unpaidRevenue = unpaidProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0);
+  const paidRevenue = paidProjects.reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0);
+  const unpaidRevenue = unpaidProjects.reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0);
 
   // This month — use created_date (when the project was created, not when shooting was scheduled)
   const thisMonthProjects = projects.filter(p => {
@@ -49,7 +49,7 @@ export function calculateMetrics(projects, projectTasks = [], projectRevisions =
       return date >= monthStart && date <= monthEnd;
     } catch { return false; }
   });
-  const thisMonthRevenue = thisMonthProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0);
+  const thisMonthRevenue = thisMonthProjects.reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0);
 
   // Turnaround times (delivered projects with valid dates)
   const projectsWithBothDates = projects.filter(p => {
