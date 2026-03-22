@@ -1,8 +1,8 @@
 import { useState, useMemo } from "react";
 import React from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useMutation } from "@tanstack/react-query";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, GitBranch } from "lucide-react";
 import ProjectTypeFilter from "../components/settings/ProjectTypeFilter";
 import { Button } from "@/components/ui/button";
@@ -68,7 +68,6 @@ export default function PackagesPage() {
   if (!canAccessSettings) {
     return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
   }
-  const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingPackage, setEditingPackage] = useState(null);
   const [deletingPackage, setDeletingPackage] = useState(null);
@@ -157,10 +156,9 @@ export default function PackagesPage() {
       return result;
     },
     onSuccess: async () => {
-      queryClient.invalidateQueries({ queryKey: ["packages"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["price-matrix"] });
-      await refetchPackages();
+      await refetchEntityList("Package");
+      refetchEntityList("Product");
+      refetchEntityList("PriceMatrix");
       const action = editingPackage ? "updated" : "created";
       toast.success(`Package "${editingPackage?.name || pendingSaveData?.name}" ${action}`);
       handleClose();
@@ -191,9 +189,8 @@ export default function PackagesPage() {
       await logChange("delete", { id: pkg.id, name: pkg.name }, pkg, null);
     },
     onSuccess: async () => {
-      queryClient.invalidateQueries({ queryKey: ["packages"] });
-      queryClient.invalidateQueries({ queryKey: ["price-matrix"] });
-      await refetchPackages();
+      await refetchEntityList("Package");
+      refetchEntityList("PriceMatrix");
       toast.success(`Package "${deletingPackage?.name}" deleted`);
       setDeletingPackage(null);
     },

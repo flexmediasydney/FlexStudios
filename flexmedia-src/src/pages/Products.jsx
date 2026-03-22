@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useMutation } from "@tanstack/react-query";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, GitBranch } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -68,7 +68,6 @@ export default function ProductsPage() {
   if (!canAccessSettings) {
     return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
   }
-  const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(null);
@@ -163,10 +162,10 @@ export default function ProductsPage() {
       await logChange("create", { id: result?.id, name: data.name }, null, data);
       return result;
     },
-    onSuccess: (result, data) => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["packages"] });
-      queryClient.invalidateQueries({ queryKey: ["price-matrix"] });
+    onSuccess: async (result, data) => {
+      await refetchEntityList("Product");
+      refetchEntityList("Package");
+      refetchEntityList("PriceMatrix");
       const action = editingProduct ? "updated" : "created";
       const productName = data?.name || "Product";
       toast.success(`Product "${productName}" ${action}`);
@@ -226,10 +225,10 @@ export default function ProductsPage() {
       await api.entities.Product.delete(product.id);
       await logChange("delete", { id: product.id, name: product.name }, product, null);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["packages"] });
-      queryClient.invalidateQueries({ queryKey: ["price-matrix"] });
+    onSuccess: async () => {
+      await refetchEntityList("Product");
+      refetchEntityList("Package");
+      refetchEntityList("PriceMatrix");
       toast.success(`Product "${deletingProduct?.name || 'Product'}" deleted`);
       setDeletingProduct(null);
     },
