@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Search, Building, User, Plus, Camera, BookOpen,
   History, LayoutGrid, Table2, Percent, CheckCircle2, Circle, Tag
@@ -37,6 +37,13 @@ export default function PriceMatrixPage() {
   const agencies = data.Agency || [];
   const agents = data.Agent || [];
   const projectTypes = (data.ProjectType || []).filter(t => t.is_active !== false);
+
+  // Auto-select if only one project type exists
+  useEffect(() => {
+    if (projectTypes.length === 1 && !selectedProjectTypeId) {
+      setSelectedProjectTypeId(projectTypes[0].id);
+    }
+  }, [projectTypes, selectedProjectTypeId]);
 
   const selectedProjectType = projectTypes.find(t => t.id === selectedProjectTypeId) || null;
 
