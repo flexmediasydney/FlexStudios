@@ -17,7 +17,7 @@ import { useEntitiesData, refetchEntityList } from "@/components/hooks/useEntity
 import PriceMatrixEditor from "@/components/priceMatrix/PriceMatrixEditor";
 import PriceMatrixSnapshots from "@/components/priceMatrix/PriceMatrixSnapshots";
 import PriceMatrixRulebook from "@/components/priceMatrix/PriceMatrixRulebook";
-import PriceMatrixActivityFeed from "@/components/priceMatrix/PriceMatrixActivityFeed";
+import PriceMatrixAuditLog from "@/components/priceMatrix/PriceMatrixAuditLog";
 
 export default function PriceMatrixPage() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -214,9 +214,9 @@ export default function PriceMatrixPage() {
                 <Camera className="h-4 w-4 mr-2" />
                 Snapshots
               </TabsTrigger>
-              <TabsTrigger value="activity">
+              <TabsTrigger value="audit">
                 <History className="h-4 w-4 mr-2" />
-                Activity Log
+                Audit Log
               </TabsTrigger>
               <TabsTrigger value="rulebook">
                 <BookOpen className="h-4 w-4 mr-2" />
@@ -254,8 +254,8 @@ export default function PriceMatrixPage() {
               <PriceMatrixSnapshots />
             </TabsContent>
 
-            <TabsContent value="activity" className="mt-6">
-              <PriceMatrixActivityFeed />
+            <TabsContent value="audit" className="mt-6">
+              <PriceMatrixAuditLog />
             </TabsContent>
 
             <TabsContent value="rulebook" className="mt-6">

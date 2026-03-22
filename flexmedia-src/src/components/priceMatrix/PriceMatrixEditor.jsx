@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import PriceMatrixActivityFeed from "./PriceMatrixActivityFeed";
+import PriceMatrixAuditLog from "./PriceMatrixAuditLog";
 import PriceMatrixSummaryTable from "./PriceMatrixSummaryTable";
 
 const safeNum = (val) => { const n = parseFloat(val); return isFinite(n) && n >= 0 ? n : 0; };
@@ -304,7 +304,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
       {/* Activity log */}
       {showActivity && (
         <div className="border-t px-4 py-3">
-          <PriceMatrixActivityFeed priceMatrixId={priceMatrix.id} />
+          <PriceMatrixAuditLog priceMatrixId={priceMatrix.id} />
         </div>
       )}
 
