@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import {
   Search, Download, ChevronDown, ChevronRight,
   Plus, Pencil, Trash2, Building, User,
-  ArrowRight, History, AlertTriangle,
+  ArrowRight, History, AlertTriangle, Package, Box,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +41,7 @@ const FILTER_DEFS = [
   { key: "pricing", label: "Pricing" },
   { key: "discount", label: "Discounts" },
   { key: "mode", label: "Mode" },
+  { key: "catalog", label: "Catalog" },
 ];
 
 const PRICING_FIELDS = new Set(["product_pricing", "package_pricing"]);
@@ -91,6 +92,7 @@ function groupByDate(items) {
 
 function matchesFilter(log, filter) {
   if (filter === "all") return true;
+  if (filter === "catalog") return log._source === "product" || log._source === "package";
   const fields = (log.changed_fields || []).map((c) => c.field);
   if (filter === "pricing") return fields.some((f) => PRICING_FIELDS.has(f));
   if (filter === "discount") return fields.some((f) => DISCOUNT_FIELDS.has(f));
@@ -296,9 +298,13 @@ function AuditEntry({ log, isModuleView, expanded, onToggle }) {
               {log.user_name || log.user_email || "System"}
             </span>
             {isModuleView && log.entity_name && (
-              <Badge variant="outline" className="text-[10px] h-5 flex items-center gap-1">
-                {log.entity_type === "agency"
-                  ? <Building className="h-3 w-3" />
+              <Badge variant="outline" className={cn("text-[10px] h-5 flex items-center gap-1",
+                log._source === "product" && "border-violet-200 text-violet-700 bg-violet-50",
+                log._source === "package" && "border-emerald-200 text-emerald-700 bg-emerald-50"
+              )}>
+                {log.entity_type === "agency" ? <Building className="h-3 w-3" />
+                  : log.entity_type === "product" ? <Box className="h-3 w-3" />
+                  : log.entity_type === "package" ? <Package className="h-3 w-3" />
                   : <User className="h-3 w-3" />}
                 {log.entity_name}
               </Badge>
@@ -397,12 +403,46 @@ export default function PriceMatrixAuditLog({ priceMatrixId = null }) {
     [priceMatrixId]
   );
 
-  const { data: rawLogs = [], loading } = useEntityList(
+  const { data: rawMatrixLogs = [], loading } = useEntityList(
     "PriceMatrixAuditLog",
     "-created_date",
     priceMatrixId ? 50 : 200,
     filterFn
   );
+
+  // Fetch product + package audit logs for the "Catalog" filter (module view only)
+  const { data: productLogs = [] } = useEntityList(
+    isModuleView ? "ProductAuditLog" : null,
+    "-created_date",
+    100
+  );
+  const { data: packageLogs = [] } = useEntityList(
+    isModuleView ? "PackageAuditLog" : null,
+    "-created_date",
+    100
+  );
+
+  // Merge all logs with source tags, sorted by date
+  const rawLogs = useMemo(() => {
+    const tagged = [
+      ...rawMatrixLogs.map(l => ({ ...l, _source: "matrix" })),
+      ...productLogs.map(l => ({
+        ...l,
+        _source: "product",
+        entity_name: l.product_name,
+        entity_type: "product",
+        changes_summary: l.changes_summary || `${l.action === 'create' ? 'Created' : l.action === 'delete' ? 'Deleted' : 'Updated'} product "${l.product_name}"`,
+      })),
+      ...packageLogs.map(l => ({
+        ...l,
+        _source: "package",
+        entity_name: l.package_name,
+        entity_type: "package",
+        changes_summary: l.changes_summary || `${l.action === 'create' ? 'Created' : l.action === 'delete' ? 'Deleted' : 'Updated'} package "${l.package_name}"`,
+      })),
+    ];
+    return tagged.sort((a, b) => safeParseDate(b.created_date) - safeParseDate(a.created_date));
+  }, [rawMatrixLogs, productLogs, packageLogs]);
 
   // Search-filtered logs (before category filter, so counts are based on search)
   const searchFiltered = useMemo(

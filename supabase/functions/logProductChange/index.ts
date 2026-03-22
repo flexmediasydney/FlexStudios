@@ -11,13 +11,10 @@ Deno.serve(async (req) => {
     const payload = await req.json();
 
     if (payload?._health_check) {
-      return jsonResponse({ _version: 'v1.1', _fn: 'logProductChange', _ts: '2026-03-17' });
+      return jsonResponse({ _version: 'v1.2', _fn: 'logProductChange', _ts: '2026-03-22' });
     }
 
     const { event, data, old_data } = payload;
-
-    // Accept both user sessions and service-role/automation calls
-    // Entity automations may fire without a user session
 
     const changedFields: any[] = [];
     if (event.type === 'update' && old_data && data) {
@@ -32,11 +29,32 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Build human-readable summary
+    let changesSummary = '';
+    if (event.type === 'create') {
+      changesSummary = `Created product "${data?.name || 'Unnamed'}"`;
+    } else if (event.type === 'delete') {
+      changesSummary = `Deleted product "${old_data?.name || 'Unnamed'}"`;
+    } else {
+      const parts: string[] = [];
+      for (const cf of changedFields) {
+        if (cf.field === 'name') parts.push(`Renamed "${old_data?.name}" → "${data?.name}"`);
+        else if (cf.field === 'standard_tier') parts.push('Updated standard pricing');
+        else if (cf.field === 'premium_tier') parts.push('Updated premium pricing');
+        else if (cf.field === 'category') parts.push(`Category: ${old_data?.category} → ${data?.category}`);
+        else if (cf.field === 'is_active') parts.push(data?.is_active ? 'Reactivated' : 'Deactivated');
+        else if (cf.field === 'standard_task_templates') parts.push('Updated standard tasks');
+        else if (cf.field === 'premium_task_templates') parts.push('Updated premium tasks');
+      }
+      changesSummary = parts.length > 0 ? parts.join('. ') : `Updated product "${data?.name || 'Unnamed'}"`;
+    }
+
     await entities.ProductAuditLog.create({
       product_id: event.entity_id,
       product_name: data?.name || old_data?.name || 'Unknown',
       action: event.type,
       changed_fields: changedFields,
+      changes_summary: changesSummary,
       previous_state: old_data || null,
       new_state: data || null,
       user_name: user?.full_name,
@@ -44,7 +62,53 @@ Deno.serve(async (req) => {
       timestamp: new Date().toISOString()
     });
 
-    // Fix 6a — re-sync tasks on open projects when task templates or effort estimates change
+    // ─── CASCADE: Product rename → update all price matrices ────────────────
+    const nameChanged = changedFields.some((f: any) => f.field === 'name');
+    if (nameChanged && event.entity_id && data?.name) {
+      try {
+        const allMatrices = await entities.PriceMatrix.filter({}, null, 1000);
+        for (const matrix of allMatrices) {
+          const pp = matrix.product_pricing || [];
+          const idx = pp.findIndex((p: any) => p.product_id === event.entity_id);
+          if (idx !== -1 && pp[idx].product_name !== data.name) {
+            const updated = [...pp];
+            updated[idx] = { ...updated[idx], product_name: data.name };
+            await entities.PriceMatrix.update(matrix.id, { product_pricing: updated });
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // ─── CASCADE: Product delete → remove from all price matrices ───────────
+    if (event.type === 'delete' && event.entity_id) {
+      try {
+        const allMatrices = await entities.PriceMatrix.filter({}, null, 1000);
+        for (const matrix of allMatrices) {
+          const pp = matrix.product_pricing || [];
+          const filtered = pp.filter((p: any) => p.product_id !== event.entity_id);
+          if (filtered.length !== pp.length) {
+            await entities.PriceMatrix.update(matrix.id, { product_pricing: filtered });
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // ─── CASCADE: Product deactivation → remove overrides from matrices ─────
+    const activeChanged = changedFields.some((f: any) => f.field === 'is_active');
+    if (activeChanged && data?.is_active === false && event.entity_id) {
+      try {
+        const allMatrices = await entities.PriceMatrix.filter({}, null, 1000);
+        for (const matrix of allMatrices) {
+          const pp = matrix.product_pricing || [];
+          const filtered = pp.filter((p: any) => p.product_id !== event.entity_id);
+          if (filtered.length !== pp.length) {
+            await entities.PriceMatrix.update(matrix.id, { product_pricing: filtered });
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // ─── CASCADE: Task template / pricing changes → sync projects ───────────
     const templateFields = ['standard_task_templates', 'premium_task_templates', 'standard_tier', 'premium_tier'];
     const templateChanged = changedFields.some((f: any) => templateFields.includes(f.field));
     if (templateChanged && event.entity_id) {
@@ -65,7 +129,6 @@ Deno.serve(async (req) => {
           }).catch(() => {});
         }
 
-        // Also recalculate pricing for affected projects when tier pricing changes
         const pricingFields = ['standard_tier', 'premium_tier'];
         const pricingChanged = changedFields.some((f: any) => pricingFields.includes(f.field));
         if (pricingChanged) {
