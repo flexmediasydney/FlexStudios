@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { TagList } from "@/components/clients/ContactTags";
@@ -145,6 +146,7 @@ export default function HierarchyTableView({
   agentProjectCounts, agentRevenue
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [sortKey, setSortKey] = useState("name");
   const [sortDir, setSortDir] = useState("asc");
   const [visibleCols, setVisibleCols] = useState(() =>
@@ -240,11 +242,12 @@ export default function HierarchyTableView({
   const handleInlineSave = useCallback(async (agentId, field, value) => {
     try {
       await api.entities.Agent.update(agentId, { [field]: value });
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
       toast.success("Updated");
     } catch {
       toast.error("Failed to save");
     }
-  }, []);
+  }, [queryClient]);
 
   const activeCols = COLUMNS.filter(c => visibleCols.includes(c.id));
   const allSelected = selectedAgentIds && selectedAgentIds.size === agents.length && agents.length > 0;

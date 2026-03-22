@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function InviteUserDialog({ open, onClose, onSuccess }) {
+  const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState("employee");
@@ -20,6 +22,8 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
 
     try {
       await api.users.inviteUser(email, role, fullName || undefined);
+      await queryClient.invalidateQueries({ queryKey: ["users"] });
+      await queryClient.invalidateQueries({ queryKey: ["internal-teams"] });
       toast.success("Invitation sent successfully!");
       setEmail("");
       setFullName("");

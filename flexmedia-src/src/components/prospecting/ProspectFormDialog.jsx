@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -19,6 +21,7 @@ const SOURCE_OPTIONS = ['Referral', 'LinkedIn', 'Web Search', 'Event', 'Manual I
 const MEDIA_NEEDS = ['Photography', 'Video Production', 'Drone Footage', 'Virtual Staging', 'Social Media Mgmt', 'Website Design', 'Branding'];
 
 export default function ProspectFormDialog({ open, onOpenChange, prospect = null, onSuccess = null, entityType = 'Agent' }) {
+  const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -86,9 +89,13 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
         }
       }
 
+      await queryClient.invalidateQueries({ queryKey: ['agents'] });
+      await queryClient.invalidateQueries({ queryKey: ['prospects'] });
+      toast.success(prospect ? 'Agent updated' : 'Agent created');
       onOpenChange(false);
       if (onSuccess) onSuccess();
     } catch (err) {
+      toast.error(err.message || 'Failed to save agent');
       setError(err.message || 'Failed to save agent');
     } finally {
       setLoading(false);

@@ -86,14 +86,13 @@ function toSydney(date: Date): Date {
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
+  try {
   const admin = getAdminClient();
   const entities = createEntities(admin);
   const now = toSydney(new Date());
   const todayStr = now.toISOString().slice(0, 10);
   let notified = 0;
   let activeTasks: any[] = [];
-
-  try {
     // Check task deadlines
     const tasks = await entities.ProjectTask.list('-created_date', 2000);
     activeTasks = tasks.filter((t: any) =>
@@ -350,6 +349,7 @@ Deno.serve(async (req) => {
       timestamp: now.toISOString(),
     });
   } catch (err: any) {
-    return jsonResponse({ error: err.message }, 200);
+    console.error('checkTaskDeadlines fatal error:', err);
+    return errorResponse('Internal server error', 500);
   }
 });

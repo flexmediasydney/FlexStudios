@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,7 @@ const REQUEST_KINDS = [
 const emptyManualTask = () => ({ title: "", description: "", task_type: "back_office" });
 
 export default function CreateRevisionDialog({ open, onClose, project, existingRevisions = [], logActivity }) {
+  const queryClient = useQueryClient();
   const [requestKind, setRequestKind] = useState("revision");
   const [revisionType, setRevisionType] = useState("images");
   const [selectedTemplateId, setSelectedTemplateId] = useState("none");
@@ -241,6 +242,9 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
       return revision;
     },
     onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['project-revisions'] });
+      queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       const revNum = data.revision_number;
       logActivity?.('request_created',
         `${requestKind === 'change_request' ? 'Change request' : 'Revision'} #${revNum} created: "${data.title}"`

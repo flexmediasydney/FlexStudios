@@ -127,6 +127,8 @@ export default function NoteComposer({
       setAttachments([]);
       setFocusTags([]);
       onNoteCreated?.();
+    } catch (error) {
+      toast.error("Failed to save note: " + (error.message || "Unknown error"));
     } finally {
       setIsSubmitting(false);
     }

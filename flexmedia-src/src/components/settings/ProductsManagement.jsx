@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, GitBranch, History, Camera, BookOpen, LayoutList, Grid3x3, Trello } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,7 @@ function getChangedFields(oldData, newData) {
 }
 
 export default function ProductsManagement() {
+  const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(null);
@@ -131,6 +132,7 @@ export default function ProductsManagement() {
       return result;
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
       const action = editingProduct ? "updated" : "created";
       toast.success(`Product "${editingProduct?.name || pendingSaveData?.name}" ${action}`);
       handleClose();

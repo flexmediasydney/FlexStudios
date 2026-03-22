@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -31,6 +31,7 @@ export default function TaskDetailPanel({
   user,
   onClose
 }) {
+  const queryClient = useQueryClient();
   const [editingDeadline, setEditingDeadline] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // Convert UTC ISO → local datetime-local string (Australia/Sydney)
@@ -86,6 +87,10 @@ export default function TaskDetailPanel({
   const lockMutation = useMutation({
     mutationFn: async (isLocked) => {
       await api.entities.ProjectTask.update(task.id, { is_locked: isLocked });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
     onError: (err) => toast.error(err?.message || 'Failed to update task lock'),
   });

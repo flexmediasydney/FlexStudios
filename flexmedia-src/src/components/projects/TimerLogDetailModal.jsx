@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import { formatDuration, getStatusColor } from "./useEffortLogging";
 import { toast } from "sonner";
 
 export default function TimerLogDetailModal({ log, onClose, currentUser, isMasterAdmin }) {
+  const queryClient = useQueryClient();
   const [editMode, setEditMode] = useState(false);
   const [hours, setHours] = useState(Math.floor(log.total_seconds / 3600));
   const [minutes, setMinutes] = useState(Math.floor((log.total_seconds % 3600) / 60));
@@ -33,6 +34,8 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
       return api.entities.TaskTimeLog.update(log.id, { total_seconds: totalSeconds });
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['time-logs'] });
+      queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
       toast.success("Time log updated");
       setEditMode(false);
       onClose();
@@ -45,6 +48,8 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
   const deleteMutation = useMutation({
     mutationFn: () => api.entities.TaskTimeLog.delete(log.id),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['time-logs'] });
+      queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
       toast.success("Time log deleted");
       onClose();
     },

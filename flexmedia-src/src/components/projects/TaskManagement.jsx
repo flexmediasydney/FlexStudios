@@ -279,6 +279,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   const createMutation = useMutation({
     mutationFn: (data) => api.entities.ProjectTask.create({ ...data, project_id: projectId, order: Date.now() }),
     onSuccess: (created, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       setShowAddDialog(false);
       setNewTask({ title: "", description: "" });
       logActivity('task_added', `Task added: "${variables.title}"`);
@@ -353,6 +355,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       return api.entities.ProjectTask.update(id, data);
     },
     onSuccess: async (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       scheduleDeadlineSync(projectId, 'task_update');
       setEditingTask(null);
       toast.success("Task saved");
@@ -403,6 +407,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       await api.entities.ProjectTask.update(id, { is_deleted: true });
     },
     onSuccess: async (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       logActivity('task_deleted', `Task deleted: "${deleteConfirm?.title || ''}"`);
 
       // Clean up dependency references: remove deleted task ID from all dependents

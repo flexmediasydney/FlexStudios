@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
@@ -7,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { api } from "@/api/supabaseClient";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 function FieldError({ error }) {
   if (!error) return null;
@@ -14,6 +16,7 @@ function FieldError({ error }) {
 }
 
 export default function ClientForm({ client, open, onClose, onSave }) {
+  const queryClient = useQueryClient();
   const [formData, setFormData] = useState({
     agent_name: "",
     agent_email: "",
@@ -61,13 +64,21 @@ export default function ClientForm({ client, open, onClose, onSave }) {
     if (Object.values(newErrors).some(Boolean)) return;
 
     setSaving(true);
-    if (client?.id) {
-      await api.entities.Client.update(client.id, trimmed);
-    } else {
-      await api.entities.Client.create(trimmed);
+    try {
+      if (client?.id) {
+        await api.entities.Client.update(client.id, trimmed);
+      } else {
+        await api.entities.Client.create(trimmed);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["clients"] });
+      toast.success(client ? "Client updated" : "Client created");
+      onSave();
+      onClose();
+    } catch (err) {
+      toast.error(err.message || "Failed to save client");
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
-    onSave();
   };
 
   return (

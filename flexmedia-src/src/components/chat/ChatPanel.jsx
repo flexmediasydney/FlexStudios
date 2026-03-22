@@ -11,12 +11,12 @@ import { cn } from '@/lib/utils';
 import ChatMessage from './ChatMessage';
 import MessageInput from './MessageInput';
 
-export default function ChatPanel({ 
+export default function ChatPanel({
   openChats,
   activeChat,
   onSetActiveChat,
   onClose,
-  currentUserEmail 
+  currentUserEmail
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('newest');
@@ -25,36 +25,43 @@ export default function ChatPanel({
   const scrollRef = useRef(null);
   const queryClient = useQueryClient();
 
-  if (!activeChat || !openChats.length) return null;
+  // Derive chat data unconditionally (before hooks that depend on it)
+  const chatKey = activeChat || null;
+  const currentChat = (activeChat && openChats.length)
+    ? openChats.find(c => `${c.type}:${c.type === 'task' ? c.taskId : 'project'}` === chatKey)
+    : null;
 
-  const chatKey = activeChat;
-  const currentChat = openChats.find(c => `${c.type}:${c.type === 'task' ? c.taskId : 'project'}` === chatKey);
-  
-  if (!currentChat) return null;
-
-  const { type: chatType, projectId, taskId, taskTitle, projectTitle } = currentChat;
+  const chatType = currentChat?.type || null;
+  const projectId = currentChat?.projectId || null;
+  const taskId = currentChat?.taskId || null;
+  const taskTitle = currentChat?.taskTitle || null;
+  const projectTitle = currentChat?.projectTitle || null;
   const entityName = chatType === 'task' ? 'TaskChat' : 'ProjectChat';
   const filterQuery = chatType === 'task' ? { task_id: taskId, project_id: projectId } : { project_id: projectId };
+  const hasValidChat = !!currentChat;
 
   // Fetch messages, project users, and project data
   const { data: allMessages = [], isLoading } = useQuery({
     queryKey: [entityName, filterQuery],
-    queryFn: () => api.entities[entityName].filter(filterQuery, '-created_date', 500)
+    queryFn: () => api.entities[entityName].filter(filterQuery, '-created_date', 500),
+    enabled: hasValidChat
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ['projectUsers', projectId],
     queryFn: () => api.entities.User.list(),
+    enabled: hasValidChat
   });
 
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => api.entities.Project.list().then(p => p.find(x => x.id === projectId)),
-    enabled: !!projectId
+    enabled: hasValidChat && !!projectId
   });
 
   // Real-time subscription
   useEffect(() => {
+    if (!hasValidChat) return;
     const unsubscribe = api.entities[entityName].subscribe((event) => {
       if (chatType === 'task' && event.data?.task_id === taskId) {
         queryClient.invalidateQueries({ queryKey: [entityName, filterQuery] });
@@ -63,7 +70,7 @@ export default function ChatPanel({
       }
     });
     return unsubscribe;
-  }, [entityName, filterQuery, chatType, taskId, projectId, queryClient]);
+  }, [hasValidChat, entityName, filterQuery, chatType, taskId, projectId, queryClient]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -101,7 +108,7 @@ export default function ChatPanel({
 
   // Pin mutation
   const pinMutation = useMutation({
-    mutationFn: ({ messageId, isPinned }) => 
+    mutationFn: ({ messageId, isPinned }) =>
       api.entities[entityName].update(messageId, { is_pinned: !isPinned }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [entityName, filterQuery] });
@@ -115,6 +122,10 @@ export default function ChatPanel({
       queryClient.invalidateQueries({ queryKey: [entityName, filterQuery] });
     }
   });
+
+  // Early returns AFTER all hooks
+  if (!activeChat || !openChats.length) return null;
+  if (!currentChat) return null;
 
   // Filter and sort messages
   let filteredMessages = allMessages;

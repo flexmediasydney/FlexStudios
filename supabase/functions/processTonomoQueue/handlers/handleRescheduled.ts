@@ -1,0 +1,147 @@
+import { ACTIVE_STAGES } from '../types.ts';
+import {
+  detectBookingTypes,
+  assignStaffToProjectFields,
+  resolveMappingsMulti,
+  loadMappingTable,
+  findProjectByOrderId,
+  writeAudit,
+  writeProjectActivity,
+  fireRoleNotif,
+} from '../utils.ts';
+
+export async function handleRescheduled(entities: any, orderId: string, p: any) {
+  const eventId = p.id;
+  const startTime = p.when?.start_time ? p.when.start_time * 1000 : null;
+  const project = await findProjectByOrderId(entities, orderId);
+  if (!project) {
+    // STRICT: Reschedule events should only UPDATE existing projects, never create new ones.
+    // If no project exists, this is an orphan event — skip it.
+    await writeAudit(entities, {
+      action: 'rescheduled', entity_type: 'Project', entity_id: null, operation: 'skipped',
+      tonomo_order_id: orderId, tonomo_event_id: eventId,
+      notes: 'Orphan event — no existing project for this order. Reschedule events do not create projects.',
+    });
+    return { summary: `Skipped reschedule for unknown order ${orderId} — no project exists`, skipped: true };
+  }
+
+  const overriddenFields = JSON.parse(project.manually_overridden_fields || '[]');
+  const updates: Record<string, any> = {};
+  const previousShootDate = project.shoot_date;
+
+  if (startTime && !overriddenFields.includes('shoot_date')) {
+    const rescheduleDt = new Date(startTime);
+    updates.shoot_date = rescheduleDt.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+    updates.shoot_time = rescheduleDt.toLocaleTimeString('en-AU', {
+      timeZone: 'Australia/Sydney',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+  // Update photographer if included in reschedule payload
+  const rescheduledPhotographers = p.photographers || [];
+  if (rescheduledPhotographers.length > 0) {
+    updates.tonomo_photographer_ids = JSON.stringify(rescheduledPhotographers);
+    const allMappings = await loadMappingTable(entities);
+    const servicesA = p.order?.services_a_la_cart || p.services_a_la_cart || [];
+    const servicesB = p.order?.services || p.services || [];
+    const reschServices = [...new Set([...servicesA, ...servicesB])].filter(Boolean);
+    const { resolvedPhotographers, unresolvedPhotographers } = await resolveMappingsMulti(entities, { photographers: rescheduledPhotographers }, allMappings);
+    if (resolvedPhotographers.length > 0) {
+      const bookingTypes = detectBookingTypes(reschServices.length > 0 ? reschServices : JSON.parse(project.tonomo_raw_services || '[]'));
+      const staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes);
+      for (const [field, userId] of Object.entries(staffAssignment)) {
+        if (userId && !overriddenFields.includes(field)) updates[field] = userId;
+      }
+    }
+    if (unresolvedPhotographers.length > 0) {
+      updates.pre_revision_stage = project.status;
+      updates.status = 'pending_review';
+      updates.pending_review_type = 'staff_change';
+      updates.pending_review_reason = `Photographer reassigned during reschedule but not found: ${unresolvedPhotographers.join(', ')}`;
+    }
+  }
+
+  if (startTime) {
+    const hoursUntilShoot = (startTime - Date.now()) / 3600000;
+    updates.urgent_review = hoursUntilShoot <= 24 && hoursUntilShoot > 0;
+  }
+  if (ACTIVE_STAGES.includes(project.status)) {
+    updates.pre_revision_stage = project.status;
+    updates.status = 'pending_review';
+    updates.pending_review_type = 'rescheduled';
+    updates.pending_review_reason = `Shoot rescheduled in Tonomo from ${previousShootDate || 'unknown'} to ${updates.shoot_date || 'unknown'} — please confirm`;
+  }
+
+  await entities.Project.update(project.id, updates);
+
+  if (eventId && startTime) {
+    try {
+      const projectCalEvents = await entities.CalendarEvent.filter({ project_id: project.id }, '-start_time', 100).catch(() => []);
+      const appointmentEvent = projectCalEvents.find(
+        (ev: any) => ev.google_event_id === eventId || ev.tonomo_appointment_id === eventId
+      );
+      if (appointmentEvent) {
+        const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
+        await entities.CalendarEvent.update(appointmentEvent.id, {
+          start_time: new Date(startTime).toISOString(),
+          end_time: endTime ? new Date(endTime).toISOString() : null,
+        });
+      } else {
+        // CalendarEvent not found — create one as fallback (original scheduled may have failed)
+        const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
+        await entities.CalendarEvent.create({
+          title: project.title || `Shoot — ${orderId}`,
+          description: `Tonomo appointment (created during reschedule) for order ${orderId}`,
+          start_time: new Date(startTime).toISOString(),
+          end_time: endTime ? new Date(endTime).toISOString() : null,
+          location: project.property_address || '',
+          google_event_id: eventId,
+          tonomo_appointment_id: eventId,
+          project_id: project.id,
+          activity_type: 'shoot',
+          is_synced: false,
+          is_done: false,
+          auto_linked: true,
+          link_source: 'tonomo_webhook',
+          link_confidence: 'exact',
+          event_source: 'tonomo',
+        });
+      }
+    } catch (calErr: any) {
+      console.error('CalendarEvent reschedule update failed (non-fatal):', calErr.message);
+    }
+  }
+  await writeAudit(entities, {
+    action: 'rescheduled', entity_type: 'Project', entity_id: project.id, operation: 'updated',
+    tonomo_order_id: orderId, tonomo_event_id: eventId,
+    notes: `Rescheduled from ${previousShootDate || 'unknown'} to ${updates.shoot_date || 'unknown'}. Urgent: ${updates.urgent_review ?? false}`,
+  });
+
+  await writeProjectActivity(entities, {
+    project_id: project.id,
+    project_title: project.title || '',
+    action: 'tonomo_rescheduled',
+    description: `Shoot rescheduled in Tonomo from ${previousShootDate || 'unknown'} to ${updates.shoot_date || 'unknown'}.${updates.urgent_review ? ' Shoot is within 24 hours.' : ''}`,
+    tonomo_order_id: orderId,
+    tonomo_event_type: 'rescheduled',
+    metadata: { previous_date: previousShootDate, new_date: updates.shoot_date },
+  });
+
+  const reschedProjectName = project.title || project.property_address || 'Project';
+  fireRoleNotif(entities, ['photographer', 'project_owner'], {
+    type: 'booking_rescheduled',
+    category: 'tonomo',
+    severity: updates.urgent_review ? 'critical' : 'info',
+    title: `Shoot rescheduled — ${reschedProjectName}`,
+    message: `Rescheduled from ${previousShootDate || 'unknown'} to ${updates.shoot_date || 'unknown'}.${updates.urgent_review ? ' Within 24 hours.' : ''}`,
+    projectId: project.id,
+    projectName: reschedProjectName,
+    ctaLabel: 'View Project',
+    source: 'tonomo',
+    idempotencyKey: `rescheduled:${orderId}:${updates.shoot_date}`,
+  }, project).catch(() => {});
+
+  return { summary: `Rescheduled project for order ${orderId}` };
+}

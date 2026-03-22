@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ const QUICK_TYPES = [
  *   triggerSize   — "sm" | "icon" — controls the trigger button style
  */
 export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm" }) {
+  const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
   const [open, setOpen] = useState(false);
   const [selectedType, setSelectedType] = useState(null);
@@ -59,6 +61,8 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
         last_contacted_at: new Date().toISOString(),
       }).catch(() => {});
 
+      await queryClient.invalidateQueries({ queryKey: ["interaction-logs"] });
+      await queryClient.invalidateQueries({ queryKey: ["agents"] });
       toast.success("Interaction logged");
       reset();
       setOpen(false);

@@ -1,5 +1,5 @@
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { fmtDate } from "@/components/utils/dateUtils";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
@@ -7,12 +7,15 @@ import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function TimerLogActions({ log, currentUser, isMasterAdmin }) {
+  const queryClient = useQueryClient();
   const isOwner = log.user_id === currentUser?.id;
   const canEdit = isMasterAdmin || isOwner;
 
   const deleteMutation = useMutation({
     mutationFn: () => api.entities.TaskTimeLog.delete(log.id),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['time-logs'] });
+      queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
       toast.success("Time log deleted");
     },
     onError: () => {

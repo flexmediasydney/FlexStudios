@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -29,6 +31,7 @@ export default function InteractionFormDialog({
   entityId = null,
   onSuccess = null
 }) {
+  const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -97,6 +100,9 @@ export default function InteractionFormDialog({
         }).catch(() => {});
       }
 
+      await queryClient.invalidateQueries({ queryKey: ['interaction-logs'] });
+      await queryClient.invalidateQueries({ queryKey: ['agents'] });
+      toast.success('Interaction logged');
       onOpenChange(false);
       setFormData({
         interaction_type: 'Meeting',
@@ -108,6 +114,7 @@ export default function InteractionFormDialog({
 
       if (onSuccess) onSuccess();
     } catch (err) {
+      toast.error(err.message || 'Failed to log interaction');
       setError(err.message || 'Failed to log interaction');
     } finally {
       setLoading(false);

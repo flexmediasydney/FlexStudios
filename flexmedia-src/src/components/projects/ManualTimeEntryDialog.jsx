@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { toast } from "sonner";
 
 export default function ManualTimeEntryDialog({ open, onClose, task, project, user, role }) {
   // All hooks must be called unconditionally (before any returns)
+  const queryClient = useQueryClient();
   const [hours, setHours] = useState("");
   const [minutes, setMinutes] = useState("");
   const [error, setError] = useState("");
@@ -80,6 +81,8 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
       });
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['time-logs'] });
+      queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
       if (project?.id) {
         api.entities.ProjectActivity.create({
           project_id: project.id,

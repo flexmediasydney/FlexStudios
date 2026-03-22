@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,6 +26,7 @@ export default function UnifiedNoteComposer({
   onSave,
   onCancel,
 }) {
+  const queryClient = useQueryClient();
   const editorRef = useRef(null);
   const fileInputRef = useRef(null);
   const mentionDropRef = useRef(null);
@@ -184,6 +185,8 @@ export default function UnifiedNoteComposer({
         if (agentId) {
           api.entities.Agent.update(agentId, {
             last_contacted_at: new Date().toISOString(),
+          }).then(() => {
+            queryClient.invalidateQueries({ queryKey: ['agents'] });
           }).catch(() => {});
         }
       }

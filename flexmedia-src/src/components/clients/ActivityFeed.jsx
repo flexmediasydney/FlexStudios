@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Card } from "@/components/ui/card";
@@ -30,6 +31,7 @@ const entityIcons = {
 };
 
 export default function ActivityFeed() {
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [restoreItem, setRestoreItem] = useState(null);
 
@@ -92,6 +94,10 @@ export default function ActivityFeed() {
         user_email: user.email
       });
 
+      queryClient.invalidateQueries({ queryKey: ['agencies'] });
+      queryClient.invalidateQueries({ queryKey: ['teams'] });
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['audit-logs'] });
       toast.success("Successfully restored previous state");
       setRestoreItem(null);
     } catch (error) {

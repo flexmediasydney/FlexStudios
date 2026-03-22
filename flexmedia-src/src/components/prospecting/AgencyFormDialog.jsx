@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -10,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { AlertCircle } from 'lucide-react';
 
 export default function AgencyFormDialog({ open, onOpenChange, agency = null, onSuccess = null }) {
+  const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -81,9 +84,13 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
         });
       }
 
+      await queryClient.invalidateQueries({ queryKey: ['agencies'] });
+      await queryClient.invalidateQueries({ queryKey: ['agents'] });
+      toast.success(agency ? 'Agency updated' : 'Agency created');
       onOpenChange(false);
       if (onSuccess) onSuccess();
     } catch (err) {
+      toast.error(err.message || 'Failed to save agency');
       setError(err.message || 'Failed to save agency');
     } finally {
       setLoading(false);
