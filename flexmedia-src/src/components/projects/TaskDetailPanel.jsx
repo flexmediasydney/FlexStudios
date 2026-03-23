@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { CalendarIcon, Trash2, AlertTriangle, ClockIcon, MessageCircle, Users, User, Lock } from "lucide-react";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { format } from "date-fns";
 import { wallClockToUTC } from "@/components/lib/deadlinePresets";
 import { CountdownTimer, CompletionTimer } from "./TaskManagement";
@@ -97,6 +98,7 @@ export default function TaskDetailPanel({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
+      refetchEntityList("ProjectTask");
       queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
     onError: (err) => toast.error(err?.message || 'Failed to update task lock'),

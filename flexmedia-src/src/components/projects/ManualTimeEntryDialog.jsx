@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -99,6 +100,8 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['time-logs'] });
       queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
+      refetchEntityList("TaskTimeLog");
+      refetchEntityList("ProjectTask");
       if (project?.id) {
         api.entities.ProjectActivity.create({
           project_id: project.id,

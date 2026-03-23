@@ -1,4 +1,5 @@
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { fmtDate } from "@/components/utils/dateUtils";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ export default function TimerLogActions({ log, currentUser, isMasterAdmin }) {
     mutationFn: () => api.entities.TaskTimeLog.delete(log.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['time-logs'] });
+      refetchEntityList("TaskTimeLog");
       queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
       toast.success("Time log deleted");
     },

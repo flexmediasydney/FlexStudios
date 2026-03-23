@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,8 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['time-logs'] });
       queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
+      refetchEntityList("TaskTimeLog");
+      refetchEntityList("ProjectTask");
       toast.success("Time log updated");
       setEditMode(false);
       onClose();
@@ -84,6 +87,8 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['time-logs'] });
       queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
+      refetchEntityList("TaskTimeLog");
+      refetchEntityList("ProjectTask");
       toast.success("Time log deleted");
       onClose();
     },

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -288,6 +289,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     onSuccess: (created, variables) => {
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      refetchEntityList("ProjectTask");
       setShowAddDialog(false);
       setNewTask({ title: "", description: "", task_type: "back_office", assigned_to: "", assigned_to_name: "", due_date: null });
       logActivity('task_added', `Task added: "${variables.title}"`);
@@ -364,6 +366,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     onSuccess: async (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      refetchEntityList("ProjectTask");
       scheduleDeadlineSync(projectId, 'task_update');
       setEditingTask(null);
       toast.success("Task saved");
@@ -416,6 +419,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     onSuccess: async (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      refetchEntityList("ProjectTask");
       logActivity('task_deleted', `Task deleted: "${deleteConfirm?.title || ''}"`);
 
       // Clean up dependency references: remove deleted task ID from all dependents
