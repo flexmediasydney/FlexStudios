@@ -29,7 +29,15 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // Anon client (respects RLS, used for ALL frontend operations)
-const supabase = createSupabaseClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = createSupabaseClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    // Increase lock timeout to handle orphaned locks from tab closures
+    // Default is 5000ms which causes AbortError on slow networks or stale locks
+    lock: { acquireTimeout: 15000 },
+    // Detect session in URL hash (for OAuth callbacks, magic links)
+    detectSessionInUrl: true,
+  },
+});
 
 // SECURITY: Service role key is NO LONGER in the frontend.
 // Admin operations (invite user, resend invite, sign out everywhere) go through

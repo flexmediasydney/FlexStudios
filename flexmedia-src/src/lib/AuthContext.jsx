@@ -68,7 +68,7 @@ export const AuthProvider = ({ children }) => {
         // Web Locks contention — retry after a short delay
         if (err?.name === 'AbortError' && retries > 0) {
           console.warn('Auth lock contention, retrying...', retries);
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => setTimeout(r, 2000));
           if (!cancelled) return init(retries - 1);
         }
         console.error('Auth init error:', err);
