@@ -41,15 +41,14 @@ export default function EditTemplateModal({ template, onClose }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [isShared, setIsShared] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const queryClient = useQueryClient();
 
   useEffect(() => {
     if (template) {
-      setName(template.name);
-      setSubject(template.subject);
-      setBody(template.body);
-      setIsShared(template.is_shared);
+      setName(template.name || "");
+      setSubject(template.subject || "");
+      setBody(template.body || "");
+      setIsShared(!!template.is_shared);
     }
   }, [template]);
 
@@ -83,32 +82,27 @@ export default function EditTemplateModal({ template, onClose }) {
     onError: () => toast.error("Failed to delete template"),
   });
 
-  const handleSave = async () => {
+  const handleSave = () => {
     if (!name.trim()) {
       toast.error("Template name is required");
       return;
     }
+    if (!subject.trim()) {
+      toast.error("Subject is required");
+      return;
+    }
 
-    setIsLoading(true);
-    try {
-      if (template) {
-        await updateMutation.mutateAsync({
-          name,
-          subject,
-          body,
-          is_shared: isShared,
-        });
-      } else {
-        await createMutation.mutateAsync({
-          name,
-          subject,
-          body,
-          is_shared: isShared,
-          category: "custom",
-        });
-      }
-    } finally {
-      setIsLoading(false);
+    const payload = {
+      name: name.trim(),
+      subject: subject.trim(),
+      body,
+      is_shared: isShared,
+    };
+
+    if (template) {
+      updateMutation.mutate(payload);
+    } else {
+      createMutation.mutate({ ...payload, category: "custom" });
     }
   };
 
@@ -217,9 +211,9 @@ export default function EditTemplateModal({ template, onClose }) {
               </Button>
               <Button
                 onClick={handleSave}
-                disabled={isLoading || createMutation.isPending || updateMutation.isPending}
+                disabled={createMutation.isPending || updateMutation.isPending}
               >
-                Save
+                {(createMutation.isPending || updateMutation.isPending) ? "Saving..." : "Save"}
               </Button>
             </div>
           </div>

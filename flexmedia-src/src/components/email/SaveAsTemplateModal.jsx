@@ -43,7 +43,8 @@ export default function SaveAsTemplateModal({ subject, body, onClose }) {
       toast.error("Subject line is required");
       return;
     }
-    if (!body?.trim() || body.trim() === '<p><br></p>') {
+    const strippedBody = (body || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+    if (!strippedBody) {
       toast.error("Template body cannot be empty");
       return;
     }

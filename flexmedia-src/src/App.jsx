@@ -54,15 +54,15 @@ function RouteGuard({ routeName, children }) {
     if (!isAuthError) {
       return (
         <div className="flex items-center justify-center min-h-[60vh] p-8">
-          <div className="bg-red-50 border border-red-200 rounded-xl p-8 max-w-md text-center">
+          <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 rounded-xl p-8 max-w-md text-center">
             <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-4" />
-            <h2 className="text-lg font-semibold text-red-900 mb-2">Something went wrong</h2>
-            <p className="text-sm text-red-700 mb-4">
+            <h2 className="text-lg font-semibold text-red-900 dark:text-red-200 mb-2">Something went wrong</h2>
+            <p className="text-sm text-red-700 dark:text-red-300 mb-4">
               {error.message || 'Failed to load user information.'}
             </p>
             <button
               onClick={() => refetch()}
-              className="text-sm text-red-600 underline hover:text-red-800"
+              className="text-sm text-red-600 dark:text-red-400 underline hover:text-red-800 dark:hover:text-red-300"
             >
               Try again
             </button>
@@ -77,13 +77,13 @@ function RouteGuard({ routeName, children }) {
   if (!canAccessRoute(routeName, user.role)) {
     return (
       <div className="flex items-center justify-center min-h-[60vh] p-8">
-        <div className="bg-red-50 border border-red-200 rounded-xl p-8 max-w-md text-center">
+        <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 rounded-xl p-8 max-w-md text-center">
           <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-4" />
-          <h2 className="text-lg font-semibold text-red-900 mb-2">Access denied</h2>
-          <p className="text-sm text-red-700 mb-4">
+          <h2 className="text-lg font-semibold text-red-900 dark:text-red-200 mb-2">Access denied</h2>
+          <p className="text-sm text-red-700 dark:text-red-300 mb-4">
             You don't have permission to access this page. Contact your admin if you need access.
           </p>
-          <a href="/Dashboard" className="text-sm text-red-600 underline hover:text-red-800">
+          <a href="/Dashboard" className="text-sm text-red-600 dark:text-red-400 underline hover:text-red-800 dark:hover:text-red-300">
             Back to Dashboard
           </a>
         </div>
@@ -192,9 +192,9 @@ function App() {
         <QueryClientProvider client={queryClientInstance}>
           <Router>
             <AuthenticatedApp />
+            <InstallPrompt />
           </Router>
           <Toaster />
-          <InstallPrompt />
         </QueryClientProvider>
       </AuthProvider>
     </ThemeProvider>

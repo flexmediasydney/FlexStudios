@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,16 +12,34 @@ import { Trash2 } from "lucide-react";
 import { formatDuration, getStatusColor } from "./useEffortLogging";
 import { toast } from "sonner";
 
+/** Compute live seconds for a log, accounting for running timers whose total_seconds is stale */
+function computeLiveSeconds(log) {
+  if (!log) return 0;
+  if (log.status === 'running' && log.is_active && log.start_time) {
+    return Math.max(0, Math.floor((Date.now() - new Date(log.start_time).getTime()) / 1000) - (log.paused_duration || 0));
+  }
+  return log.total_seconds || 0;
+}
+
 export default function TimerLogDetailModal({ log, onClose, currentUser, isMasterAdmin }) {
   const queryClient = useQueryClient();
   const [editMode, setEditMode] = useState(false);
-  const [hours, setHours] = useState(Math.floor(log.total_seconds / 3600));
-  const [minutes, setMinutes] = useState(Math.floor((log.total_seconds % 3600) / 60));
+  const [hours, setHours] = useState(Math.floor((log.total_seconds || 0) / 3600));
+  const [minutes, setMinutes] = useState(Math.floor(((log.total_seconds || 0) % 3600) / 60));
+
+  // Tick every second when viewing a running timer to keep duration live
+  const [, setTick] = useState(0);
+  const isRunning = log.is_active && log.status === 'running';
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [isRunning]);
 
   // Reset edit state when a different log is viewed
   useEffect(() => {
-    setHours(Math.floor(log.total_seconds / 3600));
-    setMinutes(Math.floor((log.total_seconds % 3600) / 60));
+    setHours(Math.floor((log.total_seconds || 0) / 3600));
+    setMinutes(Math.floor(((log.total_seconds || 0) % 3600) / 60));
     setEditMode(false);
   }, [log.id, log.total_seconds]);
 
@@ -77,7 +95,7 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
   const colors = getStatusColor(log.status);
 
   return (
-    <Dialog open={!!log} onOpenChange={onClose}>
+    <Dialog open={!!log} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Time Log Details</DialogTitle>
@@ -159,7 +177,7 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
           ) : (
             <div className="pt-2 border-t">
               <p className="text-xs text-muted-foreground">Total Duration</p>
-              <p className="text-2xl font-bold">{formatDuration(log.total_seconds)}</p>
+              <p className="text-2xl font-bold">{formatDuration(computeLiveSeconds(log))}</p>
             </div>
           )}
 

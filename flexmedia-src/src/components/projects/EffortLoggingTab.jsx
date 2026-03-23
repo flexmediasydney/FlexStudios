@@ -81,7 +81,7 @@ export default function EffortLoggingTab({ projectId, project }) {
   // Apply sorting
   const sortedLogs = [...filteredLogs].sort((a, b) => {
     if (sortBy === "duration") {
-      return (b.total_seconds || 0) - (a.total_seconds || 0);
+      return computeLiveSeconds(b) - computeLiveSeconds(a);
     }
     return new Date(fixTimestamp(b.created_date)) - new Date(fixTimestamp(a.created_date));
   });
@@ -283,7 +283,7 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
 
                 <div className="flex-1 min-w-0">
                    <div className="flex items-center gap-2 mb-2">
-                     <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: colors.dot.includes('blue') ? '#3b82f6' : colors.dot.includes('green') ? '#10b981' : colors.dot.includes('orange') ? '#f97316' : '#6b7280' }}></div>
+                     <div className={`w-2 h-2 rounded-full flex-shrink-0 ${colors.dot}`}></div>
                     <span className={`text-xs font-semibold ${colors.text}`}>
                       {parentLog.status.charAt(0).toUpperCase() + parentLog.status.slice(1)}
                     </span>

@@ -20,6 +20,9 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Guard against double-click on start/finish/resume/pause
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Dialog states
   const [showConfirm, setShowConfirm] = useState(false);
   const [showTakeoverConfirm, setShowTakeoverConfirm] = useState(false);
@@ -291,14 +294,15 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   }, []);
 
   const handlePause = useCallback(async () => {
-    if (!activeLog?.id) return;
-    
+    if (!activeLog?.id || isSubmitting) return;
+
     try {
+      setIsSubmitting(true);
       setError(null);
-      
+
       const now = new Date().toISOString();
       lastActivityTime.current = Date.now();
-      
+
       await api.entities.TaskTimeLog.update(activeLog.id, {
         status: 'paused',
         pause_time: now,
@@ -307,39 +311,49 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       logTimerActivity('timer_paused', `Timer paused on "${task.title}" by ${currentUser?.full_name}`);
     } catch (err) {
       setError(err.message || 'Failed to pause timer');
+    } finally {
+      setIsSubmitting(false);
     }
-  }, [activeLog, totalDisplaySeconds, task.title, currentUser?.full_name]);
+  }, [activeLog, totalDisplaySeconds, task.title, currentUser?.full_name, isSubmitting]);
 
   const handleFinish = useCallback(async () => {
-    if (!activeLog?.id) return;
-    
+    if (!activeLog?.id || isSubmitting) return;
+
     try {
+      setIsSubmitting(true);
       setError(null);
 
       if (currentTask?.is_locked) {
         setError('Cannot finish timer - task is locked');
         return;
       }
-      
+
+      // Compute final seconds fresh to avoid stale closure value
+      const finalSeconds = activeLog.status === 'running' && activeLog.start_time
+        ? Math.max(0, Math.floor((Date.now() - new Date(activeLog.start_time).getTime()) / 1000) - (activeLog.paused_duration || 0))
+        : (activeLog.total_seconds || 0);
+
       const finalPausedDuration = activeLog.pause_time
         ? (activeLog.paused_duration || 0) + Math.floor((Date.now() - new Date(activeLog.pause_time).getTime()) / 1000)
         : (activeLog.paused_duration || 0);
-      
+
       await api.entities.TaskTimeLog.update(activeLog.id, {
         end_time: new Date().toISOString(),
         status: 'completed',
         is_active: false,
         pause_time: null,
         paused_duration: finalPausedDuration,
-        total_seconds: totalDisplaySeconds
+        total_seconds: finalSeconds
       });
-      
-      logTimerActivity('timer_completed', `Timer completed on "${task.title}" — ${Math.round(totalDisplaySeconds / 60)}m by ${currentUser?.full_name}`);
+
+      logTimerActivity('timer_completed', `Timer completed on "${task.title}" — ${Math.round(finalSeconds / 60)}m by ${currentUser?.full_name}`);
       if (onTaskComplete) onTaskComplete(task.id);
     } catch (err) {
       setError(err.message || 'Failed to finish timer');
+    } finally {
+      setIsSubmitting(false);
     }
-  }, [activeLog, totalDisplaySeconds, currentTask, onTaskComplete, task.id, task.title, currentUser?.full_name]);
+  }, [activeLog, currentTask, onTaskComplete, task.id, task.title, currentUser?.full_name, isSubmitting]);
 
   // Inactivity monitoring (check every 10 seconds)
   useEffect(() => {
@@ -402,6 +416,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   };
 
   const handleStart = async () => {
+    if (isSubmitting) return;
     try {
       setError(null);
 
@@ -444,8 +459,9 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   const startTimer = async () => {
     setShowConfirm(false);
     setShowTakeoverConfirm(false);
-    
+
     try {
+      setIsSubmitting(true);
       setError(null);
       
       // Reassign if needed
@@ -482,27 +498,30 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       logTimerActivity('timer_started', `Timer started on "${task.title}" by ${currentUser?.full_name}`);
     } catch (err) {
       setError(err.message || 'Failed to create timer');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleResume = async () => {
-    if (!activeLog?.id) return;
-    
+    if (!activeLog?.id || isSubmitting) return;
+
     try {
+      setIsSubmitting(true);
       setError(null);
 
       if (isUnassigned) {
         setError('Task has no assignee. Please assign before resuming.');
         return;
       }
-      
+
       // Calculate pause duration and add to cumulative
-      const pauseDuration = activeLog.pause_time 
+      const pauseDuration = activeLog.pause_time
         ? Math.floor((Date.now() - new Date(activeLog.pause_time).getTime()) / 1000)
         : 0;
-      
+
       lastActivityTime.current = Date.now();
-      
+
       // Update DB - subscription will update activeLog
       await api.entities.TaskTimeLog.update(activeLog.id, {
         status: 'running',
@@ -512,13 +531,17 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       logTimerActivity('timer_resumed', `Timer resumed on "${task.title}" by ${currentUser?.full_name}`);
     } catch (err) {
       setError(err.message || 'Failed to resume timer');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleContinueConfirmed = async () => {
+    if (isSubmitting) return;
     setShowContinueConfirm(false);
-    
+
     try {
+      setIsSubmitting(true);
       setError(null);
 
       // Prevent continuing if another timer is already running
@@ -565,6 +588,8 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       // Subscription will update activeLog
     } catch (err) {
       setError(err.message || 'Failed to continue timer');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -627,11 +652,11 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
             <div className="flex items-center gap-1 ml-auto">
               {!isRunning && !isPaused && !isFinished && (
                 <>
-                  <Button 
-                    size="sm" 
-                    variant="default" 
-                    onClick={() => handleStart()} 
-                    disabled={!!conflictLog || currentTask?.is_locked || currentTask?.is_completed || isUnassigned}
+                  <Button
+                    size="sm"
+                    variant="default"
+                    onClick={() => handleStart()}
+                    disabled={isSubmitting || !!conflictLog || currentTask?.is_locked || currentTask?.is_completed || isUnassigned}
                     className="gap-1"
                     title={
                       currentTask?.is_locked ? "This task is locked" :
@@ -664,6 +689,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
                     size="sm"
                     variant="outline"
                     onClick={handlePause}
+                    disabled={isSubmitting}
                     className="gap-1"
                   >
                     <Pause className="h-3 w-3" /> Pause
@@ -672,6 +698,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
                     size="sm"
                     variant="destructive"
                     onClick={handleFinish}
+                    disabled={isSubmitting}
                     className="gap-1"
                   >
                     <CheckCircle className="h-3 w-3" /> Finish
@@ -681,27 +708,28 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
               
               {isPaused && (
                 <>
-                  <Button 
-                    size="sm" 
-                    variant="default" 
+                  <Button
+                    size="sm"
+                    variant="default"
                     onClick={handleResume}
                     className="gap-1"
-                    disabled={isUnassigned}
+                    disabled={isSubmitting || isUnassigned}
                     title={isUnassigned ? "Reassign task before resuming" : ""}
                   >
                     <Play className="h-3 w-3" /> Resume
                   </Button>
-                  <Button 
-                    size="sm" 
-                    variant="destructive" 
+                  <Button
+                    size="sm"
+                    variant="destructive"
                     onClick={handleFinish}
+                    disabled={isSubmitting}
                     className="gap-1"
                   >
                     <CheckCircle className="h-3 w-3" /> Finish
                   </Button>
                 </>
               )}
-              
+
               {isFinished && !currentTask?.is_locked && (
                 <Button 
                   size="sm" 

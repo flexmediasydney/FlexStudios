@@ -174,20 +174,46 @@ function LayoutContent({ currentPageName, children, onBack }) {
     localStorage.setItem('nav-expanded-sections', JSON.stringify(expandedSections));
   }, [expandedSections]);
 
+  // Auto-expand the section containing the current active page
+  useEffect(() => {
+    if (!currentPageName || navigationSections.length === 0) return;
+    for (const section of navigationSections) {
+      if (!section.items) continue;
+      const isInSection = section.items.some(item =>
+        item.href === currentPageName ||
+        (item.children && item.children.some(c => c.href === currentPageName))
+      );
+      if (isInSection && !expandedSections[section.id]) {
+        setExpandedSections(prev => ({ ...prev, [section.id]: true }));
+        // Also expand parent nav items if the current page is a child
+        for (const item of section.items) {
+          if (item.children && item.children.some(c => c.href === currentPageName)) {
+            setExpandedParents(prev => ({ ...prev, [item.name]: true }));
+          }
+        }
+        break;
+      }
+    }
+  }, [currentPageName, navigationSections]);
+
   useEffect(() => {
     const handler = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setSearchOpen(v => !v);
       }
-      // Esc closes sidebar on mobile
-      if (e.key === "Escape" && sidebarOpen) {
-        setSidebarOpen(false);
+      // Esc closes sidebar on mobile, or search dialog
+      if (e.key === "Escape") {
+        if (searchOpen) {
+          setSearchOpen(false);
+        } else if (sidebarOpen) {
+          setSidebarOpen(false);
+        }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [sidebarOpen]);
+  }, [sidebarOpen, searchOpen]);
 
   // Navigation structure — role-aware, with parent/child nesting
   const navigationSections = useMemo(() => {
@@ -434,7 +460,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
              )}
              <TopSearchBar />
              <div className="flex items-center gap-1.5">
-               <span className="text-[10px] text-muted-foreground/50 font-medium hidden xl:inline">Quick: <kbd className="bg-muted/50 px-1.5 py-0.5 rounded text-[9px] border border-border/40">Ctrl+K</kbd></span>
+               <span className="text-[10px] text-muted-foreground/50 font-medium hidden xl:inline">Quick: <kbd className="bg-muted/50 px-1.5 py-0.5 rounded text-[9px] border border-border/40">{navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl+'}K</kbd></span>
                <Button
                  variant="ghost"
                  size="icon"

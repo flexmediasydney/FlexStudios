@@ -175,7 +175,14 @@ function ensureSubscription(entityName) {
       if (!debounceTimer) debounceTimer = setTimeout(flush, 30);
     });
 
-    subscriptions.set(entityName, unsubscribe);
+    // BUG FIX: wrap unsubscribe to also clear pending debounce timer.
+    // Without this, clearEntityCache() unsubscribes the channel but the
+    // pending setTimeout still fires, writing stale data into a cleared cache.
+    subscriptions.set(entityName, () => {
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      pendingEvents.length = 0;
+      unsubscribe();
+    });
   } catch (err) {
     // Supabase Realtime may fail to connect (network issues, missing table, etc.)
     // This is non-fatal: the hook still works via polling/manual refetch.

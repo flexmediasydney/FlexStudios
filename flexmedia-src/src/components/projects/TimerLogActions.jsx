@@ -30,7 +30,7 @@ export default function TimerLogActions({ log, currentUser, isMasterAdmin }) {
     <div className="flex items-center gap-1">
       <AlertDialog>
         <AlertDialogTrigger asChild>
-          <Button size="icon" variant="ghost" className="h-6 w-6">
+          <Button size="icon" variant="ghost" className="h-6 w-6" disabled={deleteMutation.isPending}>
             <Trash2 className="h-3 w-3 text-destructive" />
           </Button>
         </AlertDialogTrigger>
@@ -46,6 +46,7 @@ export default function TimerLogActions({ log, currentUser, isMasterAdmin }) {
             <AlertDialogAction
               onClick={() => deleteMutation.mutate()}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? "Deleting..." : "Delete"}
             </AlertDialogAction>

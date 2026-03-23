@@ -186,6 +186,7 @@ export default function EmailAccountSettingsTab() {
     mutationFn: (data) => api.entities.UserSignature.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["user-signatures"] });
+      queryClient.invalidateQueries({ queryKey: ["user-signatures-compose"] });
       toast.success("Signature saved.");
     },
     onError: () => toast.error("Failed to save signature."),
@@ -196,6 +197,7 @@ export default function EmailAccountSettingsTab() {
       api.entities.UserSignature.update(id, { signature_html: html }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["user-signatures"] });
+      queryClient.invalidateQueries({ queryKey: ["user-signatures-compose"] });
       toast.success("Signature updated.");
     },
     onError: () => toast.error("Failed to update signature."),
@@ -213,6 +215,7 @@ export default function EmailAccountSettingsTab() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["user-signatures"] });
+      queryClient.invalidateQueries({ queryKey: ["user-signatures-compose"] });
       toast.success("Default signature updated.");
     },
   });
@@ -221,6 +224,7 @@ export default function EmailAccountSettingsTab() {
     mutationFn: (id) => api.entities.UserSignature.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["user-signatures"] });
+      queryClient.invalidateQueries({ queryKey: ["user-signatures-compose"] });
       toast.success("Signature deleted.");
     },
   });
@@ -688,12 +692,17 @@ export default function EmailAccountSettingsTab() {
                       <CardDescription>Emails from these addresses won't be synced.</CardDescription>
                     </div>
                     <BlockedAddressDialog
-                      onAdd={(address) =>
+                      onAdd={(address) => {
+                        const normalized = address.toLowerCase().trim();
+                        if (blockedAddresses.some(b => b.email_address === normalized)) {
+                          toast.error("This address is already blocked.");
+                          return;
+                        }
                         createBlockedAddressMutation.mutate({
                           email_account_id: selectedAccount.id,
-                          email_address: address.toLowerCase().trim(),
-                        })
-                      }
+                          email_address: normalized,
+                        });
+                      }}
                       isAdding={createBlockedAddressMutation.isPending}
                     />
                   </div>

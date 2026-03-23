@@ -6,7 +6,8 @@ import { differenceInDays, differenceInHours, differenceInMinutes, format, parse
 export function fixTimestamp(str) {
   if (!str || typeof str !== 'string') return str;
   if (str.length <= 10) return str; // date-only, leave alone
-  if (str.endsWith('Z') || str.includes('+') || str.match(/[-+]\d{2}:\d{2}$/)) return str;
+  // BUG FIX: also match compact offset formats like -0800 (no colon), not just -08:00
+  if (str.endsWith('Z') || str.includes('+') || str.match(/[-+]\d{2}:?\d{2}$/)) return str;
   return str + 'Z';
 }
 
@@ -58,18 +59,23 @@ export function todaySydney() {
 }
 
 export function daysAgo(date) {
+  if (!date) return 0;
   return differenceInDays(new Date(), new Date(fixTimestamp(date)));
 }
 
 export function hoursAgo(date) {
+  if (!date) return 0;
   return differenceInHours(new Date(), new Date(fixTimestamp(date)));
 }
 
 export function minutesAgo(date) {
+  if (!date) return 0;
   return differenceInMinutes(new Date(), new Date(fixTimestamp(date)));
 }
 
 export function formatRelative(date) {
+  // BUG FIX: null/undefined date caused fixTimestamp(null) → null → new Date(null) = epoch → wrong "Xd ago"
+  if (!date) return "—";
   const mins = minutesAgo(date);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
@@ -97,7 +103,13 @@ export function getDateRange(type) {
 }
 
 export function isSameDay(date1, date2) {
-  return format(new Date(fixTimestamp(date1)), "yyyy-MM-dd") === format(new Date(fixTimestamp(date2)), "yyyy-MM-dd");
+  // BUG FIX: used format() in LOCAL machine timezone instead of Sydney timezone.
+  // Two timestamps straddling midnight in Sydney would compare as same-day when they aren't.
+  if (!date1 || !date2) return false;
+  const toSydneyDay = (d) => new Intl.DateTimeFormat('en-AU', {
+    timeZone: APP_TZ, year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date(fixTimestamp(d)));
+  return toSydneyDay(date1) === toSydneyDay(date2);
 }
 
 export function isBefore(date1, date2) {
@@ -187,7 +199,9 @@ export function sydneyInputToUtc(localStr) {
 
 // ─── Shared duration formatters ───────────────────────────────────────────────
 export function formatDurationCompact(seconds) {
-  if (!seconds || seconds < 0) return "—";
+  // BUG FIX: !seconds treated 0 as falsy — 0 seconds is a valid duration
+  if (seconds == null || isNaN(seconds) || seconds < 0) return "—";
+  if (seconds === 0) return "0s";
   seconds = Math.floor(seconds);
   if (seconds < 60) return `${seconds}s`;
   const mins = Math.floor(seconds / 60);
@@ -200,7 +214,9 @@ export function formatDurationCompact(seconds) {
 }
 
 export function formatDurationFull(seconds) {
-  if (!seconds || seconds < 0) return "—";
+  // BUG FIX: !seconds treated 0 as falsy — 0 seconds is a valid duration
+  if (seconds == null || isNaN(seconds) || seconds < 0) return "—";
+  if (seconds === 0) return "0s";
   seconds = Math.floor(seconds);
   if (seconds < 60) return `${seconds}s`;
   const mins = Math.floor(seconds / 60);

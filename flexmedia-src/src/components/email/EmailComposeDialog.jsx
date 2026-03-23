@@ -404,7 +404,7 @@ export default function EmailComposeDialog({
   <p><strong>Subject:</strong> ${escapeHtml(email.subject || '')}</p>
   <p><strong>To:</strong> ${escapeHtml(Array.isArray(email.to) ? email.to.join(', ') : (email.to || ''))}</p>
   <br/>
-  ${email.body || ''}
+  ${sanitizeBodyForQuote(email.body || '')}
 </div>`;
       setBody(fwdBody);
     }
@@ -1096,6 +1096,7 @@ export default function EmailComposeDialog({
                               created_by: user?.id,
                             });
                             toast.success(`Scheduled for ${sendAt.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`);
+                            clearDraft();
                             onClose?.();
                           } catch (err) {
                             toast.error('Failed to schedule: ' + (err?.message || 'Unknown error'));
@@ -1123,12 +1124,13 @@ export default function EmailComposeDialog({
               <div className="space-y-4 flex-1 flex flex-col">
                 <div className="relative">
                   <Input
-                    placeholder="Search projects..."
+                    placeholder={linkedProject ? "Unlink current project to search..." : "Search projects..."}
                     value={linkedProject ? "" : projectSearch}
                     onChange={(e) => {
-                      setProjectSearch(e.target.value);
+                      if (!linkedProject) setProjectSearch(e.target.value);
                     }}
-                    className="text-sm bg-white border-2 hover:border-blue-300"
+                    disabled={!!linkedProject}
+                    className="text-sm bg-white border-2 hover:border-blue-300 disabled:opacity-50"
                     aria-label="Search projects"
                   />
                   {projectSearch && (

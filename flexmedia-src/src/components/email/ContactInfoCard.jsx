@@ -8,11 +8,15 @@ import { toast } from "sonner";
 export default function ContactInfoCard({ sender, senderName, allMessages = [] }) {
   const [copied, setCopied] = useState(false);
 
-  const copyEmail = () => {
-    navigator.clipboard.writeText(sender);
-    setCopied(true);
-    toast.success("Email copied");
-    setTimeout(() => setCopied(false), 2000);
+  const copyEmail = async () => {
+    try {
+      await navigator.clipboard.writeText(sender);
+      setCopied(true);
+      toast.success("Email copied");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Failed to copy email");
+    }
   };
 
   // Count messages from this sender
@@ -23,7 +27,9 @@ export default function ContactInfoCard({ sender, senderName, allMessages = [] }
     .find((m) => m.from === sender);
 
   const formatDate = (dateStr) => {
+    if (!dateStr) return "Unknown";
     const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return "Unknown";
     return date.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",

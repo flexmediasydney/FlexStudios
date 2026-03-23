@@ -9,7 +9,7 @@ export default function InstallPrompt() {
   useEffect(() => {
     // Don't show if already installed or previously dismissed
     if (window.matchMedia('(display-mode: standalone)').matches) return;
-    if (sessionStorage.getItem('pwa-install-dismissed')) return;
+    if (localStorage.getItem('pwa-install-dismissed')) return;
 
     const handler = (e) => {
       e.preventDefault();
@@ -34,7 +34,7 @@ export default function InstallPrompt() {
   const handleDismiss = () => {
     setShowPrompt(false);
     setDeferredPrompt(null);
-    sessionStorage.setItem('pwa-install-dismissed', 'true');
+    localStorage.setItem('pwa-install-dismissed', 'true');
   };
 
   if (!showPrompt) return null;

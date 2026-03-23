@@ -51,7 +51,7 @@ function highlight(text = "", query = "") {
   return (
     <>
       {text.slice(0, idx)}
-      <mark className="bg-yellow-100 text-yellow-900 rounded-sm px-0.5 not-italic">
+      <mark className="bg-yellow-100 text-yellow-900 dark:bg-yellow-800/40 dark:text-yellow-200 rounded-sm px-0.5 not-italic">
         {text.slice(idx, idx + query.length)}
       </mark>
       {text.slice(idx + query.length)}
@@ -92,25 +92,6 @@ export default function GlobalSearch({ open, onClose }) {
 
   // Reset selected index when query changes
   useEffect(() => { setSelectedIndex(0); }, [query]);
-
-  // Keyboard navigation: arrow keys + Enter to select from flat result list
-  useEffect(() => {
-    if (!open || flatResults.length === 0) return;
-    const handler = (e) => {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedIndex(prev => Math.min(prev + 1, flatResults.length - 1));
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedIndex(prev => Math.max(prev - 1, 0));
-      } else if (e.key === 'Enter' && flatResults[selectedIndex]) {
-        e.preventDefault();
-        navigateToResult(flatResults[selectedIndex]);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, flatResults, selectedIndex, navigateToResult]);
 
   // ── Search results ───────────────────────────────────────────────────────
   const q = query.trim().toLowerCase();
@@ -192,6 +173,26 @@ export default function GlobalSearch({ open, onClose }) {
     }
   }, [goTo]);
 
+  // Keyboard navigation: arrow keys + Enter to select from flat result list
+  // (must be declared after flatResults and navigateToResult)
+  useEffect(() => {
+    if (!open || flatResults.length === 0) return;
+    const handler = (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.min(prev + 1, flatResults.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter' && flatResults[selectedIndex]) {
+        e.preventDefault();
+        navigateToResult(flatResults[selectedIndex]);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, flatResults, selectedIndex, navigateToResult]);
+
   // Handle recent search click
   const handleRecentClick = useCallback((term) => {
     setQuery(term);
@@ -260,7 +261,7 @@ export default function GlobalSearch({ open, onClose }) {
                     key={`recent-${idx}`}
                     value={`recent-${term}`}
                     onSelect={() => handleRecentClick(term)}
-                    className="flex items-center gap-3 py-2.5 cursor-pointer hover:bg-accent transition-colors duration-150"
+                    className="group flex items-center gap-3 py-2.5 cursor-pointer hover:bg-accent transition-colors duration-150"
                   >
                     <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
                     <span className="flex-1 text-sm">{term}</span>

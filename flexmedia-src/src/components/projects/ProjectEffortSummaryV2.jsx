@@ -236,20 +236,20 @@ export function useProjectEffortSummary(projectId, project = null) {
    const [tick, setTick] = useState(0);
    const { timeLogs, projectTasks, projectRevisions } = useProjectEffortData(projectId, project);
 
-  // Calculate running timers to trigger re-render
+  // Calculate running timers to trigger re-render — depend on the boolean, not the array
+  const hasRunningTimer = timeLogs.some(l => l.is_active && l.status === 'running');
   useEffect(() => {
-    const hasRunning = timeLogs.some(l => l.is_active && l.status === 'running');
-    if (!hasRunning) return;
+    if (!hasRunningTimer) return;
     const id = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(id);
-  }, [timeLogs]);
+  }, [hasRunningTimer]);
 
-  const metrics = useMemo(() => calculateEffortMetrics(timeLogs, projectTasks, projectRevisions), [timeLogs, projectTasks, projectRevisions]);
+  // Include tick in deps so metrics recompute every second while a timer is running
+  const metrics = useMemo(() => calculateEffortMetrics(timeLogs, projectTasks, projectRevisions), [timeLogs, projectTasks, projectRevisions, tick]);
 
   const taskRoleList = useMemo(() => buildRoleList(metrics.task.actualByRole, metrics.task.estimatedByRole), [metrics]);
   const revisionRoleList = useMemo(() => buildRoleList(metrics.revision.actualByRole, metrics.revision.estimatedByRole), [metrics]);
 
-  const hasRunning = timeLogs.some(l => l.is_active && l.status === 'running');
   const totalEst = metrics.task.estimatedTotal + metrics.revision.estimatedTotal;
   const totalAct = metrics.task.actualTotal + metrics.revision.actualTotal;
 
@@ -261,7 +261,7 @@ export function useProjectEffortSummary(projectId, project = null) {
     totalEstimated: totalEst,
     totalActual: totalAct,
     totalUtilization: totalEst > 0 ? Math.min(Math.round((totalAct / totalEst) * 100), 999) : 0,
-    hasRunning,
+    hasRunning: hasRunningTimer,
   };
 }
 

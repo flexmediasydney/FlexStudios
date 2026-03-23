@@ -30,24 +30,18 @@ export function ActiveTimersProvider({ children, currentUser }) {
 
     // Debounce initial load to prevent rapid refetches
     const timeout = setTimeout(loadActiveTimers, 300);
-    
-    return () => {
-      clearTimeout(timeout);
-      isMounted = false;
-    };
-  }, [currentUser?.id]);
 
-  useEffect(() => {
-    if (!currentUser?.id) return;
-
-    // Subscribe to real-time updates (separate effect to avoid re-subscribing on every user change)
+    // Subscribe to real-time updates in the same effect to ensure cleanup is coordinated
     const unsubscribe = api.entities.TaskTimeLog.subscribe((event) => {
+      if (!isMounted) return;
       if (!event.data || event.data.user_id !== currentUser.id) return;
 
       setActiveTimers(prev => {
         if (event.type === 'create') {
           // Only add genuinely running timers — not completed manual entries or paused logs
           if (event.data.is_active && event.data.status === 'running') {
+            // Prevent duplicates (e.g., subscription fires after initial fetch already added it)
+            if (prev.some(t => t.id === event.data.id)) return prev;
             return [...prev, event.data];
           }
           return prev;
@@ -69,7 +63,11 @@ export function ActiveTimersProvider({ children, currentUser }) {
       });
     });
 
-    return unsubscribe;
+    return () => {
+      clearTimeout(timeout);
+      isMounted = false;
+      unsubscribe();
+    };
   }, [currentUser?.id]);
 
   return (

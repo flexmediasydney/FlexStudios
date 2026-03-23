@@ -34,9 +34,22 @@ function relativeTime(utcStr) {
 
     const sydDay = toDay(utcStr);
     const todayDay = toDay(new Date().toISOString());
-    const yestDay = toDay(new Date(Date.now() - 86400000).toISOString());
+    // BUG FIX: 86400000ms hardcoded day is wrong during DST transitions (23h or 25h days).
+    // Instead, compute yesterday by formatting (today - 25h) which always crosses midnight
+    // even on a 25h DST day, and then use the Intl formatter which handles DST correctly.
+    const yestDay = (() => {
+      // Subtract 25 hours to guarantee we land in the previous calendar day in any timezone
+      const yest = new Date(Date.now() - 25 * 3600000);
+      // But we need the *actual* previous calendar day in Sydney, so use Intl:
+      return toDay(yest.toISOString());
+    })();
     const timeStr = fmtTS(utcStr, { hour: '2-digit', minute: '2-digit', hour12: true });
-    const diffDays = Math.floor((Date.now() - new Date(fixTimestamp(utcStr)).getTime()) / 86400000);
+    // BUG FIX: use calendar-day-based diff in Sydney TZ instead of raw ms division
+    const parseSydneyDate = (s) => {
+      const parts = toDay(s).split('/');
+      return new Date(parts[2], parts[1] - 1, parts[0]);
+    };
+    const diffDays = Math.round((parseSydneyDate(new Date().toISOString()) - parseSydneyDate(utcStr)) / 86400000);
 
     if (sydDay === todayDay) return `Today at ${timeStr}`;
     if (sydDay === yestDay) return `Yesterday at ${timeStr}`;

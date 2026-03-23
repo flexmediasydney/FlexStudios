@@ -222,7 +222,11 @@ function createEntityApi(entityName, client) {
     async list(sortBy = null, limit = null) {
       let query = client.from(table).select('*');
       query = applySort(query, sortBy);
-      if (limit) query = query.limit(limit);
+      // BUG FIX: Supabase default limit is 1000. Without an explicit limit,
+      // tables with >1000 rows silently return truncated data. Always set the
+      // limit explicitly so the caller's intent is honoured, and apply the
+      // Supabase maximum (1000) when no limit is specified.
+      query = query.limit(limit || 1000);
       const { data, error } = await query;
       if (error) throw new Error(error.message);
       return mapRows(data || []);
@@ -236,7 +240,8 @@ function createEntityApi(entityName, client) {
       let query = client.from(table).select('*');
       query = applyFilters(query, filterObj);
       query = applySort(query, sortBy);
-      if (limit) query = query.limit(limit);
+      // BUG FIX: same as list() — always set explicit limit to avoid silent truncation
+      query = query.limit(limit || 1000);
       const { data, error } = await query;
       if (error) throw new Error(error.message);
       return mapRows(data || []);
@@ -319,12 +324,16 @@ function createEntityApi(entityName, client) {
             if (!eventType) return;
 
             const hasNew = payload.new && Object.keys(payload.new).length > 0;
-            const record = hasNew ? mapRow(payload.new) : mapRow(payload.old);
+            const record = hasNew ? mapRow(payload.new) : null;
 
+            // BUG FIX: For DELETE events, Supabase only sends old.id by default
+            // (unless REPLICA IDENTITY FULL is set). mapRow(payload.old) on a
+            // partial record is safe but record?.id might be undefined — always
+            // fall back to payload.old?.id which Supabase guarantees for DELETEs.
             callback({
-              id: record?.id ?? payload.old?.id,
+              id: record?.id ?? payload.old?.id ?? payload.new?.id,
               type: eventType,
-              data: hasNew ? record : null,
+              data: record,
             });
           }
         )

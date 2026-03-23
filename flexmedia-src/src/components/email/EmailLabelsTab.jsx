@@ -101,10 +101,15 @@ export default function EmailLabelsTab() {
 
   const saveEdit = () => {
     if (!editName.trim()) { toast.error("Name cannot be empty"); return; }
+    // Check for duplicate name (excluding the label being edited)
+    if (labels.some((l) => l.id !== editingId && l.name.toLowerCase() === editName.trim().toLowerCase())) {
+      toast.error("A label with this name already exists");
+      return;
+    }
     updateMutation.mutate({ id: editingId, updates: { name: editName.trim(), color: editColor } });
   };
 
-  const isAdmin = user?.role === "master_admin" || user?.role === "employee";
+  const isAdmin = user?.role === "master_admin" || user?.role === "admin";
   if (!isAdmin) {
     return (
       <div className="text-center py-12 text-muted-foreground">
