@@ -42,10 +42,11 @@ export default function Settings() {
               <SettingsIcon className="h-4 w-4" />
               <span className="hidden sm:inline">Organisation</span>
             </TabsTrigger>
-            <TabsTrigger value="integrations" className="gap-2">
+            {/* Integrations tab removed — use Tonomo Integration page */}
+            {false && <TabsTrigger value="integrations" className="gap-2">
               <Plug className="h-4 w-4" />
               <span className="hidden sm:inline">Integrations</span>
-            </TabsTrigger>
+            </TabsTrigger>}
             {isMasterAdmin && (
               <TabsTrigger value="teams-users" className="gap-2">
                 <Users className="h-4 w-4" />

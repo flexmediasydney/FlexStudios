@@ -264,7 +264,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
           can("SettingsOrganisation") && { name: "Organisation", href: "SettingsOrganisation" },
           can("SettingsAutomationRules") && { name: "Automation Rules", href: "SettingsAutomationRules" },
           can("SettingsRevisionTemplates") && { name: "Request Templates", href: "SettingsRevisionTemplates" },
-          can("SettingsIntegrations") && { name: "Integrations", href: "SettingsIntegrations" },
+          // Integrations removed — use Tonomo Integration page instead
           can("EmailSyncSettings") && { name: "Email Sync", href: "EmailSyncSettings" },
           can("SettingsTonomoIntegration") && { name: "Bookings Setup", href: "SettingsTonomoIntegration" },
           can("SettingsTonomoMappings") && { name: "Mappings", href: "SettingsTonomoMappings" },
