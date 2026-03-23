@@ -791,11 +791,19 @@ const FALLBACK_TIERS = [
     teamFunction: 'management',
   },
   {
-    key: 'onsite_fallback_team_id',
-    label: 'Photographer / Videographer',
+    key: 'photographer_fallback_team_id',
+    label: 'Photographer',
     icon: '📷',
-    covers: 'photographer_id, videographer_id',
-    desc: 'Team to draw from for onsite staff when Tonomo resolves a person not yet mapped. Booking type determines whether they\'re assigned as photographer or videographer.',
+    covers: 'photographer_id',
+    desc: 'Team to draw from for photographer when Tonomo resolves a person not yet mapped.',
+    teamFunction: 'onsite',
+  },
+  {
+    key: 'videographer_fallback_team_id',
+    label: 'Videographer',
+    icon: '🎬',
+    covers: 'videographer_id',
+    desc: 'Team to draw from for videographer when Tonomo resolves a person not yet mapped.',
     teamFunction: 'onsite',
   },
   {
@@ -832,9 +840,10 @@ function RoleDefaultsCard({ defaults, onSave, isSaving }) {
 
   const handleSave = () => {
     onSave({
-      owner_fallback_team_id:   localDefaults.owner_fallback_team_id   || null,
-      onsite_fallback_team_id:  localDefaults.onsite_fallback_team_id  || null,
-      editing_fallback_team_id: localDefaults.editing_fallback_team_id || null,
+      owner_fallback_team_id:        localDefaults.owner_fallback_team_id        || null,
+      photographer_fallback_team_id: localDefaults.photographer_fallback_team_id || null,
+      videographer_fallback_team_id: localDefaults.videographer_fallback_team_id || null,
+      editing_fallback_team_id:      localDefaults.editing_fallback_team_id      || null,
     });
   };
 
