@@ -302,10 +302,10 @@ export default function SettingsTonomoIntegration() {
         throw new Error(checks.error);
       }
 
-      // Check 4: Was it actually queued?
-      checks.queued = body?.queued === true || body?.status === 'queued' || body?.id != null;
+      // Check 4: Was the webhook accepted?
+      checks.queued = body?.received === true || body?.queued === true || body?.healthy === true || body?.status === 'queued' || body?.id != null || body?.log_id != null;
       if (!checks.queued) {
-        checks.error = 'Webhook responded but item was not queued: ' + JSON.stringify(body).substring(0, 200);
+        checks.error = 'Webhook responded but did not confirm acceptance: ' + JSON.stringify(body).substring(0, 200);
       }
 
       setTestResult(checks);
@@ -509,7 +509,7 @@ export default function SettingsTonomoIntegration() {
                     {testResult.responseValid ? '✅' : '❌'} Valid Response
                   </div>
                   <div className={testResult.queued ? 'text-green-600' : 'text-amber-600'}>
-                    {testResult.queued ? '✅' : '⚠️'} Item Queued
+                    {testResult.queued ? '✅' : '⚠️'} Accepted
                   </div>
                   {testResult.error && (
                     <div className="text-red-600 mt-1 p-2 bg-red-50 rounded text-[11px] break-all">
