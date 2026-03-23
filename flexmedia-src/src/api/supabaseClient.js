@@ -447,12 +447,81 @@ const authApi = {
    * Base44 signature: auth.redirectToLogin(redirectUrl?)
    */
   redirectToLogin(redirectUrl) {
-    // For now, redirect to a login page. This will be replaced
-    // with proper Supabase Auth UI in the auth migration phase.
     const loginUrl = redirectUrl
       ? `/login?redirect=${encodeURIComponent(redirectUrl)}`
       : '/login';
     window.location.href = loginUrl;
+  },
+
+  /** Sign in with Google OAuth (redirect flow) */
+  async signInWithGoogle(redirectTo) {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: redirectTo || `${window.location.origin}/auth/callback`,
+      },
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  /** Send a magic link (passwordless) to an email */
+  async sendMagicLink(email) {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+    if (error) throw error;
+  },
+
+  /** Send phone OTP for sign-in */
+  async sendPhoneOTP(phone) {
+    const { error } = await supabase.auth.signInWithOtp({
+      phone,
+      options: { shouldCreateUser: false },
+    });
+    if (error) throw error;
+  },
+
+  /** Verify phone OTP */
+  async verifyPhoneOTP(phone, token) {
+    const { data, error } = await supabase.auth.verifyOtp({
+      phone,
+      token,
+      type: 'sms',
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  /** Send password reset email */
+  async resetPassword(email) {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth/reset-password`,
+    });
+    if (error) throw error;
+  },
+
+  /** Update password (after reset link click) */
+  async updatePassword(newPassword) {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+  },
+
+  /** Check if a phone number is registered in users table */
+  async verifyPhoneRegistered(phone) {
+    const client = supabaseAdmin || supabase;
+    const { data, error } = await client
+      .from('users')
+      .select('id, email, full_name')
+      .eq('phone', phone)
+      .eq('is_active', true)
+      .single();
+    if (error || !data) return null;
+    return data;
   },
 };
 

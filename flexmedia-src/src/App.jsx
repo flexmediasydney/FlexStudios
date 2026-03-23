@@ -11,6 +11,8 @@ import { ThemeProvider } from '@/lib/ThemeContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import { clearEntityCache } from '@/components/hooks/useEntityData';
 import Login from './pages/Login';
+import AuthCallback from './pages/AuthCallback';
+import ResetPassword from './pages/ResetPassword';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { canAccessRoute } from '@/components/lib/routeAccess';
 import { AlertCircle } from 'lucide-react';
@@ -115,6 +117,8 @@ const AuthenticatedApp = () => {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/auth/reset-password" element={<ResetPassword />} />
         <Route path="*" element={<Login />} />
       </Routes>
     );
@@ -125,6 +129,8 @@ const AuthenticatedApp = () => {
     <Suspense fallback={<LazyFallback />}>
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/auth/reset-password" element={<ResetPassword />} />
       <Route path="/" element={
         <LayoutWrapper currentPageName={mainPageKey}>
           <RouteGuard routeName={mainPageKey}>

@@ -32,6 +32,8 @@ export const AuthProvider = ({ children }) => {
         setUser(appUser);
         setIsAuthenticated(true);
         setAuthError(null);
+        // Update last_login_at
+        dbClient.from('users').update({ last_login_at: new Date().toISOString() }).eq('id', appUser.id).then(() => {});
       }
     } catch (err) {
       console.error('User fetch failed:', err);
@@ -72,6 +74,9 @@ export const AuthProvider = ({ children }) => {
           if (session?.user) {
             await fetchAppUser(session.user);
           }
+        } else if (event === 'PASSWORD_RECOVERY') {
+          // User clicked a password reset link — redirect to reset page
+          window.location.href = '/auth/reset-password';
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setIsAuthenticated(false);
