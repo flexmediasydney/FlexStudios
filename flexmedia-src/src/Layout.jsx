@@ -174,28 +174,6 @@ function LayoutContent({ currentPageName, children, onBack }) {
     localStorage.setItem('nav-expanded-sections', JSON.stringify(expandedSections));
   }, [expandedSections]);
 
-  // Auto-expand the section containing the current active page
-  useEffect(() => {
-    if (!currentPageName || navigationSections.length === 0) return;
-    for (const section of navigationSections) {
-      if (!section.items) continue;
-      const isInSection = section.items.some(item =>
-        item.href === currentPageName ||
-        (item.children && item.children.some(c => c.href === currentPageName))
-      );
-      if (isInSection && !expandedSections[section.id]) {
-        setExpandedSections(prev => ({ ...prev, [section.id]: true }));
-        // Also expand parent nav items if the current page is a child
-        for (const item of section.items) {
-          if (item.children && item.children.some(c => c.href === currentPageName)) {
-            setExpandedParents(prev => ({ ...prev, [item.name]: true }));
-          }
-        }
-        break;
-      }
-    }
-  }, [currentPageName, navigationSections]);
-
   useEffect(() => {
     const handler = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -303,7 +281,29 @@ function LayoutContent({ currentPageName, children, onBack }) {
     ].filter(Boolean);
   }, [user?.role, navBadges]);
 
+  // Track which parent items have their children expanded (must be before auto-expand effect)
+  const [expandedParents, setExpandedParents] = useState({});
 
+  // Auto-expand the section containing the current active page
+  useEffect(() => {
+    if (!currentPageName || navigationSections.length === 0) return;
+    for (const section of navigationSections) {
+      if (!section.items) continue;
+      const isInSection = section.items.some(item =>
+        item.href === currentPageName ||
+        (item.children && item.children.some(c => c.href === currentPageName))
+      );
+      if (isInSection && !expandedSections[section.id]) {
+        setExpandedSections(prev => ({ ...prev, [section.id]: true }));
+        for (const item of section.items) {
+          if (item.children && item.children.some(c => c.href === currentPageName)) {
+            setExpandedParents(prev => ({ ...prev, [item.name]: true }));
+          }
+        }
+        break;
+      }
+    }
+  }, [currentPageName, navigationSections]);
 
   const toggleSection = (sectionId) => {
     setExpandedSections(prev => ({
@@ -312,8 +312,6 @@ function LayoutContent({ currentPageName, children, onBack }) {
     }));
   };
 
-  // Track which parent items have their children expanded
-  const [expandedParents, setExpandedParents] = useState({});
   const toggleParent = (name) => setExpandedParents(prev => ({ ...prev, [name]: !prev[name] }));
 
   const NavLink = ({ item, isChild }) => {
