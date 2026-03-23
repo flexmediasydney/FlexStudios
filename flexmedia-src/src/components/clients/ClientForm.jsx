@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
@@ -71,6 +72,7 @@ export default function ClientForm({ client, open, onClose, onSave }) {
         await api.entities.Client.create(trimmed);
       }
       await queryClient.invalidateQueries({ queryKey: ["clients"] });
+      refetchEntityList("Client");
       toast.success(client ? "Client updated" : "Client created");
       onSave();
       onClose();

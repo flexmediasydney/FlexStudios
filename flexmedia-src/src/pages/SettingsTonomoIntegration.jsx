@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Copy, Check, Clock, ExternalLink, RefreshCw, TrendingUp, CheckCircle2, Clock4, Activity } from "lucide-react";
+import { Copy, Check, Clock, ExternalLink, RefreshCw, TrendingUp, CheckCircle2, Clock4, Activity, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { relativeTime, parseTS } from "@/components/tonomo/tonomoUtils";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
@@ -229,6 +229,7 @@ export default function SettingsTonomoIntegration() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tonomoSettings'] });
+      toast.success('Settings saved');
     },
     onError: (err) => toast.error(err?.message || "Operation failed"),
   });
@@ -238,17 +239,27 @@ export default function SettingsTonomoIntegration() {
       const res = await api.functions.invoke('processTonomoQueue', { triggered_by: 'manual' });
       return res.data || res;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['tonomoSettings'] });
       queryClient.invalidateQueries({ queryKey: ['tonomoQueueStats'] });
+      queryClient.invalidateQueries({ queryKey: ['settingsQueue'] });
+      toast.success(`Queue processed: ${data?.processed ?? 0} processed, ${data?.failed ?? 0} failed`);
+      // Auto-clear the inline success/error message after 8 seconds
+      setTimeout(() => processQueueMutation.reset(), 8000);
     },
-    onError: (err) => toast.error(err?.message || "Operation failed"),
+    onError: (err) => {
+      toast.error(err?.message || "Operation failed");
+      setTimeout(() => processQueueMutation.reset(), 8000);
+    },
   });
 
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const webhookUrl = `${supabaseUrl}/functions/v1/receiveTonomoWebhook`;
 
   const [testResult, setTestResult] = useState(null);
+  const [isRetryingAll, setIsRetryingAll] = useState(false);
+  const [isClearingLock, setIsClearingLock] = useState(false);
+  const [isDiagnosing, setIsDiagnosing] = useState(false);
   const testWebhookMutation = useMutation({
     mutationFn: async () => {
       setTestResult(null);
@@ -524,16 +535,20 @@ export default function SettingsTonomoIntegration() {
                 {processQueueMutation.isPending ? "Processing..." : "⚡ Process Queue Now"}
               </Button>
               <Button variant="ghost" size="sm" className="text-xs text-muted-foreground"
+                disabled={isClearingLock}
                 onClick={async () => {
+                  setIsClearingLock(true);
                   try {
-                    const settings = await api.entities.TonomoIntegrationSettings.list('-created_date', 1);
-                    if (settings?.[0]?.id) {
-                      await api.entities.TonomoIntegrationSettings.update(settings[0].id, { processing_lock_at: null });
+                    const settingsRows = await api.entities.TonomoIntegrationSettings.list('-created_date', 1);
+                    if (settingsRows?.[0]?.id) {
+                      await api.entities.TonomoIntegrationSettings.update(settingsRows[0].id, { processing_lock_at: null });
                       toast.success('Lock cleared');
+                      queryClient.invalidateQueries({ queryKey: ['tonomoSettings'] });
                     }
                   } catch (err) { toast.error('Failed: ' + (err?.message || 'unknown')); }
+                  finally { setIsClearingLock(false); }
                 }}>
-                🔓 Clear Lock
+                {isClearingLock ? '⏳ Clearing...' : '🔓 Clear Lock'}
               </Button>
               {processQueueMutation.isSuccess && (
                 <p className="text-sm text-green-600 mt-1">
@@ -542,7 +557,9 @@ export default function SettingsTonomoIntegration() {
               )}
               {processQueueMutation.isError && <p className="text-sm text-red-600 mt-1">❌ Processor call failed</p>}
               <Button variant="outline" size="sm" className="ml-2"
+                disabled={isDiagnosing}
                 onClick={async () => {
+                  setIsDiagnosing(true);
                   try {
                     const res = await api.functions.invoke('diagnoseTonomoProcessor', {});
                     console.log('DIAGNOSIS:', JSON.stringify(res.data || res, null, 2));
@@ -553,14 +570,13 @@ export default function SettingsTonomoIntegration() {
                     } else {
                       toast.success(`All ${steps.length} checks passed — check console for details`);
                     }
-                    // Also show in an alert for visibility
-                    alert(JSON.stringify(steps, null, 2));
                   } catch (err) {
                     toast.error('Diagnosis failed: ' + (err?.message || 'unknown'));
-                    alert('Diagnosis error: ' + (err?.message || 'unknown'));
+                  } finally {
+                    setIsDiagnosing(false);
                   }
                 }}>
-                🔍 Diagnose
+                {isDiagnosing ? '⏳ Diagnosing...' : '🔍 Diagnose'}
               </Button>
             </div>
           </div>
@@ -624,7 +640,9 @@ export default function SettingsTonomoIntegration() {
                 variant="outline"
                 size="sm"
                 className="w-full gap-2"
+                disabled={isRetryingAll}
                 onClick={async () => {
+                  setIsRetryingAll(true);
                   try {
                     const queue = await api.entities.TonomoProcessingQueue.list('-created_date', 500);
                     const stuck = queue.filter(q => q.status === 'failed' || q.status === 'dead_letter');
@@ -637,15 +655,18 @@ export default function SettingsTonomoIntegration() {
                       })
                     ));
                     toast.success(`Reset ${stuck.length} items for reprocessing`);
-                    // Trigger processor
+                    queryClient.invalidateQueries({ queryKey: ['settingsQueue'] });
+                    queryClient.invalidateQueries({ queryKey: ['tonomoQueueStats'] });
                     api.functions.invoke('processTonomoQueue', { triggered_by: 'retry' }).catch(() => {});
                   } catch (err) {
                     toast.error(err?.message || 'Failed to reset queue items');
+                  } finally {
+                    setIsRetryingAll(false);
                   }
                 }}
               >
-                <RefreshCw className="h-3.5 w-3.5" />
-                Retry all failed &amp; dead letter items
+                {isRetryingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                {isRetryingAll ? 'Retrying...' : 'Retry all failed & dead letter items'}
               </Button>
             </div>
         </CardContent>

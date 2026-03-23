@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -15,6 +15,16 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState("employee");
   const [loading, setLoading] = useState(false);
+
+  // Reset form state when dialog opens to prevent stale data from previous session
+  useEffect(() => {
+    if (open) {
+      setEmail("");
+      setFullName("");
+      setRole("employee");
+      setLoading(false);
+    }
+  }, [open]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -54,6 +64,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="user@example.com"
               required
+              disabled={loading}
             />
           </div>
 
@@ -65,6 +76,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               placeholder="Jane Smith"
+              disabled={loading}
             />
             <p className="text-xs text-muted-foreground mt-1">
               Optional. They can update this after accepting the invite.

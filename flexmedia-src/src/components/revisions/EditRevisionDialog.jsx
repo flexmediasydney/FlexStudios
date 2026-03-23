@@ -105,6 +105,7 @@ export default function EditRevisionDialog({ open, onClose, revision, project })
               value={form.title || ""}
               onChange={e => setForm(p => ({ ...p, title: e.target.value }))}
               className={!form.title?.trim() ? "border-red-200 bg-red-50/20" : ""}
+              disabled={updateMutation.isPending}
             />
             {!form.title?.trim() && <p className="text-xs text-destructive mt-0.5">Title is required</p>}
           </div>
@@ -118,6 +119,7 @@ export default function EditRevisionDialog({ open, onClose, revision, project })
               onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
               rows={3}
               className={!form.description?.trim() ? "border-amber-200 bg-amber-50/20" : ""}
+              disabled={updateMutation.isPending}
             />
           </div>
 
@@ -173,6 +175,7 @@ export default function EditRevisionDialog({ open, onClose, revision, project })
               value={form.notes || ""}
               onChange={e => setForm(p => ({ ...p, notes: e.target.value }))}
               rows={2}
+              disabled={updateMutation.isPending}
             />
           </div>
 

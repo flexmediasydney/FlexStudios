@@ -108,15 +108,17 @@ export default function UnifiedNotesPanel({
 
   const pinnedNotes = useMemo(() => rootNotes.filter(n => n.is_pinned), [rootNotes]);
 
-  // Compute per-tab counts for badges
+  // Compute per-tab counts for badges — exclude pinned notes since they
+  // are shown in a separate section and not part of the filtered feed
   const tabCounts = useMemo(() => {
     if (!showContextOnNotes) return {};
+    const unpinned = rootNotes.filter(n => !n.is_pinned);
     return {
-      all: rootNotes.length,
-      agency: rootNotes.filter(n => !n.context_type || n.context_type === 'agency').length,
-      project: rootNotes.filter(n => n.context_type === 'project').length,
-      agent: rootNotes.filter(n => n.context_type === 'agent').length,
-      team: rootNotes.filter(n => n.context_type === 'team').length,
+      all: unpinned.length,
+      agency: unpinned.filter(n => !n.context_type || n.context_type === 'agency').length,
+      project: unpinned.filter(n => n.context_type === 'project').length,
+      agent: unpinned.filter(n => n.context_type === 'agent').length,
+      team: unpinned.filter(n => n.context_type === 'team').length,
     };
   }, [rootNotes, showContextOnNotes]);
 

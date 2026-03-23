@@ -35,9 +35,9 @@ export default function Analytics() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background">
-      {/* Top tab bar */}
-      <div className="border-b bg-card px-4 pt-3 shrink-0">
-        <Tabs value={activeTab} onValueChange={handleTabChange}>
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0">
+        {/* Top tab bar */}
+        <div className="border-b bg-card px-4 pt-3 shrink-0">
           <TabsList className="gap-1 bg-transparent p-0 h-auto">
             {TABS.map(({ id, label, icon: Icon }) => (
               <TabsTrigger
@@ -56,17 +56,17 @@ export default function Analytics() {
               </TabsTrigger>
             ))}
           </TabsList>
+        </div>
 
-          {/* Each tab renders the full existing page component */}
-          {TABS.map(({ id, component: Component }) => (
-            <TabsContent key={id} value={id} className="mt-0 p-0">
-              <div className="h-[calc(100vh-52px)] overflow-y-auto">
-                <Component />
-              </div>
-            </TabsContent>
-          ))}
-        </Tabs>
-      </div>
+        {/* Each tab renders the full existing page component */}
+        {TABS.map(({ id, component: Component }) => (
+          <TabsContent key={id} value={id} className="mt-0 p-0 flex-1 min-h-0">
+            <div className="h-full overflow-y-auto">
+              <Component />
+            </div>
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 }

@@ -133,7 +133,9 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
       refetchEntityList("Team");
+      refetchEntityList("Agent");
       refetchEntityList("AuditLog");
+      refetchEntityList("Project");
       toast.success(team ? "Team updated" : "Team created");
       setFormData(INITIAL_STATE);
       onClose();

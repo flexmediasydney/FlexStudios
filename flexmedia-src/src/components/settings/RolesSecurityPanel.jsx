@@ -406,11 +406,29 @@ function PeopleMode({ onViewAs }) {
                 Simulate as {(selected.full_name || "").split(" ")[0]}
               </Button>
               {selected.is_active ? (
-                <Button size="sm" variant="outline" className="h-8 text-xs text-red-600 border-red-200 hover:bg-red-50">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={() => {
+                    api.entities.User.update(selected.id, { is_active: false })
+                      .then(() => { queryClient.invalidateQueries({ queryKey: ["users"] }); toast.success(`${selected.full_name || "User"} deactivated`); })
+                      .catch(() => toast.error("Failed to deactivate user"));
+                  }}
+                >
                   Deactivate
                 </Button>
               ) : (
-                <Button size="sm" variant="outline" className="h-8 text-xs text-green-600 border-green-200 hover:bg-green-50">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs text-green-600 border-green-200 hover:bg-green-50"
+                  onClick={() => {
+                    api.entities.User.update(selected.id, { is_active: true })
+                      .then(() => { queryClient.invalidateQueries({ queryKey: ["users"] }); toast.success(`${selected.full_name || "User"} reactivated`); })
+                      .catch(() => toast.error("Failed to reactivate user"));
+                  }}
+                >
                   Reactivate
                 </Button>
               )}

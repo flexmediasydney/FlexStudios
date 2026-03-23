@@ -232,7 +232,7 @@ export default function ProjectActivityFeedItem({
               ) : item._raw?.content_html && expanded ? (
                 <div
                   className="text-sm text-gray-700 prose prose-sm max-w-none"
-                  dangerouslySetInnerHTML={{ __html: item._raw.content_html }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(item._raw.content_html) }}
                 />
               ) : (
                 <p className="text-sm text-gray-700 whitespace-pre-wrap">
@@ -252,6 +252,25 @@ export default function ProjectActivityFeedItem({
                     >
                       {att.file_name || 'Attachment'}
                     </a>
+                  ))}
+                </div>
+              )}
+              {/* Reply thread */}
+              {item._replies?.length > 0 && (
+                <div className="mt-2 border-t border-blue-100 pt-2 space-y-1.5">
+                  <p className="text-[11px] font-medium text-blue-600">
+                    {item._replies.length} {item._replies.length === 1 ? 'reply' : 'replies'}
+                  </p>
+                  {item._replies.map(reply => (
+                    <div key={reply.id} className="flex gap-2 pl-1">
+                      <div className="w-5 h-5 rounded-full bg-blue-200 flex items-center justify-center text-[8px] font-bold text-blue-700 shrink-0 mt-0.5">
+                        {(reply.author_name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[11px] font-semibold text-gray-700">{reply.author_name || 'Unknown'}</span>
+                        <p className="text-xs text-gray-600 whitespace-pre-wrap">{reply.content}</p>
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}

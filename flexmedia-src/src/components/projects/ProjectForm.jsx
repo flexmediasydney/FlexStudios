@@ -1010,8 +1010,8 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               return true;
             })}
             availablePackages={formData.packages.length > 0 ? [] : packagesList.filter(p => p.is_active !== false && !formData.packages.some(fp => (fp.package_id || fp) === p.id))}
-            onAddProduct={(id, qty) => { handleAddProduct(id, qty); setShowAddDialog(false); }}
-            onAddPackage={(id, qty, overrides) => { handleAddPackage(id, qty, overrides); setShowAddDialog(false); }}
+            onAddProduct={(id, qty) => { handleAddProduct(id, qty); }}
+            onAddPackage={(id, qty, overrides) => { handleAddPackage(id, qty, overrides); }}
             isLoading={calculatingPrice}
             projectTypeId={formData.project_type_id}
             currentProducts={formData.products}
@@ -1206,9 +1206,9 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               Cancel
             </Button>
             <SubmitButtonGuard
-              isLoading={saving}
-              isDisabled={false}
-              hasErrors={false}
+              isLoading={saving || calculatingPrice}
+              isDisabled={calculatingPrice}
+              hasErrors={Object.values(errors).some(Boolean)}
               unsavedChanges={unsavedChanges}
               isEdit={!!project}
             />

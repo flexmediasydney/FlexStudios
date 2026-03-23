@@ -195,7 +195,7 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
           </Button>
           <Button 
             onClick={() => mutation.mutate()} 
-            disabled={mutation.isPending || (!hours && !minutes)}
+            disabled={mutation.isPending || ((parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0) <= 0)}
             className="bg-primary hover:bg-primary/90"
           >
             {mutation.isPending ? "Saving..." : "Log Time"}

@@ -49,7 +49,7 @@ export default function UnifiedNoteComposer({
       editorRef.current.innerHTML = sanitizeHtml(initialHtml);
       setEditorEmpty(false);
     }
-  }, []);
+  }, [initialHtml]);
 
   const filteredUsers = mentionQuery
     ? users.filter(u => u.full_name?.toLowerCase().includes((mentionQuery.query || '').toLowerCase())).slice(0, 6)

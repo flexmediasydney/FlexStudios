@@ -6,7 +6,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle, ExternalLink, Zap, AlertCircle, XCircle, Clock, ArrowRight } from "lucide-react";
+import { CheckCircle, ExternalLink, Zap, AlertCircle, XCircle, Clock, ArrowRight, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { toSydney, parseTS, relativeTime, ACTION_COLORS } from "@/components/tonomo/tonomoUtils";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { validateProjectReadiness } from "@/components/lib/validateProjectReadiness";
@@ -19,6 +20,7 @@ export default function TonomoTab({ project }) {
   const { data: allPackages = [] } = useEntityList("Package");
   const [approvalErrors, setApprovalErrors] = useState([]);
   const [approvalWarnings, setApprovalWarnings] = useState([]);
+  const [isApproving, setIsApproving] = useState(false);
 
   // Sync subTab when project.status changes from outside (e.g. approved via Dashboard).
   // If the Review Panel tab is active but project is no longer pending_review,
@@ -93,54 +95,55 @@ export default function TonomoTab({ project }) {
     let newStatus;
     switch (reviewType) {
       case 'cancellation':
-        // Confirming a cancellation → move to cancelled
         newStatus = 'cancelled';
         break;
       case 'restoration':
       case 'reopened_after_delivery':
-        // Approving a restored/reopened booking → re-enter workflow
         newStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
         break;
       case 'additional_appointment':
-        // New appointment added → return to previous active stage
         newStatus = project.pre_revision_stage || (project.shoot_date ? 'scheduled' : 'to_be_scheduled');
         break;
       default:
-        // new_booking, rescheduled, service_change, staff_change
         newStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
     }
 
-    await api.entities.Project.update(project.id, {
-      status: newStatus,
-      pending_review_reason: null,
-      pending_review_type: null,
-      urgent_review: false,
-      auto_approved: false,
-    });
-
-    // Apply role defaults and trigger task generation.
-    // This runs AFTER the status update so tasks are created for an active project.
-    // Fire-and-forget — don't block the UI on this.
-    if (newStatus !== 'cancelled') {
-      api.functions.invoke('applyProjectRoleDefaults', {
-        project_id: project.id,
-      }).catch(err => {
-        console.warn('applyProjectRoleDefaults failed (non-fatal):', err?.message);
+    setIsApproving(true);
+    try {
+      await api.entities.Project.update(project.id, {
+        status: newStatus,
+        pending_review_reason: null,
+        pending_review_type: null,
+        urgent_review: false,
+        auto_approved: false,
       });
 
-      // Trigger stage-change engine so notifications, activity log, and
-      // deadline recalc all fire — same as manual stage changes in ProjectDetails
-      api.functions.invoke('trackProjectStageChange', {
-        projectId: project.id,
-        old_data: { status: project.status },   // project.status is the OLD status here
-        actor_id: null,
-        actor_name: 'Booking Approval',
-      }).catch(() => {});
-    }
+      // Apply role defaults and trigger task generation (fire-and-forget).
+      if (newStatus !== 'cancelled') {
+        api.functions.invoke('applyProjectRoleDefaults', {
+          project_id: project.id,
+        }).catch(err => {
+          console.warn('applyProjectRoleDefaults failed (non-fatal):', err?.message);
+        });
 
-    queryClient.invalidateQueries({ queryKey: ['pendingReviewProjects'] });
-    queryClient.invalidateQueries({ queryKey: ['tonomoQueueStats'] });
-    setSubTab('brief');
+        api.functions.invoke('trackProjectStageChange', {
+          projectId: project.id,
+          old_data: { status: project.status },
+          actor_id: null,
+          actor_name: 'Booking Approval',
+        }).catch(() => {});
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['pendingReviewProjects'] });
+      queryClient.invalidateQueries({ queryKey: ['tonomoQueueStats'] });
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      toast.success(reviewType === 'cancellation' ? 'Cancellation confirmed' : 'Booking approved');
+      setSubTab('brief');
+    } catch (err) {
+      toast.error('Approval failed: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setIsApproving(false);
+    }
   };
 
   return (
@@ -190,14 +193,32 @@ export default function TonomoTab({ project }) {
             <div className="flex gap-2">
               <Button
                 onClick={handleApprove}
+                disabled={isApproving}
                 className={project.pending_review_type === 'cancellation' ? 'bg-red-600 hover:bg-red-700' : ''}
               >
-                <CheckCircle className="h-4 w-4 mr-2" />
-                {project.pending_review_type === 'cancellation' ? 'Confirm Cancellation' :
+                {isApproving
+                  ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  : <CheckCircle className="h-4 w-4 mr-2" />}
+                {isApproving ? 'Processing...' :
+                 project.pending_review_type === 'cancellation' ? 'Confirm Cancellation' :
                  project.pending_review_type === 'restoration' || project.pending_review_type === 'reopened_after_delivery' ? 'Restore & Reactivate →' :
                  'Approve →'}
               </Button>
-              <Button variant="outline">
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    await api.entities.Project.update(project.id, {
+                      urgent_review: true,
+                      pending_review_reason: (project.pending_review_reason || '') + ' [Flagged by admin]',
+                    });
+                    queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+                    toast.success('Issue flagged — marked as urgent');
+                  } catch (err) {
+                    toast.error('Failed to flag: ' + (err?.message || 'Unknown error'));
+                  }
+                }}
+              >
                 <AlertCircle className="h-4 w-4 mr-2" />
                 Flag Issue
               </Button>

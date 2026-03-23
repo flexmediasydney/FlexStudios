@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { createNotification } from "@/components/notifications/createNotification";
 
 export default function AssignUsersDialog({ project, open, onClose, onSave }) {
@@ -79,9 +80,12 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
         });
       }
 
+      toast.success("Assignments saved");
       onSave();
+      onClose();
     } catch (err) {
       console.error('Failed to save assignments:', err);
+      toast.error(err?.message || "Failed to save assignments");
     } finally {
       setSaving(false);
     }

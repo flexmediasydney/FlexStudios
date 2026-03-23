@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Plus, Copy, Trash2, KeyRound, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -24,6 +25,7 @@ export default function InviteCodesPanel() {
   const queryClient = useQueryClient();
   const { data: currentUser } = useCurrentUser();
   const [showCreate, setShowCreate] = useState(false);
+  const [deletingCode, setDeletingCode] = useState(null);
   const [newCode, setNewCode] = useState({ code: generateCode(), role: 'contractor', max_uses: 1, note: '', expires_days: '' });
 
   const { data: codes = [], isLoading } = useQuery({
@@ -182,7 +184,7 @@ export default function InviteCodesPanel() {
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7"
-                          onClick={() => deleteMutation.mutate(code.id)}
+                          onClick={() => setDeletingCode(code)}
                           title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5 text-red-500" />
@@ -195,6 +197,29 @@ export default function InviteCodesPanel() {
             </TableBody>
           </Table>
         </div>
+      )}
+
+      {/* Delete Confirmation */}
+      {deletingCode && (
+        <AlertDialog open={!!deletingCode} onOpenChange={() => setDeletingCode(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete invite code?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete the code <strong>{deletingCode.code}</strong>. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => { deleteMutation.mutate(deletingCode.id); setDeletingCode(null); }}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
 
       {/* Create Code Dialog */}

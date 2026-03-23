@@ -75,24 +75,38 @@ export default function ClientMonitor() {
 
           {/* Portal Links */}
           <div className="flex gap-3 flex-wrap">
-            <a
-              href={`https://www.domain.com.au/agent/${selectedAgent.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              <ExternalLink className="h-4 w-4" />
-              View on Domain
-            </a>
-            <a
-              href={`https://www.realestate.com.au/agent/${selectedAgent.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              <ExternalLink className="h-4 w-4" />
-              View on REA
-            </a>
+            {selectedAgent.domain_url ? (
+              <a
+                href={selectedAgent.domain_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <ExternalLink className="h-4 w-4" />
+                View on Domain
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-400 cursor-not-allowed">
+                <ExternalLink className="h-4 w-4" />
+                No Domain profile
+              </span>
+            )}
+            {selectedAgent.rea_url ? (
+              <a
+                href={selectedAgent.rea_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <ExternalLink className="h-4 w-4" />
+                View on REA
+              </a>
+            ) : (
+              <span className="inline-flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-400 cursor-not-allowed">
+                <ExternalLink className="h-4 w-4" />
+                No REA profile
+              </span>
+            )}
           </div>
         </div>
 

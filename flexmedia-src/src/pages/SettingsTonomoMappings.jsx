@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
@@ -390,8 +390,13 @@ export default function SettingsTonomoMappings() {
                  flow={mapping}
                  isSaving={saveMutation.isPending}
                  onSetTier={async (id, tier) => {
-                   await api.entities.TonomoBookingFlowTier.update(id, { pricing_tier: tier });
-                   refetchFlows();
+                   try {
+                     await api.entities.TonomoBookingFlowTier.update(id, { pricing_tier: tier });
+                     toast.success('Pricing tier saved');
+                     refetchFlows();
+                   } catch (err) {
+                     toast.error('Failed to save tier: ' + (err?.message || 'Unknown error'));
+                   }
                  }}
                />
              ) : mapping._isProjectTypeRecord ? (
@@ -401,23 +406,33 @@ export default function SettingsTonomoMappings() {
                  projectTypes={flexProjectTypes}
                  isSaving={saveMutation.isPending}
                  onSetType={async (id, typeId, typeName) => {
-                   await api.entities.TonomoProjectTypeMapping.update(id, {
-                     project_type_id: typeId,
-                     project_type_name: typeName,
-                   });
-                   refetchTypeMap();
+                   try {
+                     await api.entities.TonomoProjectTypeMapping.update(id, {
+                       project_type_id: typeId,
+                       project_type_name: typeName,
+                     });
+                     toast.success('Project type mapping saved');
+                     refetchTypeMap();
+                   } catch (err) {
+                     toast.error('Failed to save mapping: ' + (err?.message || 'Unknown error'));
+                   }
                  }}
                  onToggleDefault={async (id, makeDefault) => {
-                   if (makeDefault) {
-                     const currentDefault = projectTypeMappings.find(m => m.is_default && m.id !== id);
-                     if (currentDefault) {
-                       await api.entities.TonomoProjectTypeMapping.update(
-                         currentDefault.id, { is_default: false }
-                       );
+                   try {
+                     if (makeDefault) {
+                       const currentDefault = projectTypeMappings.find(m => m.is_default && m.id !== id);
+                       if (currentDefault) {
+                         await api.entities.TonomoProjectTypeMapping.update(
+                           currentDefault.id, { is_default: false }
+                         );
+                       }
                      }
+                     await api.entities.TonomoProjectTypeMapping.update(id, { is_default: makeDefault });
+                     toast.success(makeDefault ? 'Set as default fallback' : 'Default removed');
+                     refetchTypeMap();
+                   } catch (err) {
+                     toast.error('Failed to update default: ' + (err?.message || 'Unknown error'));
                    }
-                   await api.entities.TonomoProjectTypeMapping.update(id, { is_default: makeDefault });
-                   refetchTypeMap();
                  }}
                />
              ) : (
@@ -618,6 +633,20 @@ function StatusPill({ status, count, label }) {
 function MappingRow({ mapping, type, entities, users, onLink, onUnlink, onConfirm, onUpdateUser, isSaving }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const pickerRef = useRef(null);
+
+  // Close picker on outside click
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const handleClickOutside = (e) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target)) {
+        setPickerOpen(false);
+        setSearch("");
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [pickerOpen]);
 
   const status = getStatus(mapping, entities);
   const cfg = STATUS[status];
@@ -741,7 +770,7 @@ function MappingRow({ mapping, type, entities, users, onLink, onUnlink, onConfir
 
         {/* Inline picker dropdown */}
         {pickerOpen && (
-          <div className="absolute left-0 top-full mt-1 z-50 w-72 bg-background border rounded-lg shadow-lg">
+          <div ref={pickerRef} className="absolute left-0 top-full mt-1 z-50 w-72 bg-background border rounded-lg shadow-lg">
             <div className="p-2 border-b">
               <Input
                 autoFocus

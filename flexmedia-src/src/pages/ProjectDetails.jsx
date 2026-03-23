@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { 
@@ -152,6 +153,7 @@ export default function ProjectDetails() {
      }
    }, [projectId, navigate]);
 
+   const queryClient = useQueryClient();
    const { canSeePricing, canEditProject, canAccessProject, isMasterAdmin, isEmployee, user: permUser } = usePermissions();
    const [showEditForm, setShowEditForm] = useState(false);
    const [showAssignDialog, setShowAssignDialog] = useState(false);
@@ -497,6 +499,12 @@ export default function ProjectDetails() {
 
      return result;
    },
+   onSuccess: () => {
+     refetchEntityList("Project");
+     refetchEntityList("ProjectActivity");
+     refetchEntityList("ProjectTask");
+     queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+   },
    onError: (err) => {
      setErrorMessage(err?.message || "Failed to update project status");
    },
@@ -547,6 +555,10 @@ export default function ProjectDetails() {
       }).catch(() => {});
 
       return result;
+    },
+    onSuccess: () => {
+      refetchEntityList("Project");
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
     },
     onError: (err) => {
       setErrorMessage(err?.message || "Failed to update outcome");
@@ -602,6 +614,10 @@ export default function ProjectDetails() {
 
       return result;
       },
+      onSuccess: () => {
+        refetchEntityList("Project");
+        queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      },
       onError: (err) => {
       setErrorMessage(err?.message || "Failed to update payment status");
       }
@@ -614,6 +630,8 @@ export default function ProjectDetails() {
       return api.entities.Project.update(projectId, { invoiced_amount: parsed });
     },
     onSuccess: (_, amount) => {
+      refetchEntityList("Project");
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       logActivity('invoiced_amount_changed',
         `Invoiced amount set to ${amount ? `$${parseFloat(amount).toLocaleString('en-AU')}` : 'cleared'}`
       );
@@ -666,6 +684,8 @@ export default function ProjectDetails() {
         }).catch((err) => console.warn('Pricing recalc after agent change failed:', err?.message));
       }
 
+      refetchEntityList("Project");
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       setShowAgentSelector(false);
       setErrorMessage(null);
       toast.success('Agent updated successfully');
@@ -707,6 +727,10 @@ export default function ProjectDetails() {
       return api.entities.Project.delete(projectId);
     },
     onSuccess: () => {
+      refetchEntityList("Project");
+      refetchEntityList("ProjectTask");
+      refetchEntityList("ProjectActivity");
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
       setErrorMessage(null);
       navigate(createPageUrl("Projects"));
     },
@@ -789,6 +813,8 @@ export default function ProjectDetails() {
               onClick={async () => {
                 try {
                   await api.entities.Project.update(projectId, { is_archived: false, archived_at: null });
+                  refetchEntityList("Project");
+                  queryClient.invalidateQueries({ queryKey: ["project", projectId] });
                   api.entities.ProjectActivity.create({
                     project_id: projectId,
                     action: 'unarchived',

@@ -8,6 +8,7 @@ import { api } from "@/api/supabaseClient";
 import { useProjectItemsManager } from "./hooks/useProjectItemsManager";
 import AddItemsDialog from "./AddItemsDialog";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 
 // Inline pricing helper — reads stored tier pricing from product objects.
 // All authoritative pricing is calculated by calculateProjectPricing backend.
@@ -349,6 +350,10 @@ export default function ProjectProductsPackages({ project }) {
       api.functions.invoke('recalculateProjectPricingServerSide', {
         project_id: project.id,
       }).catch(() => {});
+
+      // Invalidate task caches — syncProjectTasksFromProducts may have created/updated tasks
+      refetchEntityList("ProjectTask");
+      refetchEntityList("Project");
 
       toast.success("Products & packages saved");
     } catch (err) {

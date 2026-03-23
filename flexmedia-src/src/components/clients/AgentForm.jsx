@@ -137,6 +137,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
     onSuccess: () => {
       refetchEntityList("Agent");
       refetchEntityList("AuditLog");
+      refetchEntityList("Project");
       toast.success(agent ? "Person updated" : "Person created");
       setFormData(INITIAL_STATE);
       onClose();

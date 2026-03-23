@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { supabase } from '@/api/supabaseClient';
 import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
@@ -108,6 +108,7 @@ export default function Login() {
       navigate(redirect, { replace: true });
     } catch (err) {
       setError(err.message || 'Sign in failed');
+    } finally {
       setLoading(false);
     }
   };
@@ -138,9 +139,15 @@ export default function Login() {
   };
 
   const handleVerifyPhoneOTP = async (code) => {
-    const { session } = await api.auth.verifyPhoneOTP(phone, code);
-    if (session) {
-      navigate(redirect, { replace: true });
+    try {
+      const { session } = await api.auth.verifyPhoneOTP(phone, code);
+      if (session) {
+        navigate(redirect, { replace: true });
+      } else {
+        setError('Verification failed. Please try again.');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to verify code');
     }
   };
 
@@ -398,9 +405,9 @@ export default function Login() {
         <div className="text-center pt-2 border-t border-border/40">
           <p className="text-xs text-muted-foreground">
             Don't have an account?{' '}
-            <a href="/register" className="text-blue-600 hover:text-blue-700 font-medium hover:underline">
+            <Link to="/register" className="text-blue-600 hover:text-blue-700 font-medium hover:underline">
               Create account
-            </a>
+            </Link>
           </p>
         </div>
       </div>

@@ -103,6 +103,24 @@ export default function ProjectActivityHub({ projectId, project }) {
     [notes]
   );
 
+  // ── Build reply map for note threading ──
+  const replyMap = useMemo(() => {
+    const map = {};
+    for (const n of notes) {
+      if (n.parent_note_id) {
+        if (!map[n.parent_note_id]) map[n.parent_note_id] = [];
+        map[n.parent_note_id].push(n);
+      }
+    }
+    // Sort replies oldest-first within each thread
+    for (const key of Object.keys(map)) {
+      map[key].sort((a, b) =>
+        new Date(fixTimestamp(a.created_date)) - new Date(fixTimestamp(b.created_date))
+      );
+    }
+    return map;
+  }, [notes]);
+
   // ── Build unified feed items ──
   const allItems = useMemo(() => {
     const items = [];
@@ -117,6 +135,7 @@ export default function ProjectActivityHub({ projectId, project }) {
         author: n.author_name,
         content: n.content,
         _raw: n,
+        _replies: replyMap[n.id] || [],
       });
     }
 
@@ -147,7 +166,7 @@ export default function ProjectActivityHub({ projectId, project }) {
     return items.sort(
       (a, b) => new Date(fixTimestamp(b.timestamp)) - new Date(fixTimestamp(a.timestamp))
     );
-  }, [notes, activities, emails]);
+  }, [notes, activities, emails, replyMap]);
 
   // ── Filtered items ──
   const filteredItems = useMemo(() => {
@@ -271,6 +290,7 @@ export default function ProjectActivityHub({ projectId, project }) {
                     author: note.author_name,
                     content: note.content,
                     _raw: note,
+                    _replies: replyMap[note.id] || [],
                   }}
                   projectId={projectId}
                   isLast={idx === pinnedNotes.length - 1}

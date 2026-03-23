@@ -14,8 +14,6 @@ import { usePermissions } from '@/components/auth/PermissionGuard';
 
 export default function Prospecting() {
   const { canSeeProspecting } = usePermissions();
-  if (!canSeeProspecting) return <div className="p-8 text-center text-muted-foreground">Access restricted.</div>;
-  
   const [viewMode, setViewMode] = useState('kanban');
   const [searchTerm, setSearchTerm] = useState('');
   const [drillDownState, setDrillDownState] = useState(null);
@@ -55,9 +53,10 @@ export default function Prospecting() {
       }))
       .filter(a => {
         if (!searchTerm) return true;
-        return a.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          a.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (a.current_agency_name || '').toLowerCase().includes(searchTerm.toLowerCase());
+        const term = searchTerm.toLowerCase();
+        return (a.name || '').toLowerCase().includes(term) ||
+          (a.email || '').toLowerCase().includes(term) ||
+          (a.current_agency_name || '').toLowerCase().includes(term);
       });
   }, [agents, searchTerm, interactionsByEntity]);
 
@@ -72,8 +71,9 @@ export default function Prospecting() {
       }))
       .filter(agency => {
         if (!searchTerm) return true;
-        return agency.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (agency.email || '').toLowerCase().includes(searchTerm.toLowerCase());
+        const term = searchTerm.toLowerCase();
+        return (agency.name || '').toLowerCase().includes(term) ||
+          (agency.email || '').toLowerCase().includes(term);
       });
   }, [agencies, searchTerm, interactionsByEntity]);
 
@@ -120,6 +120,8 @@ export default function Prospecting() {
     });
     return grouped;
   }, [enrichedAgents, drillDownState]);
+
+  if (!canSeeProspecting) return <div className="p-8 text-center text-muted-foreground">Access restricted.</div>;
 
   if (loading) {
     return (

@@ -22,7 +22,7 @@ import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 
 const roleConfig = {
-  master_admin: { label: "Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
+  master_admin: { label: "Master Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
   admin: { label: "Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
   employee: { label: "Employee", color: "bg-blue-100 text-blue-700 border-blue-200", icon: UserCheck },
   contractor: { label: "Contractor", color: "bg-amber-100 text-amber-700 border-amber-200", icon: UserX },

@@ -32,13 +32,11 @@ export default function SettingsTonomoWebhooks() {
     refetchInterval: 15000,
   });
 
+  // The useQuery already has refetchInterval: 15000, so no manual setInterval needed.
+  // Just update lastRefresh whenever data changes.
   useEffect(() => {
-    const interval = setInterval(() => {
-      refetch();
-      setLastRefresh(new Date());
-    }, 15000);
-    return () => clearInterval(interval);
-  }, [refetch]);
+    setLastRefresh(new Date());
+  }, [logs]);
 
   const parsed = useMemo(() => {
     return logs.map(log => ({

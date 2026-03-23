@@ -44,13 +44,13 @@ const APP_TZ = 'Australia/Sydney';
 function toSydneyDateStr(utcStr) {
   return new Intl.DateTimeFormat('en-AU', {
     timeZone: APP_TZ, year: 'numeric', month: '2-digit', day: '2-digit'
-  }).format(new Date(utcStr));
+  }).format(new Date(fixTimestamp(utcStr)));
 }
 
 function relativeTime(utcStr) {
   if (!utcStr) return '';
   try {
-    const date = new Date(utcStr);
+    const date = new Date(fixTimestamp(utcStr));
     const sydneyDate = toSydneyDateStr(utcStr);
     const todayStr = toSydneyDateStr(new Date().toISOString());
     const yesterdayStr = toSydneyDateStr(
@@ -232,7 +232,7 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
             currentUser={currentUser}
             noteId={note.id}
             initialHtml={note.content_html || note.content}
-            onSave={() => setIsEditing(false)}
+            onSave={() => { setIsEditing(false); onRefresh?.(); }}
             onCancel={() => setIsEditing(false)}
           />
         ) : note.content_html ? (

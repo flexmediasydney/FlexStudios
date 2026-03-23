@@ -117,14 +117,21 @@ export default function ContactActivityLog({ entityType, entityId, entityLabel, 
     return items;
   }, [auditLogs, interactions, notes, emailActivities]);
 
-  // Apply filter
-  const filtered = filter === 'all' ? timeline : timeline.filter(t => t.type === filter);
+  // Apply filter — changelog tab is handled separately via ContactAuditLog,
+  // so show the changes-type items (which are audit log entries) as its timeline
+  const filtered = useMemo(() => {
+    if (filter === 'all') return timeline;
+    if (filter === 'changelog') return timeline.filter(t => t.type === 'changes');
+    return timeline.filter(t => t.type === filter);
+  }, [timeline, filter]);
 
-  // Group by date
+  // Group by date — guard against null/invalid timestamps
   const grouped = useMemo(() => {
     const groups = {};
     for (const item of filtered) {
+      if (!item.timestamp) continue;
       const d = new Date(item.timestamp);
+      if (isNaN(d.getTime())) continue;
       let label;
       if (isToday(d)) label = 'Today';
       else if (isYesterday(d)) label = 'Yesterday';
@@ -142,6 +149,7 @@ export default function ContactActivityLog({ entityType, entityId, entityLabel, 
     interactions: timeline.filter(t => t.type === 'interactions').length,
     notes: timeline.filter(t => t.type === 'notes').length,
     emails: timeline.filter(t => t.type === 'emails').length,
+    changelog: timeline.filter(t => t.type === 'changes').length,
   }), [timeline]);
 
   // Field label map for readable names
@@ -198,7 +206,8 @@ export default function ContactActivityLog({ entityType, entityId, entityLabel, 
               <div className="space-y-2">
                 {items.map(item => {
                   const Icon = item.icon;
-                  const time = format(new Date(item.timestamp), 'h:mm a');
+                  const tsDate = new Date(item.timestamp);
+                  const time = isNaN(tsDate.getTime()) ? '' : format(tsDate, 'h:mm a');
                   return (
                     <div key={item.id} className="flex gap-3 p-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors">
                       <div className={cn("h-8 w-8 rounded-full flex items-center justify-center shrink-0", item.iconColor)}>

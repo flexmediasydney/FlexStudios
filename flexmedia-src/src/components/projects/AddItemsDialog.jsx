@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -70,6 +70,16 @@ export default function AddItemsDialog({
   // pendingPackage: { id, qty, productQtyOverrides: { [productId]: qty } } | null
   // Only 1 package allowed per project
   const [pendingPackage, setPendingPackage] = useState(null);
+
+  // Reset all selection state when dialog opens to prevent stale data
+  useEffect(() => {
+    if (open) {
+      setSearch("");
+      setActiveTab("products");
+      setPendingProducts({});
+      setPendingPackage(null);
+    }
+  }, [open]);
 
   const { data: allCategories = [] } = useEntityList("ProductCategory");
 
@@ -222,6 +232,8 @@ export default function AddItemsDialog({
     }
     setPendingProducts({});
     setPendingPackage(null);
+    setSearch("");
+    onOpenChange(false);
   };
 
   const handleClose = () => {
