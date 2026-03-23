@@ -389,10 +389,13 @@ export default function ClientAgents() {
               <h1 className="text-xl font-bold tracking-tight">Contacts</h1>
               <div className="hidden md:flex items-center gap-1.5">
                 <Badge variant="secondary" className="font-normal gap-1">
-                  <User className="h-3 w-3" />{agents.length}
+                  <User className="h-3 w-3" />{agents.filter(a => a.relationship_state !== 'DNC').length}
                 </Badge>
                 <Badge variant="secondary" className="font-normal gap-1">
-                  <Building className="h-3 w-3" />{agencies.length}
+                  <Users className="h-3 w-3" />{teams.filter(t => t.is_active !== false).length}
+                </Badge>
+                <Badge variant="secondary" className="font-normal gap-1">
+                  <Building className="h-3 w-3" />{agencies.filter(a => a.is_active !== false).length}
                 </Badge>
                 {idleCount > 0 && (
                   <Badge
