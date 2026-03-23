@@ -248,21 +248,79 @@ export default function SettingsTonomoIntegration() {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const webhookUrl = `${supabaseUrl}/functions/v1/receiveTonomoWebhook`;
 
+  const [testResult, setTestResult] = useState(null);
   const testWebhookMutation = useMutation({
     mutationFn: async () => {
+      setTestResult(null);
+      const checks = { reachable: false, statusOk: false, responseValid: false, queued: false, latencyMs: 0, error: null };
+      const testId = "test_" + Date.now();
       const testPayload = {
         action: "scheduled",
-        orderId: "test_" + Date.now(),
-        orderName: "Test Order",
+        orderId: testId,
+        orderName: "Health Check — " + new Date().toISOString(),
         when: { start_time: Math.floor(Date.now() / 1000), end_time: Math.floor(Date.now() / 1000) + 3600 }
       };
-      const res = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(testPayload)
-      });
-      return await res.json();
-    }
+
+      // Check 1: Is the endpoint reachable + response time
+      const start = performance.now();
+      let res;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        res = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(testPayload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        checks.reachable = true;
+        checks.latencyMs = Math.round(performance.now() - start);
+      } catch (err) {
+        checks.error = err.name === 'AbortError' ? 'Timeout (>10s) — webhook is unresponsive' : (err.message || 'Network error');
+        setTestResult(checks);
+        throw new Error(checks.error);
+      }
+
+      // Check 2: HTTP status
+      checks.statusOk = res.status >= 200 && res.status < 300;
+      if (!checks.statusOk) {
+        const body = await res.text().catch(() => '');
+        checks.error = `HTTP ${res.status}: ${body.substring(0, 200)}`;
+        setTestResult(checks);
+        throw new Error(checks.error);
+      }
+
+      // Check 3: Valid JSON response
+      let body;
+      try {
+        body = await res.json();
+        checks.responseValid = true;
+      } catch {
+        checks.error = 'Invalid JSON response';
+        setTestResult(checks);
+        throw new Error(checks.error);
+      }
+
+      // Check 4: Was it actually queued?
+      checks.queued = body?.queued === true || body?.status === 'queued' || body?.id != null;
+      if (!checks.queued) {
+        checks.error = 'Webhook responded but item was not queued: ' + JSON.stringify(body).substring(0, 200);
+      }
+
+      setTestResult(checks);
+      return checks;
+    },
+    onError: (err) => {
+      toast.error('Webhook test failed: ' + err.message);
+    },
+    onSuccess: (checks) => {
+      if (checks.queued) {
+        toast.success(`Webhook healthy — ${checks.latencyMs}ms response`);
+      } else {
+        toast.warning('Webhook responded but may not be processing correctly');
+      }
+    },
   });
 
   const handleCopy = () => {
@@ -437,10 +495,29 @@ export default function SettingsTonomoIntegration() {
           <div className="flex gap-3 flex-wrap items-start">
             <div>
               <Button onClick={() => testWebhookMutation.mutate()} disabled={testWebhookMutation.isPending}>
-                {testWebhookMutation.isPending ? "Testing..." : "Test Webhook"}
+                {testWebhookMutation.isPending ? "Running 4 checks..." : "Test Webhook"}
               </Button>
-              {testWebhookMutation.isSuccess && <p className="text-sm text-green-600 mt-1">✅ Test successful</p>}
-              {testWebhookMutation.isError && <p className="text-sm text-red-600 mt-1">❌ Test failed</p>}
+              {testResult && (
+                <div className="mt-2 space-y-1 text-xs">
+                  <div className={testResult.reachable ? 'text-green-600' : 'text-red-600'}>
+                    {testResult.reachable ? '✅' : '❌'} Reachable {testResult.latencyMs ? `(${testResult.latencyMs}ms)` : ''}
+                  </div>
+                  <div className={testResult.statusOk ? 'text-green-600' : 'text-red-600'}>
+                    {testResult.statusOk ? '✅' : '❌'} HTTP Status OK
+                  </div>
+                  <div className={testResult.responseValid ? 'text-green-600' : 'text-red-600'}>
+                    {testResult.responseValid ? '✅' : '❌'} Valid Response
+                  </div>
+                  <div className={testResult.queued ? 'text-green-600' : 'text-amber-600'}>
+                    {testResult.queued ? '✅' : '⚠️'} Item Queued
+                  </div>
+                  {testResult.error && (
+                    <div className="text-red-600 mt-1 p-2 bg-red-50 rounded text-[11px] break-all">
+                      {testResult.error}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div>
               <Button variant="outline" onClick={() => processQueueMutation.mutate()} disabled={processQueueMutation.isPending}>
