@@ -1,29 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { api } from "@/api/supabaseClient";
+import { useAuth } from "@/lib/AuthContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export function useCurrentUser() {
+  // Use the user from AuthContext directly — avoids calling supabase.auth.getUser()
+  // which can hang indefinitely due to Web Locks issues
+  const { user, isLoadingAuth } = useAuth();
+
   return useQuery({
-    queryKey: ["current-user"],
-    queryFn: async () => {
-      const user = await api.auth.me();
-      return user;
-    },
-    staleTime: 5 * 60 * 1000, // Keep user fresh for 5 minutes
-    gcTime: 10 * 60 * 1000,   // Cache for 10 minutes
-    retry: (failureCount, error) => {
-      // Don't retry auth errors (not logged in)
-      if (error?.message?.includes('Not authenticated') ||
-          error?.message?.includes('JWT') ||
-          error?.message?.includes('session')) {
-        return false;
-      }
-      return failureCount < 2;
-    },
-    retryDelay: 1000,         // 1 second between retries
+    queryKey: ["current-user", user?.id],
+    queryFn: () => user,
+    enabled: !isLoadingAuth && !!user,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+    initialData: user || undefined,
   });
 }
 

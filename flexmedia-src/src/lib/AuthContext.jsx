@@ -25,12 +25,15 @@ function getSessionFromStorage() {
 
 async function fetchUserByEmailDirect(email, accessToken) {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     const headers = { 'apikey': SUPABASE_ANON_KEY, 'Accept': 'application/vnd.pgrst.object+json' };
     if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/users?email=eq.${encodeURIComponent(email)}&select=*`,
-      { headers }
+      { headers, signal: controller.signal }
     );
+    clearTimeout(timeoutId);
     if (!res.ok) return null;
     return await res.json();
   } catch {
