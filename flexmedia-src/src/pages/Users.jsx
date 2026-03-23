@@ -1,36 +1,32 @@
 import { useState, useMemo } from "react";
 import React from "react";
 import { api } from "@/api/supabaseClient";
+import { supabase, supabaseAdmin } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Search, Shield, UserCheck, UserX, Edit, Trash2, MoreVertical } from "lucide-react";
+import { Plus, Search, Shield, UserCheck, UserX, Edit, Trash2, Phone, Mail, KeyRound, RotateCcw, Send, Clock, Loader2, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import InviteUserDialog from "@/components/users/InviteUserDialog";
 import InviteCodesPanel from "@/components/users/InviteCodesPanel";
 import { toast } from "sonner";
+import { formatDistanceToNow } from "date-fns";
 
 const roleConfig = {
-  master_admin: { 
-    label: "Master Admin", 
-    color: "bg-red-100 text-red-700 border-red-200",
-    icon: Shield 
-  },
-  employee: { 
-    label: "Employee", 
-    color: "bg-blue-100 text-blue-700 border-blue-200",
-    icon: UserCheck 
-  },
-  contractor: { 
-    label: "Contractor", 
-    color: "bg-amber-100 text-amber-700 border-amber-200",
-    icon: UserX 
-  }
+  master_admin: { label: "Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
+  admin: { label: "Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
+  employee: { label: "Employee", color: "bg-blue-100 text-blue-700 border-blue-200", icon: UserCheck },
+  contractor: { label: "Contractor", color: "bg-amber-100 text-amber-700 border-amber-200", icon: UserX },
 };
+
+const providerLabel = { email: "Email/Password", google: "Google", phone: "Phone OTP" };
 
 export default function UsersManagement() {
   const queryClient = useQueryClient();
@@ -38,134 +34,100 @@ export default function UsersManagement() {
   const [searchQuery, setSearchQuery] = useState("");
   const [editingUser, setEditingUser] = useState(null);
   const [deletingUser, setDeletingUser] = useState(null);
+  const [activeTab, setActiveTab] = useState("users"); // users | codes
+  const dbClient = supabaseAdmin || supabase;
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["users"],
-    queryFn: () => api.entities.User.list("-created_date")
+    queryFn: () => api.entities.User.list("-created_date"),
   });
 
   const { data: teams = [] } = useQuery({
     queryKey: ["internal_teams"],
-    queryFn: () => api.entities.InternalTeam.list()
+    queryFn: () => api.entities.InternalTeam.list(),
   });
 
-  const updateRoleMutation = useMutation({
-    mutationFn: ({ userId, role }) => api.entities.User.update(userId, { role }),
+  // ─── Mutations ──────────────────────────────────────────────────────────
+
+  const updateUserMutation = useMutation({
+    mutationFn: ({ userId, updates }) => api.entities.User.update(userId, updates),
     onSuccess: () => {
-      queryClient.invalidateQueries(["users"]);
-      toast.success("User role updated");
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      toast.success("User updated");
       setEditingUser(null);
     },
-    onError: (error) => {
-      toast.error(error.message || "Failed to update user");
-    }
-  });
-
-  const updateTeamMutation = useMutation({
-    mutationFn: ({ userId, teamId }) => {
-      const team = teams.find(t => t.id === teamId);
-      return api.entities.User.update(userId, { 
-        internal_team_id: teamId,
-        internal_team_name: team?.name || ""
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries(["users"]);
-      toast.success("Team assignment updated");
-    },
-    onError: (err) => toast.error(err?.message || 'Failed to update team assignment'),
+    onError: (err) => toast.error(err?.message || "Failed to update user"),
   });
 
   const toggleActiveMutation = useMutation({
-    mutationFn: ({ userId, isActive }) => 
-      api.entities.User.update(userId, { is_active: isActive }),
+    mutationFn: ({ userId, isActive }) => api.entities.User.update(userId, { is_active: isActive }),
     onSuccess: () => {
-      queryClient.invalidateQueries(["users"]);
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       toast.success("User status updated");
     },
-    onError: (err) => toast.error(err?.message || 'Failed to update user status'),
+    onError: (err) => toast.error(err?.message || "Failed to update"),
   });
 
   const deleteUserMutation = useMutation({
     mutationFn: async (userId) => {
-      // Clean up role references on open projects
       try {
         const allProjects = await api.entities.Project.filter({}, null, 2000);
-        const affectedProjects = allProjects.filter(p =>
-          !['delivered', 'cancelled'].includes(p.status) && (
-            p.photographer_id === userId ||
-            p.videographer_id === userId ||
-            p.image_editor_id === userId ||
-            p.video_editor_id === userId ||
-            p.project_owner_id === userId ||
-            p.onsite_staff_1_id === userId ||
-            p.onsite_staff_2_id === userId
-          )
+        const affected = allProjects.filter(p =>
+          !["delivered", "cancelled"].includes(p.status) &&
+          [p.photographer_id, p.videographer_id, p.image_editor_id, p.video_editor_id, p.project_owner_id, p.onsite_staff_1_id, p.onsite_staff_2_id].includes(userId)
         );
-        const failedProjects = [];
-        await Promise.all(affectedProjects.map(p => {
-          const updates = {};
-          if (p.photographer_id === userId) { updates.photographer_id = null; updates.photographer_name = null; }
-          if (p.videographer_id === userId) { updates.videographer_id = null; updates.videographer_name = null; }
-          if (p.image_editor_id === userId) updates.image_editor_id = null;
-          if (p.video_editor_id === userId) updates.video_editor_id = null;
-          if (p.project_owner_id === userId) updates.project_owner_id = null;
-          if (p.onsite_staff_1_id === userId) { updates.onsite_staff_1_id = null; updates.onsite_staff_1_name = null; }
-          if (p.onsite_staff_2_id === userId) { updates.onsite_staff_2_id = null; updates.onsite_staff_2_name = null; }
-          return api.entities.Project.update(p.id, updates).catch(() => {
-            failedProjects.push(p.title || p.property_address || p.id);
-          });
+        await Promise.all(affected.map(p => {
+          const u = {};
+          if (p.photographer_id === userId) { u.photographer_id = null; u.photographer_name = null; }
+          if (p.videographer_id === userId) { u.videographer_id = null; u.videographer_name = null; }
+          if (p.image_editor_id === userId) u.image_editor_id = null;
+          if (p.video_editor_id === userId) u.video_editor_id = null;
+          if (p.project_owner_id === userId) u.project_owner_id = null;
+          if (p.onsite_staff_1_id === userId) { u.onsite_staff_1_id = null; u.onsite_staff_1_name = null; }
+          if (p.onsite_staff_2_id === userId) { u.onsite_staff_2_id = null; u.onsite_staff_2_name = null; }
+          return api.entities.Project.update(p.id, u).catch(() => {});
         }));
-        if (failedProjects.length > 0) {
-          toast.warning(`${failedProjects.length} project(s) couldn't be updated — check manually: ${failedProjects.slice(0, 3).join(', ')}${failedProjects.length > 3 ? '...' : ''}`);
-        }
-      } catch { /* non-fatal — proceed with delete */ }
-
-      // Remove EmployeeRole records for this user
-       try {
-         const roles = await api.entities.EmployeeRole.filter(
-           { user_id: userId }, null, 50
-         );
-         await Promise.all(roles.map(r =>
-           api.entities.EmployeeRole.delete(r.id).catch(() => {})
-         ));
-       } catch { /* non-fatal */ }
-
-       // Clean up user-personal entities
-       try {
-         const deletingUserRecord = users.find(u => u.id === userId);
-         const [availability, connections, signatures, prefs] = await Promise.all([
-           api.entities.PhotographerAvailability.filter({ user_id: userId }, null, 20).catch(() => []),
-           deletingUserRecord?.email
-             ? api.entities.CalendarConnection.filter({ created_by: deletingUserRecord.email }, null, 10).catch(() => [])
-             : Promise.resolve([]),
-           api.entities.UserSignature.filter({ user_id: userId }, null, 5).catch(() => []),
-           api.entities.NotificationPreference.filter({ user_id: userId }, null, 50).catch(() => []),
-         ]);
-         await Promise.all([
-           ...availability.map(a => api.entities.PhotographerAvailability.delete(a.id).catch(() => {})),
-           ...connections.map(c => api.entities.CalendarConnection.delete(c.id).catch(() => {})),
-           ...signatures.map(s => api.entities.UserSignature.delete(s.id).catch(() => {})),
-           ...prefs.map(p => api.entities.NotificationPreference.delete(p.id).catch(() => {})),
-         ]);
-       } catch { /* non-fatal */ }
-
-       return api.entities.User.delete(userId);
+      } catch {}
+      try {
+        const roles = await api.entities.EmployeeRole.filter({ user_id: userId }, null, 50);
+        await Promise.all(roles.map(r => api.entities.EmployeeRole.delete(r.id).catch(() => {})));
+      } catch {}
+      return api.entities.User.delete(userId);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(["users"]);
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       toast.success("User deleted");
       setDeletingUser(null);
     },
-    onError: (error) => {
-      toast.error(error.message || "Failed to delete user");
-    }
+    onError: (err) => toast.error(err?.message || "Failed to delete"),
   });
 
-  const filteredUsers = useMemo(() => 
-    users.filter(user =>
-      user.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.email?.toLowerCase().includes(searchQuery.toLowerCase())
+  const handleSendPasswordReset = async (email) => {
+    try {
+      await api.auth.resetPassword(email);
+      toast.success(`Password reset email sent to ${email}`);
+    } catch (err) {
+      toast.error(err?.message || "Failed to send reset email");
+    }
+  };
+
+  const handleResendInvite = async (email) => {
+    try {
+      const { error } = await dbClient.auth.admin.inviteUserByEmail(email);
+      if (error) throw error;
+      toast.success(`Invite re-sent to ${email}`);
+    } catch (err) {
+      toast.error(err?.message || "Failed to resend invite");
+    }
+  };
+
+  // ─── Filtered & Stats ──────────────────────────────────────────────────
+
+  const filteredUsers = useMemo(() =>
+    users.filter(u =>
+      u.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.phone?.includes(searchQuery)
     ),
     [users, searchQuery]
   );
@@ -173,246 +135,282 @@ export default function UsersManagement() {
   const stats = useMemo(() => ({
     total: users.length,
     active: users.filter(u => u.is_active).length,
-    admins: users.filter(u => u.role === 'master_admin').length,
-    employees: users.filter(u => u.role === 'employee').length,
+    admins: users.filter(u => u.role === "master_admin").length,
+    employees: users.filter(u => u.role === "employee").length,
+    contractors: users.filter(u => u.role === "contractor").length,
   }), [users]);
 
+  // ─── Render ─────────────────────────────────────────────────────────────
+
   return (
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
-            <p className="text-muted-foreground mt-1">
-              Manage team members and their access levels
-            </p>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
+          <p className="text-muted-foreground mt-1">Manage team members, access levels, and invite codes</p>
+        </div>
+        <Button onClick={() => setShowInviteDialog(true)} className="gap-2">
+          <Plus className="h-4 w-4" /> Invite User
+        </Button>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        {[
+          { label: "Total", value: stats.total },
+          { label: "Active", value: stats.active },
+          { label: "Admins", value: stats.admins },
+          { label: "Employees", value: stats.employees },
+          { label: "Contractors", value: stats.contractors },
+        ].map(s => (
+          <Card key={s.label}>
+            <CardContent className="pt-4 pb-3">
+              <div className="text-2xl font-bold">{s.value}</div>
+              <p className="text-xs text-muted-foreground">{s.label}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Tab Switcher */}
+      <div className="flex gap-1 border-b">
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "users" ? "border-blue-600 text-blue-600" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          onClick={() => setActiveTab("users")}
+        >
+          Users ({users.length})
+        </button>
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "codes" ? "border-blue-600 text-blue-600" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          onClick={() => setActiveTab("codes")}
+        >
+          <KeyRound className="h-3.5 w-3.5 inline mr-1.5" />Invite Codes
+        </button>
+      </div>
+
+      {/* Users Tab */}
+      {activeTab === "users" && (
+        <>
+          {/* Search */}
+          <div className="relative max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input placeholder="Search by name, email, or phone..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10" />
           </div>
-          <Button onClick={() => setShowInviteDialog(true)} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Invite User
-          </Button>
-        </div>
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {/* Users Table */}
           <Card>
-            <CardContent className="pt-4">
-              <div className="text-2xl font-bold">{stats.total}</div>
-              <p className="text-xs text-muted-foreground">Total Users</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <div className="text-2xl font-bold">{stats.active}</div>
-              <p className="text-xs text-muted-foreground">Active</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <div className="text-2xl font-bold">{stats.admins}</div>
-              <p className="text-xs text-muted-foreground">Admins</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <div className="text-2xl font-bold">{stats.employees}</div>
-              <p className="text-xs text-muted-foreground">Employees</p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Search */}
-        <div className="relative max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search by name or email..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-
-        {/* Users Table */}
-        <Card>
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/50">
-                <TableHead className="font-semibold">Name</TableHead>
-                <TableHead className="font-semibold">Email</TableHead>
-                <TableHead className="font-semibold">Role</TableHead>
-                <TableHead className="font-semibold">Team</TableHead>
-                <TableHead className="font-semibold">Status</TableHead>
-                <TableHead className="text-right font-semibold">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredUsers.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan="6" className="text-center py-6 text-muted-foreground">
-                    No users found
-                  </TableCell>
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/50">
+                  <TableHead className="font-semibold">User</TableHead>
+                  <TableHead className="font-semibold">Contact</TableHead>
+                  <TableHead className="font-semibold">Role</TableHead>
+                  <TableHead className="font-semibold">Team</TableHead>
+                  <TableHead className="font-semibold">Last Login</TableHead>
+                  <TableHead className="font-semibold">Status</TableHead>
+                  <TableHead className="text-right font-semibold">Actions</TableHead>
                 </TableRow>
-              ) : (
-                filteredUsers.map(user => {
-                  const config = roleConfig[user.role] || roleConfig.employee;
-                  const Icon = config.icon;
-                  return (
-                    <TableRow key={user.id} className="hover:bg-muted/30">
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                            <Icon className="h-4 w-4 text-primary" />
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow><TableCell colSpan={7} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
+                ) : filteredUsers.length === 0 ? (
+                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No users found</TableCell></TableRow>
+                ) : (
+                  filteredUsers.map(user => {
+                    const config = roleConfig[user.role] || roleConfig.employee;
+                    const Icon = config.icon;
+                    return (
+                      <TableRow key={user.id} className={`hover:bg-muted/30 ${!user.is_active ? "opacity-50" : ""}`}>
+                        <TableCell>
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                              <span className="text-sm font-semibold text-primary">
+                                {(user.full_name || user.email || "?").charAt(0).toUpperCase()}
+                              </span>
+                            </div>
+                            <div>
+                              <p className="font-medium text-sm">{user.full_name || "—"}</p>
+                              {user.auth_provider && user.auth_provider !== "email" && (
+                                <span className="text-[10px] text-muted-foreground">{providerLabel[user.auth_provider] || user.auth_provider}</span>
+                              )}
+                            </div>
                           </div>
-                          <div>
-                            <p className="font-medium text-sm">{user.full_name}</p>
-                            {user.title && <p className="text-xs text-muted-foreground">{user.title}</p>}
+                        </TableCell>
+                        <TableCell>
+                          <div className="space-y-0.5">
+                            <div className="text-sm text-muted-foreground flex items-center gap-1">
+                              <Mail className="h-3 w-3" /> {user.email}
+                            </div>
+                            {user.phone && (
+                              <div className="text-xs text-muted-foreground flex items-center gap-1">
+                                <Phone className="h-3 w-3" /> {user.phone}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{user.email}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={`${config.color} border text-xs`}>
-                          {config.label}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Select 
-                          value={user.internal_team_id || "none"}
-                          onValueChange={(value) => updateTeamMutation.mutate({ 
-                            userId: user.id, 
-                            teamId: value === "none" ? null : value 
-                          })}
-                        >
-                          <SelectTrigger className="h-8 text-xs w-32">
-                            <SelectValue placeholder="No team" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">No team</SelectItem>
-                            {teams.map(team => (
-                              <SelectItem key={team.id} value={team.id}>
-                                {team.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
-                      <TableCell>
-                        <Badge 
-                          variant="outline"
-                          className={user.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-700"}
-                        >
-                          {user.is_active ? "Active" : "Inactive"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setEditingUser(user)}
-                            title="Change role"
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={`${config.color} border text-xs`}>{config.label}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Select
+                            value={user.internal_team_id || "none"}
+                            onValueChange={(v) => updateUserMutation.mutate({ userId: user.id, updates: { internal_team_id: v === "none" ? null : v, internal_team_name: v === "none" ? "" : teams.find(t => t.id === v)?.name || "" } })}
                           >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => 
-                              toggleActiveMutation.mutate({ 
-                                userId: user.id, 
-                                isActive: !user.is_active 
-                              })
-                            }
-                            title={user.is_active ? "Deactivate" : "Activate"}
-                          >
-                            {user.is_active ? <UserCheck className="h-4 w-4" /> : <UserX className="h-4 w-4" />}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setDeletingUser(user)}
-                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                            title="Delete user"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </Card>
+                            <SelectTrigger className="h-8 text-xs w-32"><SelectValue placeholder="No team" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">No team</SelectItem>
+                              {teams.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                        <TableCell>
+                          {user.last_login_at ? (
+                            <div className="text-xs text-muted-foreground flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              {formatDistanceToNow(new Date(user.last_login_at), { addSuffix: true })}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground/50">Never</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={user.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-500"}>
+                            {user.is_active ? "Active" : "Inactive"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                              <DropdownMenuItem onClick={() => setEditingUser({ ...user })}>
+                                <Edit className="h-3.5 w-3.5 mr-2" /> Edit Details
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleSendPasswordReset(user.email)}>
+                                <RotateCcw className="h-3.5 w-3.5 mr-2" /> Send Password Reset
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleResendInvite(user.email)}>
+                                <Send className="h-3.5 w-3.5 mr-2" /> Resend Invite
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => toggleActiveMutation.mutate({ userId: user.id, isActive: !user.is_active })}>
+                                {user.is_active ? <><UserX className="h-3.5 w-3.5 mr-2" /> Deactivate</> : <><UserCheck className="h-3.5 w-3.5 mr-2" /> Activate</>}
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => setDeletingUser(user)} className="text-red-600 focus:text-red-600">
+                                <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete User
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </Card>
+        </>
+      )}
 
-        <InviteUserDialog
-          open={showInviteDialog}
-          onClose={() => setShowInviteDialog(false)}
-          onSuccess={() => queryClient.invalidateQueries(["users"])}
-        />
+      {/* Invite Codes Tab */}
+      {activeTab === "codes" && <InviteCodesPanel />}
 
-        {/* Edit Role Dialog */}
-        {editingUser && (
-          <AlertDialog open={!!editingUser} onOpenChange={() => setEditingUser(null)}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Change User Role</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Update role for {editingUser.full_name}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <div className="py-4">
-                <Select 
-                  defaultValue={editingUser.role}
-                  onValueChange={(role) => {
-                    updateRoleMutation.mutate({ userId: editingUser.id, role });
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
+      <InviteUserDialog open={showInviteDialog} onClose={() => setShowInviteDialog(false)} onSuccess={() => queryClient.invalidateQueries({ queryKey: ["users"] })} />
+
+      {/* Edit User Dialog */}
+      {editingUser && (
+        <Dialog open={!!editingUser} onOpenChange={() => setEditingUser(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Edit User</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Full Name</Label>
+                <Input value={editingUser.full_name || ""} onChange={(e) => setEditingUser(p => ({ ...p, full_name: e.target.value }))} className="h-11" />
+              </div>
+              <div className="space-y-2">
+                <Label>Email</Label>
+                <Input type="email" value={editingUser.email || ""} disabled className="h-11 bg-muted/50" />
+                <p className="text-[10px] text-muted-foreground">Email cannot be changed</p>
+              </div>
+              <div className="space-y-2">
+                <Label>Phone</Label>
+                <Input type="tel" placeholder="+61 412 345 678" value={editingUser.phone || ""} onChange={(e) => setEditingUser(p => ({ ...p, phone: e.target.value }))} className="h-11" />
+              </div>
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <Select value={editingUser.role} onValueChange={(v) => setEditingUser(p => ({ ...p, role: v }))}>
+                  <SelectTrigger className="h-11"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="master_admin">Master Admin</SelectItem>
+                    <SelectItem value="master_admin">Admin</SelectItem>
                     <SelectItem value="employee">Employee</SelectItem>
                     <SelectItem value="contractor">Contractor</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
+              <div className="space-y-2">
+                <Label>Team</Label>
+                <Select value={editingUser.internal_team_id || "none"} onValueChange={(v) => setEditingUser(p => ({ ...p, internal_team_id: v === "none" ? null : v, internal_team_name: v === "none" ? "" : teams.find(t => t.id === v)?.name || "" }))}>
+                  <SelectTrigger className="h-11"><SelectValue placeholder="No team" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No team</SelectItem>
+                    {teams.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
+              <Button
+                onClick={() => updateUserMutation.mutate({
+                  userId: editingUser.id,
+                  updates: {
+                    full_name: editingUser.full_name,
+                    phone: editingUser.phone || null,
+                    role: editingUser.role,
+                    internal_team_id: editingUser.internal_team_id,
+                    internal_team_name: editingUser.internal_team_name,
+                  },
+                })}
+                disabled={updateUserMutation.isPending}
+              >
+                {updateUserMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</> : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
-        {/* Delete Confirmation */}
-        {deletingUser && (
-          <AlertDialog open={!!deletingUser} onOpenChange={() => setDeletingUser(null)}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete User?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This will permanently delete {deletingUser.full_name}'s account. This action cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction 
-                  onClick={() => deleteUserMutation.mutate(deletingUser.id)}
-                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                >
-                  Delete
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
-
-        {/* Invite Codes Section */}
-        <div className="mt-8 border-t pt-6">
-          <InviteCodesPanel />
-        </div>
-      </div>
+      {/* Delete Confirmation */}
+      {deletingUser && (
+        <AlertDialog open={!!deletingUser} onOpenChange={() => setDeletingUser(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete User?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete <strong>{deletingUser.full_name}</strong>'s account ({deletingUser.email}) and remove them from all assigned projects. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => deleteUserMutation.mutate(deletingUser.id)}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={deleteUserMutation.isPending}
+              >
+                {deleteUserMutation.isPending ? "Deleting..." : "Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+    </div>
   );
 }
