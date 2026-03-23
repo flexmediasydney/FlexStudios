@@ -31,7 +31,7 @@ export const AuthProvider = ({ children }) => {
       } else if (!appUser.is_active) {
         setAuthError({ type: 'user_deactivated', message: 'Your account has been deactivated. Contact your admin.' });
         setIsAuthenticated(false);
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: 'local' });
       } else {
         setUser(appUser);
         setIsAuthenticated(true);
@@ -99,7 +99,7 @@ export const AuthProvider = ({ children }) => {
   const logout = async (shouldRedirect = true) => {
     setUser(null);
     setIsAuthenticated(false);
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: 'local' });
     if (shouldRedirect) {
       window.location.href = '/login';
     }

@@ -436,7 +436,7 @@ const authApi = {
    * Base44 signature: auth.logout(redirectUrl?)
    */
   async logout(redirectUrl) {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: 'local' });
     if (redirectUrl) {
       window.location.href = redirectUrl;
     }
