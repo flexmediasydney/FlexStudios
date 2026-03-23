@@ -104,7 +104,10 @@ const extractAttachments = (payload: any) => {
 
 const parseHeaders = (headers: any[]) => {
   const parsed: Record<string, string> = {};
-  for (const header of headers) parsed[header.name] = header.value;
+  if (!Array.isArray(headers)) return parsed;
+  for (const header of headers) {
+    if (header?.name) parsed[header.name] = header.value ?? '';
+  }
   return parsed;
 };
 

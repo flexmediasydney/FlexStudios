@@ -6,6 +6,7 @@ import {
   loadMappingTable,
   findProjectByOrderId,
   writeAudit,
+  writeProjectActivity,
 } from '../utils.ts';
 import { handleScheduled } from './handleScheduled.ts';
 
@@ -139,7 +140,15 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
   if (!overriddenFields.includes('tonomo_payment_status')) updates.tonomo_payment_status = p.paymentStatus || project.tonomo_payment_status;
 
   const startTime = p.when?.start_time ? p.when.start_time * 1000 : null;
-  if (startTime && !overriddenFields.includes('shoot_date')) updates.shoot_date = new Date(startTime).toISOString().split('T')[0];
+  if (startTime && !overriddenFields.includes('shoot_date')) {
+    updates.shoot_date = new Date(startTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+    updates.shoot_time = new Date(startTime).toLocaleTimeString('en-AU', {
+      timeZone: 'Australia/Sydney',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
   if (p.deliverablesLinks?.length > 0) {
     updates.tonomo_delivered_files = JSON.stringify(p.deliverablesLinks);
     if (p.deliverable_link) updates.tonomo_deliverable_link = p.deliverable_link;
@@ -158,6 +167,21 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
     operation: Object.keys(updates).length ? 'updated' : 'no_changes',
     tonomo_order_id: orderId,
     notes: `Services: ${services.length}. Invoice: $${p.invoice_amount ?? 'unchanged'}. OrderStatus: ${incomingStatus || 'unchanged'}`,
+  });
+
+  await writeProjectActivity(entities, {
+    project_id: project.id,
+    project_title: project.title || '',
+    action: 'tonomo_order_updated',
+    description: `Order updated from Tonomo.${reviewReasons.length > 0 ? ` Review flags: ${reviewReasons.join('; ')}` : ' No review required.'} Services: ${services.length}. OrderStatus: ${incomingStatusBCC || 'unchanged'}.`,
+    tonomo_order_id: orderId,
+    tonomo_event_type: 'booking_created_or_changed',
+    metadata: {
+      review_flags: reviewReasons,
+      fields_updated: Object.keys(updates),
+      services_count: services.length,
+      order_status: incomingStatusBCC || null,
+    },
   });
 
   if (updates.products || updates.packages) {

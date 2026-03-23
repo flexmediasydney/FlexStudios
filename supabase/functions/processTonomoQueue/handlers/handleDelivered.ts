@@ -30,19 +30,23 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
 
   if (p.deliveredDate) updates.tonomo_delivered_at = new Date(p.deliveredDate).toISOString();
   if (p.deliverable_link) updates.tonomo_deliverable_link = p.deliverable_link;
-  if (p.deliverable_path || p.order?.deliverable_path) updates.tonomo_deliverable_path = p.deliverable_path || p.order.deliverable_path;
+  if (p.deliverable_path || p.order?.deliverable_path) updates.tonomo_deliverable_path = p.deliverable_path || p.order?.deliverable_path;
   if (p.deliverablesLinks?.length > 0) updates.tonomo_delivered_files = JSON.stringify(p.deliverablesLinks);
   if (p.invoice_link) updates.tonomo_invoice_link = p.invoice_link;
   if (p.invoice_amount != null && !overriddenFields.includes('tonomo_invoice_amount')) updates.tonomo_invoice_amount = p.invoice_amount ? parseFloat(p.invoice_amount) : null;
 
   // Auto-complete all active tasks on delivery
-  const tasks = await entities.ProjectTask.filter({ project_id: project.id });
-  for (const task of tasks) {
+  const tasks = await entities.ProjectTask.filter({ project_id: project.id }, '-created_at', 500).catch(() => []);
+  for (const task of (tasks || [])) {
     if (!task.is_completed && !task.is_deleted) {
-      await entities.ProjectTask.update(task.id, {
-        is_completed: true,
-        completed_at: new Date().toISOString(),
-      });
+      try {
+        await entities.ProjectTask.update(task.id, {
+          is_completed: true,
+          completed_at: new Date().toISOString(),
+        });
+      } catch (taskErr: any) {
+        console.error(`Task completion failed for task ${task.id} (non-fatal):`, taskErr.message);
+      }
     }
   }
 

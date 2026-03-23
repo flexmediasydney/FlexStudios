@@ -1,5 +1,28 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const retryFetch = async (url: string, options: any, retries = 3): Promise<Response> => {
+  let lastResponse: Response | undefined;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.status === 429 || response.status === 503) {
+        lastResponse = response;
+        const retryAfter = parseInt(response.headers.get('retry-after') || '5') * 1000;
+        await sleep(retryAfter);
+        continue;
+      }
+      return response;
+    } catch (error) {
+      if (i === retries - 1) throw error;
+      await sleep(1000 * Math.pow(2, i));
+    }
+  }
+  if (lastResponse) return lastResponse;
+  throw new Error('retryFetch: all retries exhausted');
+};
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
@@ -82,12 +105,16 @@ Deno.serve(async (req) => {
     });
     const tokenData = await refreshResponse.json();
     if (!tokenData.access_token) {
-      return errorResponse(`Failed to refresh Gmail token: ${tokenData.error || 'unknown'}`, 401);
+      console.error('Gmail token refresh failed:', tokenData.error, tokenData.error_description);
+      return errorResponse('Failed to refresh Gmail token. User may need to reconnect their Gmail account.', 401);
     }
     const accessToken = tokenData.access_token;
 
-    // Write refreshed token back
-    await entities.EmailAccount.update(account.id, { access_token: accessToken });
+    // Write refreshed token back (including rotated refresh token if Google issued one)
+    await entities.EmailAccount.update(account.id, {
+      access_token: accessToken,
+      ...(tokenData.refresh_token ? { refresh_token: tokenData.refresh_token } : {}),
+    });
 
     // Get user signature — use specific one if signatureId provided, else default
     let signatures;
@@ -177,7 +204,22 @@ Deno.serve(async (req) => {
             failedAttachments.push({ filename, error: errMsg });
             continue;
           }
+          // Gmail API enforces a 25MB total message size limit; reject oversized attachments early
+          const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024; // 20MB (leaves room for base64 overhead + body)
+          const contentLength = parseInt(attResponse.headers.get('content-length') || '0');
+          if (contentLength > MAX_ATTACHMENT_SIZE) {
+            const errMsg = `Attachment too large (${(contentLength / 1024 / 1024).toFixed(1)}MB). Max is 20MB.`;
+            console.warn(`Attachment "${filename}" rejected: ${errMsg}`);
+            failedAttachments.push({ filename, error: errMsg });
+            continue;
+          }
           const attBytes = new Uint8Array(await attResponse.arrayBuffer());
+          if (attBytes.length > MAX_ATTACHMENT_SIZE) {
+            const errMsg = `Attachment too large (${(attBytes.length / 1024 / 1024).toFixed(1)}MB). Max is 20MB.`;
+            console.warn(`Attachment "${filename}" rejected after download: ${errMsg}`);
+            failedAttachments.push({ filename, error: errMsg });
+            continue;
+          }
           if (attBytes.length === 0) {
             const errMsg = 'Downloaded file is empty (0 bytes)';
             console.warn(`Attachment "${filename}" downloaded but empty: ${url}`);
@@ -310,9 +352,9 @@ Deno.serve(async (req) => {
   } catch (error: any) {
     const statusCode = error.message.includes('Unauthorized') ? 401 :
                        error.message.includes('not found') ? 404 : 500;
+    console.error('sendGmailMessage error:', error.stack || error.message);
     return jsonResponse({
       error: error.message,
-      details: error.stack
     }, statusCode);
   }
 });
