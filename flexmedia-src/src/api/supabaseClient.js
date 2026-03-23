@@ -652,9 +652,8 @@ export const api = {
   _supabaseAdmin: supabaseAdmin,
 };
 
-// Temporary backward-compat alias (remove once all imports are updated)
-export { api as base44 };
-
-// Also export individual Supabase clients for direct use where needed
-export { supabase, supabaseAdmin };
+// Export the anon Supabase client for direct use where needed (e.g. AuthContext).
+// supabaseAdmin is intentionally NOT exported — it is always null in the frontend.
+// Admin operations go through the adminAuthActions edge function.
+export { supabase };
 // force rebuild 1773921131

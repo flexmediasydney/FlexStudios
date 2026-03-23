@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { Plus, CalendarIcon } from "lucide-react";
+import { Plus, CalendarIcon, CheckCheck } from "lucide-react";
 import { scheduleDeadlineSync } from "./taskDeadlineSync";
 import { format, differenceInSeconds } from "date-fns";
 import { wallClockToUTC } from "@/components/lib/deadlinePresets";
@@ -594,6 +594,27 @@ export default function TaskManagement({ projectId, project, canEdit }) {
             </span>
           </div>
           <div className="flex items-center gap-2">
+            {canEdit && completedCount < tasks.length && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1"
+                title="Mark all remaining tasks complete"
+                onClick={async () => {
+                  const incomplete = tasks.filter(t => !t.is_completed);
+                  if (incomplete.length === 0) return;
+                  try {
+                    await Promise.all(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: new Date().toISOString() })));
+                    queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+                    toast.success(`Completed ${incomplete.length} task${incomplete.length > 1 ? 's' : ''}`);
+                    logActivity('tasks_completed', `Marked all ${incomplete.length} remaining tasks complete`);
+                  } catch { toast.error('Failed to complete some tasks'); }
+                }}
+              >
+                <CheckCheck className="h-3.5 w-3.5" />
+                Complete all
+              </Button>
+            )}
             <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="h-8 w-32 text-xs">
                 <SelectValue />
@@ -603,7 +624,6 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                 <SelectItem value="urgency">Urgency</SelectItem>
               </SelectContent>
             </Select>
-            
           </div>
         </div>
       )}

@@ -1,7 +1,11 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+// Pre-computed skeleton widths — avoids calling Math.random() during render,
+// which would produce a different value every render cycle.
+const SKELETON_WIDTHS = [72, 55, 63, 48, 79, 60, 44, 68];
 
 export default function EntityDataTable({
   columns,      // [{ key, label, render, sortable, width, align, noClick, sortValue }]
@@ -19,8 +23,19 @@ export default function EntityDataTable({
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
 
-  // Reset page when data changes (search/filter applied)
-  useEffect(() => setPage(0), [data]);
+  // Reset page when data length changes (search/filter applied).
+  // Using data.length instead of the data array reference avoids firing
+  // on every render (array props are new references each render).
+  const dataLength = data.length;
+  useEffect(() => setPage(0), [dataLength]);
+
+  // Escape key clears selection
+  useEffect(() => {
+    if (!selectable || !selectedIds?.size) return;
+    const handler = (e) => { if (e.key === 'Escape') onToggleSelectAll?.(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [selectable, selectedIds?.size, onToggleSelectAll]);
 
   const handleSort = (key) => {
     if (sortKey === key) {
@@ -31,16 +46,21 @@ export default function EntityDataTable({
     }
   };
 
+  // Stabilise the columns reference: only re-derive when the column keys change,
+  // not on every render (parent often passes a new array literal each time).
+  const columnsKeyStr = columns.map(c => c.key).join(',');
+  const stableColumns = useMemo(() => columns, [columnsKeyStr]);
+
   const sorted = useMemo(() => {
     if (!sortKey) return data;
-    const col = columns.find(c => c.key === sortKey);
+    const col = stableColumns.find(c => c.key === sortKey);
     return [...data].sort((a, b) => {
       const av = col?.sortValue ? col.sortValue(a) : (a[sortKey] ?? '');
       const bv = col?.sortValue ? col.sortValue(b) : (b[sortKey] ?? '');
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [data, sortKey, sortDir, columns]);
+  }, [data, sortKey, sortDir, stableColumns]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const safeCurrentPage = Math.min(page, totalPages - 1);
@@ -65,7 +85,7 @@ export default function EntityDataTable({
               <tr key={i} className="border-b">
                 {columns.map(col => (
                   <td key={col.key} className="px-3 py-2.5">
-                    <div className="h-4 rounded bg-muted animate-pulse" style={{ width: `${40 + Math.random() * 40}%` }} />
+                    <div className="h-4 rounded bg-muted animate-pulse" style={{ width: `${SKELETON_WIDTHS[i % SKELETON_WIDTHS.length]}%` }} />
                   </td>
                 ))}
               </tr>
@@ -118,7 +138,7 @@ export default function EntityDataTable({
                         {col.label}
                         {sortKey === col.key
                           ? (sortDir === 'asc' ? <ChevronUp className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />)
-                          : <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-30" />}
+                          : <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-50" />}
                       </span>
                     ) : col.label}
                   </th>
@@ -128,7 +148,7 @@ export default function EntityDataTable({
             <tbody>
               {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length + (selectable ? 1 : 0)} className="py-16 text-center text-sm text-muted-foreground">
+                  <td colSpan={columns.length + (selectable ? 1 : 0)} className="py-10 text-center text-sm text-muted-foreground">
                     {emptyMessage}
                   </td>
                 </tr>
@@ -136,7 +156,7 @@ export default function EntityDataTable({
                 <tr
                   key={row.id || localIdx}
                   className={cn(
-                    "border-b last:border-0 group transition-colors hover:bg-muted/20",
+                    "border-b last:border-0 group transition-colors hover:bg-muted/40",
                     onRowClick && "cursor-pointer"
                   )}
                   onClick={() => onRowClick?.(row)}
@@ -180,10 +200,13 @@ export default function EntityDataTable({
           {sorted.length === 0
             ? '0 records'
             : `${startIdx + 1}–${Math.min(startIdx + pageSize, sorted.length)} of ${sorted.length}`}
+          {selectable && selectedIds?.size > 0 && (
+            <span className="ml-2 text-primary font-medium">({selectedIds.size} selected — Esc to clear)</span>
+          )}
         </span>
         {totalPages > 1 && (
           <div className="flex items-center gap-0.5">
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-xs" onClick={() => setPage(0)} disabled={safeCurrentPage === 0} aria-label="First page">‹‹</Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(0)} disabled={safeCurrentPage === 0} aria-label="First page"><ChevronsLeft className="h-3.5 w-3.5" /></Button>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safeCurrentPage === 0} aria-label="Previous page">
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
@@ -191,7 +214,7 @@ export default function EntityDataTable({
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={safeCurrentPage >= totalPages - 1} aria-label="Next page">
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-xs" onClick={() => setPage(totalPages - 1)} disabled={safeCurrentPage >= totalPages - 1} aria-label="Last page">››</Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(totalPages - 1)} disabled={safeCurrentPage >= totalPages - 1} aria-label="Last page"><ChevronsRight className="h-3.5 w-3.5" /></Button>
           </div>
         )}
       </div>

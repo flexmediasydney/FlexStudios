@@ -1,5 +1,6 @@
 import { format, isToday } from "date-fns";
 import { fixTimestamp } from "@/components/utils/dateUtils";
+import { formatBytes } from "@/components/utils/formatters";
 
 /**
  * Consistent date formatting for email timestamps
@@ -31,11 +32,11 @@ export const formatEmailDateTime = (timestamp) => {
 };
 
 /**
- * Format file size with proper units
+ * Format file size with proper units.
+ * Delegates to the shared formatBytes util; returns '' instead of '—' for
+ * null/negative to match the email-specific convention (empty string = hide).
  */
 export const formatFileSize = (bytes) => {
-  if (!bytes || bytes < 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const result = formatBytes(bytes);
+  return result === '—' ? '' : result;
 };

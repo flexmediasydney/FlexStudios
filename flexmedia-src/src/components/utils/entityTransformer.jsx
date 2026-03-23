@@ -1,26 +1,5 @@
-import { parseISO, format } from 'date-fns';
 import { DATE_FIELD_REGISTRY } from './entityDateFields';
-import { fixTimestamp } from './dateUtils';
-
-const APP_TZ = 'Australia/Sydney';
-
-function fmtDateOnly(str, pattern = 'd MMM yyyy') {
-  if (!str) return '—';
-  try {
-    return format(parseISO(String(str).substring(0, 10)), pattern);
-  } catch {
-    return '—';
-  }
-}
-
-function fmtTS(utcStr, opts = {}) {
-  if (!utcStr) return '—';
-  try {
-    return new Intl.DateTimeFormat('en-AU', { timeZone: APP_TZ, ...opts }).format(new Date(fixTimestamp(utcStr)));
-  } catch {
-    return '—';
-  }
-}
+import { fmtDate as fmtDateOnly, fmtTimestampCustom as fmtTS, fixTimestamp, APP_TZ } from './dateUtils';
 
 function relativeTime(utcStr) {
   if (!utcStr) return '';

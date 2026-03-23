@@ -300,10 +300,12 @@ export default function ProjectDetails() {
     };
   }, [project?.client_id, agent?.name]);
 
-  // Memoize canEditProject to prevent unnecessary child re-renders
+  // Memoize canEditProject to prevent unnecessary child re-renders.
+  // canEditProject is stable (from usePermissions hook), but we include it
+  // to satisfy exhaustive-deps and avoid stale closure warnings.
   const memoizedCanEdit = useMemo(
     () => canEditProject(project),
-    [project?.id, project?.status, project?.agent_id]
+    [canEditProject, project?.id, project?.status, project?.agent_id]
   );
 
   // Memoize enriched products for WeatherCard (O(n) lookup instead of O(n²))
@@ -903,8 +905,8 @@ export default function ProjectDetails() {
           <div className="flex items-center gap-1.5 text-muted-foreground text-sm">
             <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
             <button
-              onClick={() => { try { navigator.clipboard.writeText(project.property_address); } catch {} }}
-              title="Copy address"
+              onClick={() => { navigator.clipboard.writeText(project.property_address).then(() => toast.success('Address copied'), () => {}); }}
+              title="Copy address to clipboard"
               className="text-left hover:text-primary transition-colors group truncate"
             >
               {project?.property_address || ''}
@@ -951,7 +953,7 @@ export default function ProjectDetails() {
               project.payment_status === "paid"
                 ? "bg-green-500 text-white border-green-600 hover:bg-green-600"
                 : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!canEditProject(project) || updatePaymentMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
+            } ${!memoizedCanEdit || updatePaymentMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
             title={memoizedCanEdit ? `Click to mark ${project.payment_status === "paid" ? "unpaid" : "paid"}` : "You don't have permission to edit"}
             aria-label={`Payment status: ${project.payment_status}. Click to toggle.`}
           >
@@ -970,9 +972,9 @@ export default function ProjectDetails() {
               project.outcome === "won"
                 ? "bg-green-600 text-white border-green-700 hover:bg-green-700"
                 : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!canEditProject(project) || updateOutcomeMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
+            } ${!memoizedCanEdit || updateOutcomeMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
             title={
-              !canEditProject(project) ? "You don't have permission to edit" :
+              !memoizedCanEdit ? "You don't have permission to edit" :
               project.outcome === "won" ? "Currently Won — click to revert to Open" :
               "Mark this project as Won"
             }
@@ -992,7 +994,7 @@ export default function ProjectDetails() {
               project.outcome === "lost"
                 ? "bg-red-600 text-white border-red-700 hover:bg-red-700"
                 : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!canEditProject(project) || updateOutcomeMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
+            } ${!memoizedCanEdit || updateOutcomeMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
             title={
               !memoizedCanEdit ? "You don't have permission to edit" :
               project.outcome === "lost" ? "Currently Lost — click to revert to Open" :
@@ -1003,6 +1005,21 @@ export default function ProjectDetails() {
             <XCircle className="h-3.5 w-3.5" />
             {project.outcome === "lost" ? "✓ Lost" : "◯ Lost"}
           </button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 px-2.5 transition-colors"
+            title="Copy project link"
+            aria-label="Copy project link"
+            onClick={() => {
+              navigator.clipboard.writeText(window.location.href).then(
+                () => toast.success('Project link copied'),
+                () => toast.error('Failed to copy link')
+              );
+            }}
+          >
+            <Copy className="h-4 w-4" />
+          </Button>
           {memoizedCanEdit && (
            <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-shadow h-9" aria-label="Edit project">
              <Edit className="h-4 w-4" />
@@ -1294,7 +1311,7 @@ export default function ProjectDetails() {
                   </div>
                 )}
 
-                {canSeePricing && canEditProject(project) && (
+                {canSeePricing && memoizedCanEdit && (
                   <div className="col-span-2 sm:col-span-1">
                     <p className="text-xs text-muted-foreground mb-0.5">Invoiced</p>
                     <InvoicedAmountInput

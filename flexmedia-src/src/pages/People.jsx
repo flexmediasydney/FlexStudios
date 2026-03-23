@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
-import { Plus, Search, Mail, Phone, Building2, ExternalLink, List, LayoutGrid, Tag, Clock, AlertTriangle, MailX, Zap, Users, Activity } from 'lucide-react';
+import { Plus, Search, Mail, Phone, Building2, ExternalLink, List, LayoutGrid, Tag, Clock, AlertTriangle, MailX, Zap, Users, Activity, Download } from 'lucide-react';
 import { createPageUrl } from '@/utils';
 import { differenceInDays } from 'date-fns';
 import { toast } from 'sonner';
@@ -279,9 +279,35 @@ export default function People() {
             {stats.dnc > 0 && <><span className="text-red-500 font-medium ml-1">{stats.dnc}</span> DNC</>}
           </div>
         </div>
-        <Button onClick={() => { setEditingAgent(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8">
-          <Plus className="h-3.5 w-3.5" />Add Person
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 h-8"
+            title="Export filtered contacts as CSV"
+            onClick={() => {
+              const headers = ['Name','Email','Phone','Organisation','Team','State','Tags'];
+              const rows = filtered.map(a => [
+                a.name || '', a.email || '', a.phone || '',
+                a.current_agency_name || '', a.current_team_name || '',
+                a.relationship_state || '',
+                (Array.isArray(a.tags) ? a.tags.join('; ') : ''),
+              ]);
+              const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+              const blob = new Blob([csv], { type: 'text/csv' });
+              const url = URL.createObjectURL(blob);
+              const a = Object.assign(document.createElement('a'), { href: url, download: `contacts-${new Date().toISOString().slice(0,10)}.csv` });
+              a.click();
+              URL.revokeObjectURL(url);
+              toast.success(`Exported ${filtered.length} contacts`);
+            }}
+          >
+            <Download className="h-3.5 w-3.5" />Export CSV
+          </Button>
+          <Button onClick={() => { setEditingAgent(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8">
+            <Plus className="h-3.5 w-3.5" />Add Person
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center gap-3 px-6 py-3 border-b shrink-0 bg-muted/20">

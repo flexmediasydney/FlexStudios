@@ -1,11 +1,15 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BarChart2, FileBarChart, Users, Activity } from "lucide-react";
-import BusinessIntelligence from "./BusinessIntelligence";
-import Reports from "./Reports";
-import EmployeeUtilization from "./EmployeeUtilization";
-import TeamPulsePage from "./TeamPulsePage";
+
+// Lazy-load heavy sub-pages — these were defeating code-splitting by pulling
+// BusinessIntelligence, Reports, EmployeeUtilization, and TeamPulsePage into
+// the Analytics chunk eagerly (each is ~100KB+ with recharts/date-fns).
+const BusinessIntelligence = React.lazy(() => import("./BusinessIntelligence"));
+const Reports = React.lazy(() => import("./Reports"));
+const EmployeeUtilization = React.lazy(() => import("./EmployeeUtilization"));
+const TeamPulsePage = React.lazy(() => import("./TeamPulsePage"));
 
 const TABS = [
   { id: "overview",      label: "Overview",       icon: BarChart2,    component: BusinessIntelligence },
@@ -58,11 +62,13 @@ export default function Analytics() {
           </TabsList>
         </div>
 
-        {/* Each tab renders the full existing page component */}
+        {/* Each tab renders the full existing page component (lazy-loaded) */}
         {TABS.map(({ id, component: Component }) => (
           <TabsContent key={id} value={id} className="mt-0 p-0 flex-1 min-h-0">
             <div className="h-full overflow-y-auto">
-              <Component />
+              <Suspense fallback={<div className="flex items-center justify-center p-12"><div className="w-6 h-6 border-2 border-muted border-t-foreground rounded-full animate-spin" /></div>}>
+                <Component />
+              </Suspense>
             </div>
           </TabsContent>
         ))}

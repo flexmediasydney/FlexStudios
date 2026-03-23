@@ -59,9 +59,13 @@ function DropdownFilter({ filter: d }) {
  * dropdownFilters: [{ id, label, icon: LucideIcon, options: [{value, label}], value, onChange }]
  * onClearAll: () => void
  */
+// Stable empty Set — avoids creating a new reference on every render
+// when the caller omits activeFilters.
+const EMPTY_SET = new Set();
+
 export default function SmartFilterBar({
   quickFilters = [],
-  activeFilters = new Set(),
+  activeFilters = EMPTY_SET,
   onToggleFilter,
   dropdownFilters = [],
   onClearAll,
@@ -113,10 +117,11 @@ export default function SmartFilterBar({
           <>
             <button
               onClick={onClearAll}
-              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-full text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted border border-border hover:border-foreground/20 transition-all"
+              title="Clear all active filters"
             >
               <X className="h-3 w-3" />
-              Clear
+              Clear all
             </button>
             {filteredCount !== totalCount && (
               <span className="text-xs text-muted-foreground tabular-nums">

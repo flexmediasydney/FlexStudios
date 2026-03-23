@@ -648,9 +648,9 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                         {columnProjects.length}
                       </span>
                     </div>
-                    <div className="text-[10px] text-white/60 font-medium">
-                      Last synced {new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
-                    </div>
+                    {/* Removed "Last synced" live clock — calling new Date() during
+                        render creates a new value every cycle, which can cause
+                        unnecessary re-renders and React reconciliation noise. */}
 
                     {/* Column Metrics */}
                     <div className="grid grid-cols-2 gap-1.5 mt-2">
@@ -960,20 +960,20 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
 
                           // Twilight lane in scheduled column
                           if (column.id === 'scheduled' && columnProjects.some(p => p.tonomo_is_twilight)) {
+                          const dayProjects = columnProjects.filter(p => !p.tonomo_is_twilight);
+                          const twilightProjects = columnProjects.filter(p => p.tonomo_is_twilight);
                           return (
-                            <>
-                              {columnProjects.filter(p => !p.tonomo_is_twilight).map((p, i) => renderCard(p, i))}
-                              {columnProjects.some(p => p.tonomo_is_twilight) && (
-                                <div className="flex items-center gap-2 my-2">
-                                  <div className="flex-1 h-px bg-purple-200" />
-                                  <span className="text-[9px] text-purple-500 font-medium flex-shrink-0">
-                                    🌅 Twilight
-                                  </span>
-                                  <div className="flex-1 h-px bg-purple-200" />
-                                </div>
-                              )}
-                              {columnProjects.filter(p => p.tonomo_is_twilight).map((p, i) => renderCard(p, i + columnProjects.filter(tp => !tp.tonomo_is_twilight).length))}
-                            </>
+                            <React.Fragment key="scheduled-twilight-lane">
+                              {dayProjects.map((p, i) => renderCard(p, i))}
+                              <div key="twilight-divider" className="flex items-center gap-2 my-2">
+                                <div className="flex-1 h-px bg-purple-200" />
+                                <span className="text-[9px] text-purple-500 font-medium flex-shrink-0">
+                                  Twilight
+                                </span>
+                                <div className="flex-1 h-px bg-purple-200" />
+                              </div>
+                              {twilightProjects.map((p, i) => renderCard(p, i + dayProjects.length))}
+                            </React.Fragment>
                           );
                           }
 

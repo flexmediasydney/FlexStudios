@@ -63,7 +63,7 @@ export function todaySydney() {
 // in the *local* machine timezone, not Sydney. On a UTC server at 23:00 UTC
 // (= 10:00 AEST next day), a timestamp from "today in Sydney" would show as "0d ago"
 // when it should show "1d ago". Now we compare Sydney date strings for day-level diffs.
-export function daysAgo(date) {
+function daysAgo(date) {
   if (!date) return 0;
   const todayStr = todaySydney();
   const targetStr = fmtTimestampCustom(date, { year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -76,12 +76,12 @@ export function daysAgo(date) {
   return differenceInDays(todayD, targetD);
 }
 
-export function hoursAgo(date) {
+function hoursAgo(date) {
   if (!date) return 0;
   return differenceInHours(new Date(), new Date(fixTimestamp(date)));
 }
 
-export function minutesAgo(date) {
+function minutesAgo(date) {
   if (!date) return 0;
   return differenceInMinutes(new Date(), new Date(fixTimestamp(date)));
 }
@@ -107,7 +107,9 @@ export function formatRelative(date) {
 // BUG FIX: was using new Date() which gives local machine's "today", not Sydney's "today".
 // On a Vercel edge or any non-AEST server, "today" could be yesterday/tomorrow in Sydney.
 // Now we derive "today" from todaySydney() and build ranges from that date-only string.
-export function getDateRange(type) {
+// NOTE: getDateRange was a dead export (never imported). Kept as non-exported
+// in case it's needed later; remove entirely if not used by next cleanup.
+function getDateRange(type) {
   const sydneyToday = parseDate(todaySydney()); // midnight local-parse of Sydney date
   if (!sydneyToday) return undefined;
   const ranges = {
@@ -129,18 +131,8 @@ export function isSameDay(date1, date2) {
   return toSydneyDay(date1) === toSydneyDay(date2);
 }
 
-export function isBefore(date1, date2) {
-  return new Date(fixTimestamp(date1)) < new Date(fixTimestamp(date2));
-}
-
-export function isAfter(date1, date2) {
-  return new Date(fixTimestamp(date1)) > new Date(fixTimestamp(date2));
-}
-
-export function isBetween(date, start, end) {
-  const d = new Date(fixTimestamp(date));
-  return d >= new Date(fixTimestamp(start)) && d <= new Date(fixTimestamp(end));
-}
+// NOTE: isBefore, isAfter, isBetween were removed — they were dead exports
+// (never imported anywhere). If needed, use date-fns equivalents with fixTimestamp().
 
 // ─── Calendar event timezone helpers ──────────────────────────────────────────
 // Convert UTC timestamp to Sydney local time for HTML input (datetime-local)
@@ -240,36 +232,5 @@ export function fmtSydneyTime(utcStr, options = { hour: 'numeric', minute: '2-di
   return fmtTimestampCustom(utcStr, options);
 }
 
-// ─── Shared duration formatters ───────────────────────────────────────────────
-export function formatDurationCompact(seconds) {
-  // BUG FIX: !seconds treated 0 as falsy — 0 seconds is a valid duration
-  if (seconds == null || isNaN(seconds) || seconds < 0) return "—";
-  if (seconds === 0) return "0s";
-  seconds = Math.floor(seconds);
-  if (seconds < 60) return `${seconds}s`;
-  const mins = Math.floor(seconds / 60);
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(seconds / 3600);
-  if (hours < 24) return `${hours}h ${Math.floor((seconds % 3600) / 60)}m`;
-  const days = Math.floor(seconds / 86400);
-  const remHours = Math.floor((seconds % 86400) / 3600);
-  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
-}
-
-export function formatDurationFull(seconds) {
-  // BUG FIX: !seconds treated 0 as falsy — 0 seconds is a valid duration
-  if (seconds == null || isNaN(seconds) || seconds < 0) return "—";
-  if (seconds === 0) return "0s";
-  seconds = Math.floor(seconds);
-  if (seconds < 60) return `${seconds}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (mins < 60) return `${mins}m ${secs}s`;
-  const hours = Math.floor(seconds / 3600);
-  const remMins = Math.floor((seconds % 3600) / 60);
-  const remSecs = seconds % 60;
-  if (hours < 24) return `${hours}h ${remMins}m ${remSecs}s`;
-  const days = Math.floor(seconds / 86400);
-  const remHours = Math.floor((seconds % 86400) / 3600);
-  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
-}
+// NOTE: formatDurationCompact and formatDurationFull were removed — dead exports
+// never imported anywhere. If needed, use formatDuration from formatters.jsx.

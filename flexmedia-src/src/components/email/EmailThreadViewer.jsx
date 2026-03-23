@@ -8,7 +8,7 @@ import {
   ArrowLeft, Reply, ReplyAll, Forward, Archive, Trash2,
   MoreVertical, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Lock, Users, Copy, Clock, ChevronsUpDown,
-  Loader2, Eye, EyeOff, RefreshCw, AlertCircle
+  Loader2, Eye, EyeOff, RefreshCw, AlertCircle, Printer, Link2
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -667,8 +667,13 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         {/* Thread Header — Subject + Actions */}
         <div className={cn("px-5 pt-5 pb-4 bg-card border-b", priorityConfig[msg.priority] || '')}>
           {/* Subject */}
-          <h1 className="text-[22px] font-bold text-foreground leading-snug mb-3 pr-2">
+          <h1
+            className="text-[22px] font-bold text-foreground leading-snug mb-3 pr-2 cursor-pointer group"
+            title="Click to copy subject"
+            onClick={() => { if (thread.subject) navigator.clipboard.writeText(thread.subject).then(() => toast.success('Subject copied')); }}
+          >
             {thread.subject || <em className="text-muted-foreground font-normal">(no subject)</em>}
+            <Copy className="h-3.5 w-3.5 inline ml-2 opacity-0 group-hover:opacity-40 transition-opacity" />
           </h1>
 
           {/* Action toolbar */}
@@ -793,8 +798,17 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => {
+                  navigator.clipboard.writeText(window.location.href).then(
+                    () => toast.success('Thread link copied'),
+                    () => toast.error('Failed to copy link')
+                  );
+                }}>
+                  <Link2 className="h-4 w-4 mr-2 text-muted-foreground" />
+                  Copy link to thread
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => window.print()}>
-                  <RefreshCw className="h-4 w-4 mr-2 text-muted-foreground" />
+                  <Printer className="h-4 w-4 mr-2 text-muted-foreground" />
                   Print
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />

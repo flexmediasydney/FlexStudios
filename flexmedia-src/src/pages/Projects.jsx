@@ -634,7 +634,8 @@ export default function Projects() {
           {(shootDateFrom || shootDateTo || priorityFilter !== 'all') && (
             <button
               onClick={() => { setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); }}
-              className="text-xs text-muted-foreground hover:text-foreground px-2"
+              className="text-xs text-muted-foreground hover:text-foreground hover:bg-muted px-2.5 h-9 rounded-lg border border-transparent hover:border-border transition-all"
+              title="Clear date and priority filters"
             >
               Clear
             </button>

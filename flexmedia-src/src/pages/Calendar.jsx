@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon,
-  Users, User, RefreshCw, Search, AlertTriangle, Clock
+  Users, User, RefreshCw, Search, AlertTriangle, Clock, X
 } from "lucide-react";
 import { expandRecurringEvent } from "@/components/calendar/CalendarEventUtils";
 import {
@@ -648,11 +648,11 @@ export default function CalendarPage() {
                <span className="absolute right-8 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 font-medium tabular-nums">{searchQuery.length}</span>
                <button
                  onClick={() => setSearchQuery("")}
-                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground hover:bg-muted rounded p-1 transition-colors duration-150"
+                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full p-1 transition-colors duration-150"
                  title="Clear search (Esc)"
                  aria-label="Clear search"
                  >
-                 ×
+                 <X className="h-3.5 w-3.5" />
                </button>
              </>
            )}
@@ -889,7 +889,10 @@ function MonthView({ currentDate, events, users, userColorMap, conflictSet, onCe
                   />
                 ))}
                 {dayItems.length > 3 && (
-                  <div className="text-xs text-muted-foreground pl-1">+{dayItems.length - 3} more</div>
+                  <div
+                    className="text-xs text-muted-foreground pl-1 cursor-pointer hover:text-foreground transition-colors"
+                    title={dayItems.slice(3).map(({ event }) => event.title || 'Untitled').join(', ')}
+                  >+{dayItems.length - 3} more</div>
                 )}
               </div>
             </div>

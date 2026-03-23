@@ -344,7 +344,7 @@ export default function EmailListRow({
               )}
               {/* Preview snippet */}
               {preview && (
-                <span className="text-[12px] text-muted-foreground/60 truncate min-w-0">
+                <span className="text-[12px] text-muted-foreground/60 truncate min-w-0" title={preview}>
                   {preview}
                 </span>
               )}
@@ -362,7 +362,7 @@ export default function EmailListRow({
             {realAttachments.length > 0 && (
               <AttachmentsHoverCard attachments={realAttachments}>
                 <button
-                  className="p-2 rounded-lg hover:bg-slate-100 transition-colors"
+                  className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-slate-100 transition-colors"
                         onClick={(e) => e.stopPropagation()}
                         aria-label={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
                         title={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}

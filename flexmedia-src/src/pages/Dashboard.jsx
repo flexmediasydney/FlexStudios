@@ -25,27 +25,29 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import ExecutiveMetricsGrid from "@/components/dashboard/ExecutiveMetricsGrid";
-import RevenueBreakdownChart from "@/components/dashboard/RevenueBreakdownChart";
-import ProjectVelocityChart from "@/components/dashboard/ProjectVelocityChart";
-import StageDistributionChart from "@/components/dashboard/StageDistributionChart";
 import TopPerformersPanel from "@/components/dashboard/TopPerformersPanel";
 import ProjectHealthScore from "@/components/dashboard/ProjectHealthScore";
-import RevenueByClientTypeChart from "@/components/dashboard/RevenueByClientTypeChart";
 import PredictiveInsightsPanel from "@/components/dashboard/PredictiveInsightsPanel";
-import CashFlowForecast from "@/components/dashboard/CashFlowForecast";
 import QuickActionsPanel from "@/components/dashboard/QuickActionsPanel";
-import TerritoryMap from '@/components/dashboard/TerritoryMap';
-import DeliveryFeed from '@/components/dashboard/DeliveryFeed';
 import NeedsAttentionPanel, { LivePulseBar } from '@/components/dashboard/NeedsAttentionPanel';
 import TodayBoard from '@/components/dashboard/TodayBoard';
-import PipelineAnalyzer from '@/components/dashboard/PipelineAnalyzer';
-import RevenueIntelligence from '@/components/dashboard/RevenueIntelligence';
-import EnhancedActivityStream from '@/components/dashboard/EnhancedActivityStream';
 import TodaysScheduleWidget from '@/components/dashboard/TodaysScheduleWidget';
 import ActiveTimersWidget from '@/components/dashboard/ActiveTimersWidget';
 import PendingReviewsWidget from '@/components/dashboard/PendingReviewsWidget';
-import TeamWorkloadChart from '@/components/dashboard/TeamWorkloadChart';
-import RevenueComparisonChart from '@/components/dashboard/RevenueComparisonChart';
+
+// Lazy-load heavy chart/analytics widgets (each pulls in recharts or large data processing)
+const RevenueBreakdownChart = React.lazy(() => import("@/components/dashboard/RevenueBreakdownChart"));
+const ProjectVelocityChart = React.lazy(() => import("@/components/dashboard/ProjectVelocityChart"));
+const StageDistributionChart = React.lazy(() => import("@/components/dashboard/StageDistributionChart"));
+const RevenueByClientTypeChart = React.lazy(() => import("@/components/dashboard/RevenueByClientTypeChart"));
+const CashFlowForecast = React.lazy(() => import("@/components/dashboard/CashFlowForecast"));
+const TerritoryMap = React.lazy(() => import('@/components/dashboard/TerritoryMap'));
+const DeliveryFeed = React.lazy(() => import('@/components/dashboard/DeliveryFeed'));
+const PipelineAnalyzer = React.lazy(() => import('@/components/dashboard/PipelineAnalyzer'));
+const RevenueIntelligence = React.lazy(() => import('@/components/dashboard/RevenueIntelligence'));
+const EnhancedActivityStream = React.lazy(() => import('@/components/dashboard/EnhancedActivityStream'));
+const TeamWorkloadChart = React.lazy(() => import('@/components/dashboard/TeamWorkloadChart'));
+const RevenueComparisonChart = React.lazy(() => import('@/components/dashboard/RevenueComparisonChart'));
 import ErrorBoundary from '@/components/common/ErrorBoundary';
 
 export default function Dashboard() {
@@ -551,7 +553,7 @@ export default function Dashboard() {
                 <NeedsAttentionPanel projects={projects} tasks={allTasks} users={allUsers} />
               </ErrorBoundary>
               <Card className="overflow-hidden">
-                <div className="px-4 py-3 border-b"><span className="text-sm font-bold">Live activity</span></div>
+                <div className="px-4 py-3 border-b"><h3 className="text-sm font-semibold tracking-tight">Live Activity</h3></div>
                 <div className="p-4">
                   <ErrorBoundary fallbackLabel="Activity Stream" compact>
                     <EnhancedActivityStream maxItems={8} compact />
@@ -584,8 +586,8 @@ export default function Dashboard() {
 
           {/* Charts Row 1 - Revenue Comparison + Stage Distribution */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '100ms'}}>
-            {projects.length > 0 ? <ErrorBoundary fallbackLabel="Revenue Chart" compact><RevenueComparisonChart projects={projects} /></ErrorBoundary> : <Card className="lg:col-span-2 p-6 text-center text-muted-foreground text-sm">No revenue data</Card>}
-            {projects.length > 0 ? <ErrorBoundary fallbackLabel="Stage Distribution" compact><StageDistributionChart projects={projects} /></ErrorBoundary> : <Card className="p-6 text-center text-muted-foreground text-sm">No project data</Card>}
+            {projects.length > 0 ? <ErrorBoundary fallbackLabel="Revenue Chart" compact><RevenueComparisonChart projects={projects} /></ErrorBoundary> : <Card className="lg:col-span-2 p-8 flex items-center justify-center text-center text-muted-foreground text-sm min-h-[200px]">No revenue data yet</Card>}
+            {projects.length > 0 ? <ErrorBoundary fallbackLabel="Stage Distribution" compact><StageDistributionChart projects={projects} /></ErrorBoundary> : <Card className="p-8 flex items-center justify-center text-center text-muted-foreground text-sm min-h-[200px]">No project data yet</Card>}
           </div>
 
           {/* Charts Row 2 */}
