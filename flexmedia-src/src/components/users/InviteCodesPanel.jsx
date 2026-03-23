@@ -60,8 +60,17 @@ export default function InviteCodesPanel() {
   });
 
   const handleCreate = () => {
+    const cleanCode = newCode.code.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    if (cleanCode.length < 4 || cleanCode.length > 20) {
+      toast.error('Code must be 4-20 characters (letters, numbers, dashes only)');
+      return;
+    }
+    if (parseInt(newCode.max_uses) < 1) {
+      toast.error('Max uses must be at least 1');
+      return;
+    }
     const data = {
-      code: newCode.code.trim().toUpperCase(),
+      code: cleanCode,
       role: newCode.role,
       max_uses: parseInt(newCode.max_uses) || 1,
       note: newCode.note.trim() || null,

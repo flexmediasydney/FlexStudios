@@ -131,11 +131,11 @@ export default function Register() {
         console.error('Users table insert error:', userErr);
       }
 
-      // 3. Increment use count on invite code
-      await dbClient
-        .from('invite_codes')
-        .update({ use_count: (codeData.use_count || 0) + 1 })
-        .eq('id', codeData.id);
+      // 3. Atomically claim the invite code (prevents race conditions)
+      const { error: claimErr } = await dbClient.rpc('claim_invite_code', { p_code: codeData.code });
+      if (claimErr) {
+        console.warn('Code claim failed (may already be used):', claimErr.message);
+      }
 
       setStep('SUCCESS');
     } catch (err) {
