@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import React from "react";
 import { api } from "@/api/supabaseClient";
-import { supabase, supabaseAdmin } from "@/api/supabaseClient";
+import { supabase } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Shield, UserCheck, UserX, Edit, Trash2, Phone, Mail, KeyRound, RotateCcw, Send, Clock, Loader2, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -35,7 +35,7 @@ export default function UsersManagement() {
   const [editingUser, setEditingUser] = useState(null);
   const [deletingUser, setDeletingUser] = useState(null);
   const [activeTab, setActiveTab] = useState("users"); // users | codes
-  const dbClient = supabaseAdmin || supabase;
+  // Admin operations go through edge functions now (no service role key in frontend)
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["users"],
@@ -104,7 +104,7 @@ export default function UsersManagement() {
 
   const handleSendPasswordReset = async (email) => {
     try {
-      await api.auth.resetPassword(email);
+      await api.users.sendPasswordResetAdmin(email);
       toast.success(`Password reset email sent to ${email}`);
     } catch (err) {
       toast.error(err?.message || "Failed to send reset email");
@@ -113,11 +113,19 @@ export default function UsersManagement() {
 
   const handleResendInvite = async (email) => {
     try {
-      const { error } = await dbClient.auth.admin.inviteUserByEmail(email);
-      if (error) throw error;
+      await api.users.resendInvite(email);
       toast.success(`Invite re-sent to ${email}`);
     } catch (err) {
       toast.error(err?.message || "Failed to resend invite");
+    }
+  };
+
+  const handleSignOutEverywhere = async (userId, userName) => {
+    try {
+      await api.users.signOutEverywhere(userId);
+      toast.success(`All sessions terminated for ${userName}`);
+    } catch (err) {
+      toast.error(err?.message || "Failed to sign out user");
     }
   };
 
@@ -296,6 +304,9 @@ export default function UsersManagement() {
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => handleResendInvite(user.email)}>
                                 <Send className="h-3.5 w-3.5 mr-2" /> Resend Invite
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleSignOutEverywhere(user.id, user.full_name)}>
+                                <KeyRound className="h-3.5 w-3.5 mr-2" /> Sign Out Everywhere
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => toggleActiveMutation.mutate({ userId: user.id, isActive: !user.is_active })}>

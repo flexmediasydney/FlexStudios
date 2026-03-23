@@ -1,5 +1,5 @@
 import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
-import { supabase, supabaseAdmin } from '@/api/supabaseClient';
+import { supabase } from '@/api/supabaseClient';
 
 const AuthContext = createContext();
 
@@ -10,8 +10,8 @@ export const AuthProvider = ({ children }) => {
   const [authError, setAuthError] = useState(null);
   const fetchingRef = useRef(false);
 
-  // Use admin client for users table query to bypass RLS issues
-  const dbClient = supabaseAdmin || supabase;
+  // Use anon client with RLS — users can read their own record via policy
+  const dbClient = supabase;
 
   const fetchAppUser = useCallback(async (authUser) => {
     // Prevent concurrent fetches

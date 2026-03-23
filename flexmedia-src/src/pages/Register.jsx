@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { supabase, supabaseAdmin } from '@/api/supabaseClient';
+import { supabase } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,8 +19,6 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const dbClient = supabaseAdmin || supabase;
-
   const handleValidateCode = async (e) => {
     e.preventDefault();
     const code = inviteCode.trim().toUpperCase();
@@ -29,12 +27,13 @@ export default function Register() {
     setLoading(true);
 
     try {
-      const { data, error: fetchErr } = await dbClient
+      const { data: rows, error: fetchErr } = await supabase
         .from('invite_codes')
         .select('*')
         .eq('code', code)
-        .eq('is_active', true)
-        .single();
+        .eq('is_active', true);
+
+      const data = rows?.[0];
 
       if (fetchErr || !data) {
         setError('Invalid invite code. Please check and try again.');
@@ -88,53 +87,31 @@ export default function Register() {
 
     setLoading(true);
     try {
-      // 1. Create auth user
-      const { data: authData, error: authErr } = await supabase.auth.signUp({
-        email: email.trim().toLowerCase(),
-        password,
-        options: {
-          data: { full_name: fullName.trim(), role: codeData.role },
+      // Use edge function for registration — service role key stays server-side
+      const { data, error: regErr } = await supabase.functions.invoke('adminAuthActions', {
+        body: {
+          action: 'register_with_code',
+          email: email.trim().toLowerCase(),
+          password,
+          fullName: fullName.trim(),
+          code: codeData.code,
         },
       });
 
-      if (authErr) {
-        if (authErr.message?.includes('already registered')) {
+      if (regErr) {
+        setError(regErr.message || 'Registration failed');
+        setLoading(false);
+        return;
+      }
+
+      if (data?.error) {
+        if (data.error.includes('already')) {
           setError('An account with this email already exists. Try signing in instead.');
         } else {
-          setError(authErr.message);
+          setError(data.error);
         }
         setLoading(false);
         return;
-      }
-
-      const userId = authData.user?.id;
-      if (!userId) {
-        setError('Account created but no user ID returned. Please try signing in.');
-        setLoading(false);
-        return;
-      }
-
-      // 2. Create users table record
-      const { error: userErr } = await dbClient
-        .from('users')
-        .insert({
-          id: userId,
-          email: email.trim().toLowerCase(),
-          full_name: fullName.trim(),
-          role: codeData.role,
-          is_active: true,
-          auth_provider: 'email',
-        });
-
-      if (userErr && userErr.code !== '23505') {
-        // 23505 = unique violation (user already exists)
-        console.error('Users table insert error:', userErr);
-      }
-
-      // 3. Atomically claim the invite code (prevents race conditions)
-      const { error: claimErr } = await dbClient.rpc('claim_invite_code', { p_code: codeData.code });
-      if (claimErr) {
-        console.warn('Code claim failed (may already be used):', claimErr.message);
       }
 
       setStep('SUCCESS');

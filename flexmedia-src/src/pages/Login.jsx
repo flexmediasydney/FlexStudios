@@ -29,9 +29,30 @@ export default function Login() {
   const [phone, setPhone] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [attempts, setAttempts] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirect = searchParams.get('redirect') || '/';
+
+  // Client-side brute force protection
+  const isLocked = lockedUntil && Date.now() < lockedUntil;
+  const checkRateLimit = () => {
+    if (isLocked) {
+      const secs = Math.ceil((lockedUntil - Date.now()) / 1000);
+      setError(`Too many attempts. Try again in ${secs} seconds.`);
+      return false;
+    }
+    return true;
+  };
+  const recordFailedAttempt = () => {
+    const next = attempts + 1;
+    setAttempts(next);
+    if (next >= 5) {
+      setLockedUntil(Date.now() + 30000); // 30 second lockout
+      setAttempts(0);
+    }
+  };
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
@@ -67,6 +88,7 @@ export default function Login() {
   const handlePasswordSignIn = async (e) => {
     e.preventDefault();
     if (!email.trim() || !password) return;
+    if (!checkRateLimit()) return;
     setError(null);
     setLoading(true);
     try {
@@ -75,12 +97,14 @@ export default function Login() {
         password,
       });
       if (authError) {
+        recordFailedAttempt();
         setError(authError.message === 'Invalid login credentials'
           ? 'Invalid email or password'
           : authError.message);
         setLoading(false);
         return;
       }
+      setAttempts(0); // Reset on success
       navigate(redirect, { replace: true });
     } catch (err) {
       setError(err.message || 'Sign in failed');
