@@ -3,6 +3,8 @@ import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { usePermissions } from "@/components/auth/PermissionGuard";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -43,8 +45,8 @@ export default function PriceMatrixEditor({ priceMatrix }) {
     queryFn: () => api.auth.me(),
     staleTime: 60000,
   });
-  const { canEditPriceMatrix, canViewPriceMatrixPricing, priceMatrixAccess } = usePermissions();
-  const canEdit = canEditPriceMatrix;
+  const { canViewPriceMatrixPricing } = usePermissions();
+  const { canEdit, canView } = useEntityAccess('price_matrices');
   const canSeePrices = canViewPriceMatrixPricing;
 
   const saveMutation = useMutation({
@@ -229,6 +231,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
   };
 
   if (!localData) return null;
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
 
   const hasChanges = JSON.stringify(localData) !== JSON.stringify(priceMatrix);
   const useDefault = localData.use_default_pricing ?? true;
@@ -263,7 +266,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-sm">{localData.entity_name}</span>
+            <span className="font-medium text-sm">{localData.entity_name} <AccessBadge entityType="price_matrices" /></span>
             {localData.project_type_name && (
               <Badge variant="outline" className="text-xs h-5 border-primary/30 text-primary/80">{localData.project_type_name}</Badge>
             )}

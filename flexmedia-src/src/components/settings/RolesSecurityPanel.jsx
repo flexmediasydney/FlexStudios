@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Shield, AlertCircle, ArrowLeft, Search, Eye, X, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import PermissionMatrix from "@/components/settings/PermissionMatrix";
+import EntityAccessMatrix from "@/components/settings/EntityAccessMatrix";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -644,6 +645,7 @@ export default function RolesSecurityPanel() {
     { key: "matrix", label: "Access Matrix" },
     { key: "overrides", label: "Overrides" },
     { key: "blocked", label: "Blocked UX" },
+    { key: "entity-access", label: "Entity Access" },
   ];
 
   return (
@@ -689,6 +691,7 @@ export default function RolesSecurityPanel() {
       {mode === "matrix" && <MatrixMode />}
       {mode === "overrides" && <PermissionMatrix />}
       {mode === "blocked" && <BlockedUXMode />}
+      {mode === "entity-access" && <EntityAccessMatrix />}
 
       {/* Platform note */}
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex gap-3">

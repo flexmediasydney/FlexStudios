@@ -1,4 +1,6 @@
 import { useState, useMemo } from "react";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useRoleMappings } from "@/components/hooks/useRoleMappings";
 import { api } from "@/api/supabaseClient";
@@ -249,7 +251,7 @@ function RoleEditor({ roleDef, entityRow, onSaved }) {
   );
 }
 
-function RoleSection({ roleDef, entityRow, products, packages, onSaved }) {
+function RoleSection({ roleDef, entityRow, products, packages, onSaved, canEdit }) {
   const [expanded, setExpanded] = useState(true);
   const [editing, setEditing] = useState(false);
   const Icon = ROLE_ICONS[roleDef.role] || Users;
@@ -340,6 +342,7 @@ function RoleSection({ roleDef, entityRow, products, packages, onSaved }) {
             editing ? "bg-primary/10 text-primary" : "hover:bg-muted/50 text-muted-foreground"
           )}
           title="Edit role mapping"
+          disabled={!canEdit}
         >
           <Pencil className="h-3.5 w-3.5" />
         </button>
@@ -392,6 +395,7 @@ function RoleSection({ roleDef, entityRow, products, packages, onSaved }) {
 }
 
 export default function RoleTaskMatrix() {
+  const { canEdit, canView } = useEntityAccess('role_matrix');
   const { data: products = [], loading: loadingProducts } = useEntityList("Product");
   const { data: packages = [], loading: loadingPackages } = useEntityList("Package");
   const { data: entityRows = [], loading: loadingMappings, refetch: refetchMappings } = useEntityList("RoleCategoryMapping", "order");
@@ -428,6 +432,8 @@ export default function RoleTaskMatrix() {
   if (loadingProducts || loadingPackages || loadingMappings) {
     return <div className="py-12 text-center text-sm text-muted-foreground">Loading...</div>;
   }
+
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
 
   return (
     <div className="space-y-6">
@@ -474,7 +480,7 @@ export default function RoleTaskMatrix() {
 
       {/* Role sections */}
       <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-widest">Role → Product → Task Mapping</h3>
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-widest">Role → Product → Task Mapping <AccessBadge entityType="role_matrix" /></h3>
         <p className="text-xs text-muted-foreground -mt-2">Click the <Pencil className="inline h-3 w-3" /> icon to edit which product categories trigger each role.</p>
         {mappings.map(roleDef => (
           <RoleSection
@@ -484,6 +490,7 @@ export default function RoleTaskMatrix() {
             products={products}
             packages={packages}
             onSaved={refetchMappings}
+            canEdit={canEdit}
           />
         ))}
       </div>

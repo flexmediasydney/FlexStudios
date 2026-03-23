@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useMutation } from "@tanstack/react-query";
@@ -25,6 +27,7 @@ function slugify(str) {
 }
 
 export default function ProjectTypesManagement() {
+  const { canEdit, canView } = useEntityAccess('project_types');
   const [showDialog, setShowDialog] = useState(false);
   const [editingType, setEditingType] = useState(null);
   const [deletingType, setDeletingType] = useState(null);
@@ -102,14 +105,16 @@ export default function ProjectTypesManagement() {
     saveMutation.mutate({ ...formData, name: formData.name.trim() });
   };
 
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-semibold text-base">Project Types</h3>
+          <h3 className="font-semibold text-base">Project Types <AccessBadge entityType="project_types" /></h3>
           <p className="text-sm text-muted-foreground">Define the types of projects your business handles. Each type has its own set of products and packages.</p>
         </div>
-        <Button onClick={() => handleOpen()} size="sm" className="gap-1.5">
+        <Button onClick={() => handleOpen()} size="sm" className="gap-1.5" disabled={!canEdit}>
           <Plus className="h-4 w-4" />
           Add Type
         </Button>
@@ -153,13 +158,13 @@ export default function ProjectTypesManagement() {
                     size="sm"
                     className="text-xs h-7 px-2 text-muted-foreground"
                     onClick={() => setDefaultMutation.mutate(type)}
-                    disabled={setDefaultMutation.isPending}
+                    disabled={!canEdit || setDefaultMutation.isPending}
                     title="Set as default"
                   >
                     <Star className="h-3 w-3" />
                   </Button>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => handleOpen(type)} className="h-7 w-7 p-0">
+                <Button variant="ghost" size="sm" onClick={() => handleOpen(type)} className="h-7 w-7 p-0" disabled={!canEdit}>
                   <Edit className="h-3.5 w-3.5" />
                 </Button>
                 <Button
@@ -167,6 +172,7 @@ export default function ProjectTypesManagement() {
                   size="sm"
                   onClick={() => setDeletingType(type)}
                   className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                  disabled={!canEdit}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>

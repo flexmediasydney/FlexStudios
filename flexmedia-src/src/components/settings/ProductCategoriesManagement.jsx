@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from '@/api/supabaseClient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -103,7 +105,7 @@ function CategoryForm({ projectType, initialData, onSubmit, onCancel, isLoading 
 
 
 
-function CategoryCard({ category, onEdit, onDelete, projectType }) {
+function CategoryCard({ category, onEdit, onDelete, projectType, disabled }) {
   return (
     <div className="border rounded-lg p-4 hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between mb-3">
@@ -128,6 +130,7 @@ function CategoryCard({ category, onEdit, onDelete, projectType }) {
           size="sm"
           onClick={() => onEdit(category)}
           className="gap-1.5"
+          disabled={disabled}
         >
           <Edit2 className="h-3.5 w-3.5" />
           Edit
@@ -137,6 +140,7 @@ function CategoryCard({ category, onEdit, onDelete, projectType }) {
           size="sm"
           onClick={() => onDelete(category)}
           className="gap-1.5 text-destructive hover:text-destructive"
+          disabled={disabled}
         >
           <Trash2 className="h-3.5 w-3.5" />
           Delete
@@ -147,6 +151,7 @@ function CategoryCard({ category, onEdit, onDelete, projectType }) {
 }
 
 export default function ProductCategoriesManagement() {
+  const { canEdit, canView } = useEntityAccess('product_categories');
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('');
   const [viewMode, setViewMode] = useState('grid');
@@ -244,6 +249,8 @@ export default function ProductCategoriesManagement() {
     return allCategories.filter(c => c.project_type_id === typeId).sort((a, b) => (a.order || 0) - (b.order || 0));
   }, [allCategories]);
 
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
+
   return (
     <div className="space-y-4">
       {notification && (
@@ -263,7 +270,7 @@ export default function ProductCategoriesManagement() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Product Categories</CardTitle>
+          <CardTitle>Product Categories <AccessBadge entityType="product_categories" /></CardTitle>
           <CardDescription>Manage categories for each project type</CardDescription>
         </CardHeader>
         <CardContent>
@@ -313,6 +320,7 @@ export default function ProductCategoriesManagement() {
                         variant="outline"
                         size="sm"
                         className="gap-1.5"
+                        disabled={!canEdit}
                       >
                         <Plus className="h-4 w-4" />
                         New Category
@@ -340,6 +348,7 @@ export default function ProductCategoriesManagement() {
                           key={category.id}
                           category={category}
                           projectType={type}
+                          disabled={!canEdit}
                           onEdit={(cat) => {
                             setEditingCategory(cat);
                             setExpandedFormType(type.id);
@@ -384,6 +393,7 @@ export default function ProductCategoriesManagement() {
                                       setExpandedFormType(type.id);
                                     }}
                                     className="h-7 px-2"
+                                    disabled={!canEdit}
                                   >
                                     <Edit2 className="h-3.5 w-3.5" />
                                   </Button>
@@ -392,6 +402,7 @@ export default function ProductCategoriesManagement() {
                                     size="sm"
                                     onClick={() => handleDeleteClick(category)}
                                     className="h-7 px-2 text-destructive hover:text-destructive"
+                                    disabled={!canEdit}
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </Button>

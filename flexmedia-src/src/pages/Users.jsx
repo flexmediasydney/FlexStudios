@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
 import React from "react";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
 import { supabase } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -29,6 +31,7 @@ const roleConfig = {
 const providerLabel = { email: "Email/Password", google: "Google", phone: "Phone OTP" };
 
 export default function UsersManagement() {
+  const { canEdit, canView } = useEntityAccess('users');
   const queryClient = useQueryClient();
   const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -150,15 +153,17 @@ export default function UsersManagement() {
 
   // ─── Render ─────────────────────────────────────────────────────────────
 
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
+          <h1 className="text-3xl font-bold tracking-tight">User Management <AccessBadge entityType="users" /></h1>
           <p className="text-muted-foreground mt-1">Manage team members, access levels, and invite codes</p>
         </div>
-        <Button onClick={() => setShowInviteDialog(true)} className="gap-2">
+        <Button onClick={() => setShowInviteDialog(true)} className="gap-2" disabled={!canEdit}>
           <Plus className="h-4 w-4" /> Invite User
         </Button>
       </div>
@@ -414,7 +419,7 @@ export default function UsersManagement() {
               <AlertDialogAction
                 onClick={() => deleteUserMutation.mutate(deletingUser.id)}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                disabled={deleteUserMutation.isPending}
+                disabled={!canEdit || deleteUserMutation.isPending}
               >
                 {deleteUserMutation.isPending ? "Deleting..." : "Delete"}
               </AlertDialogAction>

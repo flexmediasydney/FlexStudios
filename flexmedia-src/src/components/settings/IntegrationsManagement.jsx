@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -10,6 +12,7 @@ import { toast } from "sonner";
 import { Plug, CheckCircle, XCircle, Loader2 } from "lucide-react";
 
 export default function IntegrationsManagement() {
+  const { canEdit, canView } = useEntityAccess('tonomo_mappings');
   const queryClient = useQueryClient();
   const [tonomoConfig, setTonomoConfig] = useState({
     api_key: "",
@@ -83,6 +86,8 @@ export default function IntegrationsManagement() {
 
   const isConnected = savedConfig?.api_key && savedConfig?.api_endpoint;
 
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
+
   return (
     <div className="space-y-6">
       <Card>
@@ -93,7 +98,7 @@ export default function IntegrationsManagement() {
                 <Plug className="h-6 w-6 text-primary" />
               </div>
               <div>
-                <CardTitle>Tonomo Integration</CardTitle>
+                <CardTitle>Tonomo Integration <AccessBadge entityType="tonomo_mappings" /></CardTitle>
                 <CardDescription>Connect your Tonomo real estate account</CardDescription>
               </div>
             </div>
@@ -145,7 +150,7 @@ export default function IntegrationsManagement() {
             <Button
               variant="outline"
               onClick={handleTestConnection}
-              disabled={testing || !tonomoConfig.api_key || !tonomoConfig.api_endpoint}
+              disabled={!canEdit || testing || !tonomoConfig.api_key || !tonomoConfig.api_endpoint}
             >
               {testing ? (
                 <>
@@ -158,7 +163,7 @@ export default function IntegrationsManagement() {
             </Button>
             <Button
               onClick={handleSave}
-              disabled={saveMutation.isPending || !tonomoConfig.api_key || !tonomoConfig.api_endpoint}
+              disabled={!canEdit || saveMutation.isPending || !tonomoConfig.api_key || !tonomoConfig.api_endpoint}
             >
               {saveMutation.isPending ? "Saving..." : "Save Configuration"}
             </Button>

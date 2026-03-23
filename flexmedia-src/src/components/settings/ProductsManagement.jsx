@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -42,6 +44,7 @@ function getChangedFields(oldData, newData) {
 }
 
 export default function ProductsManagement() {
+  const { canEdit, canView } = useEntityAccess('products');
   const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
@@ -187,11 +190,13 @@ export default function ProductsManagement() {
     return matchesSearch && matchesType;
   });
 
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
+
   return (
     <div className="space-y-6">
       <Tabs defaultValue="products">
         <TabsList>
-          <TabsTrigger value="products">Products</TabsTrigger>
+          <TabsTrigger value="products">Products <AccessBadge entityType="products" /></TabsTrigger>
           <TabsTrigger value="hierarchy">
             <GitBranch className="h-4 w-4 mr-1.5" />
             Hierarchy
@@ -255,7 +260,7 @@ export default function ProductsManagement() {
                   <Trello className="h-4 w-4" />
                 </Button>
               </div>
-              <Button onClick={() => handleOpen()} className="gap-2">
+              <Button onClick={() => handleOpen()} className="gap-2" disabled={!canEdit}>
                 <Plus className="h-4 w-4" />
                 Add Product
               </Button>
@@ -362,10 +367,10 @@ export default function ProductsManagement() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-1 justify-end">
-                              <Button variant="ghost" size="sm" onClick={() => handleOpen(product)}>
+                              <Button variant="ghost" size="sm" onClick={() => handleOpen(product)} disabled={!canEdit}>
                                 <Edit className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="sm" onClick={() => setDeletingProduct(product)} className="text-destructive hover:text-destructive">
+                              <Button variant="ghost" size="sm" onClick={() => setDeletingProduct(product)} className="text-destructive hover:text-destructive" disabled={!canEdit}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>

@@ -1,4 +1,6 @@
 import { useState, useMemo } from "react";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Edit, Trash2, Users, Search } from "lucide-react";
@@ -14,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "sonner";
 
 export default function InternalTeamsManagement() {
+  const { canEdit, canView } = useEntityAccess('internal_teams');
   const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
@@ -137,14 +140,16 @@ export default function InternalTeamsManagement() {
     totalMembers: users.filter(u => u.internal_team_id).length,
   }), [teams, users]);
 
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-bold">Internal Teams</h2>
+          <h2 className="text-2xl font-bold">Internal Teams <AccessBadge entityType="internal_teams" /></h2>
           <p className="text-muted-foreground">Manage your internal teams and members</p>
         </div>
-        <Button onClick={() => handleOpen()} className="gap-2">
+        <Button onClick={() => handleOpen()} className="gap-2" disabled={!canEdit}>
           <Plus className="h-4 w-4" />
           Add Team
         </Button>
@@ -253,7 +258,7 @@ export default function InternalTeamsManagement() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => handleOpen(team)} title="Edit team">
+                        <Button variant="ghost" size="sm" onClick={() => handleOpen(team)} title="Edit team" disabled={!canEdit}>
                           <Edit className="h-4 w-4" />
                         </Button>
                         <Button
@@ -262,6 +267,7 @@ export default function InternalTeamsManagement() {
                           onClick={() => setDeletingTeam(team)}
                           className="text-destructive hover:text-destructive hover:bg-destructive/10"
                           title="Delete team"
+                          disabled={!canEdit}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -363,7 +369,7 @@ export default function InternalTeamsManagement() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => deleteMutation.mutate(deletingTeam.id)} className="bg-destructive text-destructive-foreground">
+            <AlertDialogAction onClick={() => deleteMutation.mutate(deletingTeam.id)} className="bg-destructive text-destructive-foreground" disabled={!canEdit}>
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>

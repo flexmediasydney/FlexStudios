@@ -62,12 +62,16 @@ function getChangedFields(oldData, newData) {
 }
 
 import { usePermissions } from '@/components/auth/PermissionGuard';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import AccessBadge from '@/components/auth/AccessBadge';
 
 export default function PackagesPage() {
   const { canAccessSettings } = usePermissions();
+  const { canEdit, canView } = useEntityAccess('packages');
   if (!canAccessSettings) {
     return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
   }
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
   const [showDialog, setShowDialog] = useState(false);
   const [editingPackage, setEditingPackage] = useState(null);
   const [deletingPackage, setDeletingPackage] = useState(null);
@@ -218,7 +222,7 @@ export default function PackagesPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Packages</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Packages <AccessBadge entityType="packages" /></h1>
         <p className="text-muted-foreground mt-1">Manage product bundles with tier variants</p>
       </div>
 
@@ -284,7 +288,7 @@ export default function PackagesPage() {
                 <Trello className="h-4 w-4" />
               </Button>
             </div>
-            <Button onClick={() => handleOpen()} className="gap-2">
+            <Button onClick={() => handleOpen()} className="gap-2" disabled={!canEdit}>
               <Plus className="h-4 w-4" />
               Add Package
             </Button>
@@ -361,10 +365,10 @@ export default function PackagesPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-1 justify-end">
-                              <Button variant="ghost" size="sm" onClick={() => handleOpen(pkg)}>
+                              <Button variant="ghost" size="sm" onClick={() => handleOpen(pkg)} disabled={!canEdit}>
                                 <Edit className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="sm" onClick={() => setDeletingPackage(pkg)} className="text-destructive hover:text-destructive">
+                              <Button variant="ghost" size="sm" onClick={() => setDeletingPackage(pkg)} className="text-destructive hover:text-destructive" disabled={!canEdit}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
