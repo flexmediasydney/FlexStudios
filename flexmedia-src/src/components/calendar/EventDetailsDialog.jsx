@@ -56,6 +56,11 @@ export default function EventDetailsDialog({
   const [markingDone, setMarkingDone] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Bug fix: Move useCurrentUser to top of component so currentUserId is
+  // available in handleSubmit (was defined after handleSubmit, causing undefined)
+  const { data: currentUser } = useCurrentUser();
+  const currentUserId = currentUser?.id;
+
   const { data: projects = [] } = useQuery({
     queryKey: ["projects-for-cal"],
     queryFn: () => api.entities.Project.list("-created_date", 200),
@@ -168,11 +173,17 @@ export default function EventDetailsDialog({
        };
 
       let savedId = event?.id;
-      if (event?.id) {
-        await api.entities.CalendarEvent.update(event.id, payload);
-      } else {
-        const created = await api.entities.CalendarEvent.create(payload);
-        savedId = created?.id;
+      try {
+        if (event?.id) {
+          await api.entities.CalendarEvent.update(event.id, payload);
+        } else {
+          const created = await api.entities.CalendarEvent.create(payload);
+          savedId = created?.id;
+        }
+      } catch (saveErr) {
+        // Bug fix: show error toast and keep dialog open on save failure
+        toast.error('Failed to save event: ' + (saveErr?.message || 'Unknown error'));
+        return;
       }
 
       // Push to Google Calendar if this is a native FlexStudios event
@@ -284,6 +295,9 @@ export default function EventDetailsDialog({
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
+    // Bug fix: also invalidate "calendar-events-team" which is the actual query key
+    // used by the Calendar page — without this, the calendar view never refreshes
+    queryClient.invalidateQueries({ queryKey: ["calendar-events-team"] });
     queryClient.invalidateQueries({ queryKey: ["entity-activities"] });
   };
 
@@ -347,9 +361,6 @@ export default function EventDetailsDialog({
       setRescheduling(false);
     }
   };
-
-  const { data: currentUser } = useCurrentUser();
-  const currentUserId = currentUser?.id;
 
   const actType = getActivityType(formData.activity_type);
   const eventSource = getEventSource(event);

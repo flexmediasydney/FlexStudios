@@ -59,7 +59,7 @@ const initialFormData = {
   is_active: true
 };
 
-export default function ProductFormDialog({ open, onClose, product, onSave, presetTypeId }) {
+export default function ProductFormDialog({ open, onClose, product, onSave, isSaving = false, presetTypeId }) {
    const [formData, setFormData] = useState(initialFormData);
    const [pendingTypeChange, setPendingTypeChange] = useState(null);
    const { data: projectTypes = [], isLoading: projectTypesLoading } = useEntityList("ProjectType", "order");
@@ -226,12 +226,12 @@ export default function ProductFormDialog({ open, onClose, product, onSave, pres
       }
     }
 
-    // Validate category exists if assigned
+    // Validate category exists if assigned — check against dynamic categories from DB
     if (formData.category && formData.category.trim()) {
-      const validCategories = ['photography', 'video', 'drone', 'editing', 'virtual_staging', 'other', 'drones', 'floorplan'];
-      const categoryLower = formData.category.toLowerCase();
-      if (!validCategories.includes(categoryLower) &&
-          !productCategories.find(c => c?.name?.toLowerCase() === categoryLower && c.is_active !== false)) {
+      const categoryLower = formData.category.toLowerCase().trim();
+      const matchesStaticFallback = ['photography', 'video', 'drone', 'editing', 'virtual_staging', 'other', 'drones', 'floorplan'].includes(categoryLower);
+      const matchesDynamic = productCategories.some(c => c?.name?.toLowerCase().trim() === categoryLower && c.is_active !== false);
+      if (!matchesStaticFallback && !matchesDynamic) {
         toast.error(`Category "${formData.category}" is no longer valid. Please select another category.`);
         return;
       }
@@ -400,14 +400,13 @@ export default function ProductFormDialog({ open, onClose, product, onSave, pres
              </div>
 
              <div>
-               <Label htmlFor="name" className={`text-xs font-medium ${formData.is_active ? "text-muted-foreground" : "text-muted-foreground/50"}`}>Service Name *</Label>
+               <Label htmlFor="name" className="text-xs font-medium text-muted-foreground">Service Name *</Label>
                <Input
                  id="name"
-                 disabled={!formData.is_active}
                  value={formData.name || ""}
                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
                  placeholder="e.g. +1 Rental Image"
-                 className={`mt-2 ${!formData.is_active ? "bg-muted/50 cursor-not-allowed" : ""}`}
+                 className="mt-2"
                />
              </div>
 
@@ -921,9 +920,9 @@ export default function ProductFormDialog({ open, onClose, product, onSave, pres
 
             {/* Footer */}
             <div className="flex justify-end gap-2 pt-6 border-t mt-6">
-              <Button variant="outline" onClick={onClose}>Cancel</Button>
-              <Button onClick={handleSubmit}>
-                {product ? "Update Service" : "Create Service"}
+              <Button variant="outline" onClick={onClose} disabled={isSaving}>Cancel</Button>
+              <Button onClick={handleSubmit} disabled={isSaving}>
+                {isSaving ? "Saving..." : product ? "Update Service" : "Create Service"}
               </Button>
             </div>
             </div>

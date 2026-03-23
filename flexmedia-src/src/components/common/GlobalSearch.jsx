@@ -93,6 +93,25 @@ export default function GlobalSearch({ open, onClose }) {
   // Reset selected index when query changes
   useEffect(() => { setSelectedIndex(0); }, [query]);
 
+  // Keyboard navigation: arrow keys + Enter to select from flat result list
+  useEffect(() => {
+    if (!open || flatResults.length === 0) return;
+    const handler = (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.min(prev + 1, flatResults.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter' && flatResults[selectedIndex]) {
+        e.preventDefault();
+        navigateToResult(flatResults[selectedIndex]);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, flatResults, selectedIndex, navigateToResult]);
+
   // ── Search results ───────────────────────────────────────────────────────
   const q = query.trim().toLowerCase();
 

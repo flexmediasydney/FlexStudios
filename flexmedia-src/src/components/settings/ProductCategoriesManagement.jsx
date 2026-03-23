@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AlertCircle, Plus, Trash2, CheckCircle2, AlertTriangle, Loader2, Copy, Edit2, Eye, EyeOff, ArrowUp, ArrowDown, Grid3x3, Table as TableIcon } from 'lucide-react';
+import { toast } from 'sonner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import DeleteConfirmationDialogComponent from '../common/DeleteConfirmationDialog';
@@ -19,6 +20,12 @@ const CATEGORY_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', 
 function CategoryForm({ projectType, initialData, onSubmit, onCancel, isLoading }) {
   const [formData, setFormData] = useState(initialData || { name: '', icon: '📷', color: '#3b82f6', is_active: true });
   const [errors, setErrors] = useState({});
+
+  // Re-sync form when initialData changes (e.g. switching from editing one category to another)
+  useEffect(() => {
+    setFormData(initialData || { name: '', icon: '📷', color: '#3b82f6', is_active: true });
+    setErrors({});
+  }, [initialData?.id]);
 
   const validate = () => {
     const newErrors = {};
@@ -158,6 +165,7 @@ export default function ProductCategoriesManagement() {
   const [expandedFormType, setExpandedFormType] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
   const [deleteDialog, setDeleteDialog] = useState({ open: false, category: null, impact: null });
+  // notification state kept for backward compat but replaced by toast
   const [notification, setNotification] = useState(null);
 
   const { data: projectTypes = [] } = useQuery({
@@ -221,8 +229,11 @@ export default function ProductCategoriesManagement() {
   });
 
   const showNotification = useCallback((type, message) => {
-    setNotification({ type, message });
-    setTimeout(() => setNotification(null), 4000);
+    if (type === 'success') {
+      toast.success(message);
+    } else {
+      toast.error(message);
+    }
   }, []);
 
   const handleDeleteClick = async (category) => {
@@ -253,21 +264,6 @@ export default function ProductCategoriesManagement() {
 
   return (
     <div className="space-y-4">
-      {notification && (
-        <div className={`p-3 rounded-lg flex items-center gap-2 text-sm animate-in fade-in slide-in-from-top-2 ${
-          notification.type === 'success'
-            ? 'bg-green-50 text-green-900 border border-green-200'
-            : 'bg-red-50 text-red-900 border border-red-200'
-        }`}>
-          {notification.type === 'success' ? (
-            <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-          ) : (
-            <AlertCircle className="h-4 w-4 flex-shrink-0" />
-          )}
-          {notification.message}
-        </div>
-      )}
-
       <Card>
         <CardHeader>
           <CardTitle>Product Categories <AccessBadge entityType="product_categories" /></CardTitle>

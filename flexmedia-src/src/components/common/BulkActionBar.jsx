@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
  * loading: boolean
  */
 export default function BulkActionBar({ selectedCount = 0, actions = [], onClear, loading = false }) {
-  if (selectedCount === 0) return null;
+  if (selectedCount === 0 || actions.length === 0) return null;
 
   return (
     <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/20 rounded-lg mb-3 animate-in fade-in slide-in-from-top-2">

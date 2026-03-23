@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useMutation } from "@tanstack/react-query";
 import { Plus, Edit, Trash2, Star, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,7 @@ export default function ProjectTypesManagement() {
       return api.entities.ProjectType.create(data);
     },
     onSuccess: () => {
+      refetchEntityList("ProjectType");
       toast.success(editingType ? "Project type updated" : "Project type created");
       handleClose();
     },
@@ -58,6 +59,7 @@ export default function ProjectTypesManagement() {
   const deleteMutation = useMutation({
     mutationFn: (type) => api.entities.ProjectType.delete(type.id),
     onSuccess: () => {
+      refetchEntityList("ProjectType");
       toast.success(`"${deletingType?.name}" deleted`);
       setDeletingType(null);
     },
@@ -70,7 +72,7 @@ export default function ProjectTypesManagement() {
       await Promise.all(others.map(t => api.entities.ProjectType.update(t.id, { is_default: false })));
       return api.entities.ProjectType.update(type.id, { is_default: true });
     },
-    onSuccess: () => toast.success("Default updated"),
+    onSuccess: () => { refetchEntityList("ProjectType"); toast.success("Default updated"); },
     onError: (err) => toast.error(err?.message || 'Failed to set default project type'),
   });
 

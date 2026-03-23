@@ -124,6 +124,35 @@ function Section({ title, badge, children, defaultOpen = true }) {
   );
 }
 
+function InlineName({ value, field, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  const inputRef = useRef(null);
+
+  useEffect(() => { setDraft(value || ''); }, [value]);
+  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+
+  const save = () => {
+    setEditing(false);
+    if (draft.trim() && draft !== (value || '')) onSave(field, draft.trim());
+  };
+
+  if (editing) {
+    return (
+      <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)}
+        onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+        className="text-lg font-bold w-full border-b-2 border-primary bg-transparent outline-none py-0.5 px-0" />
+    );
+  }
+
+  return (
+    <h2 className="text-lg font-bold cursor-pointer hover:text-primary transition-colors leading-tight"
+      onClick={() => setEditing(true)} title="Click to edit name">
+      {value || 'Unnamed'}
+    </h2>
+  );
+}
+
 function InlineField({ label, value, field, onSave, type = 'text', options, placeholder, icon: Icon, viewRender }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || '');
@@ -141,7 +170,12 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
       return (
         <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
           {label && <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1">{Icon && <Icon className="h-3 w-3" />} {label}</label>}
-          <select ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
+          <select ref={inputRef} value={draft} onChange={e => {
+              const val = e.target.value;
+              setDraft(val);
+              setEditing(false);
+              if (val !== (value || '')) onSave(field, val);
+            }} onBlur={save}
             className="flex-1 text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
             {options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
           </select>
@@ -450,6 +484,9 @@ export default function TeamDetails() {
   const wonProjects = useMemo(() => projects.filter(p => p.outcome === 'won'), [projects]);
   const totalRev = useMemo(() => wonProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0), [wonProjects]);
 
+  // Only count root notes (not replies) for the badge
+  const rootNoteCount = useMemo(() => orgNotes?.filter(n => !n.parent_note_id).length || 0, [orgNotes]);
+
   const membersByState = useMemo(() => {
     const states = ['Active', 'Prospecting', 'Dormant', 'Do Not Contact'];
     const grouped = {};
@@ -462,9 +499,10 @@ export default function TeamDetails() {
   const handleDelete = async () => {
     try {
       await api.entities.Team.delete(teamId);
+      toast.success('Team deleted');
       navigate(createPageUrl('Teams'));
-    } catch {
-      // error handled by UI
+    } catch (err) {
+      toast.error(err?.message || 'Failed to delete team');
     }
   };
 
@@ -614,7 +652,7 @@ export default function TeamDetails() {
                 </span>
               </div>
               <div className="flex-1 min-w-0">
-                <h2 className="text-lg font-bold leading-tight">{team.name || 'Unnamed'}</h2>
+                <InlineName value={team.name} field="name" onSave={handleFieldSave} />
                 {agency && (
                   <Link
                     to={createPageUrl(`OrgDetails?id=${agency.id}`)}
@@ -775,9 +813,9 @@ export default function TeamDetails() {
               >
                 <tab.icon className="h-4 w-4" />
                 {tab.label}
-                {tab.id === 'notes' && orgNotes.length > 0 && (
+                {tab.id === 'notes' && rootNoteCount > 0 && (
                   <span className="bg-primary/10 text-primary text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1">
-                    {orgNotes.length}
+                    {rootNoteCount}
                   </span>
                 )}
               </button>

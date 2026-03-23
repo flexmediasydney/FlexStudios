@@ -70,7 +70,8 @@ export default function NotificationsPage() {
       .filter(n => {
         if (!search.trim()) return true;
         const q = search.toLowerCase();
-        return (n.title + n.message + n.project_name).toLowerCase().includes(q);
+        // Bug fix: guard against null fields (null + string = "null" giving false matches)
+        return ((n.title || '') + ' ' + (n.message || '') + ' ' + (n.project_name || '')).toLowerCase().includes(q);
       });
   }, [notifications, tab, readFilter, search]);
 

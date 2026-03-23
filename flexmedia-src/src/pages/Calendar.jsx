@@ -104,10 +104,19 @@ function CalendarSkeleton({ view }) {
 export default function CalendarPage() {
   const { isContractor, user: permUser } = usePermissions();
   
-  const [view, setView] = useState(() => {
+  const [view, setViewRaw] = useState(() => {
+    // Persist calendar view across navigation
+    try {
+      const saved = localStorage.getItem('flex-calendar-view');
+      if (saved && VIEWS.includes(saved)) return saved;
+    } catch { /* ignore */ }
     if (typeof window !== 'undefined' && window.innerWidth < 768) return 'day';
     return 'week';
   });
+  const setView = useCallback((v) => {
+    setViewRaw(v);
+    try { localStorage.setItem('flex-calendar-view', v); } catch { /* ignore */ }
+  }, []);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [filterType, setFilterType] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");

@@ -352,8 +352,10 @@ export default function InternalTeamsManagement() {
               <Label htmlFor="is_active">Active</Label>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
-              <Button type="submit">{editingTeam ? "Update" : "Create"}</Button>
+              <Button type="button" variant="outline" onClick={handleClose} disabled={saveMutation.isPending}>Cancel</Button>
+              <Button type="submit" disabled={saveMutation.isPending}>
+                {saveMutation.isPending ? "Saving..." : editingTeam ? "Update" : "Create"}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -369,8 +371,8 @@ export default function InternalTeamsManagement() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => deleteMutation.mutate(deletingTeam.id)} className="bg-destructive text-destructive-foreground" disabled={!canEdit}>
-              Delete
+            <AlertDialogAction onClick={() => deleteMutation.mutate(deletingTeam.id)} className="bg-destructive text-destructive-foreground" disabled={!canEdit || deleteMutation.isPending}>
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

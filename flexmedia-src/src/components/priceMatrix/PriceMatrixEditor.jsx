@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
@@ -22,17 +22,17 @@ export default function PriceMatrixEditor({ priceMatrix }) {
   const [localData, setLocalData] = useState(null);
   const [showActivity, setShowActivity] = useState(false);
   const [activeSection, setActiveSection] = useState("overrides"); // "overrides" | "summary"
-  const [lastSavedJson, setLastSavedJson] = useState(null);
+  const lastSavedJsonRef = useRef(null);
 
   useEffect(() => {
     const incomingJson = JSON.stringify(priceMatrix);
     setLocalData(prev => {
-      if (!prev) { setLastSavedJson(incomingJson); return priceMatrix; }
+      if (!prev) { lastSavedJsonRef.current = incomingJson; return priceMatrix; }
       // Only accept real-time updates if user has NO unsaved changes
       const localJson = JSON.stringify(prev);
-      const hasUnsavedChanges = lastSavedJson && localJson !== lastSavedJson;
+      const hasUnsavedChanges = lastSavedJsonRef.current && localJson !== lastSavedJsonRef.current;
       if (hasUnsavedChanges) return prev; // protect unsaved work
-      setLastSavedJson(incomingJson);
+      lastSavedJsonRef.current = incomingJson;
       return priceMatrix;
     });
   }, [priceMatrix]);
@@ -96,7 +96,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
     },
     onSuccess: async () => {
       toast.success("Pricing saved");
-      setLastSavedJson(JSON.stringify(localData));
+      lastSavedJsonRef.current = JSON.stringify(localData);
       await refetchEntityList("PriceMatrix");
       refetchEntityList("PriceMatrixAuditLog");
     },

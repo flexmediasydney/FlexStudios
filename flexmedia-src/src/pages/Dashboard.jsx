@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useEntityList } from "@/components/hooks/useEntityData";
+import { useQueryClient } from "@tanstack/react-query";
 import { Camera, Users, Calendar, DollarSign, Plus, ArrowRight, TrendingUp, CheckCircle2, Clock, AlertCircle, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,7 @@ export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);
   const { isContractor, canAccessProject } = usePermissions();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -184,6 +186,13 @@ export default function Dashboard() {
     setShowProjectForm(false);
   }, []);
 
+  const handleProjectSaved = useCallback(() => {
+    setShowProjectForm(false);
+    // Invalidate all entity caches so KPI cards, charts, and activity feeds refresh
+    queryClient.invalidateQueries({ queryKey: ["entity-list"] });
+    queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
+  }, [queryClient]);
+
   // Executive-level analytics - using the existing analytics data
   const executiveMetrics = useMemo(() => {
     const now = new Date();
@@ -231,15 +240,15 @@ export default function Dashboard() {
       completionRate: parseFloat(completionRate),
       completionTrend: parseFloat(completionTrend),
       averageValue,
-      valueGrowth: 5.2,
+      valueGrowth: 0, // Bug fix: was hardcoded 5.2, misleading users with fake data
       deliverySpeed,
-      speedTrend: -1,
-      clientSatisfaction: 92,
-      satisfactionTrend: 3,
+      speedTrend: 0, // Bug fix: was hardcoded -1, misleading users with fake data
+      clientSatisfaction: 0, // Bug fix: was hardcoded 92, not connected to real data
+      satisfactionTrend: 0, // Bug fix: was hardcoded 3
       teamUtilization,
-      utilizationTrend: 2,
+      utilizationTrend: 0, // Bug fix: was hardcoded 2
       overdueItems,
-      overdueTrend: -2
+      overdueTrend: 0 // Bug fix: was hardcoded -2
     };
   }, [projects, allTasks, allTimeLogs]);
 
@@ -716,7 +725,7 @@ export default function Dashboard() {
         <ProjectForm
           open={showProjectForm}
           onClose={handleCloseProjectForm}
-          onSave={handleCloseProjectForm}
+          onSave={handleProjectSaved}
         />
       )}
     </div>

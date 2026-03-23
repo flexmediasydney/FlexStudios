@@ -370,7 +370,7 @@ export default function EmailListRow({
 
       {/* Visibility — clickable toggle */}
       {columns.some(c => c.id === 'visibility') && (() => {
-        const isShared = thread.messages[0]?.visibility === 'shared';
+        // Uses outer-scope isShared (line ~166) — no redeclaration needed
         return (
           <div className="flex-shrink-0 w-8 flex items-center justify-center">
             <TooltipProvider delayDuration={400}>

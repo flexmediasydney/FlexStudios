@@ -281,7 +281,6 @@ export default function EmailComposeDialog({
   const [linkedProject, setLinkedProject] = useState(defaultProjectId || projectId || "");
   const [linkedProjectTitle, setLinkedProjectTitle] = useState(defaultProjectTitle || "");
   const [isPrivate, setIsPrivate] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
   const [selectedSignatureId, setSelectedSignatureId] = useState(null);
 
   // Fetch user signatures for selector
@@ -475,8 +474,13 @@ export default function EmailComposeDialog({
       setBcc("");
       setAttachments([]);
       setLinkedProject("");
-      onSent?.();
-      onClose();
+      // Call onSent if provided (handles close for reply/forward), else fall back to onClose.
+      // Avoids double-fire when callers pass onClose as onSent (e.g., EmailComposeReply).
+      if (onSent) {
+        onSent();
+      } else {
+        onClose();
+      }
     },
     onError: (error) => {
       toast.error(error.message || "Failed to send email");
@@ -1027,7 +1031,7 @@ export default function EmailComposeDialog({
                       if (sendMutation.isPending || uploadProgress === 'uploading') return;
                       sendMutation.mutate();
                     }}
-                    disabled={isLoading || sendMutation.isPending || uploadProgress === 'uploading' || !recipients.trim() || !subject.trim()}
+                    disabled={sendMutation.isPending || uploadProgress === 'uploading' || !recipients.trim() || !subject.trim()}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-md hover:shadow-lg active:scale-95 transition-all rounded-r-none"
                     size="lg"
                   >
@@ -1042,7 +1046,7 @@ export default function EmailComposeDialog({
                         variant="default"
                         size="lg"
                         className="bg-blue-600 hover:bg-blue-700 text-white rounded-l-none border-l border-blue-500 px-2"
-                        disabled={isLoading || sendMutation.isPending || !recipients.trim() || !subject.trim()}
+                        disabled={sendMutation.isPending || !recipients.trim() || !subject.trim()}
                       >
                         <Clock className="h-4 w-4" />
                       </Button>

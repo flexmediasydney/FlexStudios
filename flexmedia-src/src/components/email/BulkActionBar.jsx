@@ -301,13 +301,17 @@ export default function BulkActionBar({
                     allMessages.push({ id: m.id, labels: updatedLabels });
                   });
                 });
+                setIsProcessing(true);
                 Promise.all(
                   allMessages.map(({ id, labels }) => api.entities.EmailMessage.update(id, { labels }))
                 ).then(() => {
                   toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
+                  setSelectedMessages(new Set());
                   onRefetch();
                 }).catch(() => {
                   toast.error("Failed to update labels");
+                }).finally(() => {
+                  setIsProcessing(false);
                 });
               }}
               isAdmin={user?.role === "master_admin"}
@@ -344,10 +348,6 @@ export default function BulkActionBar({
           size="sm"
           className="gap-1.5 h-8 text-xs"
           onClick={() => {
-            if (filterView === 'deleted') {
-              toast.error("Cannot permanently delete from deleted folder");
-              return;
-            }
             const isConfirmed = confirm(`Delete ${selectedCount} email${selectedCount !== 1 ? 's' : ''}?`);
             if (!isConfirmed) return;
             setIsProcessing(true);
@@ -370,8 +370,8 @@ export default function BulkActionBar({
             }).catch(() => toast.error("Failed to delete"))
             .finally(() => setIsProcessing(false));
           }}
-          disabled={isProcessing}
-          title="Move to deleted folder"
+          disabled={isProcessing || filterView === 'deleted'}
+          title={filterView === 'deleted' ? "Already in deleted folder" : "Move to deleted folder"}
         >
           <Trash2 className={`h-3.5 w-3.5 ${isProcessing ? 'animate-pulse' : ''}`} />
           Delete ({selectedCount})

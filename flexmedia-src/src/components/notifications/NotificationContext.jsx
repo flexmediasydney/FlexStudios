@@ -50,8 +50,8 @@ export function NotificationProvider({ children }) {
         if (event.data.is_dismissed) return;
 
         setNotifications(prev => {
-          // Avoid duplicates
-          if (prev.some(n => n.id === event.id)) return prev;
+          // Bug fix: check event.data.id (notification ID), not event.id (supabase event ID)
+          if (prev.some(n => n.id === event.data.id)) return prev;
           const updated = [event.data, ...prev].slice(0, MAX_DISPLAY);
           return updated;
         });
@@ -62,17 +62,20 @@ export function NotificationProvider({ children }) {
 
         setNotifications(prev => {
           let updated;
+          // Bug fix: use event.data.id (notification ID), not event.id
           if (event.data.is_dismissed) {
-            updated = prev.filter(n => n.id !== event.id);
+            updated = prev.filter(n => n.id !== event.data.id);
           } else {
-            updated = prev.map(n => n.id === event.id ? event.data : n);
+            updated = prev.map(n => n.id === event.data.id ? event.data : n);
           }
           setUnreadCount(updated.filter(n => !n.is_read && !n.is_dismissed).length);
           return updated;
         });
       } else if (event.type === 'delete') {
         setNotifications(prev => {
-          const updated = prev.filter(n => n.id !== event.id);
+          // Bug fix: use event.data?.id with fallback to event.id for deletes
+          const deletedId = event.data?.id || event.id;
+          const updated = prev.filter(n => n.id !== deletedId);
           setUnreadCount(updated.filter(n => !n.is_read && !n.is_dismissed).length);
           return updated;
         });
@@ -126,15 +129,15 @@ export function NotificationProvider({ children }) {
   }, [notifications, fetchNotifications]);
 
   const dismiss = useCallback(async (notificationId) => {
-    let wasUnread = false;
+    // Bug fix: compute wasUnread synchronously from current state snapshot
+    // before mutating, avoiding the race condition with queueMicrotask
     setNotifications(prev => {
       const target = prev.find(n => n.id === notificationId);
-      if (target && !target.is_read) wasUnread = true;
+      const wasUnread = target && !target.is_read;
+      if (wasUnread) {
+        setUnreadCount(c => Math.max(0, c - 1));
+      }
       return prev.filter(n => n.id !== notificationId);
-    });
-    // Defer unreadCount update to next microtask so wasUnread is set
-    queueMicrotask(() => {
-      if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
     });
     try {
       await api.entities.Notification.update(notificationId, { is_dismissed: true });

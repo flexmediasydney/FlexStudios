@@ -165,14 +165,14 @@ export default function Organisations() {
     setBulkLoading(true);
     try {
       const ids = [...selectedIds];
-      await Promise.all(ids.map(id => api.update('Agency', id, { relationship_state: newState })));
-      toast.success(`Updated ${ids.length} organisation${ids.length > 1 ? 's' : ''} to ${newState}`);
+      await Promise.all(ids.map(id => api.entities.Agency.update(id, { relationship_state: newState })));
       refetchEntityList('Agency');
-      clearSelection();
+      toast.success(`Updated ${ids.length} organisation${ids.length > 1 ? 's' : ''} to ${newState}`);
     } catch (err) {
       console.error('Bulk state change failed:', err);
       toast.error('Failed to update organisations');
     } finally {
+      clearSelection();
       setBulkLoading(false);
     }
   };

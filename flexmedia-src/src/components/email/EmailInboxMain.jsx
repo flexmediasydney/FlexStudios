@@ -78,7 +78,6 @@ export default function EmailInboxMain() {
   const [linkProjectThread, setLinkProjectThread] = useState(null);
   const [sortBy, setSortBy] = useState('newest');
   const [showAttachmentsOnly, setShowAttachmentsOnly] = useState(false);
-  const [showReply, setShowReply] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [savedFilters, setSavedFilters] = useState(() => {
     try { return JSON.parse(localStorage.getItem('email-saved-filters') || '[]'); } catch { return []; }
@@ -109,6 +108,15 @@ export default function EmailInboxMain() {
     setSelectedMessages(new Set());
     setSelectedThread(null);
   }, [filterView]);
+
+  // Clear person/label/project-specific filters when switching account to avoid stale empty results
+  useEffect(() => {
+    setFilterFrom(null);
+    setFilterLabel(null);
+    setFilterProject(null);
+    setSelectedMessages(new Set());
+    setSelectedThread(null);
+  }, [accountFilter]);
 
   useEffect(() => {
     const key = `inbox-sidebar-scroll-${filterView}`;
@@ -649,8 +657,8 @@ export default function EmailInboxMain() {
   // Keyboard shortcuts (must be after filteredThreads is defined)
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Ignore if user is typing in an input or contenteditable (ReactQuill)
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      // Ignore if user is typing in an input, select, or contenteditable (ReactQuill)
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable) return;
       // Ignore if a dialog/modal is open (compose, etc.)
       if (showCompose) return;
 
@@ -743,20 +751,17 @@ export default function EmailInboxMain() {
          setShowCompose(true);
        }
 
-      // r or R = reply to selected/open thread
+      // r or R = reply — open thread (thread viewer handles its own reply shortcut)
        if ((e.key === 'r' || e.key === 'R') && !showCompose) {
          e.preventDefault();
-         if (selectedThread) {
-           setShowReply(true);
-         } else if (selectedMessages.size === 1) {
+         if (!selectedThread && selectedMessages.size === 1) {
            const threadId = Array.from(selectedMessages)[0];
            const thread = currentThreads.find(t => t.threadId === threadId);
            if (thread) {
              setSelectedThread(thread);
-             // Open reply after thread loads
-             setTimeout(() => setShowReply(true), 100);
            }
          }
+         // If already in thread viewer, the thread viewer's own keydown handler opens reply
        }
 
        // / = focus search bar

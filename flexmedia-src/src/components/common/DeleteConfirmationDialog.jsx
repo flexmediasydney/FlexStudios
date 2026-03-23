@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,14 @@ export default function DeleteConfirmationDialog({
   const [inputValue, setInputValue] = useState('');
   const [step, setStep] = useState('confirm');
   const isMatched = inputValue === itemName;
+
+  // Reset step and input when dialog opens/closes or item changes
+  useEffect(() => {
+    if (open) {
+      setStep('confirm');
+      setInputValue('');
+    }
+  }, [open, itemName]);
 
   const getRiskLevel = (impact) => {
     if (!impact || impact.totalAffected === 0) return 'low';

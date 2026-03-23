@@ -446,6 +446,7 @@ export default function ProductsManagement() {
         onClose={handleClose}
         product={editingProduct}
         onSave={handleSaveWithImpactCheck}
+        isSaving={saveMutation.isPending}
         presetTypeId={!editingProduct && filterTypeId ? filterTypeId : null}
       />
 

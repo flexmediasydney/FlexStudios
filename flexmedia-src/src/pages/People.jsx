@@ -115,7 +115,7 @@ export default function People() {
 
   // Smart filter counts
   const filterCounts = useMemo(() => ({
-    idle: agents.filter(a => { const lc = a.last_contacted_at; if (!lc) return false; return differenceInDays(new Date(), new Date(lc)) > 30; }).length,
+    idle: agents.filter(a => { const lc = a.last_contacted_at; if (!lc) return true; return differenceInDays(new Date(), new Date(lc)) > 30; }).length,
     at_risk: agents.filter(a => a.is_at_risk === true).length,
     active: agents.filter(a => a.relationship_state === 'Active').length,
     prospecting: agents.filter(a => a.relationship_state === 'Prospecting').length,
@@ -147,7 +147,7 @@ export default function People() {
   // Stage 2: smart filters + tag/org dropdowns
   const filtered = useMemo(() => {
     let result = searchFiltered;
-    if (activeFilters.has("idle")) result = result.filter(a => { const lc = a.last_contacted_at; return lc && differenceInDays(new Date(), new Date(lc)) > 30; });
+    if (activeFilters.has("idle")) result = result.filter(a => { const lc = a.last_contacted_at; return !lc || differenceInDays(new Date(), new Date(lc)) > 30; });
     if (activeFilters.has("at_risk")) result = result.filter(a => a.is_at_risk === true);
     if (activeFilters.has("active")) result = result.filter(a => a.relationship_state === "Active");
     if (activeFilters.has("prospecting")) result = result.filter(a => a.relationship_state === "Prospecting");
@@ -172,8 +172,8 @@ export default function People() {
     } catch {
       toast.error('Some updates failed');
     } finally {
-      clearSelection();
       setBulkLoading(false);
+      clearSelection();
     }
   };
 

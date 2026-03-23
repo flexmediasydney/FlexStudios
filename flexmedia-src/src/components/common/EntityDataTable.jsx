@@ -88,8 +88,8 @@ export default function EntityDataTable({
                     <input
                       type="checkbox"
                       className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
-                      checked={data.length > 0 && selectedIds?.size === data.length}
-                      ref={el => { if (el) el.indeterminate = selectedIds?.size > 0 && selectedIds.size < data.length; }}
+                      checked={sorted.length > 0 && selectedIds?.size === sorted.length}
+                      ref={el => { if (el) el.indeterminate = selectedIds?.size > 0 && selectedIds.size < sorted.length; }}
                       onChange={() => onToggleSelectAll?.()}
                     />
                   </th>

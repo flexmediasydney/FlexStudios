@@ -491,8 +491,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Ignore if typing in input/editor
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.contentEditable === 'true') return;
+      // Ignore if typing in input/editor/select
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.contentEditable === 'true') return;
       
       // Shift+R = Reply All
       if ((e.key === 'R') && e.shiftKey) {
@@ -1269,7 +1269,16 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                 account={account}
                 replyType={replyMode}
                 replyToMessage={replyToMessage}
-                onClose={() => { setReplyExpanded(false); setReplyToMessage(null); setQuickReplyBody(''); latestMessageRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
+                onClose={() => {
+                  setReplyExpanded(false);
+                  setReplyToMessage(null);
+                  setQuickReplyBody('');
+                  // Invalidate email queries so inbox list + thread data refresh immediately
+                  // (don't rely solely on real-time subscription which may have latency)
+                  queryClient.invalidateQueries({ queryKey: ["email-messages"] });
+                  queryClient.invalidateQueries({ queryKey: ["email-thread"] });
+                  latestMessageRef.current?.scrollIntoView({ behavior: 'smooth' });
+                }}
                 onReplyMode={() => {}}
                 emailAccounts={emailAccounts}
                 defaultBodyPrefix={quickReplyBody}
@@ -1365,7 +1374,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           onSent={() => {
             setShowForward(false);
             setReplyToMessage(null);
-            toast.success('Email forwarded');
+            // Toast already shown by EmailComposeDialog.sendMutation.onSuccess — no duplicate needed
           }}
         />
       )}

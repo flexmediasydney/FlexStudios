@@ -68,10 +68,6 @@ import AccessBadge from '@/components/auth/AccessBadge';
 export default function PackagesPage() {
   const { canAccessSettings } = usePermissions();
   const { canEdit, canView } = useEntityAccess('packages');
-  if (!canAccessSettings) {
-    return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
-  }
-  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
   const [showDialog, setShowDialog] = useState(false);
   const [editingPackage, setEditingPackage] = useState(null);
   const [deletingPackage, setDeletingPackage] = useState(null);
@@ -200,6 +196,12 @@ export default function PackagesPage() {
     },
     onError: (e) => toast.error(e.message || "Failed to delete")
   });
+
+  // Access guards - must be AFTER all hooks to satisfy React Rules of Hooks
+  if (!canAccessSettings) {
+    return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
+  }
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
 
   const handleOpen = async (pkg = null) => {
     setEditingPackage(pkg);

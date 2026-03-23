@@ -76,7 +76,13 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
             <select
               ref={inputRef}
               value={draft}
-              onChange={e => setDraft(e.target.value)}
+              onChange={e => {
+                const val = e.target.value;
+                setDraft(val);
+                // Auto-save and close on selection (Pipedrive behavior)
+                setEditing(false);
+                if (val !== (value || '')) onSave(field, val);
+              }}
               onBlur={save}
               className="w-full text-sm border rounded px-2 py-0.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
             >
@@ -480,9 +486,10 @@ export default function PersonDetails() {
   const handleDelete = async () => {
     try {
       await api.entities.Agent.delete(agentId);
+      toast.success('Person deleted');
       navigate(createPageUrl('ClientAgents'));
-    } catch {
-      // error handled by UI
+    } catch (err) {
+      toast.error(err?.message || 'Failed to delete person');
     }
   };
 
