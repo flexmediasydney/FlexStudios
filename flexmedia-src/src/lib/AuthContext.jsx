@@ -113,27 +113,44 @@ export const AuthProvider = ({ children }) => {
     let cancelled = false;
 
     const init = async () => {
+      // Race getSession() against a 5-second timeout
+      // Web Locks can hang indefinitely if orphaned from closed tabs
+      let session = null;
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (cancelled) return;
+        const timeout = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 5000)
+        );
+        const result = await Promise.race([
+          supabase.auth.getSession(),
+          timeout,
+        ]);
+        session = result?.data?.session;
+      } catch (err) {
+        // getSession() threw (AbortError) or timed out — use localStorage fallback
+        console.warn('Auth getSession failed/timed out — using localStorage fallback');
+        const storedSession = getSessionFromStorage();
+        if (!cancelled && storedSession?.user) {
+          await fetchAppUser(storedSession.user, storedSession.access_token);
+          return;
+        }
+        // No stored session either — user needs to log in
+        if (!cancelled) setIsLoadingAuth(false);
+        return;
+      }
 
-        if (session?.user) {
-          await fetchAppUser(session.user, session.access_token);
+      if (cancelled) return;
+
+      if (session?.user) {
+        await fetchAppUser(session.user, session.access_token);
+      } else {
+        // No active session — check localStorage as last resort
+        // (session may exist but getSession returned null due to race)
+        const storedSession = getSessionFromStorage();
+        if (storedSession?.user) {
+          await fetchAppUser(storedSession.user, storedSession.access_token);
         } else {
           setIsLoadingAuth(false);
         }
-      } catch (err) {
-        // Web Locks AbortError — read session from localStorage and use direct REST
-        if (err?.name === 'AbortError') {
-          console.warn('Auth lock contention — using direct REST fallback');
-          const storedSession = getSessionFromStorage();
-          if (!cancelled && storedSession?.user) {
-            await fetchAppUser(storedSession.user, storedSession.access_token);
-            return;
-          }
-        }
-        console.error('Auth init error:', err);
-        if (!cancelled) setIsLoadingAuth(false);
       }
     };
 
