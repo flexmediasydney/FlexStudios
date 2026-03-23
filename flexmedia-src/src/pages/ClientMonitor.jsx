@@ -68,7 +68,14 @@ export default function ClientMonitor() {
               <h1 className="text-3xl font-bold text-slate-900">{selectedAgent.name}</h1>
               <p className="text-slate-600 text-sm">{selectedAgent.current_agency_name}</p>
             </div>
-            <Button variant="outline" onClick={() => setSelectedAgent(null)}>
+            <Button variant="outline" onClick={() => {
+              // BUG FIX: Reset refreshKey and close form when changing agent.
+              // Previously, stale refreshKey and open form persisted into the
+              // next agent selection.
+              setSelectedAgent(null);
+              setShowForm(false);
+              setRefreshKey(0);
+            }}>
               Change Agent
             </Button>
           </div>

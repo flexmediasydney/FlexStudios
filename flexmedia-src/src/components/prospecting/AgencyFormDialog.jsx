@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/api/supabaseClient';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -12,12 +12,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { AlertCircle } from 'lucide-react';
 
 export default function AgencyFormDialog({ open, onOpenChange, agency = null, onSuccess = null }) {
-  const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  
-  const [formData, setFormData] = useState({
+
+  const buildInitialFormData = () => ({
     name: agency?.name || '',
     relationship_state: agency?.relationship_state || 'Prospecting',
     email: agency?.email || '',
@@ -42,7 +41,19 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
     whatsapp_group_chat: agency?.whatsapp_group_chat || ''
   });
 
+  const [formData, setFormData] = useState(buildInitialFormData);
   const [errors, setErrors] = useState({});
+
+  // BUG FIX: Reset form state every time the dialog opens so stale data
+  // from a previous edit doesn't persist into a new create/edit.
+  useEffect(() => {
+    if (open) {
+      setFormData(buildInitialFormData());
+      setErrors({});
+      setError(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, agency?.id]);
 
   const validate = () => {
     const newErrors = {};
@@ -84,8 +95,10 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
         });
       }
 
-      await queryClient.invalidateQueries({ queryKey: ['agencies'] });
-      await queryClient.invalidateQueries({ queryKey: ['agents'] });
+      // BUG FIX: The Prospecting page uses useEntitiesData (custom cache), not
+      // react-query. Invalidating react-query keys was a no-op.
+      await refetchEntityList('Agency');
+      await refetchEntityList('InteractionLog');
       toast.success(agency ? 'Agency updated' : 'Agency created');
       onOpenChange(false);
       if (onSuccess) onSuccess();

@@ -137,10 +137,12 @@ function InlineName({ value, field, onSave }) {
     if (draft.trim() && draft !== (value || '')) onSave(field, draft.trim());
   };
 
+  const cancel = () => { setDraft(value || ''); setEditing(false); };
+
   if (editing) {
     return (
       <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)}
-        onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+        onBlur={save} onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); }}
         className="text-lg font-bold w-full border-b-2 border-primary bg-transparent outline-none py-0.5 px-0" />
     );
   }
@@ -159,6 +161,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
   const inputRef = useRef(null);
   useEffect(() => { setDraft(value || ''); }, [value]);
   useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+  const cancel = () => { setDraft(value || ''); setEditing(false); };
   const save = () => { setEditing(false); if (draft !== (value || '')) onSave(field, draft); };
 
   const displayValue = type === 'select' && options
@@ -175,8 +178,9 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
               setDraft(val);
               setEditing(false);
               if (val !== (value || '')) onSave(field, val);
-            }} onBlur={save}
+            }} onBlur={save} onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
             className="flex-1 text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
+            <option value="">-- Select --</option>
             {options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
           </select>
         </div>
@@ -207,6 +211,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
       <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
         <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">{label}</label>
         <textarea ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
+          onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
           rows={3} className="flex-1 text-sm border rounded px-2 py-1.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none" />
       </div>
     );
@@ -219,7 +224,8 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
       <div className="flex-1 min-w-0 flex items-start gap-1">
         {editing ? (
           <input ref={inputRef} type={type === 'date' ? 'date' : type === 'number' ? 'number' : 'text'}
-            value={draft} onChange={e => setDraft(e.target.value)} onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+            value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
+            onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); }}
             placeholder={placeholder} className="w-full text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
         ) : (
           <>
@@ -443,16 +449,24 @@ export default function TeamDetails() {
   const { data: agencies = [] } = useEntityList('Agency', 'name');
 
   const memberFilter = useCallback(a => a.current_team_id === teamId, [teamId]);
+  // Project filter: match projects where any assigned staff is a member of this team.
+  // Staff ID fields hold agent (person) IDs, not team IDs, so we compare against member IDs.
+  const memberIds = useMemo(() => new Set(members.map(m => m.id)), [members]);
   const projectFilter = useCallback(
-    p =>
-      p.project_owner_id === teamId ||
-      p.onsite_staff_1_id === teamId ||
-      p.onsite_staff_2_id === teamId ||
-      p.image_editor_id === teamId ||
-      p.video_editor_id === teamId ||
-      p.floorplan_editor_id === teamId ||
-      p.drone_editor_id === teamId,
-    [teamId]
+    p => {
+      if (memberIds.size === 0) return false;
+      return (
+        memberIds.has(p.agent_id) ||
+        memberIds.has(p.project_owner_id) ||
+        memberIds.has(p.onsite_staff_1_id) ||
+        memberIds.has(p.onsite_staff_2_id) ||
+        memberIds.has(p.image_editor_id) ||
+        memberIds.has(p.video_editor_id) ||
+        memberIds.has(p.floorplan_editor_id) ||
+        memberIds.has(p.drone_editor_id)
+      );
+    },
+    [memberIds]
   );
   const noteFilter = useCallback(e => e.team_id === teamId, [teamId]);
   const interactionFilter = useCallback(e => e.entity_type === 'Team' && e.entity_id === teamId, [teamId]);

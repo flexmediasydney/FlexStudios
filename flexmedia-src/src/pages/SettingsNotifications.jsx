@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Bell, Settings, History, ChevronDown, ChevronRight } from "lucide-react";
@@ -79,15 +79,22 @@ function MyPreferencesTab({ userId }) {
 
   const { data: digestData = [] } = useQuery({
     queryKey: ["notifDigest", userId],
-    queryFn: async () => {
-      const data = await api.entities.NotificationDigestSettings.list("-created_date", 10);
-      const mine = data.find(d => d.user_id === userId);
-      if (mine) setDigestSettings(mine);
-      return data;
-    },
+    queryFn: () => api.entities.NotificationDigestSettings.list("-created_date", 10),
     enabled: !!userId,
     staleTime: 60 * 1000,
   });
+
+  // Sync digest settings from server data on initial load only
+  const digestInitialized = useRef(false);
+  useEffect(() => {
+    if (digestData.length > 0 && !digestInitialized.current) {
+      const mine = digestData.find(d => d.user_id === userId);
+      if (mine) {
+        setDigestSettings(mine);
+        digestInitialized.current = true;
+      }
+    }
+  }, [digestData, userId]);
 
   const savePrefMutation = useMutation({
     mutationFn: async ({ type, category, enabled }) => {
@@ -134,15 +141,17 @@ function MyPreferencesTab({ userId }) {
     onError: (err) => toast.error(err?.message || 'Failed to save digest settings'),
   });
 
-  function getPref(type) {
-    const p = prefs.find(x => x.user_id === userId && x.notification_type === type);
-    return p?.in_app_enabled !== false;
-  }
-
   function getCategoryPref(category) {
     const p = prefs.find(
       x => x.user_id === userId && x.category === category && (!x.notification_type || x.notification_type === "*")
     );
+    return p?.in_app_enabled !== false;
+  }
+
+  function getPref(type, category) {
+    // If the parent category is disabled, individual type is effectively disabled
+    if (!getCategoryPref(category)) return false;
+    const p = prefs.find(x => x.user_id === userId && x.notification_type === type);
     return p?.in_app_enabled !== false;
   }
 
@@ -171,8 +180,9 @@ function MyPreferencesTab({ userId }) {
               <Switch
                 checked={digestSettings.sound_enabled}
                 onCheckedChange={v => {
-                  setDigestSettings(p => ({ ...p, sound_enabled: v }));
-                  saveDigestMutation.mutate({ ...digestSettings, sound_enabled: v });
+                  const updated = { ...digestSettings, sound_enabled: v };
+                  setDigestSettings(updated);
+                  saveDigestMutation.mutate(updated);
                 }}
               />
             </div>
@@ -184,8 +194,9 @@ function MyPreferencesTab({ userId }) {
               <Switch
                 checked={digestSettings.show_previews}
                 onCheckedChange={v => {
-                  setDigestSettings(p => ({ ...p, show_previews: v }));
-                  saveDigestMutation.mutate({ ...digestSettings, show_previews: v });
+                  const updated = { ...digestSettings, show_previews: v };
+                  setDigestSettings(updated);
+                  saveDigestMutation.mutate(updated);
                 }}
               />
             </div>
@@ -199,8 +210,9 @@ function MyPreferencesTab({ userId }) {
               <Switch
                 checked={digestSettings.quiet_hours_enabled}
                 onCheckedChange={v => {
-                  setDigestSettings(p => ({ ...p, quiet_hours_enabled: v }));
-                  saveDigestMutation.mutate({ ...digestSettings, quiet_hours_enabled: v });
+                  const updated = { ...digestSettings, quiet_hours_enabled: v };
+                  setDigestSettings(updated);
+                  saveDigestMutation.mutate(updated);
                 }}
               />
             </div>
@@ -212,8 +224,13 @@ function MyPreferencesTab({ userId }) {
                   type="time"
                   className="w-28 h-7 text-xs"
                   value={digestSettings.quiet_hours_start}
-                  onChange={e => setDigestSettings(p => ({ ...p, quiet_hours_start: e.target.value }))}
-                  onBlur={() => saveDigestMutation.mutate(digestSettings)}
+                  onChange={e => {
+                    const updated = { ...digestSettings, quiet_hours_start: e.target.value };
+                    setDigestSettings(updated);
+                  }}
+                  onBlur={e => {
+                    saveDigestMutation.mutate({ ...digestSettings, quiet_hours_start: e.target.value });
+                  }}
                 />
                 <Label htmlFor="quiet-hours-end" className="text-xs">to</Label>
                 <Input
@@ -221,8 +238,13 @@ function MyPreferencesTab({ userId }) {
                   type="time"
                   className="w-28 h-7 text-xs"
                   value={digestSettings.quiet_hours_end}
-                  onChange={e => setDigestSettings(p => ({ ...p, quiet_hours_end: e.target.value }))}
-                  onBlur={() => saveDigestMutation.mutate(digestSettings)}
+                  onChange={e => {
+                    const updated = { ...digestSettings, quiet_hours_end: e.target.value };
+                    setDigestSettings(updated);
+                  }}
+                  onBlur={e => {
+                    saveDigestMutation.mutate({ ...digestSettings, quiet_hours_end: e.target.value });
+                  }}
                 />
                 <span className="text-xs text-muted-foreground">(Sydney time)</span>
               </div>
@@ -271,11 +293,12 @@ function MyPreferencesTab({ userId }) {
                 {isExpanded && (
                   <div className="border-t divide-y">
                     {types.map(t => (
-                      <div key={t.type} className="flex items-center justify-between px-4 py-2.5 pl-12">
+                      <div key={t.type} className={`flex items-center justify-between px-4 py-2.5 pl-12 ${!catEnabled ? "opacity-50" : ""}`}>
                         <Label className="text-sm font-normal cursor-pointer">{t.label}</Label>
                         <Switch
-                          checked={getPref(t.type)}
+                          checked={getPref(t.type, category)}
                           onCheckedChange={v => savePrefMutation.mutate({ type: t.type, category, enabled: v })}
+                          disabled={!catEnabled}
                         />
                       </div>
                     ))}

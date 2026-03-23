@@ -8,6 +8,10 @@ import ProductsManagement from "@/components/settings/ProductsManagement";
 import PackagesManagement from "@/components/settings/PackagesManagement";
 import PriceMatrixManagement from "@/components/settings/PriceMatrixManagement";
 import DeliverySettings from "@/components/settings/DeliverySettings";
+import ProjectTypesManagement from "@/components/settings/ProjectTypesManagement";
+import ProductCategoriesManagement from "@/components/settings/ProductCategoriesManagement";
+import NoteTagsManagement from "@/components/settings/NoteTagsManagement";
+import ProjectRulebook from "@/components/projects/ProjectRulebook";
 import IntegrationsManagement from "@/components/settings/IntegrationsManagement";
 import InternalTeamsManagement from "@/components/settings/InternalTeamsManagement";
 
@@ -79,7 +83,30 @@ export default function Settings() {
           </TabsContent>
 
           <TabsContent value="organisation">
-            <DeliverySettings />
+            <Tabs defaultValue="project_types" className="space-y-4">
+              <TabsList>
+                <TabsTrigger value="project_types">Project Types</TabsTrigger>
+                <TabsTrigger value="categories">Categories</TabsTrigger>
+                <TabsTrigger value="delivery">Delivery</TabsTrigger>
+                <TabsTrigger value="projects">Project Rules</TabsTrigger>
+                <TabsTrigger value="note_tags">Note Tags</TabsTrigger>
+              </TabsList>
+              <TabsContent value="project_types">
+                <ProjectTypesManagement />
+              </TabsContent>
+              <TabsContent value="categories">
+                <ProductCategoriesManagement />
+              </TabsContent>
+              <TabsContent value="delivery">
+                <DeliverySettings />
+              </TabsContent>
+              <TabsContent value="projects">
+                <ProjectRulebook />
+              </TabsContent>
+              <TabsContent value="note_tags">
+                <NoteTagsManagement />
+              </TabsContent>
+            </Tabs>
           </TabsContent>
 
           <TabsContent value="integrations">

@@ -51,9 +51,19 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
   useEffect(() => { setDraft(value || ''); }, [value]);
   useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
 
+  const cancel = () => {
+    setDraft(value || '');
+    setEditing(false);
+  };
+
   const save = () => {
     setEditing(false);
     if (draft !== (value || '')) onSave(field, draft);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') save();
+    if (e.key === 'Escape') cancel();
   };
 
   const displayValue = type === 'select' && options
@@ -84,6 +94,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
                 if (val !== (value || '')) onSave(field, val);
               }}
               onBlur={save}
+              onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
               className="w-full text-sm border rounded px-2 py-0.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
             >
               <option value="">-- Select --</option>
@@ -97,6 +108,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
               value={draft}
               onChange={e => setDraft(e.target.value)}
               onBlur={save}
+              onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
               rows={3}
               className="w-full text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none"
             />
@@ -107,7 +119,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
               value={draft}
               onChange={e => setDraft(e.target.value)}
               onBlur={save}
-              onKeyDown={e => e.key === 'Enter' && save()}
+              onKeyDown={handleKeyDown}
               placeholder={placeholder}
               className="w-full text-sm border rounded px-2 py-0.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
             />
@@ -150,10 +162,12 @@ function InlineName({ value, field, onSave }) {
     if (draft.trim() && draft !== (value || '')) onSave(field, draft.trim());
   };
 
+  const cancel = () => { setDraft(value || ''); setEditing(false); };
+
   if (editing) {
     return (
       <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)}
-        onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+        onBlur={save} onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') cancel(); }}
         className="text-lg font-bold w-full border-b-2 border-primary bg-transparent outline-none py-0.5 px-0" />
     );
   }
@@ -665,7 +679,7 @@ export default function PersonDetails() {
               onSave={handleFieldSave} type="select" options={PROSPECT_STATUSES} />
             <InlineField label="Source" value={agent.source} field="source"
               onSave={handleFieldSave} type="select" options={SOURCES} />
-            <InlineField label="Last Contacted" value={agent.last_contacted_at ? fmtDate(agent.last_contacted_at, 'd MMM yyyy') : ''}
+            <InlineField label="Last Contacted" value={agent.last_contacted_at ? String(agent.last_contacted_at).substring(0, 10) : ''}
               field="last_contacted_at" onSave={(field, val) => handleFieldSave(field, val ? new Date(val).toISOString() : null)}
               type="date" placeholder="Not contacted yet" />
             <InlineField label="Frequency (days)" value={agent.contact_frequency_days ? String(agent.contact_frequency_days) : ''}
@@ -847,9 +861,9 @@ export default function PersonDetails() {
               >
                 <tab.icon className="h-4 w-4" />
                 {tab.label}
-                {tab.id === 'notes' && orgNotes.length > 0 && (
+                {tab.id === 'notes' && orgNotes.filter(n => !n.parent_note_id).length > 0 && (
                   <span className="bg-primary/10 text-primary text-[10px] font-bold min-w-[18px] h-[18px] rounded-full flex items-center justify-center px-1">
-                    {orgNotes.length}
+                    {orgNotes.filter(n => !n.parent_note_id).length}
                   </span>
                 )}
               </button>

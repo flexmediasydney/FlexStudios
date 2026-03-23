@@ -77,6 +77,7 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
   // ── Load files ──────────────────────────────────────────────────────────
   const loadFiles = useCallback(async () => {
     if (!entityId) return;
+    setLoading(true);
     try {
       const data = await api.entities.EntityFile.filter(
         { entity_type: entityType, entity_id: entityId },
@@ -85,6 +86,7 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
       setFiles(data || []);
     } catch (err) {
       console.error('Failed to load files:', err);
+      toast.error('Failed to load files');
     } finally {
       setLoading(false);
     }
@@ -363,7 +365,17 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-36">
                         <DropdownMenuItem
-                          onClick={() => window.open(file.file_url, '_blank')}
+                          onClick={() => {
+                            // Use a hidden anchor with download attribute to trigger real download
+                            const a = document.createElement('a');
+                            a.href = file.file_url;
+                            a.download = file.file_name || 'download';
+                            a.target = '_blank';
+                            a.rel = 'noopener noreferrer';
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                          }}
                           className="gap-2 text-xs"
                         >
                           <Download className="h-3.5 w-3.5" />

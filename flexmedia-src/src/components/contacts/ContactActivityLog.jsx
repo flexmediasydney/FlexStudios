@@ -8,8 +8,6 @@ import {
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 
-import ContactAuditLog from './ContactAuditLog';
-
 const ACTIVITY_TYPES = {
   all: { label: 'All', icon: Clock },
   changes: { label: 'Changes', icon: Pencil },
@@ -250,10 +248,8 @@ export default function ContactActivityLog({ entityType, entityId, entityLabel, 
         </div>
       )}
 
-      {/* Changelog — renders full audit log when selected */}
-      {filter === 'changelog' && showChangelog && (
-        <ContactAuditLog entityType={entityType} entityId={entityId} />
-      )}
+      {/* Changelog — no separate ContactAuditLog needed; the timeline
+          already shows audit/change entries when changelog filter is active */}
     </div>
   );
 }

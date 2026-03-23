@@ -423,8 +423,9 @@ export default function EmailInboxMain() {
   const handleRedo = async () => {
     if (redoStack.length === 0) return;
     const action = redoStack[redoStack.length - 1];
-    setUndoStack([...undoStack, action]);
-    setRedoStack(redoStack.slice(0, -1));
+    // Use functional updaters to avoid stale closure issues
+    setUndoStack(prev => [...prev, action]);
+    setRedoStack(prev => prev.slice(0, -1));
     
     // Redo the action
     if (action.type === 'delete') {
@@ -517,11 +518,23 @@ export default function EmailInboxMain() {
   }, [messages, userAccountIds]);
 
   // Update selectedThread reference if it exists in threads (after subscription updates)
+  // Uses threadId ref to avoid infinite loop (setSelectedThread -> re-render -> threads changes -> effect runs again)
+  const selectedThreadIdRef = useRef(null);
   useEffect(() => {
-    if (selectedThread && threads.length > 0) {
-      const updated = threads.find(t => t.threadId === selectedThread.threadId);
+    selectedThreadIdRef.current = selectedThread?.threadId || null;
+  }, [selectedThread?.threadId]);
+
+  useEffect(() => {
+    if (selectedThreadIdRef.current && threads.length > 0) {
+      const updated = threads.find(t => t.threadId === selectedThreadIdRef.current);
       if (updated) {
-        setSelectedThread(updated);
+        setSelectedThread(prev => {
+          // Only update if data actually changed (avoid infinite re-render)
+          if (!prev || prev.messages?.length !== updated.messages?.length || prev.unreadCount !== updated.unreadCount) {
+            return updated;
+          }
+          return prev;
+        });
       }
     }
   }, [threads]);
@@ -646,9 +659,9 @@ export default function EmailInboxMain() {
       }
     });
 
-    // Apply attachments filter
+    // Apply attachments filter — check ALL messages in thread, not just the first
     if (showAttachmentsOnly) {
-      result = result.filter(t => t.messages[0]?.attachments?.length > 0);
+      result = result.filter(t => t.messages.some(m => m.attachments?.length > 0));
     }
 
     return result;
@@ -659,6 +672,8 @@ export default function EmailInboxMain() {
     const handleKeyDown = (e) => {
       // Ignore if user is typing in an input, select, or contenteditable (ReactQuill)
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable) return;
+      // Ignore if modifier keys are held (let browser shortcuts like Ctrl+F, Cmd+A work)
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       // Ignore if a dialog/modal is open (compose, etc.)
       if (showCompose) return;
 
@@ -700,8 +715,8 @@ export default function EmailInboxMain() {
         if (thread) setSelectedThread(thread);
       }
 
-      // a or e = archive
-      if ((e.key === 'a' || e.key === 'e') && selectedMessages.size > 0 && filterView !== 'archived' && filterView !== 'deleted') {
+      // a or e = archive (only in list view, not when thread is open — thread viewer has its own handler)
+      if ((e.key === 'a' || e.key === 'e') && !selectedThread && selectedMessages.size > 0 && filterView !== 'archived' && filterView !== 'deleted') {
         e.preventDefault();
         const accountIds = Array.from(new Set(
           Array.from(selectedMessages).map(msgId => {
@@ -720,8 +735,8 @@ export default function EmailInboxMain() {
         });
       }
 
-      // # = delete
-      if (e.key === '#' && selectedMessages.size > 0 && filterView !== 'deleted') {
+      // # = delete (only in list view)
+      if (e.key === '#' && !selectedThread && selectedMessages.size > 0 && filterView !== 'deleted') {
         e.preventDefault();
         const count = selectedMessages.size;
         const threadIds = Array.from(selectedMessages);
@@ -782,8 +797,8 @@ export default function EmailInboxMain() {
          }
        }
 
-       // u = mark as unread
-       if (e.key === 'u' && selectedMessages.size > 0) {
+       // u = mark as unread (only in list view)
+       if (e.key === 'u' && !selectedThread && selectedMessages.size > 0) {
          e.preventDefault();
          const accountIds = Array.from(new Set(
            Array.from(selectedMessages).map(msgId => {
@@ -1338,12 +1353,16 @@ export default function EmailInboxMain() {
                 onLinkProject={(thread) => setLinkProjectThread(thread)}
                 onToggleVisibility={async (thread, newVisibility) => {
                   try {
-                    const msg = thread.messages[0];
-                    if (!msg) return;
-                    await updateMessageMutation.mutateAsync({
-                      messageId: msg.id,
-                      updates: { visibility: newVisibility },
-                    });
+                    if (!thread.messages?.length) return;
+                    // Update ALL messages in the thread, not just the first
+                    await Promise.all(
+                      thread.messages.map(msg =>
+                        updateMessageMutation.mutateAsync({
+                          messageId: msg.id,
+                          updates: { visibility: newVisibility },
+                        })
+                      )
+                    );
                     toast.success(
                       newVisibility === 'shared'
                         ? 'Email shared with team'
@@ -1362,14 +1381,31 @@ export default function EmailInboxMain() {
                         threadIds: [thread.threadId],
                         emailAccountId: thread.email_account_id,
                       });
-                      toast.success('Archived');
+                      // Push to undo stack so user can undo via Ctrl+Z or undo button
+                      setUndoStack(prev => [...prev, {
+                        type: 'archive',
+                        data: { threadIds: [thread.threadId], accountIds: [thread.email_account_id] }
+                      }]);
+                      setRedoStack([]);
+                      toast.success('Archived', {
+                        action: { label: 'Undo', onClick: handleUndo }
+                      });
                       refetchMessages();
                     } else if (action === 'delete') {
                       await api.functions.invoke('deleteEmails', {
                         threadIds: [thread.threadId],
                         emailAccountId: thread.email_account_id,
+                        permanently: false,
                       });
-                      toast.success('Deleted');
+                      // Push to undo stack
+                      setUndoStack(prev => [...prev, {
+                        type: 'delete',
+                        data: { threadIds: [thread.threadId], accountIds: [thread.email_account_id] }
+                      }]);
+                      setRedoStack([]);
+                      toast.success('Deleted', {
+                        action: { label: 'Undo', onClick: handleUndo }
+                      });
                       refetchMessages();
                     }
                   } catch {

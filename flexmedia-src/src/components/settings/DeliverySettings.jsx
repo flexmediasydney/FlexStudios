@@ -75,11 +75,13 @@ export default function DeliverySettings() {
   };
 
   const updateThreshold = (field, value) => {
-    const num = parseFloat(value);
+    // Allow empty string while user is typing; clamp on save via validateAndSave
+    const num = value === "" ? 0 : parseFloat(value);
     if (isNaN(num)) return;
+    const clamped = Math.min(100, Math.max(0, num));
     setLocalSettings(prev => ({
       ...prev,
-      countdown_thresholds: { ...prev.countdown_thresholds, [field]: num }
+      countdown_thresholds: { ...prev.countdown_thresholds, [field]: clamped }
     }));
     setHasChanges(true);
   };

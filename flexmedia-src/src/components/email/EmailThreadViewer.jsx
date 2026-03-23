@@ -460,14 +460,24 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   });
 
   // Auto-mark as read on open (fires once per unique thread open)
+  // Uses a ref to track which threads have been auto-marked, preventing repeated calls
+  const autoMarkedRef = useRef(new Set());
   useEffect(() => {
     if (!thread?.threadId || !account?.id) return;
+    if (autoMarkedRef.current.has(thread.threadId)) return;
     const hasUnread = thread.messages.some(m => m.is_unread);
     if (!hasUnread) return;
-    api.functions.invoke('markEmailsAsRead', {
-      threadIds: [thread.threadId],
-      emailAccountId: account.id
-    }).catch(() => {}); // Silent — don't surface errors for background action
+    autoMarkedRef.current.add(thread.threadId);
+    // Small delay so the UI renders the thread first, then marks read in background
+    const timer = setTimeout(() => {
+      api.functions.invoke('markEmailsAsRead', {
+        threadIds: [thread.threadId],
+        emailAccountId: account.id
+      }).then(() => {
+        queryClient.invalidateQueries({ queryKey: ['email-messages'] });
+      }).catch(() => {}); // Silent — don't surface errors for background action
+    }, 1500);
+    return () => clearTimeout(timer);
   }, [thread.threadId, account?.id]);
 
   // Track email opens (deduped: max once per 5 minutes per message)
@@ -493,7 +503,12 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     const handleKeyDown = (e) => {
       // Ignore if typing in input/editor/select
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.contentEditable === 'true') return;
-      
+      // Ignore if any modifier key is held (Ctrl/Cmd/Alt) — let browser shortcuts (Ctrl+F, Cmd+A, etc.) work
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      // Don't fire action shortcuts when reply composer is open (except Escape)
+      const composerOpen = replyExpanded || showForward;
+
       // Shift+R = Reply All
       if ((e.key === 'R') && e.shiftKey) {
         e.preventDefault();
@@ -502,48 +517,61 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         setReplyExpanded(true);
         return;
       }
-      // R = Reply
+      // R = Reply (toggle)
       if (e.key === 'r' && !e.shiftKey) {
         e.preventDefault();
         setReplyMode('reply');
         setReplyToMessage(null);
         setReplyExpanded(v => !v);
+        return;
       }
-      // F = Forward
-      if (e.key === 'f' || e.key === 'F') {
+      // F = Forward (only lowercase f without shift, skip if composer is open)
+      if (e.key === 'f' && !e.shiftKey && !composerOpen) {
         e.preventDefault();
         setShowForward(true);
+        return;
       }
       // J or N = Next thread
-      if (e.key === 'j' || e.key === 'J' || e.key === 'n' || e.key === 'N') {
+      if ((e.key === 'j' || e.key === 'n') && !e.shiftKey) {
         e.preventDefault();
         onNextThread?.();
+        return;
       }
       // K or P = Previous thread
-      if (e.key === 'k' || e.key === 'K' || e.key === 'p' || e.key === 'P') {
+      if ((e.key === 'k' || e.key === 'p') && !e.shiftKey) {
         e.preventDefault();
         onPrevThread?.();
+        return;
       }
-      // A = Archive
-      if (e.key === 'a' || e.key === 'A') {
+      // A = Archive (skip if composer is open to avoid accidental archive while typing)
+      if (e.key === 'a' && !e.shiftKey && !composerOpen) {
         e.preventDefault();
         archiveEmailMutation.mutate();
+        return;
       }
-      // E = Expand all
-      if (e.key === 'e' || e.key === 'E') {
+      // E = Expand all (skip if composer is open)
+      if (e.key === 'e' && !e.shiftKey && !composerOpen) {
         e.preventDefault();
         setExpandedMessages(new Set(freshThread.messages.map(m => m.id)));
+        return;
       }
-      // Escape = Back
+      // Escape = Back (or close composer first)
       if (e.key === 'Escape') {
         e.preventDefault();
-        onBack();
+        if (replyExpanded) {
+          setReplyExpanded(false);
+          setReplyToMessage(null);
+        } else if (showForward) {
+          setShowForward(false);
+        } else {
+          onBack();
+        }
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [replyExpanded, freshThread, onNextThread, onPrevThread, onBack]);
+  }, [replyExpanded, showForward, freshThread, onNextThread, onPrevThread, onBack]);
 
   const { data: labelData = [] } = useQuery({
    queryKey: ["email-labels", account?.id],
@@ -1386,8 +1414,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           try {
             const snoozeTime = option.snooze_until;
             await Promise.all(
-              thread.messages.map(msg =>
-                api.entities.EmailMessage.update(msg.id, { snoozed_until: snoozeTime })
+              freshThread.messages.map(m =>
+                api.entities.EmailMessage.update(m.id, { snoozed_until: snoozeTime })
               )
             );
             queryClient.invalidateQueries({ queryKey: ['email-messages'] });
@@ -1395,6 +1423,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
               weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
             });
             toast.success(`Snoozed until ${formatted}`);
+            // Navigate back to inbox so snoozed thread disappears from view
+            onBack();
           } catch (err) {
             console.error('Snooze failed:', err);
             toast.error('Failed to snooze email');

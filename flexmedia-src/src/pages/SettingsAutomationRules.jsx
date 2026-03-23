@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Plus, Trash2, Edit2, ChevronDown, ChevronRight, Zap, CheckCircle, XCircle, Clock, Loader2 } from "lucide-react";
@@ -113,17 +113,26 @@ const EMPTY_RULE = {
   notes: ""
 };
 
+function safeParse(json, fallback) {
+  try { return JSON.parse(json || JSON.stringify(fallback)); } catch { return fallback; }
+}
+
 function RuleBuilderModal({ open, onClose, initialRule, onSave }) {
   const [form, setForm] = useState(initialRule || EMPTY_RULE);
-  const [conditions, setConditions] = useState(() => {
-    try { return JSON.parse(initialRule?.conditions_json || "[]"); } catch { return []; }
-  });
-  const [triggerCfg, setTriggerCfg] = useState(() => {
-    try { return JSON.parse(initialRule?.trigger_config || "{}"); } catch { return {}; }
-  });
-  const [actionCfg, setActionCfg] = useState(() => {
-    try { return JSON.parse(initialRule?.action_config || "{}"); } catch { return {}; }
-  });
+  const [conditions, setConditions] = useState(() => safeParse(initialRule?.conditions_json, []));
+  const [triggerCfg, setTriggerCfg] = useState(() => safeParse(initialRule?.trigger_config, {}));
+  const [actionCfg, setActionCfg] = useState(() => safeParse(initialRule?.action_config, {}));
+
+  // Reset all internal state when initialRule changes (edit vs new, or different rule)
+  const ruleId = initialRule?.id || null;
+  const [prevRuleId, setPrevRuleId] = useState(ruleId);
+  if (ruleId !== prevRuleId) {
+    setPrevRuleId(ruleId);
+    setForm(initialRule || EMPTY_RULE);
+    setConditions(safeParse(initialRule?.conditions_json, []));
+    setTriggerCfg(safeParse(initialRule?.trigger_config, {}));
+    setActionCfg(safeParse(initialRule?.action_config, {}));
+  }
 
   function updateForm(k, v) { setForm(prev => ({ ...prev, [k]: v })); }
 
@@ -140,8 +149,17 @@ function RuleBuilderModal({ open, onClose, initialRule, onSave }) {
   }
 
   function handleSave() {
+    if (!form.name.trim()) {
+      toast.error("Rule name is required");
+      return;
+    }
+    // Sanitize numeric fields to prevent NaN reaching the database
+    const priority = Number.isFinite(form.priority) ? form.priority : 50;
+    const cooldown = Number.isFinite(form.cooldown_minutes) ? form.cooldown_minutes : 60;
     onSave({
       ...form,
+      priority,
+      cooldown_minutes: cooldown,
       conditions_json: JSON.stringify(conditions),
       trigger_config: JSON.stringify(triggerCfg),
       action_config: JSON.stringify(actionCfg)
@@ -446,12 +464,16 @@ export default function SettingsAutomationRules() {
   const [seedingRules, setSeedingRules] = useState(false);
   const [seedMessage, setSeedMessage] = useState(null);
 
-  const { data: rules = [], isLoading: rulesLoading } = useQuery({
+  const { data: rules = [], isLoading: rulesLoading, error: rulesError } = useQuery({
     queryKey: ["automationRules"],
-    queryFn: () => api.entities.ProjectAutomationRule.list("-priority", 200),
+    queryFn: () => api.entities.ProjectAutomationRule.list("priority", 200),
     staleTime: 60 * 1000,
-    onError: () => toast.error('Failed to load automation rules'),
   });
+
+  // Show error toast on failed rules fetch (onError removed in TanStack Query v5)
+  useEffect(() => {
+    if (rulesError) toast.error('Failed to load automation rules');
+  }, [rulesError]);
 
   const { data: logs = [], isLoading: logsLoading } = useQuery({
     queryKey: ["automationRuleLogs"],

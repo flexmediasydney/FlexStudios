@@ -1,8 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
+import { api } from '@/api/supabaseClient';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
+import { toast } from 'sonner';
 
 const statusConfig = {
   'New Lead': { color: 'bg-blue-100', badge: 'bg-blue-200 text-blue-800' },
@@ -20,9 +23,50 @@ const statusConfig = {
 export default function ProspectingStatusKanban({ agentsByStatus }) {
   const navigate = useNavigate();
   const statuses = Object.keys(statusConfig);
+  const [draggedAgent, setDraggedAgent] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
 
   const handleAgentClick = (agent) => {
     navigate(createPageUrl('PersonDetails') + '?id=' + agent.id);
+  };
+
+  // BUG FIX: Added drag-and-drop support so agent cards can be moved between
+  // prospecting statuses. Previously, the kanban was read-only.
+  const handleDragStart = (e, agent) => {
+    setDraggedAgent(agent);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', agent.id);
+  };
+
+  const handleDragOver = (e, status) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDropTarget(status);
+  };
+
+  const handleDragLeave = () => {
+    setDropTarget(null);
+  };
+
+  const handleDrop = async (e, targetStatus) => {
+    e.preventDefault();
+    setDropTarget(null);
+
+    if (!draggedAgent || draggedAgent.status === targetStatus) {
+      setDraggedAgent(null);
+      return;
+    }
+
+    try {
+      await api.entities.Agent.update(draggedAgent.id, {
+        status: targetStatus
+      });
+      await refetchEntityList('Agent');
+      toast.success(`${draggedAgent.name} moved to ${targetStatus}`);
+    } catch (err) {
+      toast.error(err.message || 'Failed to update status');
+    }
+    setDraggedAgent(null);
   };
 
   return (
@@ -30,7 +74,8 @@ export default function ProspectingStatusKanban({ agentsByStatus }) {
       {statuses.map((status) => {
         const agents = agentsByStatus[status] || [];
         const config = statusConfig[status];
-        
+        const isDropTarget = dropTarget === status;
+
         return (
           <div key={status} className="flex-shrink-0 w-72">
             <div className={`${config.color} rounded-t-lg px-3 py-2`}>
@@ -39,18 +84,27 @@ export default function ProspectingStatusKanban({ agentsByStatus }) {
                 <Badge className={config.badge}>{agents.length}</Badge>
               </h3>
             </div>
-            
-            <div className="bg-muted/30 rounded-b-lg min-h-[400px] p-2 space-y-1.5 overflow-y-auto">
+
+            <div
+              className={`bg-muted/30 rounded-b-lg min-h-[400px] p-2 space-y-1.5 overflow-y-auto transition-colors ${
+                isDropTarget ? 'ring-2 ring-primary/40 bg-primary/5' : ''
+              }`}
+              onDragOver={(e) => handleDragOver(e, status)}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => handleDrop(e, status)}
+            >
               {agents.map((agent) => (
-                <div 
-                  key={agent.id} 
-                  className="bg-white rounded-lg p-2 border border-border/50 hover:shadow-md transition-all cursor-pointer text-xs"
+                <div
+                  key={agent.id}
+                  className="bg-white rounded-lg p-2 border border-border/50 hover:shadow-md transition-all cursor-grab active:cursor-grabbing text-xs"
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, agent)}
                   onClick={() => handleAgentClick(agent)}
                 >
                   <p className="font-medium truncate">{agent.name}</p>
                   <p className="text-muted-foreground truncate">{agent.email}</p>
                   {agent.interactionCount > 0 && (
-                    <p className="text-primary mt-0.5">{agent.interactionCount} 📞</p>
+                    <p className="text-primary mt-0.5">{agent.interactionCount} interactions</p>
                   )}
                 </div>
               ))}

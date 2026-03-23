@@ -370,9 +370,10 @@ export default function EmailListRow({
 
       {/* Visibility — clickable toggle */}
       {columns.some(c => c.id === 'visibility') && (() => {
-        // Uses outer-scope isShared (line ~166) — no redeclaration needed
+        const col = columns.find(c => c.id === 'visibility');
+        const w = col?.width ?? 32;
         return (
-          <div className="flex-shrink-0 w-8 flex items-center justify-center">
+          <div style={{ width: `${w}px`, minWidth: `${w}px` }} className="flex-shrink-0 flex items-center justify-center">
             <TooltipProvider delayDuration={400}>
             <Tooltip>
               <TooltipTrigger asChild>

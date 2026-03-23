@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@/api/supabaseClient';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -31,7 +31,6 @@ export default function InteractionFormDialog({
   entityId = null,
   onSuccess = null
 }) {
-  const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -100,8 +99,11 @@ export default function InteractionFormDialog({
         }).catch(() => {});
       }
 
-      await queryClient.invalidateQueries({ queryKey: ['interaction-logs'] });
-      await queryClient.invalidateQueries({ queryKey: ['agents'] });
+      // BUG FIX: The Prospecting page uses useEntitiesData (custom cache), not
+      // react-query. Invalidating react-query keys was a no-op — the interaction
+      // count and list never refreshed after logging.
+      await refetchEntityList('InteractionLog');
+      await refetchEntityList('Agent');
       toast.success('Interaction logged');
       onOpenChange(false);
       setFormData({
@@ -166,8 +168,12 @@ export default function InteractionFormDialog({
                 type="datetime-local"
                 value={formData.date_time.slice(0, 16)}
                 onChange={(e) => {
+                  // BUG FIX: Guard against empty/invalid date values which produce
+                  // "Invalid Date" and crash toISOString().
                   const date = new Date(e.target.value);
-                  setFormData(prev => ({ ...prev, date_time: date.toISOString() }));
+                  if (!isNaN(date.getTime())) {
+                    setFormData(prev => ({ ...prev, date_time: date.toISOString() }));
+                  }
                 }}
               />
             </div>

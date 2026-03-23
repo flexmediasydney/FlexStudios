@@ -247,6 +247,8 @@ function fetchEntityList(entityName) {
         if (item.id) {
           singleCache.set(`${entityName}:${item.id}`, item);
           cacheTimestamps.set(`${entityName}:${item.id}`, now);
+          // Notify single-entity listeners so detail pages see the update
+          notifySingleListeners(entityName, item.id);
         }
       });
       notifyListListeners(entityName);

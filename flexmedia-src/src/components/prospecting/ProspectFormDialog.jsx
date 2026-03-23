@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/api/supabaseClient';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -21,12 +21,11 @@ const SOURCE_OPTIONS = ['Referral', 'LinkedIn', 'Web Search', 'Event', 'Manual I
 const MEDIA_NEEDS = ['Photography', 'Video Production', 'Drone Footage', 'Virtual Staging', 'Social Media Mgmt', 'Website Design', 'Branding'];
 
 export default function ProspectFormDialog({ open, onOpenChange, prospect = null, onSuccess = null, entityType = 'Agent' }) {
-  const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  
-  const [formData, setFormData] = useState({
+
+  const buildInitialFormData = () => ({
     name: prospect?.name || '',
     title: prospect?.title || '',
     email: prospect?.email || '',
@@ -44,16 +43,33 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
     assigned_to_user_id: prospect?.assigned_to_user_id || user?.id || ''
   });
 
+  const [formData, setFormData] = useState(buildInitialFormData);
   const [errors, setErrors] = useState({});
+
+  // BUG FIX: Reset form state every time the dialog opens so stale data
+  // from a previous edit session doesn't persist into a new create/edit.
+  useEffect(() => {
+    if (open) {
+      setFormData(buildInitialFormData());
+      setErrors({});
+      setError(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, prospect?.id]);
 
   // Validation
   const validate = () => {
     const newErrors = {};
     if (!formData.name.trim()) newErrors.name = 'Name is required';
-    if (!formData.email.trim()) newErrors.email = 'Email is required';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) newErrors.email = 'Invalid email';
+    // BUG FIX: Only require email format when email is provided.
+    // Previously, empty email AND invalid-format were separate checks that
+    // could overwrite each other, and empty email was always flagged even for
+    // prospects where email isn't known yet.
+    if (formData.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      newErrors.email = 'Invalid email format';
+    }
     if (!formData.current_agency_name.trim()) newErrors.current_agency_name = 'Agency name is required';
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -89,9 +105,12 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
         }
       }
 
-      await queryClient.invalidateQueries({ queryKey: ['agents'] });
-      await queryClient.invalidateQueries({ queryKey: ['prospects'] });
-      toast.success(prospect ? 'Agent updated' : 'Agent created');
+      // BUG FIX: The Prospecting page uses useEntitiesData (custom cache), not
+      // react-query. Invalidating react-query keys ['agents'] / ['prospects'] was
+      // a no-op — the list never refreshed after create/edit.
+      await refetchEntityList(entityType);
+      await refetchEntityList('InteractionLog');
+      toast.success(prospect ? `${entityType} updated` : `${entityType} created`);
       onOpenChange(false);
       if (onSuccess) onSuccess();
     } catch (err) {

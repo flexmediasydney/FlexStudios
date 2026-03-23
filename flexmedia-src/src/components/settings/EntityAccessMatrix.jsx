@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { useAllEntityAccessRules } from "@/components/auth/useEntityAccess";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
@@ -35,15 +35,22 @@ function cycleLevel(current) {
 export default function EntityAccessMatrix() {
   const { rules, isLoading } = useAllEntityAccessRules();
   const queryClient = useQueryClient();
+  const [updatingRuleId, setUpdatingRuleId] = useState(null);
 
   const updateMutation = useMutation({
-    mutationFn: ({ ruleId, access_level }) =>
-      api.entities.EntityAccessRule.update(ruleId, { access_level }),
+    mutationFn: ({ ruleId, access_level }) => {
+      setUpdatingRuleId(ruleId);
+      return api.entities.EntityAccessRule.update(ruleId, { access_level });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["entity-access-rules"] });
+      setUpdatingRuleId(null);
       toast.success("Access updated");
     },
-    onError: () => toast.error("Failed to update access"),
+    onError: () => {
+      setUpdatingRuleId(null);
+      toast.error("Failed to update access");
+    },
   });
 
   const roles = [...new Set(rules.map((r) => r.role))].sort();
@@ -53,7 +60,7 @@ export default function EntityAccessMatrix() {
 
   const handleCellClick = (entityType, role) => {
     const rule = getRuleFor(entityType, role);
-    if (!rule) return;
+    if (!rule || updatingRuleId) return;
     const nextLevel = cycleLevel(rule.access_level || "none");
     updateMutation.mutate({ ruleId: rule.id, access_level: nextLevel });
   };
@@ -114,7 +121,7 @@ export default function EntityAccessMatrix() {
                     <td key={role} className="px-1 py-1 text-center">
                       <button
                         onClick={() => handleCellClick(entity.key, role)}
-                        disabled={!rule || updateMutation.isPending}
+                        disabled={!rule || updatingRuleId === rule?.id}
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md ${config.bg} ${config.textColor} font-medium transition-all hover:ring-2 hover:ring-offset-1 hover:ring-current/20 disabled:opacity-50 disabled:cursor-not-allowed w-full justify-center`}
                       >
                         <Icon className="h-3.5 w-3.5" />

@@ -37,7 +37,11 @@ export default function SnoozeDialog({ open, onOpenChange, onSnooze }) {
     if (option.type === 'next_monday_9am') {
       const nextMonday = new Date(now);
       const dayOfWeek = nextMonday.getDay();
-      const daysUntilMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+      // dayOfWeek: 0=Sun, 1=Mon, 2=Tue, ..., 6=Sat
+      // If today is Monday (1), go to next Monday (7 days ahead).
+      // If today is Sunday (0), go to tomorrow (1 day ahead).
+      // Otherwise, calculate days until next Monday.
+      const daysUntilMonday = dayOfWeek === 0 ? 1 : dayOfWeek === 1 ? 7 : (8 - dayOfWeek);
       nextMonday.setDate(nextMonday.getDate() + daysUntilMonday);
       nextMonday.setHours(9, 0, 0, 0);
       return nextMonday.toISOString();

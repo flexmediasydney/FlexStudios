@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Paperclip, Users } from "lucide-react";
 import {
@@ -99,7 +99,6 @@ export default function EmailListHeader({
 
           const cellInner = (
             <div
-              key={col.id}
               draggable={col.id !== "checkbox"}
               onDragStart={(e) => handleDragStart(e, col.id)}
               onDragOver={handleDragOver}
@@ -142,7 +141,8 @@ export default function EmailListHeader({
             );
           }
 
-          return cellInner;
+          // Not wrapped in Tooltip — need a keyed fragment
+          return <React.Fragment key={col.id}>{cellInner}</React.Fragment>;
         })}
       </div>
     </TooltipProvider>

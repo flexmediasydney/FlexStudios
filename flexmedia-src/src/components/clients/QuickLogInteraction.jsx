@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -26,7 +26,6 @@ const QUICK_TYPES = [
  *   triggerSize   — "sm" | "icon" — controls the trigger button style
  */
 export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm" }) {
-  const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
   const [open, setOpen] = useState(false);
   const [selectedType, setSelectedType] = useState(null);
@@ -61,8 +60,10 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
         last_contacted_at: new Date().toISOString(),
       }).catch(() => {});
 
-      await queryClient.invalidateQueries({ queryKey: ["interaction-logs"] });
-      await queryClient.invalidateQueries({ queryKey: ["agents"] });
+      // BUG FIX: The parent pages use useEntitiesData (custom cache), not
+      // react-query. Invalidating react-query keys was a no-op.
+      await refetchEntityList("InteractionLog");
+      await refetchEntityList("Agent");
       toast.success("Interaction logged");
       reset();
       setOpen(false);
