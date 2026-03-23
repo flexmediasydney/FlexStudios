@@ -22,6 +22,20 @@ const UserNotRegisteredError = () => {
               <li>Try logging out and back in again</li>
             </ul>
           </div>
+          <div className="mt-6 flex gap-3 justify-center">
+            <button
+              onClick={() => {
+                // Clear all Supabase auth state from localStorage
+                Object.keys(localStorage).forEach(key => {
+                  if (key.startsWith('sb-')) localStorage.removeItem(key);
+                });
+                window.location.href = '/login';
+              }}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+            >
+              Sign out and try again
+            </button>
+          </div>
         </div>
       </div>
     </div>
