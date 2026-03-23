@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -98,6 +98,10 @@ export default function ActivityFeed() {
       queryClient.invalidateQueries({ queryKey: ['teams'] });
       queryClient.invalidateQueries({ queryKey: ['agents'] });
       queryClient.invalidateQueries({ queryKey: ['audit-logs'] });
+      refetchEntityList("Agency");
+      refetchEntityList("Team");
+      refetchEntityList("Agent");
+      refetchEntityList("AuditLog");
       toast.success("Successfully restored previous state");
       setRestoreItem(null);
     } catch (error) {

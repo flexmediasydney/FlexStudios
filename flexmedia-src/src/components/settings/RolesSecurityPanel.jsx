@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { canAccessRoute } from "@/components/lib/routeAccess";
 import { Badge } from "@/components/ui/badge";
@@ -106,6 +107,7 @@ function PeopleMode({ onViewAs }) {
     mutationFn: ({ userId, role }) => api.entities.User.update(userId, { role }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
+      refetchEntityList("User");
       toast.success("Role updated");
       setRoleChangePreview(null);
     },

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -243,6 +243,7 @@ export default function HierarchyTableView({
     try {
       await api.entities.Agent.update(agentId, { [field]: value });
       queryClient.invalidateQueries({ queryKey: ['agents'] });
+      refetchEntityList("Agent");
       toast.success("Updated");
     } catch {
       toast.error("Failed to save");

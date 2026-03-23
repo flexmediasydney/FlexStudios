@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Edit, Trash2, Users, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,7 @@ export default function InternalTeamsManagement() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["internal_teams"] });
+      refetchEntityList("InternalTeam");
       toast.success(editingTeam ? "Team updated" : "Team created");
       handleClose();
     },
@@ -59,6 +61,7 @@ export default function InternalTeamsManagement() {
     mutationFn: (id) => api.entities.InternalTeam.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["internal_teams"] });
+      refetchEntityList("InternalTeam");
       queryClient.invalidateQueries({ queryKey: ["users"] });
       toast.success("Team deleted");
       setDeletingTeam(null);
