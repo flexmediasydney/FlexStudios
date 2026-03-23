@@ -128,7 +128,7 @@ export default function RevisionTemplatesManagement() {
         </div>
       )}
 
-      {Object.entries(REVISION_TYPES).map(([type, meta]) => {
+      {!isLoading && Object.entries(REVISION_TYPES).map(([type, meta]) => {
         const group = grouped[type] || [];
         if (group.length === 0 && searchQuery) return null;
         return (

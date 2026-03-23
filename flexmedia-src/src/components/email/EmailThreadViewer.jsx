@@ -1,15 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { 
   ArrowLeft, Reply, ReplyAll, Forward, Archive, Trash2,
   MoreVertical, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
-  Lock, Users, Copy, Clock, ChevronsUpDown, Tag,
-  Loader2, Eye, EyeOff, RefreshCw, AlertCircle, Maximize2, Minimize2
+  Lock, Users, Copy, Clock, ChevronsUpDown,
+  Loader2, Eye, EyeOff, RefreshCw, AlertCircle
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -609,37 +608,37 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       {/* Main Email Content */}
       <div className="lg:col-span-2 flex flex-col overflow-y-auto max-h-[calc(100vh-64px)] border-r">
         {/* Sticky Header */}
-        <div className="sticky top-0 bg-white/95 backdrop-blur-sm z-10 px-4 py-2.5 border-b border-slate-200 shadow-sm flex items-center justify-between gap-2">
+        <div className="sticky top-0 bg-background/95 backdrop-blur-sm z-10 px-4 py-2.5 border-b border-border shadow-sm flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => onBack()}
-              className="gap-1.5 hover:bg-slate-100 text-slate-700 font-medium shrink-0"
+              className="gap-1.5 hover:bg-muted text-foreground/80 font-medium shrink-0"
               title="Back to Inbox (Esc)"
               aria-label="Back to inbox"
             >
               <ArrowLeft className="h-4 w-4" />
               <span className="hidden sm:inline">Inbox</span>
             </Button>
-            <span className="text-slate-300 hidden sm:inline">|</span>
+            <span className="text-border hidden sm:inline">|</span>
             {/* Thread subject truncated */}
-            <span className="text-sm font-semibold text-slate-800 truncate min-w-0 hidden sm:block">{thread.subject}</span>
+            <span className="text-sm font-semibold text-foreground truncate min-w-0 hidden sm:block">{thread.subject}</span>
           </div>
           {/* Right: prev/next + shortcuts hint */}
           <div className="flex items-center gap-1 shrink-0">
             <span className="text-xs text-muted-foreground/50 hidden lg:inline mr-2">
-              <kbd className="bg-slate-100 px-1 rounded text-[10px]">J</kbd>/<kbd className="bg-slate-100 px-1 rounded text-[10px]">K</kbd> nav
+              <kbd className="bg-muted px-1 rounded text-[10px]">J</kbd>/<kbd className="bg-muted px-1 rounded text-[10px]">K</kbd> nav
               <span className="mx-1">·</span>
-              <kbd className="bg-slate-100 px-1 rounded text-[10px]">R</kbd> reply
+              <kbd className="bg-muted px-1 rounded text-[10px]">R</kbd> reply
               <span className="mx-1">·</span>
-              <kbd className="bg-slate-100 px-1 rounded text-[10px]">⇧R</kbd> all
+              <kbd className="bg-muted px-1 rounded text-[10px]">⇧R</kbd> all
               <span className="mx-1">·</span>
-              <kbd className="bg-slate-100 px-1 rounded text-[10px]">F</kbd> fwd
+              <kbd className="bg-muted px-1 rounded text-[10px]">F</kbd> fwd
               <span className="mx-1">·</span>
-              <kbd className="bg-slate-100 px-1 rounded text-[10px]">A</kbd> archive
+              <kbd className="bg-muted px-1 rounded text-[10px]">A</kbd> archive
               <span className="mx-1">·</span>
-              <kbd className="bg-slate-100 px-1 rounded text-[10px]">E</kbd> expand all
+              <kbd className="bg-muted px-1 rounded text-[10px]">E</kbd> expand all
             </span>
             <Button
               variant="ghost"
@@ -647,7 +646,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
               onClick={() => onPrevThread?.()}
               disabled={!onPrevThread}
               title="Previous thread (P)"
-              className="h-8 w-8 text-slate-500 disabled:opacity-30"
+              className="h-8 w-8 text-muted-foreground disabled:opacity-30"
               aria-label="Previous thread"
             >
               <ChevronUp className="h-4 w-4" />
@@ -658,7 +657,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
               onClick={() => onNextThread?.()}
               disabled={!onNextThread}
               title="Next thread (N)"
-              className="h-8 w-8 text-slate-500 disabled:opacity-30"
+              className="h-8 w-8 text-muted-foreground disabled:opacity-30"
               aria-label="Next thread"
             >
               <ChevronDown className="h-4 w-4" />
@@ -667,10 +666,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         </div>
 
         {/* Thread Header — Subject + Actions */}
-        <div className={cn("px-5 pt-5 pb-4 bg-white border-b", priorityConfig[msg.priority] || '')}>
+        <div className={cn("px-5 pt-5 pb-4 bg-card border-b", priorityConfig[msg.priority] || '')}>
           {/* Subject */}
-          <h1 className="text-[22px] font-bold text-slate-900 leading-snug mb-3 pr-2">
-            {thread.subject || <em className="text-slate-400 font-normal">(no subject)</em>}
+          <h1 className="text-[22px] font-bold text-foreground leading-snug mb-3 pr-2">
+            {thread.subject || <em className="text-muted-foreground font-normal">(no subject)</em>}
           </h1>
 
           {/* Action toolbar */}
@@ -710,7 +709,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
               Forward
             </Button>
 
-            <div className="h-5 w-px bg-slate-200 mx-0.5" />
+            <div className="h-5 w-px bg-border mx-0.5" />
 
             {/* Visibility */}
             <button
@@ -719,7 +718,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                 "h-8 px-2 rounded-lg flex items-center gap-1.5 text-xs font-semibold transition-all active:scale-95",
                 msg.visibility === 'shared'
                   ? "text-blue-700 bg-blue-50 hover:bg-blue-100"
-                  : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
               )}
               aria-label={msg.visibility === 'shared' ? "Make private" : "Share with team"}
               title={msg.visibility === 'shared' ? "Shared with team — click to make private" : "Private — click to share"}
@@ -731,7 +730,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
             {/* Snooze */}
             <button
               onClick={() => setShowSnoozeDialog(true)}
-              className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all active:scale-95"
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-all active:scale-95"
               aria-label="Snooze"
               title="Snooze"
             >
@@ -744,14 +743,14 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
               onPriorityChange={(p) => setPriorityMutation.mutate(p)}
             />
 
-            <div className="h-5 w-px bg-slate-200 mx-0.5" />
+            <div className="h-5 w-px bg-border mx-0.5" />
 
             {/* Archive / Restore */}
             {currentView !== "archived" && currentView !== "deleted" ? (
               <button
                 onClick={() => archiveEmailMutation.mutate()}
                 disabled={archiveEmailMutation.isPending}
-                className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all active:scale-95 disabled:opacity-40"
+                className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-all active:scale-95 disabled:opacity-40"
                 aria-label="Archive"
                 title="Archive (A)"
               >
@@ -775,7 +774,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
-                  className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all"
+                  className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
                   aria-label="More options"
                   title="More options"
                 >
@@ -813,7 +812,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
 
           {/* Labels row */}
           {(msg.labels?.length > 0 || true) && (
-            <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-slate-100 items-center">
+            <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-border items-center">
               {msg.labels?.map((labelName) => {
                 const label = getLabel(labelName);
                 return (
@@ -836,7 +835,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         </div>
 
         {/* Thread: From + message count bar */}
-        <div className="px-5 py-2.5 border-b border-slate-100 bg-slate-50/60 flex items-center justify-between gap-2">
+        <div className="px-5 py-2.5 border-b border-border bg-muted/40 flex items-center justify-between gap-2">
           <EmailHeaderInfo
             from={msg.from}
             fromName={msg.from_name}
@@ -847,7 +846,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           {totalMessages > 1 && (
             <button
               onClick={toggleAllExpanded}
-              className="flex-shrink-0 flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 px-2 py-1 rounded-lg transition-all"
+              className="flex-shrink-0 flex items-center gap-1.5 text-xs font-bold text-muted-foreground hover:text-foreground hover:bg-muted px-2 py-1 rounded-lg transition-all"
               title={allExpanded ? "Collapse all" : "Expand all (E)"}
               aria-label={allExpanded ? "Collapse all messages" : "Expand all messages"}
             >
@@ -858,7 +857,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         </div>
 
         {/* Message list */}
-        <div className="flex-1 divide-y divide-slate-100 bg-white">
+        <div className="flex-1 divide-y divide-border bg-card">
           {(() => {
             const msgs = freshThread.messages;
             const collapsedCount = msgs.filter((m, i) => i < msgs.length - 1 && !expandedMessages.has(m.id)).length;
@@ -887,7 +886,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                 elements.push(
                   <div
                     key="collapsed-summary"
-                    className="flex items-center gap-3 px-5 py-2 bg-slate-50/80 border-y border-slate-100 cursor-pointer hover:bg-slate-100/80 transition-colors"
+                    className="flex items-center gap-3 px-5 py-2 bg-muted/60 border-y border-border cursor-pointer hover:bg-muted transition-colors"
                     onClick={() => {
                       // Expand all collapsed older messages
                       setExpandedMessages(new Set(msgs.map(m => m.id)));
@@ -905,7 +904,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                             <div
                               key={si}
                               className={cn(
-                                "w-6 h-6 rounded-full bg-gradient-to-br flex items-center justify-center text-[10px] font-bold text-white border-2 border-white",
+                                "w-6 h-6 rounded-full bg-gradient-to-br flex items-center justify-center text-[10px] font-bold text-white border-2 border-background",
                                 sColor
                               )}
                             >
@@ -914,7 +913,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                           );
                         })}
                       </div>
-                      <span className="text-xs text-slate-500 font-medium">
+                      <span className="text-xs text-muted-foreground font-medium">
                         {collapsedCount} older message{collapsedCount !== 1 ? 's' : ''}
                         {collapsedSenders.length <= 3
                           ? ` from ${collapsedSenders.join(', ')}`
@@ -922,7 +921,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                         }
                       </span>
                     </div>
-                    <span className="text-[10px] text-slate-400 flex items-center gap-1 flex-shrink-0">
+                    <span className="text-[10px] text-muted-foreground flex items-center gap-1 flex-shrink-0">
                       <ChevronsUpDown className="h-3 w-3" />
                       Expand all
                     </span>
@@ -936,8 +935,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                   ref={isLatest ? latestMessageRef : null}
                   className={cn(
                     "transition-all duration-150 group/msg",
-                    !isExpanded && !isLatest && "hover:bg-slate-50/80 cursor-pointer",
-                    isLatest && "bg-white"
+                    !isExpanded && !isLatest && "hover:bg-muted/60 cursor-pointer",
+                    isLatest && "bg-card"
                   )}
                 >
                   {/* Message header row — always visible */}
@@ -977,17 +976,17 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                     {/* Sender + preview */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-baseline gap-2">
-                        <span className={cn("text-sm truncate", isExpanded ? "font-bold text-slate-900" : "font-semibold text-slate-700")}>
+                        <span className={cn("text-sm truncate", isExpanded ? "font-bold text-foreground" : "font-semibold text-foreground/80")}>
                           {msgItem.from_name || msgItem.from}
                         </span>
                         {!isExpanded && (
-                          <span className="text-xs text-slate-400 truncate min-w-0 hidden sm:block">
+                          <span className="text-xs text-muted-foreground truncate min-w-0 hidden sm:block">
                             {msgItem.body ? msgItem.body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 80) : ''}
                           </span>
                         )}
                       </div>
                       {isExpanded && (
-                        <p className="text-xs text-slate-500 truncate">
+                        <p className="text-xs text-muted-foreground truncate">
                           to {(msgItem.to || []).join(', ')}
                         </p>
                       )}
@@ -1000,19 +999,19 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                         <div className="flex items-center gap-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity">
                           <button
                             onClick={(e) => { e.stopPropagation(); setReplyMode('reply'); setReplyToMessage(msgItem); setReplyExpanded(true); }}
-                            className="p-1.5 hover:bg-blue-50 rounded-md transition-colors"
+                            className="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-950 rounded-md transition-colors"
                             title="Reply to this message"
                             aria-label="Reply"
                           >
-                            <Reply className="h-3.5 w-3.5 text-slate-400 hover:text-blue-600" />
+                            <Reply className="h-3.5 w-3.5 text-muted-foreground hover:text-blue-600" />
                           </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); setReplyMode('replyAll'); setReplyToMessage(msgItem); setReplyExpanded(true); }}
-                            className="p-1.5 hover:bg-blue-50 rounded-md transition-colors"
+                            className="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-950 rounded-md transition-colors"
                             title="Reply All to this message"
                             aria-label="Reply All"
                           >
-                            <ReplyAll className="h-3.5 w-3.5 text-slate-400 hover:text-blue-600" />
+                            <ReplyAll className="h-3.5 w-3.5 text-muted-foreground hover:text-blue-600" />
                           </button>
                           <button
                             onClick={(e) => {
@@ -1021,30 +1020,30 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                               // Set replyToMessage so the forward dialog has the right message context
                               setReplyToMessage(msgItem);
                             }}
-                            className="p-1.5 hover:bg-blue-50 rounded-md transition-colors"
+                            className="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-950 rounded-md transition-colors"
                             title="Forward this message"
                             aria-label="Forward"
                           >
-                            <Forward className="h-3.5 w-3.5 text-slate-400 hover:text-blue-600" />
+                            <Forward className="h-3.5 w-3.5 text-muted-foreground hover:text-blue-600" />
                           </button>
                         </div>
                       )}
-                      <span className="text-xs text-slate-400 font-medium whitespace-nowrap">
+                      <span className="text-xs text-muted-foreground font-medium whitespace-nowrap">
                         {formatEmailDateTime(msgItem.received_at)}
                       </span>
                       {!isLatest && (
                         isExpanded
-                          ? <ChevronUp className="h-4 w-4 text-slate-400" />
-                          : <ChevronDown className="h-4 w-4 text-slate-400" />
+                          ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                          : <ChevronDown className="h-4 w-4 text-muted-foreground" />
                       )}
                       {isExpanded && (
                         <button
                           onClick={(e) => { e.stopPropagation(); copyEmail(msgItem.from); }}
-                          className="p-1 hover:bg-slate-100 rounded-md transition-colors"
+                          className="p-1 hover:bg-muted rounded-md transition-colors"
                           title="Copy sender email"
                           aria-label="Copy sender email"
                         >
-                          <Copy className="h-3.5 w-3.5 text-slate-400" />
+                          <Copy className="h-3.5 w-3.5 text-muted-foreground" />
                         </button>
                       )}
                     </div>
@@ -1055,7 +1054,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                     <div className="px-5 pb-6">
                       {/* Sandboxed email body — cap height for very large emails with scroll */}
                       <div
-                        className="prose prose-sm max-w-none text-slate-800 leading-relaxed overflow-x-auto overflow-y-auto email-body-content"
+                        className="prose prose-sm max-w-none text-foreground leading-relaxed overflow-x-auto overflow-y-auto email-body-content"
                         style={{ fontFamily: 'inherit', maxHeight: '80vh' }}
                         dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msgItem.body) }}
                       />
@@ -1076,8 +1075,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
 
                       {/* Attachments */}
                       {msgItem.attachments && msgItem.attachments.length > 0 && (
-                        <div className="mt-5 pt-4 border-t border-slate-100">
-                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                        <div className="mt-5 pt-4 border-t border-border">
+                          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-3">
                             Attachments ({msgItem.attachments.length})
                           </p>
                           <div className="flex flex-wrap gap-2">
@@ -1147,18 +1146,18 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                                 <button
                                   key={aidx}
                                   onClick={handleDownload}
-                                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group max-w-xs cursor-pointer text-left"
+                                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-muted/60 border border-border hover:border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950 dark:hover:bg-blue-950 transition-all group max-w-xs cursor-pointer text-left"
                                   title={`Download ${att.filename}`}
                                 >
-                                  <div className="w-8 h-8 bg-white rounded-lg border border-slate-200 flex items-center justify-center text-xs font-bold text-slate-500 flex-shrink-0 uppercase">
+                                  <div className="w-8 h-8 bg-background rounded-lg border border-border flex items-center justify-center text-xs font-bold text-muted-foreground flex-shrink-0 uppercase">
                                     {isPdf ? 'PDF' : ext}
                                   </div>
                                   <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-bold text-slate-700 group-hover:text-blue-700 truncate leading-tight">
+                                    <p className="text-xs font-bold text-foreground/80 group-hover:text-blue-700 dark:group-hover:text-blue-400 truncate leading-tight">
                                       {att.filename}
                                     </p>
                                     {att.size > 0 && (
-                                      <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                      <p className="text-[10px] text-muted-foreground font-medium mt-0.5">
                                         {formatFileSize(att.size)}
                                       </p>
                                     )}
@@ -1188,7 +1187,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         )}
 
         {/* Reply / Forward Box — Pipedrive-style */}
-        <div className="sticky bottom-0 bg-white border-t border-slate-200 shadow-lg">
+        <div className="sticky bottom-0 bg-card border-t border-border shadow-lg">
           {/* Collapsed reply bar */}
           {!replyExpanded ? (
             <div className="flex items-center gap-2 px-5 py-3">
@@ -1200,7 +1199,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
               </div>
               <button
                 onClick={() => { setReplyMode('reply'); setReplyToMessage(null); setReplyExpanded(true); }}
-                className="flex-1 text-left text-sm text-slate-400 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-full px-4 py-2 transition-all"
+                className="flex-1 text-left text-sm text-muted-foreground bg-muted/60 hover:bg-muted border border-border rounded-full px-4 py-2 transition-all"
                 aria-label="Click to reply"
               >
                 Reply to {msg.from_name || msg.from}…
@@ -1210,7 +1209,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                   size="sm"
                   variant="ghost"
                   onClick={() => { setReplyMode('reply'); setReplyToMessage(null); setReplyExpanded(true); }}
-                  className="gap-1.5 text-blue-600 hover:bg-blue-50 font-semibold"
+                  className="gap-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 font-semibold"
                   aria-label="Reply"
                 >
                   <Reply className="h-3.5 w-3.5" /> Reply
@@ -1219,17 +1218,17 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                   size="sm"
                   variant="ghost"
                   onClick={() => { setReplyMode('replyAll'); setReplyToMessage(null); setReplyExpanded(true); }}
-                  className="gap-1.5 text-slate-500 hover:bg-slate-100 font-medium"
+                  className="gap-1.5 text-muted-foreground hover:bg-muted font-medium"
                   aria-label="Reply All"
                 >
                   <ReplyAll className="h-3.5 w-3.5" /> Reply All
                 </Button>
-                <div className="h-4 w-px bg-slate-200 mx-0.5" />
+                <div className="h-4 w-px bg-border mx-0.5" />
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={() => setShowForward(true)}
-                  className="gap-1.5 text-slate-500 hover:bg-slate-100 font-medium"
+                  className="gap-1.5 text-muted-foreground hover:bg-muted font-medium"
                   aria-label="Forward"
                 >
                   <Forward className="h-3.5 w-3.5" /> Forward
@@ -1247,7 +1246,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                       "flex items-center gap-1.5 text-sm font-bold px-2.5 py-1 rounded-md transition-all",
                       replyMode === 'reply'
                         ? "text-blue-700 bg-blue-50"
-                        : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
                     )}
                   >
                     <Reply className="h-3.5 w-3.5" />
@@ -1259,7 +1258,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                       "flex items-center gap-1.5 text-sm font-bold px-2.5 py-1 rounded-md transition-all",
                       replyMode === 'replyAll'
                         ? "text-blue-700 bg-blue-50"
-                        : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
                     )}
                   >
                     <ReplyAll className="h-3.5 w-3.5" />
@@ -1269,16 +1268,16 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => setShowForward(true)}
-                    className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors flex items-center gap-1"
+                    className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1"
                     aria-label="Forward instead"
                   >
                     <Forward className="h-3 w-3" />
                     Forward
                   </button>
-                  <div className="h-4 w-px bg-slate-200" />
+                  <div className="h-4 w-px bg-border" />
                   <button
                     onClick={() => { setReplyExpanded(false); setReplyToMessage(null); }}
-                    className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors"
+                    className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted transition-colors"
                     aria-label="Close reply"
                   >
                     Discard
@@ -1318,10 +1317,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         </div>
 
       {/* Right Sidebar */}
-      <div className="hidden lg:flex flex-col overflow-y-auto max-h-[calc(100vh-64px)] bg-slate-50/40 border-l">
+      <div className="hidden lg:flex flex-col overflow-y-auto max-h-[calc(100vh-64px)] bg-muted/30 border-l">
         {/* Sidebar header */}
-        <div className="px-4 py-3 border-b border-slate-200 bg-white sticky top-0 z-10">
-          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Details</p>
+        <div className="px-4 py-3 border-b border-border bg-card sticky top-0 z-10">
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Details</p>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -1341,9 +1340,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
             />
 
             {/* Email tracking stats */}
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Tracking</p>
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
+              <div className="px-4 py-3 border-b border-border">
+                <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Tracking</p>
               </div>
               <div className="p-4 space-y-3">
                 <EmailOpenStats messageId={msg.id} />
@@ -1352,9 +1351,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
             </div>
 
             {/* Activity log */}
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Activity</p>
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
+              <div className="px-4 py-3 border-b border-border">
+                <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Activity</p>
               </div>
               <div className="max-h-72 overflow-y-auto">
                 <EmailActivityLog messageId={msg.id} />
@@ -1362,9 +1361,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
             </div>
 
             {/* Raw source — collapsed by default, dev tool */}
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
               <button
-                className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider hover:bg-slate-50 transition-colors"
+                className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-muted-foreground uppercase tracking-wider hover:bg-muted transition-colors"
                 onClick={() => setShowRaw(v => !v)}
                 aria-expanded={showRaw}
                 aria-label="Toggle email source"
@@ -1373,7 +1372,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                 {showRaw ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
               </button>
               {showRaw && (
-                <div className="border-t border-slate-100">
+                <div className="border-t border-border">
                   <pre className="text-[10px] bg-slate-950 text-green-400 p-3 overflow-x-auto max-h-52 overflow-y-auto font-mono leading-relaxed">
                     {JSON.stringify({
                       from: msg.from,

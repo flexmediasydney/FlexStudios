@@ -11,21 +11,13 @@ import {
   X,
   Mail,
   LogOut,
-  Shield,
-  UserCircle,
-  Settings as SettingsIcon,
   Target,
-  Zap,
   Bot,
   Activity,
   Bell,
   BarChart2,
   Search,
-  TrendingUp,
-  LineChart,
-  FileBarChart,
   UserCheck,
-  Clock,
   ChevronDown,
   ChevronRight,
   Sun,
@@ -34,7 +26,6 @@ import {
   Building2,
   UserRound,
   UsersRound,
-  Contact,
   Rss,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -285,6 +276,9 @@ function LayoutContent({ currentPageName, children, onBack }) {
   const [expandedParents, setExpandedParents] = useState({});
 
   // Auto-expand the section containing the current active page
+  // BUG FIX: use functional updaters to read current state, avoiding stale closure
+  // over expandedSections (which was missing from the dependency array and would
+  // cause the effect to always read the initial value on subsequent page navigations)
   useEffect(() => {
     if (!currentPageName || navigationSections.length === 0) return;
     for (const section of navigationSections) {
@@ -293,8 +287,11 @@ function LayoutContent({ currentPageName, children, onBack }) {
         item.href === currentPageName ||
         (item.children && item.children.some(c => c.href === currentPageName))
       );
-      if (isInSection && !expandedSections[section.id]) {
-        setExpandedSections(prev => ({ ...prev, [section.id]: true }));
+      if (isInSection) {
+        setExpandedSections(prev => {
+          if (prev[section.id]) return prev; // already expanded, no-op
+          return { ...prev, [section.id]: true };
+        });
         for (const item of section.items) {
           if (item.children && item.children.some(c => c.href === currentPageName)) {
             setExpandedParents(prev => ({ ...prev, [item.name]: true }));

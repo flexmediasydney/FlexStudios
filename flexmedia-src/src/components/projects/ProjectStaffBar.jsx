@@ -106,6 +106,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
     },
     onSuccess: (_, data) => {
       setOpen(false);
+      toast.success("Staff assignment updated");
       // Resync onsite tasks when photographer or videographer changes
       // so task assignment and future effort logs reflect the new staff
       const onsiteRoleFields = ['photographer_id', 'onsite_staff_1_id', 'videographer_id', 'onsite_staff_2_id'];

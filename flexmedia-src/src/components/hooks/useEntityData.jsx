@@ -465,10 +465,12 @@ export function useEntityList(entityName, sortBy = null, limit = null, filter = 
     : JSON.stringify(filter);
 
   // Keep current options accessible inside refresh without stale closure
+  // BUG FIX: assign directly during render instead of using a bare useEffect.
+  // A no-deps useEffect schedules an unnecessary commit phase on every render
+  // and runs twice in StrictMode, adding overhead with no benefit for ref syncing.
   const optsRef    = useRef({ sortBy, limit, filter });
+  optsRef.current = { sortBy, limit, filter };
   const mountedRef = useRef(true);
-
-  useEffect(() => { optsRef.current = { sortBy, limit, filter }; });
 
   useEffect(() => {
     if (!entityName) {
@@ -646,8 +648,9 @@ export function useEntitiesData(entityConfigs) {
   );
   const [loading, setLoading] = useState(entityConfigs.length > 0);
   const mountedRef = useRef(true);
+  // BUG FIX: direct assignment instead of bare useEffect (same fix as useEntityList)
   const optsRef    = useRef(entityConfigs);
-  useEffect(() => { optsRef.current = entityConfigs; });
+  optsRef.current = entityConfigs;
 
   useEffect(() => {
     if (entityConfigs.length === 0) {

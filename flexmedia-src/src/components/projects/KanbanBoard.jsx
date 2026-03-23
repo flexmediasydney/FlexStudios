@@ -148,12 +148,12 @@ function ProjectEmailIndicator({ emails = [] }) {
           className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
             hasUnread
               ? "bg-purple-100 text-purple-700 hover:bg-purple-200"
-              : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+              : "bg-muted text-muted-foreground hover:bg-muted/80"
           }`}
           onClick={(e) => e.stopPropagation()}
           title={hasUnread ? `${unreadCount} unread email${unreadCount > 1 ? "s" : ""}` : `${emails.length} linked email${emails.length > 1 ? "s" : ""}`}
         >
-          <Mail className={`h-2.5 w-2.5 ${hasUnread ? "text-purple-600" : "text-gray-400"}`} />
+          <Mail className={`h-2.5 w-2.5 ${hasUnread ? "text-purple-600" : "text-muted-foreground"}`} />
           <span>{emails.length}</span>
         </button>
       </HoverCardTrigger>
@@ -179,7 +179,7 @@ function ProjectEmailIndicator({ emails = [] }) {
               className={`px-3 py-2 text-xs ${email.is_unread ? "bg-purple-50/40" : ""}`}
             >
               <div className="flex items-start justify-between gap-2">
-                <p className={`truncate flex-1 ${email.is_unread ? "font-semibold text-gray-900" : "font-medium text-gray-700"}`}>
+                <p className={`truncate flex-1 ${email.is_unread ? "font-semibold text-foreground" : "font-medium text-foreground/80"}`}>
                   {email.subject || "(no subject)"}
                 </p>
                 <span className="text-[10px] text-muted-foreground shrink-0">

@@ -109,6 +109,7 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
           user_email: user?.email || '',
         }).catch(() => {});
       }
+      toast.success(`Time entry logged: ${hours || 0}h ${minutes || 0}m`);
       setHours("");
       setMinutes("");
       setError("");

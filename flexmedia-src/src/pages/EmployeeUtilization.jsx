@@ -132,12 +132,14 @@ export default function EmployeeUtilization() {
   const [sortDir, setSortDir] = useState('desc');
 
   // ─── Data ─────────────────────────────────────────────────────────────────
-  const { data: allUsers = [] }           = useEntityList('User');
-  const { data: allEmployeeRoles = [] }   = useEntityList('EmployeeRole');
+  const { data: allUsers = [], loading: usersLoading }           = useEntityList('User');
+  const { data: allEmployeeRoles = [], loading: rolesLoading }   = useEntityList('EmployeeRole');
   const { data: allUtilizations = [] }    = useEntityList('EmployeeUtilization', '-period_date');
   const { data: teams = [] }              = useEntityList('InternalTeam');
-  const { data: allTimeLogs = [] }        = useEntityList('TaskTimeLog', '-created_date', 1000);
+  const { data: allTimeLogs = [], loading: timeLogsLoading }        = useEntityList('TaskTimeLog', '-created_date', 1000);
   const { data: allProjects = [] }        = useEntityList('Project', '-shoot_date', 500);
+
+  const utilizationLoading = usersLoading || rolesLoading || timeLogsLoading;
 
   // ─── Live active timers poll (30s) ────────────────────────────────────────
   const { data: liveTimers = [] } = useQuery({
@@ -316,6 +318,29 @@ export default function EmployeeUtilization() {
     });
     return map;
   }, [allProjects, period]);
+
+  if (utilizationLoading) {
+    return (
+      <div className="p-6 lg:p-8 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <div className="animate-spin h-8 w-8 border-3 border-primary/30 border-t-primary rounded-full mx-auto mb-4" />
+          <p className="text-muted-foreground text-sm">Loading utilisation data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (allUsers.length === 0) {
+    return (
+      <div className="p-6 lg:p-8 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <Users className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+          <p className="font-medium text-foreground">No team members yet</p>
+          <p className="text-sm text-muted-foreground mt-1">Add users to start tracking staff utilisation.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 lg:p-8 space-y-6">

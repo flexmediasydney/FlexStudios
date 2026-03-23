@@ -395,7 +395,7 @@ export default function EventDetailsDialog({
             <span className="flex items-center gap-2">
               <actType.Icon className="h-5 w-5" style={{ color: actType.color }} />
               {event ? (editable ? `Edit ${actType.label}` : actType.label) : `New ${actType.label}`}
-              {event?.is_done && <Badge className="bg-green-100 text-green-700">✓ Done</Badge>}
+              {event?.is_done && <Badge className="bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">✓ Done</Badge>}
             </span>
             {editable && <kbd className="text-[10px] font-normal text-muted-foreground bg-muted px-2 py-1 rounded border">Ctrl+S to save</kbd>}
           </DialogTitle>
@@ -406,8 +406,8 @@ export default function EventDetailsDialog({
 
         <form onSubmit={editable ? handleSubmit : (e) => e.preventDefault()} className="space-y-4">
           {isOtherUserEvent && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-              <p className="text-xs text-amber-700 font-medium">
+            <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2">
+              <p className="text-xs text-amber-700 dark:text-amber-400 font-medium">
                 This activity belongs to another team member and cannot be edited here.
               </p>
             </div>
@@ -436,9 +436,9 @@ export default function EventDetailsDialog({
               const entries = Object.entries(responses);
               if (entries.length === 0) return null;
               const statusConfig = {
-                accepted:    { label: 'Accepted',    cls: 'bg-green-100 text-green-700' },
-                declined:    { label: 'Declined',    cls: 'bg-red-100 text-red-700' },
-                tentative:   { label: 'Tentative',   cls: 'bg-amber-100 text-amber-700' },
+                accepted:    { label: 'Accepted',    cls: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400' },
+                declined:    { label: 'Declined',    cls: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400' },
+                tentative:   { label: 'Tentative',   cls: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400' },
                 needsAction: { label: 'No response', cls: 'bg-muted text-muted-foreground' },
               };
               return (
@@ -493,7 +493,7 @@ export default function EventDetailsDialog({
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all hover:scale-105 active:scale-95"
                   style={formData.activity_type === key
                     ? { backgroundColor: bgColor, borderColor: color, color, boxShadow: `0 0 0 2px ${color}20` }
-                    : { backgroundColor: 'transparent', borderColor: '#e2e8f0', color: '#64748b' }
+                    : { backgroundColor: 'transparent', borderColor: 'var(--border)', color: 'var(--muted-foreground)' }
                   }
                   title={`Set activity type to ${label}`}
                 >

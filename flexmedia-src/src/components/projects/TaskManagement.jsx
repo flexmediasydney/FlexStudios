@@ -547,6 +547,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       }
 
       scheduleDeadlineSync(projectId, 'task_completed');
+      toast.success(task.is_completed ? "Task re-opened" : "Task completed");
     } catch (err) {
       toast.error(err.message || "Failed to update task");
     }

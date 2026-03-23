@@ -26,7 +26,7 @@ export default function ClientMonitor() {
   });
 
   // Fetch external listings for selected agent
-  const { data: externalListings = [] } = useQuery({
+  const { data: externalListings = [], isLoading: listingsLoading } = useQuery({
     queryKey: ["externalListings", selectedAgent?.id, refreshKey],
     queryFn: () =>
       selectedAgent
@@ -158,9 +158,12 @@ export default function ClientMonitor() {
         )}
 
         {/* Comparison */}
-        {projectsLoading ? (
+        {(projectsLoading || listingsLoading) ? (
           <div className="flex items-center justify-center p-12">
-            <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+            <div className="text-center">
+              <Loader2 className="h-8 w-8 animate-spin text-slate-400 mx-auto mb-2" />
+              <p className="text-sm text-slate-500">Loading projects and listings...</p>
+            </div>
           </div>
         ) : (
           <ListingComparison

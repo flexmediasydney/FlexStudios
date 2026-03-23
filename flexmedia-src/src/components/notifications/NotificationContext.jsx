@@ -60,24 +60,31 @@ export function NotificationProvider({ children }) {
         // Only process if this is our notification
         if (event.data.user_id !== currentUser.id) return;
 
+        // BUG FIX: avoid calling setUnreadCount inside setNotifications updater.
+        // Nesting state setters inside updaters is an anti-pattern that can cause
+        // issues with React concurrent features. Compute and set separately.
         setNotifications(prev => {
-          let updated;
           // Bug fix: use event.data.id (notification ID), not event.id
           if (event.data.is_dismissed) {
-            updated = prev.filter(n => n.id !== event.data.id);
-          } else {
-            updated = prev.map(n => n.id === event.data.id ? event.data : n);
+            return prev.filter(n => n.id !== event.data.id);
           }
-          setUnreadCount(updated.filter(n => !n.is_read && !n.is_dismissed).length);
-          return updated;
+          return prev.map(n => n.id === event.data.id ? event.data : n);
+        });
+        // Recompute unread count from the notification list after update
+        setNotifications(current => {
+          setUnreadCount(current.filter(n => !n.is_read && !n.is_dismissed).length);
+          return current; // no mutation, just reading
         });
       } else if (event.type === 'delete') {
+        // BUG FIX: same pattern — separate the count update from the list update
         setNotifications(prev => {
           // Bug fix: use event.data?.id with fallback to event.id for deletes
           const deletedId = event.data?.id || event.id;
-          const updated = prev.filter(n => n.id !== deletedId);
-          setUnreadCount(updated.filter(n => !n.is_read && !n.is_dismissed).length);
-          return updated;
+          return prev.filter(n => n.id !== deletedId);
+        });
+        setNotifications(current => {
+          setUnreadCount(current.filter(n => !n.is_read && !n.is_dismissed).length);
+          return current;
         });
       }
     });
@@ -92,18 +99,20 @@ export function NotificationProvider({ children }) {
     return () => clearInterval(pollRef.current);
   }, [currentUser?.id, fetchNotifications]);
 
+  // BUG FIX: compute wasUnread inside the updater and call setUnreadCount from there,
+  // matching the pattern used in dismiss(). The previous approach relied on the
+  // wasUnread variable being set synchronously inside setNotifications before
+  // setUnreadCount was called — fragile under React concurrent mode.
   const markRead = useCallback(async (notificationId) => {
-    let wasUnread = false;
-    setNotifications(prev =>
-      prev.map(n => {
-        if (n.id === notificationId) {
-          if (!n.is_read) wasUnread = true;
-          return { ...n, is_read: true };
-        }
-        return n;
-      })
-    );
-    if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
+    setNotifications(prev => {
+      const target = prev.find(n => n.id === notificationId);
+      if (target && !target.is_read) {
+        setUnreadCount(c => Math.max(0, c - 1));
+      }
+      return prev.map(n =>
+        n.id === notificationId ? { ...n, is_read: true } : n
+      );
+    });
     try {
       await api.entities.Notification.update(notificationId, {
         is_read: true,

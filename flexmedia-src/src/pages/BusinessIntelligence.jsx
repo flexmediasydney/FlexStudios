@@ -93,9 +93,9 @@ export default function BusinessIntelligence() {
   const [period, setPeriod] = useState("3m");
 
   // All hooks must be called unconditionally (React rules of hooks)
-  const { data: allProjects = [] }   = useEntityList("Project");
-  const { data: allRevisions = [] }  = useEntityList("ProjectRevision");
-  const { data: allUsers = [] }      = useEntityList("User");
+  const { data: allProjects = [], loading: projectsLoading }   = useEntityList("Project");
+  const { data: allRevisions = [], loading: revisionsLoading }  = useEntityList("ProjectRevision");
+  const { data: allUsers = [], loading: usersLoading }      = useEntityList("User");
   const { data: allAgencies = [] }   = useEntityList("Agency");
   const { data: allAgents = [] }     = useEntityList("Agent");
   const { data: webhookLogs = [] }   = useEntityList("TonomoWebhookLog", "-received_at", 500);
@@ -103,6 +103,8 @@ export default function BusinessIntelligence() {
   const { data: allTimeLogs = [] }   = useEntityList("TaskTimeLog", "-created_date", 2000);
   const { data: allEmails = [] }     = useEntityList("EmailMessage", "-received_at", 1000);
   const { data: allNotifs = [] }     = useEntityList("Notification", "-created_date", 500);
+
+  const biLoading = projectsLoading || revisionsLoading || usersLoading;
 
   // ── Data truncation warning ───────────────────────────────────────────────
   const DATA_WARNING_THRESHOLD = 950;
@@ -384,6 +386,29 @@ export default function BusinessIntelligence() {
 
   if (!canSeeBI) {
     return <div className="p-8 text-center text-muted-foreground">Access denied — admin only</div>;
+  }
+
+  if (biLoading) {
+    return (
+      <div className="p-6 lg:p-8 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <div className="animate-spin h-8 w-8 border-3 border-primary/30 border-t-primary rounded-full mx-auto mb-4" />
+          <p className="text-muted-foreground text-sm">Loading business intelligence...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (allProjects.length === 0) {
+    return (
+      <div className="p-6 lg:p-8 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <TrendingUp className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+          <p className="font-medium text-foreground">No project data yet</p>
+          <p className="text-sm text-muted-foreground mt-1">Business intelligence will populate once projects are created.</p>
+        </div>
+      </div>
+    );
   }
 
   return (

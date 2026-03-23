@@ -5,9 +5,11 @@ import { TrendingUp, Users, Building2, Target, Calendar, DollarSign } from 'luci
 import { useEntityList } from '@/components/hooks/useEntityData';
 
 export default function ProspectingDashboard() {
-  const { data: agents = [] } = useEntityList('Agent');
-  const { data: agencies = [] } = useEntityList('Agency');
-  const { data: interactions = [] } = useEntityList('InteractionLog');
+  const { data: agents = [], loading: agentsLoading } = useEntityList('Agent');
+  const { data: agencies = [], loading: agenciesLoading } = useEntityList('Agency');
+  const { data: interactions = [], loading: interactionsLoading } = useEntityList('InteractionLog');
+
+  const dashboardLoading = agentsLoading || agenciesLoading || interactionsLoading;
 
   const metrics = useMemo(() => {
     const prospectingAgents = agents.filter(a => a.relationship_state === 'Prospecting');
@@ -71,6 +73,17 @@ export default function ProspectingDashboard() {
       </CardContent>
     </Card>
   );
+
+  if (dashboardLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <div className="animate-spin h-6 w-6 border-2 border-primary/30 border-t-primary rounded-full mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

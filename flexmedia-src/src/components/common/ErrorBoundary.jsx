@@ -33,7 +33,9 @@ class ErrorBoundary extends Component {
   // Reset error state when the resetKey prop changes (e.g. on route navigation)
   componentDidUpdate(prevProps) {
     if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
-      this.setState({ hasError: false, error: null, errorInfo: null, showStack: false });
+      // BUG FIX: also increment internal resetKey so children remount with a new key,
+      // preventing the same broken component from immediately re-throwing
+      this.setState(s => ({ hasError: false, error: null, errorInfo: null, showStack: false, resetKey: s.resetKey + 1 }));
     }
   }
 

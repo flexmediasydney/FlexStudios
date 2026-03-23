@@ -26,7 +26,7 @@ export default function MediaDeliveryManager({ projectId, project }) {
     watermark_enabled: false
   });
 
-  const { data: allMedia = [] } = useEntityList(
+  const { data: allMedia = [], loading: mediaLoading } = useEntityList(
     projectId ? "ProjectMedia" : null,
     null,
     null,
@@ -87,6 +87,23 @@ export default function MediaDeliveryManager({ projectId, project }) {
   };
 
   const isConfigured = config.dropbox_link && config.is_published;
+
+  if (mediaLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Media Delivery</CardTitle>
+          <CardDescription>Configure Dropbox link and client access</CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-center py-12">
+          <div className="text-center">
+            <div className="animate-spin h-6 w-6 border-2 border-primary/30 border-t-primary rounded-full mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground">Loading media settings...</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card>

@@ -11,7 +11,7 @@ import {
   ExternalLink, Edit, Trash2, CheckCircle, Building,
   Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Copy, Camera
 } from "lucide-react";
-import { PROJECT_STAGES, PROJECT_OUTCOMES, PROJECT_PAYMENT_STATUSES, stageConfig, stageLabel } from "@/components/projects/projectStatuses";
+import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import StagePipeline from "@/components/projects/StagePipeline";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,7 +56,6 @@ import { createNotification, createNotificationsForUsers, writeFeedEvent } from 
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 
-const statuses = PROJECT_STAGES;
 
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
 // creating a new Set on every render. Since it's a constant, it belongs here.
@@ -504,13 +503,15 @@ export default function ProjectDetails() {
 
      return result;
    },
-   onSuccess: () => {
+   onSuccess: (_, newStatus) => {
      refetchEntityList("Project");
      refetchEntityList("ProjectActivity");
      refetchEntityList("ProjectTask");
      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+     toast.success(`Status updated to ${stageLabel(newStatus) || newStatus}`);
    },
    onError: (err) => {
+     toast.error(err?.message || "Failed to update project status");
      setErrorMessage(err?.message || "Failed to update project status");
    },
    });
@@ -561,11 +562,13 @@ export default function ProjectDetails() {
 
       return result;
     },
-    onSuccess: () => {
+    onSuccess: (_, outcome) => {
       refetchEntityList("Project");
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      toast.success(`Outcome set to ${outcome}`);
     },
     onError: (err) => {
+      toast.error(err?.message || "Failed to update outcome");
       setErrorMessage(err?.message || "Failed to update outcome");
     }
     });
@@ -619,11 +622,13 @@ export default function ProjectDetails() {
 
       return result;
       },
-      onSuccess: () => {
+      onSuccess: (_, payment_status) => {
         refetchEntityList("Project");
         queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+        toast.success(`Payment status updated to ${payment_status}`);
       },
       onError: (err) => {
+      toast.error(err?.message || "Failed to update payment status");
       setErrorMessage(err?.message || "Failed to update payment status");
       }
       });
@@ -640,8 +645,12 @@ export default function ProjectDetails() {
       logActivity('invoiced_amount_changed',
         `Invoiced amount set to ${amount ? `$${parseFloat(amount).toLocaleString('en-AU')}` : 'cleared'}`
       );
+      toast.success(amount ? `Invoiced amount set to $${parseFloat(amount).toLocaleString('en-AU')}` : 'Invoiced amount cleared');
     },
-    onError: (err) => setErrorMessage(err.message || 'Failed to update invoiced amount'),
+    onError: (err) => {
+      toast.error(err.message || 'Failed to update invoiced amount');
+      setErrorMessage(err.message || 'Failed to update invoiced amount');
+    },
   });
 
   const updateAgentMutation = useMutation({
@@ -696,6 +705,7 @@ export default function ProjectDetails() {
       toast.success('Agent updated successfully');
       },
       onError: (err) => {
+      toast.error(err?.message || "Failed to update agent");
       setErrorMessage(err?.message || "Failed to update agent");
       }
       });
@@ -737,9 +747,11 @@ export default function ProjectDetails() {
       refetchEntityList("ProjectActivity");
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       setErrorMessage(null);
+      toast.success("Project deleted");
       navigate(createPageUrl("Projects"));
     },
     onError: (err) => {
+      toast.error(err?.message || "Failed to delete project");
       setErrorMessage(err?.message || "Failed to delete project");
     }
     });

@@ -1,5 +1,5 @@
 import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
-import { supabase, supabaseAdmin } from '@/api/supabaseClient';
+import { supabase } from '@/api/supabaseClient';
 
 const AuthContext = createContext();
 
@@ -65,7 +65,9 @@ export const AuthProvider = ({ children }) => {
       } else if (!appUser.is_active) {
         setAuthError({ type: 'user_deactivated', message: 'Your account has been deactivated.' });
         setIsAuthenticated(false);
-        supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        // BUG FIX: defer signOut so it doesn't re-enter onAuthStateChange
+        // and clear the deactivated error via the SIGNED_OUT handler
+        setTimeout(() => supabase.auth.signOut({ scope: 'local' }).catch(() => {}), 0);
       } else {
         setUser(appUser);
         setIsAuthenticated(true);
@@ -104,14 +106,18 @@ export const AuthProvider = ({ children }) => {
     const init = async () => {
       // Step 1: Try getSession() with a 4-second timeout
       let session = null;
+      let sessionTimeoutId = null;
       try {
-        const timeout = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 4000)
-        );
+        const timeout = new Promise((_, reject) => {
+          sessionTimeoutId = setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 4000);
+        });
         const result = await Promise.race([supabase.auth.getSession(), timeout]);
+        clearTimeout(sessionTimeoutId);
         session = result?.data?.session;
       } catch {
         // getSession hung or threw — fall through to localStorage
+        // BUG FIX: clear the timeout so it doesn't fire after we've moved on
+        if (sessionTimeoutId) clearTimeout(sessionTimeoutId);
       }
 
       if (cancelled) return;
@@ -152,7 +158,9 @@ export const AuthProvider = ({ children }) => {
           setUser(null);
           setIsAuthenticated(false);
           setIsLoadingAuth(false);
-          setAuthError(null);
+          // BUG FIX: preserve deactivation error so the UI keeps showing
+          // the "account deactivated" message instead of the login form
+          setAuthError(prev => prev?.type === 'user_deactivated' ? prev : null);
         }
       }
     );

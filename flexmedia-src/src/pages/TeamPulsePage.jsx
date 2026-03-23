@@ -997,7 +997,14 @@ export default function TeamPulsePage() {
         )}
         {view === "board" && (
           <div className="h-full overflow-y-auto pb-4">
-            <BoardView events={displayEvents} />
+            {isLoading && displayEvents.length === 0 ? (
+              <div className="py-16 text-center text-muted-foreground">
+                <RefreshCw className="h-8 w-8 mx-auto mb-3 animate-spin text-primary/30" />
+                <p className="text-sm font-medium">Loading board...</p>
+              </div>
+            ) : (
+              <BoardView events={displayEvents} />
+            )}
           </div>
         )}
         {view === "effort" && (
@@ -1007,7 +1014,14 @@ export default function TeamPulsePage() {
         )}
         {view === "stats" && (
            <div className="h-full overflow-y-auto pb-4">
-             <StatsView events={liveEvents} users={users} />
+             {isLoading && liveEvents.length === 0 ? (
+               <div className="py-16 text-center text-muted-foreground">
+                 <RefreshCw className="h-8 w-8 mx-auto mb-3 animate-spin text-primary/30" />
+                 <p className="text-sm font-medium">Loading stats...</p>
+               </div>
+             ) : (
+               <StatsView events={liveEvents} users={users} />
+             )}
            </div>
          )}
          {view === 'notifications' && (

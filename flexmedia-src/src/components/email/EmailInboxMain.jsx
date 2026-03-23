@@ -5,21 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
-import { 
   RefreshCw,
   Plus,
   Search,
   Settings,
   Menu,
   X,
-  ChevronDown,
   Link2,
   Tag,
-  Clock
 } from "lucide-react";
 
 import { format, formatDistanceToNow, isToday } from "date-fns";
@@ -352,6 +345,9 @@ export default function EmailInboxMain() {
     mutationFn: (data) => api.entities.EmailMessage.update(data.messageId, data.updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
+    },
+    onError: (err) => {
+      toast.error(err?.message || "Failed to update email");
     }
   });
 
