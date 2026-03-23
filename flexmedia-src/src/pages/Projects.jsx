@@ -456,7 +456,7 @@ export default function Projects() {
   }, []);
 
   return (
-    <div className="p-6 lg:p-8 space-y-6">
+    <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6">
       {/* Quick Stats */}
       <QuickStatsBar projects={filteredProjects} tasks={allTasks.filter(t => filteredProjects.some(p => p.id === t.project_id) && !t.parent_task_id)} />
 
@@ -542,7 +542,7 @@ export default function Projects() {
         />
 
         {/* Date range + Priority filters */}
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap overflow-x-auto scrollbar-none pb-1">
           {/* Quick date presets */}
           {[
             { label: 'Today', days: 0 },
@@ -674,7 +674,7 @@ export default function Projects() {
               {fitToScreen ? "📌 Fitted" : "↔ Fit"}
             </Button>
           )}
-          <Tabs value={viewMode} onValueChange={setViewMode} className="hidden sm:block">
+          <Tabs value={viewMode} onValueChange={setViewMode}>
            <TabsList className="bg-muted/60 hover:bg-muted/80 transition-colors duration-200">
              <TabsTrigger value="kanban" title="Kanban board view (Ctrl+K)" className="gap-1.5 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9" aria-label="Kanban view">
                <Columns3 className="h-4 w-4" />

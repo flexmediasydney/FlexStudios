@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useMemo } from 'react';
 import { api } from '@/api/supabaseClient';
 
 export const ActiveTimersContext = createContext();
@@ -70,8 +70,15 @@ export function ActiveTimersProvider({ children, currentUser }) {
     };
   }, [currentUser?.id]);
 
+  // BUG FIX: memoize context value to prevent all consumers from re-rendering
+  // when the provider re-renders due to parent state changes unrelated to timers.
+  const contextValue = useMemo(
+    () => ({ activeTimers, setActiveTimers }),
+    [activeTimers]
+  );
+
   return (
-    <ActiveTimersContext.Provider value={{ activeTimers, setActiveTimers }}>
+    <ActiveTimersContext.Provider value={contextValue}>
       {children}
     </ActiveTimersContext.Provider>
   );

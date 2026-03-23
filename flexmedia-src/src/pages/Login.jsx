@@ -284,9 +284,13 @@ export default function Login() {
         </div>
 
         {/* Email / Phone Tab Switcher */}
-        <div className="flex rounded-lg border border-border/60 p-1 bg-muted/30">
+        <div className="flex rounded-lg border border-border/60 p-1 bg-muted/30" role="tablist" aria-label="Sign in method">
           <button
-            className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
+            role="tab"
+            aria-selected={tab === 'email'}
+            aria-controls="tab-panel-email"
+            id="tab-email"
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${
               tab === 'email'
                 ? 'bg-background shadow-sm text-foreground'
                 : 'text-muted-foreground hover:text-foreground'
@@ -296,7 +300,11 @@ export default function Login() {
             Email
           </button>
           <button
-            className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
+            role="tab"
+            aria-selected={tab === 'phone'}
+            aria-controls="tab-panel-phone"
+            id="tab-phone"
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 ${
               tab === 'phone'
                 ? 'bg-background shadow-sm text-foreground'
                 : 'text-muted-foreground hover:text-foreground'
@@ -311,7 +319,7 @@ export default function Login() {
 
         {/* Email Tab */}
         {tab === 'email' && (
-          <div className="space-y-4">
+          <div className="space-y-4" role="tabpanel" id="tab-panel-email" aria-labelledby="tab-email">
             <div className="space-y-2">
               <Label htmlFor="email">Email address</Label>
               <Input
@@ -342,7 +350,7 @@ export default function Login() {
             {/* Password Toggle */}
             <button
               type="button"
-              className="w-full flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+              className="w-full flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-2.5 min-h-[44px]"
               onClick={() => setShowPassword(p => !p)}
             >
               {showPassword ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -384,9 +392,9 @@ export default function Login() {
 
         {/* Phone Tab */}
         {tab === 'phone' && (
-          <form onSubmit={handleSendPhoneOTP} className="space-y-4">
+          <form onSubmit={handleSendPhoneOTP} className="space-y-4" role="tabpanel" id="tab-panel-phone" aria-labelledby="tab-phone">
             <div className="space-y-2">
-              <Label>Phone number</Label>
+              <Label htmlFor="phone-input">Phone number</Label>
               <PhoneInput value={phone} onChange={setPhone} disabled={loading} />
             </div>
             <Button type="submit" className="w-full h-11" disabled={!phone || phone.length < 8 || loading}>
@@ -434,7 +442,7 @@ function Shell({ children }) {
           {children}
         </CardContent>
       </Card>
-      <p className="fixed bottom-4 text-xs text-muted-foreground/50">
+      <p className="fixed bottom-4 left-0 right-0 text-center text-xs text-muted-foreground/50 px-4">
         FlexMedia Sydney
       </p>
     </div>
@@ -443,8 +451,8 @@ function Shell({ children }) {
 
 function ErrorBanner({ message }) {
   return (
-    <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-      <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+    <div role="alert" aria-live="assertive" className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+      <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" aria-hidden="true" />
       <span>{message}</span>
     </div>
   );

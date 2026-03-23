@@ -28,10 +28,34 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedName = fullName.trim();
+
+    // Validate email format (HTML type="email" is easily bypassed)
+    if (!trimmedEmail) {
+      toast.error("Email address is required");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      toast.error("Please enter a valid email address");
+      return;
+    }
+
+    // Validate name is not whitespace-only if provided
+    if (fullName && !trimmedName) {
+      toast.error("Name cannot be only whitespace");
+      return;
+    }
+    if (trimmedName.length > 120) {
+      toast.error("Name must be 120 characters or fewer");
+      return;
+    }
+
     setLoading(true);
 
     try {
-      await api.users.inviteUser(email, role, fullName || undefined);
+      await api.users.inviteUser(trimmedEmail, role, trimmedName || undefined);
       await queryClient.invalidateQueries({ queryKey: ["users"] });
       await queryClient.invalidateQueries({ queryKey: ["internal-teams"] });
       toast.success("Invitation sent successfully!");
@@ -65,6 +89,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               placeholder="user@example.com"
               required
               disabled={loading}
+              maxLength={100}
             />
           </div>
 
@@ -77,6 +102,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               onChange={(e) => setFullName(e.target.value)}
               placeholder="Jane Smith"
               disabled={loading}
+              maxLength={120}
             />
             <p className="text-xs text-muted-foreground mt-1">
               Optional. They can update this after accepting the invite.
@@ -106,7 +132,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={loading || !email}>
+            <Button type="submit" disabled={loading || !email.trim()}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Send Invitation
             </Button>

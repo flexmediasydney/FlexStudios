@@ -73,6 +73,7 @@ export default function GlobalSearch({ open, onClose }) {
   const [recentSearches, setRecentSearches] = useState([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef(null);
+  const selectedItemRef = useRef(null);
 
   // ── Data (all from shared cache — zero extra API calls) ─────────────────
   const { data: allProjects = [] } = useEntityList("Project");
@@ -92,6 +93,13 @@ export default function GlobalSearch({ open, onClose }) {
 
   // Reset selected index when query changes
   useEffect(() => { setSelectedIndex(0); }, [query]);
+
+  // Scroll selected item into view for keyboard navigation
+  useEffect(() => {
+    if (selectedItemRef.current) {
+      selectedItemRef.current.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedIndex]);
 
   // ── Search results ───────────────────────────────────────────────────────
   const q = query.trim().toLowerCase();
@@ -214,17 +222,21 @@ export default function GlobalSearch({ open, onClose }) {
   // Show recent searches when query is empty
   const showRecents = !q && recentSearches.length > 0;
 
+  // Track a running flat index counter for rendering
+  let flatIndexCounter = 0;
+
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="p-0 gap-0 shadow-xl max-w-xl overflow-hidden">
-        <Command shouldFilter={false} className="rounded-lg">
+      <DialogContent className="p-0 gap-0 shadow-xl max-w-xl overflow-hidden" aria-label="Global search">
+        <Command shouldFilter={false} className="rounded-lg" aria-label="Search results">
           <div className="flex items-center border-b px-3 gap-2">
-            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <CommandInput
               placeholder="Search projects, contacts, emails..."
               value={query}
               onValueChange={setQuery}
               className="border-0 focus:ring-0 h-12 text-sm"
+              aria-label="Search projects, contacts, and emails"
             />
             <div className="flex items-center gap-1.5 shrink-0">
               {query && (
@@ -243,6 +255,14 @@ export default function GlobalSearch({ open, onClose }) {
           </div>
 
           <CommandList className="max-h-[480px]" ref={listRef}>
+            {/* Screen reader announcement for result count */}
+            {q.length >= 2 && (
+              <div aria-live="polite" aria-atomic="true" className="sr-only">
+                {totalResults === 0
+                  ? `No results found for ${query}`
+                  : `${totalResults} result${totalResults !== 1 ? 's' : ''} found`}
+              </div>
+            )}
             {/* Recent Searches (when query is empty) */}
             {showRecents && (
               <CommandGroup heading={
@@ -323,17 +343,22 @@ export default function GlobalSearch({ open, onClose }) {
                       <Badge variant="secondary" className="ml-1 text-[10px] h-4 px-1.5">{projectResults.length}</Badge>
                     </span>
                   }>
-                    {projectResults.map(p => (
+                    {projectResults.map(p => {
+                      const myIdx = flatResults.findIndex(r => r.type === 'project' && r.data.id === p.id);
+                      const isSelected = myIdx === selectedIndex;
+                      return (
                       <CommandItem
                         key={p.id}
                         value={`project-${p.id}`}
+                        ref={isSelected ? selectedItemRef : undefined}
                         onSelect={() => {
                           setRecentSearches(saveRecentSearch(query.trim()));
                           onClose();
                           navigate(createPageUrl("ProjectDetails") + `?id=${p.id}`);
                         }}
-                        className="flex items-start gap-3 py-3 cursor-pointer hover:bg-accent transition-colors duration-150"
+                        className={`flex items-start gap-3 py-3 cursor-pointer hover:bg-accent transition-colors duration-150 ${isSelected ? 'bg-accent ring-2 ring-primary/30' : ''}`}
                         aria-label={`Go to project ${p.title}`}
+                        aria-selected={isSelected}
                       >
                         <div className="mt-0.5 shrink-0 w-7 h-7 rounded-md bg-blue-50 flex items-center justify-center">
                           <Camera className="h-3.5 w-3.5 text-blue-600" />
@@ -374,7 +399,8 @@ export default function GlobalSearch({ open, onClose }) {
                           </div>
                         </div>
                       </CommandItem>
-                    ))}
+                    );
+                    })}
                   </CommandGroup>
                 )}
 
@@ -387,17 +413,22 @@ export default function GlobalSearch({ open, onClose }) {
                       <Badge variant="secondary" className="ml-1 text-[10px] h-4 px-1.5">{agentResults.length}</Badge>
                     </span>
                   }>
-                    {agentResults.map(a => (
+                    {agentResults.map(a => {
+                      const myIdx = flatResults.findIndex(r => r.type === 'agent' && r.data.id === a.id);
+                      const isSelected = myIdx === selectedIndex;
+                      return (
                       <CommandItem
                         key={a.id}
                         value={`agent-${a.id}`}
+                        ref={isSelected ? selectedItemRef : undefined}
                         onSelect={() => {
                           setRecentSearches(saveRecentSearch(query.trim()));
                           onClose();
                           navigate(createPageUrl("PersonDetails") + `?id=${a.id}`);
                         }}
-                        className="flex items-start gap-3 py-3 cursor-pointer hover:bg-accent transition-colors duration-150"
+                        className={`flex items-start gap-3 py-3 cursor-pointer hover:bg-accent transition-colors duration-150 ${isSelected ? 'bg-accent ring-2 ring-primary/30' : ''}`}
                         aria-label={`Go to contact ${a.name}`}
+                        aria-selected={isSelected}
                       >
                         <div className="mt-0.5 shrink-0 w-7 h-7 rounded-md bg-emerald-50 flex items-center justify-center">
                           <Users className="h-3.5 w-3.5 text-emerald-600" />
@@ -419,7 +450,8 @@ export default function GlobalSearch({ open, onClose }) {
                           )}
                         </div>
                       </CommandItem>
-                    ))}
+                    );
+                    })}
                   </CommandGroup>
                 )}
 
@@ -434,17 +466,21 @@ export default function GlobalSearch({ open, onClose }) {
                   }>
                     {emailResults.map(e => {
                       const snippet = stripHtml(e.body).substring(0, 100);
+                      const myIdx = flatResults.findIndex(r => r.type === 'email' && r.data.id === e.id);
+                      const isSelected = myIdx === selectedIndex;
                       return (
                         <CommandItem
                           key={e.id}
                           value={`email-${e.id}`}
+                          ref={isSelected ? selectedItemRef : undefined}
                           onSelect={() => {
                             setRecentSearches(saveRecentSearch(query.trim()));
                             onClose();
                             navigate(createPageUrl("Inbox") + `?thread=${e.gmail_thread_id || e.id}`);
                           }}
-                          className="flex items-start gap-3 py-3 cursor-pointer hover:bg-accent transition-colors duration-150"
+                          className={`flex items-start gap-3 py-3 cursor-pointer hover:bg-accent transition-colors duration-150 ${isSelected ? 'bg-accent ring-2 ring-primary/30' : ''}`}
                           aria-label={`Go to email: ${e.subject}`}
+                          aria-selected={isSelected}
                         >
                           <div className="mt-0.5 shrink-0 w-7 h-7 rounded-md bg-violet-50 flex items-center justify-center">
                             <Mail className="h-3.5 w-3.5 text-violet-600" />
@@ -488,17 +524,22 @@ export default function GlobalSearch({ open, onClose }) {
                       <Badge variant="secondary" className="ml-1 text-[10px] h-4 px-1.5">{agencyResults.length}</Badge>
                     </span>
                   }>
-                    {agencyResults.map(a => (
+                    {agencyResults.map(a => {
+                      const myIdx = flatResults.findIndex(r => r.type === 'agency' && r.data.id === a.id);
+                      const isSelected = myIdx === selectedIndex;
+                      return (
                       <CommandItem
                         key={a.id}
                         value={`agency-${a.id}`}
+                        ref={isSelected ? selectedItemRef : undefined}
                         onSelect={() => {
                           setRecentSearches(saveRecentSearch(query.trim()));
                           onClose();
                           navigate(createPageUrl("ClientAgents") + `?agency=${a.id}`);
                         }}
-                        className="flex items-start gap-3 py-3 cursor-pointer hover:bg-accent transition-colors duration-150"
+                        className={`flex items-start gap-3 py-3 cursor-pointer hover:bg-accent transition-colors duration-150 ${isSelected ? 'bg-accent ring-2 ring-primary/30' : ''}`}
                         aria-label={`Go to agency ${a.name}`}
+                        aria-selected={isSelected}
                       >
                         <div className="mt-0.5 shrink-0 w-7 h-7 rounded-md bg-amber-50 flex items-center justify-center">
                           <Building2 className="h-3.5 w-3.5 text-amber-600" />
@@ -512,7 +553,8 @@ export default function GlobalSearch({ open, onClose }) {
                           )}
                         </div>
                       </CommandItem>
-                    ))}
+                    );
+                    })}
                   </CommandGroup>
                 )}
 

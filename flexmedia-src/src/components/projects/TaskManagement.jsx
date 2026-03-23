@@ -643,11 +643,11 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       }}>
         <DialogContent className="max-w-md" onKeyDown={(e) => {
           if (e.key === 'Escape') setShowAddDialog(false);
-          if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (newTask.title?.trim()) createMutation.mutate({ ...newTask, task_type: newTask.task_type || "back_office" }); }
+          if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (newTask.title?.trim()) createMutation.mutate({ ...newTask, title: newTask.title.trim(), description: (newTask.description || '').trim() || null, task_type: newTask.task_type || "back_office" }); }
         }}>
           <DialogHeader><DialogTitle>Add Task</DialogTitle></DialogHeader>
           <div className="space-y-3">
-             <Input placeholder="Task title *" value={newTask.title} onChange={e => setNewTask(p => ({ ...p, title: e.target.value }))} autoFocus aria-label="Task title" disabled={createMutation.isPending} />
+             <Input placeholder="Task title *" value={newTask.title} onChange={e => setNewTask(p => ({ ...p, title: e.target.value }))} autoFocus aria-label="Task title" disabled={createMutation.isPending} maxLength={255} />
              <Textarea placeholder="Description (optional)" value={newTask.description || ""} onChange={e => setNewTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} aria-label="Task description" disabled={createMutation.isPending} />
              <p className="text-xs text-muted-foreground text-right">{(newTask.description || "").length}/500</p>
              <div>
@@ -688,7 +688,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
             <Button variant="outline" onClick={() => setShowAddDialog(false)} disabled={createMutation.isPending}>Cancel</Button>
             <Button 
               disabled={!newTask.title?.trim() || createMutation.isPending} 
-              onClick={() => createMutation.mutate({ ...newTask, task_type: newTask.task_type || "back_office" })} 
+              onClick={() => createMutation.mutate({ ...newTask, title: newTask.title.trim(), description: (newTask.description || '').trim() || null, task_type: newTask.task_type || "back_office" })}
               title="Ctrl+S to save"
               className="shadow-sm hover:shadow-md transition-shadow"
             >

@@ -80,8 +80,16 @@ export default function Register() {
       setError('Please enter a valid email address');
       return;
     }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    if (!/[A-Z]/.test(password)) {
+      setError('Password must contain at least one uppercase letter');
+      return;
+    }
+    if (!/[0-9]/.test(password)) {
+      setError('Password must contain at least one number');
       return;
     }
     if (password !== confirmPassword) {
@@ -220,6 +228,7 @@ export default function Register() {
                   required
                   autoFocus
                   className="h-11"
+                  maxLength={120}
                 />
               </div>
 
@@ -233,6 +242,7 @@ export default function Register() {
                   onChange={(e) => setEmail(e.target.value)}
                   required
                   className="h-11"
+                  maxLength={100}
                 />
               </div>
 
@@ -241,11 +251,12 @@ export default function Register() {
                 <Input
                   id="reg-password"
                   type="password"
-                  placeholder="Minimum 6 characters"
+                  placeholder="Min 8 chars, uppercase + number"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  minLength={6}
+                  minLength={8}
+                  maxLength={128}
                   className="h-11"
                 />
               </div>
@@ -259,7 +270,8 @@ export default function Register() {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
-                  minLength={6}
+                  minLength={8}
+                  maxLength={128}
                   className="h-11"
                 />
               </div>

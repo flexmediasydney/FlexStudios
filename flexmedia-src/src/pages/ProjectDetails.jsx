@@ -58,6 +58,10 @@ import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 const statuses = PROJECT_STAGES;
 
+// BUG FIX: moved VALID_TABS to module level — was inside the component body,
+// creating a new Set on every render. Since it's a constant, it belongs here.
+const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'tonomo']);
+
 const serviceLabels = {
   photography: "📷 Photography",
   video_tour: "🎬 Video Tour",
@@ -143,8 +147,9 @@ function InvoicedAmountInput({ value, onSave, isPending }) {
 }
 
 export default function ProjectDetails() {
-   const urlParams = new URLSearchParams(window.location.search);
-   const projectId = urlParams.get("id");
+   // BUG FIX: useMemo the URL parse — was creating new URLSearchParams on every render.
+   // projectId only changes when the URL changes (which triggers a re-render anyway).
+   const projectId = useMemo(() => new URLSearchParams(window.location.search).get("id"), []);
    const navigate = useNavigate();
 
    useEffect(() => {
@@ -166,7 +171,7 @@ export default function ProjectDetails() {
    const [pendingBackwardStage, setPendingBackwardStage] = useState(null);
 
    // Tab state — persisted in URL ?tab= param so reload preserves active tab
-   const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'tonomo']);
+   // (VALID_TABS is now at module level to avoid re-creating the Set every render)
    const [activeTab, setActiveTab] = useState(() => {
      const params = new URLSearchParams(window.location.search);
      const tab = params.get('tab');
@@ -190,7 +195,7 @@ export default function ProjectDetails() {
    };
 
    // ── Data fetching — must come BEFORE any hooks that reference project ──
-   const { data: projectRaw, loading: isLoading } = useSmartEntityData('Project', projectId, { priority: 10 });
+   const { data: projectRaw, loading: isLoading, error: projectError } = useSmartEntityData('Project', projectId, { priority: 10 });
    // Stable ref: once project loads, never revert to null (prevents crash during cache refresh)
    const projectStableRef = useRef(null);
    if (projectRaw) projectStableRef.current = projectRaw;
@@ -767,11 +772,17 @@ export default function ProjectDetails() {
     );
   }
 
-  if (!project) {
+  if (projectError || !project) {
     return (
       <div className="p-6 lg:p-8">
         <Card className="p-12 text-center">
-          <h3 className="text-lg font-medium mb-2">Project not found</h3>
+          <AlertCircle className="h-10 w-10 text-red-500 mx-auto mb-4" />
+          <h3 className="text-lg font-medium mb-2">
+            {projectError ? 'Failed to load project' : 'Project not found'}
+          </h3>
+          <p className="text-sm text-muted-foreground mb-4">
+            {projectError?.message || 'This project may have been deleted or you don\'t have access.'}
+          </p>
           <Link to={createPageUrl("Projects")}>
             <Button>Back to Projects</Button>
           </Link>

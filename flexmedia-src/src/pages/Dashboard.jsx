@@ -193,64 +193,40 @@ export default function Dashboard() {
     queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
   }, [queryClient]);
 
-  // Executive-level analytics - using the existing analytics data
+  // BUG FIX: executiveMetrics was a near-duplicate of `analytics` above,
+  // re-filtering and re-parsing the same projects/tasks/timeLogs arrays.
+  // On a 500-project dashboard this doubled the CPU cost on every data change.
+  // Now derived from `analytics` with only the additional fields it needs.
   const executiveMetrics = useMemo(() => {
     const now = new Date();
     const last7Days = subDays(now, 7);
     const last14Days = subDays(now, 14);
-
-    // Prefer invoiced_amount when set (actual billed), fall back to calculated/quoted price
     const projectValue = (p) => p.invoiced_amount ?? p.calculated_price ?? p.price ?? 0;
 
     const thisWeekProjects = projects.filter(p => p.created_date && new Date(fixTimestamp(p.created_date)) >= last7Days);
     const lastWeekProjects = projects.filter(p => p.created_date && new Date(fixTimestamp(p.created_date)) >= last14Days && new Date(fixTimestamp(p.created_date)) < last7Days);
-    
-    const thisWeekRevenue = thisWeekProjects.reduce((sum, p) => sum + projectValue(p), 0);
-    const lastWeekRevenue = lastWeekProjects.reduce((sum, p) => sum + projectValue(p), 0);
-    const totalRevenue = projects.reduce((sum, p) => sum + projectValue(p), 0);
-    
-    const revenueGrowth = lastWeekRevenue > 0 ? ((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue * 100).toFixed(1) : 0;
     const projectsGrowth = lastWeekProjects.length > 0 ? ((thisWeekProjects.length - lastWeekProjects.length) / lastWeekProjects.length * 100).toFixed(1) : 0;
-    
-    const activeProjects = projects.filter(p => !["delivered"].includes(p.status));
-    const completedProjects = projects.filter(p => p.status === "delivered");
-    const completionRate = projects.length > 0 ? (completedProjects.length / projects.length * 100).toFixed(0) : 0;
-    
-    const completedThisWeek = completedProjects.filter(p => p.updated_date && new Date(fixTimestamp(p.updated_date)) >= last7Days).length;
-    const completedLastWeek = completedProjects.filter(p => p.updated_date && new Date(fixTimestamp(p.updated_date)) >= last14Days && new Date(fixTimestamp(p.updated_date)) < last7Days).length;
-    const completionTrend = completedLastWeek > 0 ? ((completedThisWeek - completedLastWeek) / completedLastWeek * 100).toFixed(1) : 0;
 
-    const averageValue = projects.length > 0 ? totalRevenue / projects.length : 0;
-    const deliveredWithDates = completedProjects.filter(p => p.created_date && p.updated_date);
-    const deliverySpeed = deliveredWithDates.length > 0
-      ? Math.round(deliveredWithDates.reduce((sum, p) => sum + differenceInDays(new Date(fixTimestamp(p.updated_date)), new Date(fixTimestamp(p.created_date))), 0) / deliveredWithDates.length)
-      : 0;
-
-    const totalSeconds = allTimeLogs.filter(l => l.created_date && new Date(fixTimestamp(l.created_date)) >= last7Days).reduce((sum, log) => sum + (log.total_seconds || 0), 0);
-    const estimatedSeconds = allTasks.reduce((sum, t) => sum + ((t.estimated_minutes || 0) * 60), 0);
-    const teamUtilization = estimatedSeconds > 0 ? Math.round((totalSeconds / estimatedSeconds) * 100) : 75;
-    
-    const overdueItems = allTasks.filter(t => !t.is_completed && t.due_date && new Date(fixTimestamp(t.due_date)) < now).length;
-
+    // Reuse values already computed in analytics
     return {
-      totalRevenue,
-      revenueGrowth: parseFloat(revenueGrowth),
-      activeProjects: activeProjects.length,
+      totalRevenue: analytics.totalRevenue,
+      revenueGrowth: analytics.revenueGrowth,
+      activeProjects: analytics.activeProjectCount,
       projectsGrowth: parseFloat(projectsGrowth),
-      completionRate: parseFloat(completionRate),
-      completionTrend: parseFloat(completionTrend),
-      averageValue,
-      valueGrowth: 0, // Bug fix: was hardcoded 5.2, misleading users with fake data
-      deliverySpeed,
-      speedTrend: 0, // Bug fix: was hardcoded -1, misleading users with fake data
-      clientSatisfaction: 0, // Bug fix: was hardcoded 92, not connected to real data
-      satisfactionTrend: 0, // Bug fix: was hardcoded 3
-      teamUtilization,
-      utilizationTrend: 0, // Bug fix: was hardcoded 2
-      overdueItems,
-      overdueTrend: 0 // Bug fix: was hardcoded -2
+      completionRate: analytics.completionRate,
+      completionTrend: analytics.completionTrend,
+      averageValue: analytics.averageValue,
+      valueGrowth: 0,
+      deliverySpeed: analytics.deliverySpeed,
+      speedTrend: 0,
+      clientSatisfaction: 0,
+      satisfactionTrend: 0,
+      teamUtilization: analytics.teamUtilization,
+      utilizationTrend: 0,
+      overdueItems: analytics.overdueItems,
+      overdueTrend: 0
     };
-  }, [projects, allTasks, allTimeLogs]);
+  }, [analytics, projects]);
 
   // Revenue breakdown by status
   const revenueBreakdown = useMemo(() => {
@@ -267,18 +243,27 @@ export default function Dashboard() {
   }, [projects]);
 
   // Velocity data (last 8 weeks)
+  // BUG FIX: capture `now` once outside the loop to avoid calling new Date()
+  // 8 times per memo invocation. Each call returns a slightly different ms value,
+  // which could cause inconsistent week boundaries if the memo runs near midnight.
+  // Also pre-parse project dates once instead of re-parsing inside every filter call.
   const velocityData = useMemo(() => {
+    const now = new Date();
     const weeks = [];
+    // Pre-parse dates once for O(n) instead of O(8n) re-parsing
+    const projectCreatedDates = projects.map(p => p.created_date ? new Date(fixTimestamp(p.created_date)) : null);
+    const projectUpdatedDates = projects.map(p => (p.status === "delivered" && p.updated_date) ? new Date(fixTimestamp(p.updated_date)) : null);
     for (let i = 7; i >= 0; i--) {
-      const weekStart = subWeeks(new Date(), i);
+      const weekStart = subWeeks(now, i);
       const weekEnd = addDays(weekStart, 7);
-      const created = projects.filter(p => p.created_date && new Date(fixTimestamp(p.created_date)) >= weekStart && new Date(fixTimestamp(p.created_date)) < weekEnd).length;
-      const completed = projects.filter(p => p.status === "delivered" && p.updated_date && new Date(fixTimestamp(p.updated_date)) >= weekStart && new Date(fixTimestamp(p.updated_date)) < weekEnd).length;
-      weeks.push({
-        period: `W${8 - i}`,
-        created,
-        completed
-      });
+      let created = 0, completed = 0;
+      for (let j = 0; j < projects.length; j++) {
+        const cd = projectCreatedDates[j];
+        if (cd && cd >= weekStart && cd < weekEnd) created++;
+        const ud = projectUpdatedDates[j];
+        if (ud && ud >= weekStart && ud < weekEnd) completed++;
+      }
+      weeks.push({ period: `W${8 - i}`, created, completed });
     }
     return weeks;
   }, [projects]);
@@ -477,7 +462,7 @@ export default function Dashboard() {
       {/* Dashboard Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">
        <div className="sticky top-0 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
-         <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap">
+         <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap -webkit-overflow-scrolling-touch" style={{ WebkitOverflowScrolling: 'touch' }}>
            <TabsTrigger 
              value="overview" 
              title="Main dashboard overview (Ctrl+1)" 
@@ -580,7 +565,7 @@ export default function Dashboard() {
            </ErrorBoundary>
 
           {/* Operational Widgets Row */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
+            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
               <ErrorBoundary fallbackLabel="Today's Schedule" compact>
                 <TodaysScheduleWidget projects={projects} calendarEvents={calendarEvents} />
               </ErrorBoundary>

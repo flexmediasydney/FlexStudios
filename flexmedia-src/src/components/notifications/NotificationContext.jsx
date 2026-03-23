@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 
@@ -112,21 +112,27 @@ export function NotificationProvider({ children }) {
     } catch { fetchNotifications(true); }
   }, [fetchNotifications]);
 
+  // BUG FIX: use functional updater to read current notifications state,
+  // avoiding stale closure over `notifications` which caused markAllRead
+  // to miss notifications that arrived between the last render and the click.
   const markAllRead = useCallback(async () => {
-    const unread = notifications.filter(n => !n.is_read);
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    let unreadIds = [];
+    setNotifications(prev => {
+      unreadIds = prev.filter(n => !n.is_read).map(n => n.id);
+      return prev.map(n => ({ ...n, is_read: true }));
+    });
     setUnreadCount(0);
     try {
       await Promise.all(
-        unread.map(n =>
-          api.entities.Notification.update(n.id, {
+        unreadIds.map(id =>
+          api.entities.Notification.update(id, {
             is_read: true,
             read_at: new Date().toISOString(),
           })
         )
       );
     } catch { fetchNotifications(true); }
-  }, [notifications, fetchNotifications]);
+  }, [fetchNotifications]);
 
   const dismiss = useCallback(async (notificationId) => {
     // Bug fix: compute wasUnread synchronously from current state snapshot
@@ -146,22 +152,31 @@ export function NotificationProvider({ children }) {
 
   const refresh = useCallback(() => fetchNotifications(false), [fetchNotifications]);
 
-  const criticalUnread = notifications.filter(
-    n => n.severity === 'critical' && !n.is_read && !n.is_dismissed
+  // BUG FIX: memoize criticalUnread — was recomputed on every render creating a
+  // new array reference even when notifications hadn't changed, triggering
+  // unnecessary re-renders in consumers that depend on criticalUnread.
+  const criticalUnread = useMemo(
+    () => notifications.filter(n => n.severity === 'critical' && !n.is_read && !n.is_dismissed),
+    [notifications]
   );
 
+  // BUG FIX: memoize context value to prevent all consumers from re-rendering
+  // on every provider render. Without this, every parent state change
+  // (even unrelated) forces all useNotifications() consumers to re-render.
+  const contextValue = useMemo(() => ({
+    notifications,
+    unreadCount,
+    criticalUnread,
+    loading,
+    lastFetched,
+    markRead,
+    markAllRead,
+    dismiss,
+    refresh,
+  }), [notifications, unreadCount, criticalUnread, loading, lastFetched, markRead, markAllRead, dismiss, refresh]);
+
   return (
-    <NotificationContext.Provider value={{
-      notifications,
-      unreadCount,
-      criticalUnread,
-      loading,
-      lastFetched,
-      markRead,
-      markAllRead,
-      dismiss,
-      refresh,
-    }}>
+    <NotificationContext.Provider value={contextValue}>
       {children}
     </NotificationContext.Provider>
   );

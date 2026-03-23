@@ -180,7 +180,7 @@ export default function EmailListRow({
           className={cn(
             "group relative flex items-center gap-0 border-b cursor-pointer select-none",
             "h-[56px] transition-all duration-150",
-            "hover:bg-blue-50",
+            "hover:bg-blue-50 focus-visible:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
             isSelected && "bg-blue-100 shadow-sm",
             isUnread && !isSelected && "bg-blue-50 font-medium",
             !isUnread && !isSelected && priorityClass
@@ -190,7 +190,14 @@ export default function EmailListRow({
             borderLeftWidth: accountColor || isSelected || (isUnread && !isSelected) ? '3px' : undefined,
             borderLeftColor: isSelected ? '#2563eb' : (isUnread && !isSelected) ? '#3b82f6' : (accountColor || undefined),
           }}
+          role="row"
+          tabIndex={0}
+          aria-selected={isSelected}
+          aria-label={`${isUnread ? 'Unread: ' : ''}${thread.from_name || thread.from_email || 'Unknown sender'} — ${thread.subject || 'No subject'}`}
           onClick={() => onOpen(thread)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(thread); }
+          }}
         >
       {/* Checkbox */}
       {columns.some(c => c.id === 'checkbox') && (() => {

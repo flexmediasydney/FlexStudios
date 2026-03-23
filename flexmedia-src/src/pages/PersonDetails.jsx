@@ -259,11 +259,11 @@ function ErrorState({ navigate, title, message }) {
       <Button variant="ghost" className="gap-2 mb-4" onClick={() => navigate(-1)}>
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
-      <div className="bg-red-50 border border-red-200 rounded-xl p-6 flex gap-3">
-        <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+      <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 rounded-xl p-6 flex gap-3">
+        <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
         <div>
-          <h3 className="font-semibold text-red-900">{title}</h3>
-          <p className="text-red-800 text-sm mt-1">{message}</p>
+          <h3 className="font-semibold text-red-900 dark:text-red-200">{title}</h3>
+          <p className="text-red-800 dark:text-red-300 text-sm mt-1">{message}</p>
         </div>
       </div>
     </div>
@@ -508,7 +508,7 @@ export default function PersonDetails() {
   };
 
   if (!agentId) {
-    window.location.href = createPageUrl('ClientAgents');
+    navigate(createPageUrl('ClientAgents'));
     return null;
   }
 

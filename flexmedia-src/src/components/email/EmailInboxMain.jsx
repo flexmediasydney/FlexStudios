@@ -285,8 +285,19 @@ export default function EmailInboxMain() {
   const lastSyncRef = useRef(null);
   const [syncCountdown, setSyncCountdown] = useState(null);
   const nextSyncRef = useRef(null);
+  // BUG FIX: use a ref for emailAccounts so the sync callback always reads
+  // the latest accounts without needing emailAccounts in the dep array
+  // (which caused stale closure bugs since .length was used as dep but
+  // the full array was accessed inside).
+  const emailAccountsRef = useRef(emailAccounts);
+  useEffect(() => { emailAccountsRef.current = emailAccounts; }, [emailAccounts]);
+
   useEffect(() => {
     if (emailAccounts.length === 0 || !user?.id) return;
+
+    // BUG FIX: track staggered setTimeout handles so they can be cleared on unmount.
+    // Previously, rapid account changes or unmount would leave orphaned sync calls.
+    let staggeredTimers = [];
 
     const runSync = () => {
       const now = Date.now();
@@ -294,8 +305,14 @@ export default function EmailInboxMain() {
       lastSyncRef.current = now;
       nextSyncRef.current = now + AUTO_SYNC_INTERVAL_MS;
 
-      emailAccounts.forEach((account, idx) => {
-        setTimeout(() => {
+      // Clear any pending staggered timers from a previous sync run
+      staggeredTimers.forEach(t => clearTimeout(t));
+      staggeredTimers = [];
+
+      // BUG FIX: read from ref to get latest accounts
+      const accounts = emailAccountsRef.current;
+      accounts.forEach((account, idx) => {
+        const timer = setTimeout(() => {
           api.functions.invoke('syncGmailMessagesForAccount', {
             accountId: account.id,
             userId: user.id,
@@ -307,6 +324,7 @@ export default function EmailInboxMain() {
             }
           }).catch(() => {});
         }, idx * 1500);
+        staggeredTimers.push(timer);
       });
     };
 
@@ -324,6 +342,8 @@ export default function EmailInboxMain() {
       clearTimeout(mountTimeout);
       clearInterval(interval);
       clearInterval(tick);
+      // BUG FIX: clear staggered sync timers on unmount
+      staggeredTimers.forEach(t => clearTimeout(t));
     };
   }, [emailAccounts.length, user?.id]);
 
@@ -1082,6 +1102,25 @@ export default function EmailInboxMain() {
           <>
             {/* Header - Modern compact design */}
             <div className="border-b bg-background/95 backdrop-blur-sm space-y-2">
+              {/* Mobile sidebar toggle */}
+              {!sidebarOpen && (
+                <div className="lg:hidden flex items-center gap-2 px-3 pt-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setSidebarOpen(true)}
+                    className="min-h-[44px] min-w-[44px] h-11 w-11"
+                    title="Open folders"
+                    aria-label="Open email folders sidebar"
+                  >
+                    <Menu className="h-5 w-5" />
+                  </Button>
+                  <span className="text-sm font-medium capitalize">{filterView}</span>
+                  {unreadCount > 0 && filterView === 'inbox' && (
+                    <Badge variant="secondary" className="text-xs">{unreadCount}</Badge>
+                  )}
+                </div>
+              )}
               {/* Controls Bar */}
               <EmailListControls
                 sortBy={sortBy}
@@ -1107,17 +1146,8 @@ export default function EmailInboxMain() {
                 }}
               />
 
-              <div className="px-4 py-2 flex items-center justify-between gap-3">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setSidebarOpen(!sidebarOpen)}
-                  className="flex lg:hidden h-8 w-8"
-                >
-                  <Menu className="h-4 w-4" />
-                </Button>
-
-                <div className="flex-1 relative max-w-lg" ref={searchContainerRef}>
+              <div className="px-3 sm:px-4 py-2 flex items-center justify-between gap-2 sm:gap-3">
+                <div className="flex-1 relative max-w-lg min-w-0" ref={searchContainerRef}>
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
                   <Input
                       placeholder="Search... from: to: has:attachment is:unread (/ to focus, ? for help)"

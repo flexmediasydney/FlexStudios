@@ -550,7 +550,7 @@ export default function CalendarPage() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex flex-col border-b">
         {/* Top bar */}
-        <div className="flex items-center gap-3 px-4 py-3 flex-wrap">
+        <div className="flex items-center gap-2 sm:gap-3 px-2 sm:px-4 py-2 sm:py-3 flex-wrap">
           {/* Navigation */}
           <div className="flex items-center gap-1">
             <Button variant="outline" size="icon" onClick={() => navigate(-1)} className="hover:shadow-sm transition-all duration-200 h-9 w-9" title="Previous period" aria-label="Previous period">
@@ -564,24 +564,24 @@ export default function CalendarPage() {
             </Button>
           </div>
 
-          <h1 className="text-lg font-semibold min-w-[200px]">{headerLabel()}</h1>
+          <h1 className="text-sm sm:text-lg font-semibold min-w-0 sm:min-w-[200px] truncate">{headerLabel()}</h1>
 
           {/* Mode toggle */}
           <div className="flex gap-1 bg-muted rounded-lg p-0.5">
             <button
               onClick={() => setCalendarMode("flex")}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-200 hover:scale-105 active:scale-95 ${
+              className={`px-3 py-2 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 hover:scale-105 active:scale-95 ${
                 calendarMode === "flex"
                   ? "bg-background shadow-md text-foreground"
                   : "text-muted-foreground hover:text-foreground hover:bg-background/50"
               }`}
               title="Show only project bookings and linked events"
             >
-              📅 Flex
+              <span className="hidden sm:inline">📅 </span>Flex
             </button>
             <button
               onClick={() => setCalendarMode("team")}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-200 hover:scale-105 active:scale-95 ${
+              className={`px-3 py-2 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 hover:scale-105 active:scale-95 ${
                 calendarMode === "team"
                   ? "bg-background shadow-md text-foreground"
                   : "text-muted-foreground hover:text-foreground hover:bg-background/50"
@@ -641,7 +641,7 @@ export default function CalendarPage() {
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery(''); }}
               placeholder="Search events (Esc to clear)…"
-              className="h-9 pl-8 pr-12 rounded-md border bg-background text-sm w-48 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 transition-all duration-150 hover:border-primary/50"
+              className="h-9 pl-8 pr-12 rounded-md border bg-background text-sm w-full sm:w-48 min-w-0 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 transition-all duration-150 hover:border-primary/50"
             />
            {searchQuery && (
              <>
@@ -659,11 +659,11 @@ export default function CalendarPage() {
           </div>
 
           {/* Type filter + timezone indicator */}
-           <div className="flex items-center gap-1 text-xs text-muted-foreground px-2 py-1">
+           <div className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground px-2 py-1">
              🕐 Sydney
            </div>
            <Select value={filterType} onValueChange={setFilterType}>
-             <SelectTrigger className="w-36 h-9 text-sm">
+             <SelectTrigger className="w-24 sm:w-36 h-9 text-sm">
                <SelectValue placeholder="All types" />
              </SelectTrigger>
              <SelectContent>
@@ -684,7 +684,7 @@ export default function CalendarPage() {
            </Button>
 
           <Button size="sm" variant="outline" onClick={() => setShowConnections(v => !v)} className="relative h-9 transition-all duration-200" aria-label="Manage calendar connections">
-            <CalendarIcon className="h-4 w-4 mr-1" /> Connections
+            <CalendarIcon className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Connections</span>
             {eventsFetching && <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full animate-pulse" />}
           </Button>
 
@@ -699,7 +699,7 @@ export default function CalendarPage() {
         </div>
 
         {/* Person selector row */}
-        <div className="flex items-center gap-2 px-4 py-2 border-t bg-muted/20 flex-wrap">
+        <div className="flex items-center gap-2 px-2 sm:px-4 py-2 border-t bg-muted/20 overflow-x-auto scrollbar-none flex-nowrap sm:flex-wrap">
           <span className="text-xs text-muted-foreground font-medium mr-1">Team:</span>
 
           {/* All */}
@@ -866,7 +866,7 @@ function MonthView({ currentDate, events, users, userColorMap, conflictSet, onCe
           return (
             <div
               key={i}
-              className={`border-r border-b p-1 cursor-pointer hover:bg-muted/30 transition-all hover:shadow-inner min-h-[90px] ${!isCurrentMonth ? 'bg-muted/10' : ''}`}
+              className={`border-r border-b p-0.5 sm:p-1 cursor-pointer hover:bg-muted/30 transition-all hover:shadow-inner min-h-[60px] sm:min-h-[90px] ${!isCurrentMonth ? 'bg-muted/10' : ''}`}
               onDoubleClick={() => onCellDoubleClick(d)}
               onClick={() => onCellClick(d)}
               title={`Double-click to create event on ${format(d, 'EEEE, d MMMM yyyy')}`}

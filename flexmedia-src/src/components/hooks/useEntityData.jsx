@@ -44,6 +44,44 @@ const subscriptions   = new Map(); // entityName → unsubscribeFn
 
 const CACHE_TTL  = 5 * 60 * 1000; // 5 minutes
 const LIST_LIMIT = 1000;           // always fetch up to 1000; limit applied client-side
+const CACHE_PRUNE_INTERVAL = 10 * 60 * 1000; // prune every 10 minutes
+const MAX_SINGLE_CACHE_SIZE = 2000; // BUG FIX: cap singleCache to prevent unbounded memory growth
+
+// BUG FIX: Periodically prune expired entries from singleCache and cacheTimestamps
+// to prevent memory leaks from entities that are fetched once and never accessed again.
+let _pruneTimer = null;
+function ensurePruneTimer() {
+  if (_pruneTimer) return;
+  _pruneTimer = setInterval(() => {
+    const now = Date.now();
+    let pruned = 0;
+    for (const [key, ts] of cacheTimestamps) {
+      // Only prune single-entity entries (contain ':'), not list caches
+      if (key.includes(':') && (now - ts) > CACHE_TTL * 2) {
+        singleCache.delete(key);
+        cacheTimestamps.delete(key);
+        singleListeners.delete(key);
+        pruned++;
+      }
+    }
+    // Hard cap: if singleCache is still too large, evict oldest entries
+    if (singleCache.size > MAX_SINGLE_CACHE_SIZE) {
+      const entries = [...cacheTimestamps.entries()]
+        .filter(([k]) => k.includes(':'))
+        .sort((a, b) => a[1] - b[1]);
+      const toRemove = entries.slice(0, singleCache.size - MAX_SINGLE_CACHE_SIZE);
+      for (const [key] of toRemove) {
+        singleCache.delete(key);
+        cacheTimestamps.delete(key);
+        singleListeners.delete(key);
+        pruned++;
+      }
+    }
+    if (pruned > 0 && import.meta.env.DEV) {
+      console.debug(`[useEntityData] Cache pruned: ${pruned} expired single-entity entries removed`);
+    }
+  }, CACHE_PRUNE_INTERVAL);
+}
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -109,6 +147,7 @@ function removeSingleListener(entityName, entityId, fn) {
  */
 function ensureSubscription(entityName) {
   if (subscriptions.has(entityName)) return;
+  ensurePruneTimer(); // BUG FIX: start cache pruning when first subscription is created
 
   let debounceTimer = null;
   const pendingEvents = [];
@@ -399,6 +438,8 @@ export function clearEntityCache() {
     try { unsub(); } catch (_) { /* ignore */ }
   });
   subscriptions.clear();
+  // BUG FIX: clear cache prune timer on logout
+  if (_pruneTimer) { clearInterval(_pruneTimer); _pruneTimer = null; }
   // Reset throttler backoff state so the next session starts clean
   globalThrottler.reset();
 }
@@ -438,6 +479,7 @@ export function useEntityList(entityName, sortBy = null, limit = null, filter = 
 
     mountedRef.current = true;
     let retryCount = 0;
+    let retryTimer = null; // BUG FIX: track retry setTimeout so we can clear on unmount
 
     // refresh: reads current cache, applies this component's transformations
     const refresh = () => {
@@ -474,7 +516,7 @@ export function useEntityList(entityName, sortBy = null, limit = null, filter = 
         // We only retry here for transient network errors (offline → online).
         if (retryCount < 2 && isTransientError(err)) {
           retryCount++;
-          setTimeout(load, 1000 * retryCount);
+          retryTimer = setTimeout(load, 1000 * retryCount);
         } else {
           setError(err);
           setLoading(false);
@@ -486,6 +528,7 @@ export function useEntityList(entityName, sortBy = null, limit = null, filter = 
 
     return () => {
       mountedRef.current = false;
+      if (retryTimer) clearTimeout(retryTimer); // BUG FIX: clear pending retry on unmount
       removeListListener(entityName, refresh);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -533,6 +576,7 @@ export function useEntityData(entityName, entityId) {
 
     mountedRef.current = true;
     let retryCount = 0;
+    let retryTimer = null; // BUG FIX: track retry setTimeout so we can clear on unmount
     const singleKey = `${entityName}:${entityId}`;
 
     const refresh = () => {
@@ -563,7 +607,7 @@ export function useEntityData(entityName, entityId) {
         // Retry here only for transient network errors.
         if (retryCount < 2 && isTransientError(err)) {
           retryCount++;
-          setTimeout(load, 1000 * retryCount);
+          retryTimer = setTimeout(load, 1000 * retryCount);
         } else {
           setError(err);
           setLoading(false);
@@ -575,6 +619,7 @@ export function useEntityData(entityName, entityId) {
 
     return () => {
       mountedRef.current = false;
+      if (retryTimer) clearTimeout(retryTimer); // BUG FIX: clear pending retry on unmount
       removeSingleListener(entityName, entityId, refresh);
     };
   }, [entityName, entityId]);

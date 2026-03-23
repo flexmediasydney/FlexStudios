@@ -199,6 +199,16 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
       toast.error("Service name is required.");
       return;
     }
+    // Trim the name to prevent whitespace-padded names
+    formData.name = formData.name.trim();
+    formData.description = (formData.description || '').trim();
+
+    // Validate min_quantity is a positive integer (HTML min is easily bypassed)
+    const minQty = parseInt(formData.min_quantity, 10);
+    if (isNaN(minQty) || minQty < 1) {
+      toast.error("Minimum quantity must be at least 1.");
+      return;
+    }
 
     // Validate min/max quantity
     if (formData.min_quantity < 1) {
@@ -407,6 +417,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
                  placeholder="e.g. +1 Rental Image"
                  className="mt-2"
+                 maxLength={120}
                />
              </div>
 
@@ -419,6 +430,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                   onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
                   placeholder="Describe this service"
                   rows={2}
+                  maxLength={1000}
                   className={`mt-2 ${!formData.is_active ? "bg-muted/50 cursor-not-allowed" : ""}`}
                 />
               </div>

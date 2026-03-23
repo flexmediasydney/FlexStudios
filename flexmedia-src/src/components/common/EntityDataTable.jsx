@@ -91,6 +91,11 @@ export default function EntityDataTable({
                       checked={sorted.length > 0 && selectedIds?.size === sorted.length}
                       ref={el => { if (el) el.indeterminate = selectedIds?.size > 0 && selectedIds.size < sorted.length; }}
                       onChange={() => onToggleSelectAll?.()}
+                      aria-label={
+                        sorted.length > 0 && selectedIds?.size === sorted.length
+                          ? "Deselect all rows"
+                          : "Select all rows"
+                      }
                     />
                   </th>
                 )}
@@ -105,6 +110,8 @@ export default function EntityDataTable({
                     )}
                     style={col.width ? { width: col.width } : undefined}
                     onClick={() => col.sortable && handleSort(col.key)}
+                    aria-sort={col.sortable && sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                    scope="col"
                   >
                     {col.sortable ? (
                       <span className="inline-flex items-center gap-1">
@@ -141,6 +148,7 @@ export default function EntityDataTable({
                         className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
                         checked={selectedIds?.has(row.id) || false}
                         onChange={() => onToggleSelect?.(row.id)}
+                        aria-label={`Select row ${startIdx + localIdx + 1}`}
                       />
                     </td>
                   )}
@@ -175,15 +183,15 @@ export default function EntityDataTable({
         </span>
         {totalPages > 1 && (
           <div className="flex items-center gap-0.5">
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-xs" onClick={() => setPage(0)} disabled={safeCurrentPage === 0}>‹‹</Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safeCurrentPage === 0}>
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-xs" onClick={() => setPage(0)} disabled={safeCurrentPage === 0} aria-label="First page">‹‹</Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safeCurrentPage === 0} aria-label="Previous page">
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
-            <span className="px-2 tabular-nums">{safeCurrentPage + 1} / {totalPages}</span>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={safeCurrentPage >= totalPages - 1}>
+            <span className="px-2 tabular-nums" aria-live="polite" aria-atomic="true">Page {safeCurrentPage + 1} of {totalPages}</span>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={safeCurrentPage >= totalPages - 1} aria-label="Next page">
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-xs" onClick={() => setPage(totalPages - 1)} disabled={safeCurrentPage >= totalPages - 1}>››</Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-xs" onClick={() => setPage(totalPages - 1)} disabled={safeCurrentPage >= totalPages - 1} aria-label="Last page">››</Button>
           </div>
         )}
       </div>

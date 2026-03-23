@@ -87,11 +87,11 @@ function ErrorState({ navigate, title, message }) {
       <Button variant="ghost" className="gap-2 mb-4" onClick={() => navigate(-1)}>
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
-      <div className="bg-red-50 border border-red-200 rounded-xl p-6 flex gap-3">
-        <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+      <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 rounded-xl p-6 flex gap-3">
+        <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
         <div>
-          <h3 className="font-semibold text-red-900">{title}</h3>
-          <p className="text-red-800 text-sm mt-1">{message}</p>
+          <h3 className="font-semibold text-red-900 dark:text-red-200">{title}</h3>
+          <p className="text-red-800 dark:text-red-300 text-sm mt-1">{message}</p>
         </div>
       </div>
     </div>
@@ -363,7 +363,7 @@ function ActivityFeed({ interactions, projects }) {
               <div className="flex-1 min-w-0">
                 <p className="text-foreground font-medium">{proj.title}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Status changed to <span className="font-medium capitalize">{proj.status.replace(/_/g, ' ')}</span>
+                  Status changed to <span className="font-medium capitalize">{(proj.status || 'unknown').replace(/_/g, ' ')}</span>
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {formatRelative(fixTimestamp(proj.last_status_change))}
@@ -449,6 +449,12 @@ export default function TeamDetails() {
   const { data: agencies = [] } = useEntityList('Agency', 'name');
 
   const memberFilter = useCallback(a => a.current_team_id === teamId, [teamId]);
+  const noteFilter = useCallback(e => e.team_id === teamId, [teamId]);
+  const interactionFilter = useCallback(e => e.entity_type === 'Team' && e.entity_id === teamId, [teamId]);
+
+  // members must be declared BEFORE memberIds/projectFilter that depend on it
+  const { data: members = [] } = useEntityList('Agent', 'name', null, memberFilter);
+
   // Project filter: match projects where any assigned staff is a member of this team.
   // Staff ID fields hold agent (person) IDs, not team IDs, so we compare against member IDs.
   const memberIds = useMemo(() => new Set(members.map(m => m.id)), [members]);
@@ -468,10 +474,6 @@ export default function TeamDetails() {
     },
     [memberIds]
   );
-  const noteFilter = useCallback(e => e.team_id === teamId, [teamId]);
-  const interactionFilter = useCallback(e => e.entity_type === 'Team' && e.entity_id === teamId, [teamId]);
-
-  const { data: members = [] } = useEntityList('Agent', 'name', null, memberFilter);
   const { data: projects = [] } = useEntityList('Project', '-created_date', 200, projectFilter);
   const { data: orgNotes = [] } = useEntityList('OrgNote', '-created_date', null, noteFilter);
   const { data: interactions = [] } = useEntityList('InteractionLog', '-date_time', 100, interactionFilter);
@@ -554,7 +556,7 @@ export default function TeamDetails() {
   ], [agencies]);
 
   if (!teamId) {
-    window.location.href = createPageUrl('Teams');
+    navigate(createPageUrl('Teams'));
     return null;
   }
 

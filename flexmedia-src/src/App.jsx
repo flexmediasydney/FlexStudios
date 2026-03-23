@@ -163,7 +163,7 @@ const AuthenticatedApp = () => {
           element={
             <LayoutWrapper currentPageName={path}>
               <RouteGuard routeName={path}>
-                <ErrorBoundary fallbackLabel={path}>
+                <ErrorBoundary fallbackLabel={path} resetKey={path}>
                   <Page />
                 </ErrorBoundary>
               </RouteGuard>
@@ -186,18 +186,32 @@ function App() {
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, []);
 
+  // Global handler for unhandled promise rejections — prevents silent failures
+  React.useEffect(() => {
+    const handleRejection = (event) => {
+      const msg = event?.reason?.message || String(event?.reason || 'Unknown async error');
+      // Don't log auth-related rejections (handled by AuthProvider)
+      if (/JWT|session|Not authenticated/i.test(msg)) return;
+      console.error('[Unhandled Promise Rejection]', msg, event?.reason);
+    };
+    window.addEventListener('unhandledrejection', handleRejection);
+    return () => window.removeEventListener('unhandledrejection', handleRejection);
+  }, []);
+
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <QueryClientProvider client={queryClientInstance}>
-          <Router>
-            <AuthenticatedApp />
-            <InstallPrompt />
-          </Router>
-          <Toaster />
-        </QueryClientProvider>
-      </AuthProvider>
-    </ThemeProvider>
+    <ErrorBoundary fallbackLabel="FlexStudios">
+      <ThemeProvider>
+        <AuthProvider>
+          <QueryClientProvider client={queryClientInstance}>
+            <Router>
+              <AuthenticatedApp />
+              <InstallPrompt />
+            </Router>
+            <Toaster />
+          </QueryClientProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   )
 }
 

@@ -49,7 +49,15 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
   useEffect(() => {
     if (open) {
       if (team) {
-        setFormData(team);
+        setFormData({
+          ...INITIAL_STATE,
+          name: team.name || "",
+          agency_id: team.agency_id || "",
+          agency_name: team.agency_name || "",
+          phone: team.phone || "",
+          email: team.email || "",
+          notes: team.notes || "",
+        });
       } else if (preselectedAgencyId) {
         const agency = agencies.find(a => a.id === preselectedAgencyId);
         setFormData({

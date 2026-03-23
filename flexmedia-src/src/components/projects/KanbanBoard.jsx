@@ -867,7 +867,11 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                     ...provided.draggableProps.style,
                                     animationDelay: `${index * 30}ms`,
                                   }}
+                                  tabIndex={0}
+                                  role="button"
+                                  aria-label={`Open project: ${project.title}`}
                                   onMouseEnter={() => prefetchProject(project.id)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(createPageUrl("ProjectDetails") + "?id=" + project.id); } }}
                                   onClick={() => navigate(createPageUrl("ProjectDetails") + "?id=" + project.id)}
                                 >
                                   {/* Card Header */}
@@ -988,9 +992,16 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
 
       {/* Backward drag confirmation */}
       {pendingDrag && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPendingDrag(null)}>
-          <div className="bg-white rounded-lg p-6 max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold text-base mb-2">Move Project Backward?</h3>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setPendingDrag(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="backward-drag-title"
+          onKeyDown={(e) => { if (e.key === 'Escape') setPendingDrag(null); }}
+        >
+          <div className="bg-white dark:bg-card rounded-lg p-6 max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
+            <h3 id="backward-drag-title" className="font-semibold text-base mb-2">Move Project Backward?</h3>
             <p className="text-sm text-muted-foreground mb-4">
               Moving <strong>{pendingDrag.project?.title || 'this project'}</strong> from{' '}
               <strong>{PROJECT_STAGES.find(s => s.value === pendingDrag.project?.status)?.label}</strong> back to{' '}
@@ -998,8 +1009,19 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
               Stage timer history is preserved.
             </p>
             <div className="flex gap-2 justify-end">
-              <button className="px-3 py-1.5 text-sm border rounded hover:bg-muted" onClick={() => setPendingDrag(null)}>Cancel</button>
-              <button className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700" onClick={confirmBackwardDrag}>Move Backward</button>
+              <button
+                className="px-3 py-1.5 text-sm border rounded hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                onClick={() => setPendingDrag(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+                onClick={confirmBackwardDrag}
+                autoFocus
+              >
+                Move Backward
+              </button>
             </div>
           </div>
         </div>

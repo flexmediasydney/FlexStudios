@@ -12,7 +12,7 @@ import { Component } from "react";
 class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null, errorInfo: null, showStack: false };
+    this.state = { hasError: false, error: null, errorInfo: null, showStack: false, resetKey: 0 };
   }
 
   static getDerivedStateFromError(error) {
@@ -30,8 +30,16 @@ class ErrorBoundary extends Component {
     this.setState({ errorInfo });
   }
 
+  // Reset error state when the resetKey prop changes (e.g. on route navigation)
+  componentDidUpdate(prevProps) {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, error: null, errorInfo: null, showStack: false });
+    }
+  }
+
   handleReset = () => {
-    this.setState({ hasError: false, error: null, errorInfo: null, showStack: false });
+    // Increment internal resetKey to force children to remount via key change
+    this.setState(s => ({ hasError: false, error: null, errorInfo: null, showStack: false, resetKey: s.resetKey + 1 }));
     this.props.onReset?.();
   };
 
@@ -170,7 +178,9 @@ class ErrorBoundary extends Component {
       );
     }
 
-    return this.props.children;
+    // Wrap children in a keyed fragment so "Try Again" forces a remount
+    // (prevents the same broken component from immediately re-throwing)
+    return <div key={this.state.resetKey}>{this.props.children}</div>;
   }
 }
 

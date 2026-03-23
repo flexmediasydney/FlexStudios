@@ -376,6 +376,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
     if (Object.values(newErrors).some(Boolean)) return;
 
     setSaving(true);
+    setSaveError(null);
 
     try {
       // Build save payload — ensure agent_name is stored for display
@@ -788,7 +789,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
           )}
 
           {/* Status & Date/Time */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <Label className="text-xs font-medium">Stage</Label>
               <Select value={formData.status} onValueChange={(v) => setFormData(prev => ({ ...prev, status: v }))}>
@@ -814,7 +815,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
               Pricing Tier <span className="text-destructive">*</span>
             </Label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {[
                 { value: "standard", label: "Standard", desc: "Default pricing", Icon: Zap, color: "blue" },
                 { value: "premium", label: "Premium", desc: "Premium rates", Icon: Star, color: "amber" }

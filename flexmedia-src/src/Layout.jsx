@@ -368,6 +368,8 @@ function LayoutContent({ currentPageName, children, onBack }) {
                   ? "text-primary hover:bg-primary/10"
                   : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/40"
               )}
+              aria-expanded={isParentExpanded}
+              aria-label={`${isParentExpanded ? 'Collapse' : 'Expand'} ${item.name} sub-items`}
               title={`${isParentExpanded ? 'Hide' : 'Show'} ${item.name} sub-items`}
             >
               <ChevronRight className={cn(
@@ -511,7 +513,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
           sidebarOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         )}
         onClick={() => setSidebarOpen(false)}
-        role="presentation"
+        aria-hidden="true"
       />
 
       {/* Sidebar */}
@@ -584,6 +586,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
               className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all duration-200 h-9 px-2 text-xs"
               onClick={() => setSearchOpen(true)}
               title="Global search (Ctrl+K)"
+              aria-label="Open global search"
             >
               <Search className="h-3.5 w-3.5 flex-shrink-0" />
               <span>Search</span>

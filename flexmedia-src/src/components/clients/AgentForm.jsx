@@ -312,10 +312,18 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
               min={7}
               max={365}
               value={formData.contact_frequency_days}
-              onChange={e => setFormData(prev => ({
-                ...prev,
-                contact_frequency_days: e.target.value ? parseInt(e.target.value) : ""
-              }))}
+              onChange={e => {
+                const raw = e.target.value;
+                if (raw === "" || raw === undefined) {
+                  setFormData(prev => ({ ...prev, contact_frequency_days: "" }));
+                  return;
+                }
+                const num = parseInt(raw);
+                if (isNaN(num)) return; // reject non-numeric input
+                // Clamp to valid range
+                const clamped = Math.min(365, Math.max(1, num));
+                setFormData(prev => ({ ...prev, contact_frequency_days: clamped }));
+              }}
               placeholder="e.g. 30 for monthly, 90 for quarterly"
               className="h-8 text-sm mt-1"
             />

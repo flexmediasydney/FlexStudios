@@ -419,6 +419,20 @@ export default function EmailComposeDialog({
       if (!recipients.trim()) {
         throw new Error("Recipients required");
       }
+      // Validate email format for all recipient fields
+      const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const validateEmails = (field, label) => {
+        if (!field.trim()) return;
+        const addrs = field.split(",").map(s => s.trim()).filter(Boolean);
+        for (const addr of addrs) {
+          if (!EMAIL_RE.test(addr)) {
+            throw new Error(`Invalid ${label} email address: "${addr}"`);
+          }
+        }
+      };
+      validateEmails(recipients, "recipient");
+      if (cc.trim()) validateEmails(cc, "CC");
+      if (bcc.trim()) validateEmails(bcc, "BCC");
       if (!subject.trim()) {
         throw new Error("Subject required");
       }
