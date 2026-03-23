@@ -28,6 +28,10 @@ export const AuthProvider = ({ children }) => {
       if (error || !appUser) {
         setAuthError({ type: 'user_not_registered', message: 'User not registered for this app' });
         setIsAuthenticated(false);
+      } else if (!appUser.is_active) {
+        setAuthError({ type: 'user_deactivated', message: 'Your account has been deactivated. Contact your admin.' });
+        setIsAuthenticated(false);
+        await supabase.auth.signOut();
       } else {
         setUser(appUser);
         setIsAuthenticated(true);
