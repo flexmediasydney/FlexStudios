@@ -85,33 +85,7 @@ export default function ContactInfoCard({ sender, senderName, allMessages = [] }
           )}
         </div>
 
-        {/* Quick Tags */}
-        <div className="space-y-2 pt-2 border-t">
-          <p className="text-xs font-semibold text-muted-foreground uppercase">
-            Quick Tags
-          </p>
-          <div className="flex flex-wrap gap-1">
-            {messageCount > 10 && (
-              <Badge variant="outline" className="text-xs">
-                🔥 Frequent
-              </Badge>
-            )}
-            {lastMessage &&
-              new Date() - new Date(lastMessage.received_at) <
-                24 * 60 * 60 * 1000 && (
-                <Badge variant="outline" className="text-xs">
-                  ⚡ Recent
-                </Badge>
-              )}
-            {firstMessage &&
-              new Date() - new Date(firstMessage.received_at) <
-                7 * 24 * 60 * 60 * 1000 && (
-                <Badge variant="outline" className="text-xs">
-                  ✨ New
-                </Badge>
-              )}
-          </div>
-        </div>
+        {/* Quick Tags removed — emails use labels, not tags */}
       </CardContent>
     </Card>
   );

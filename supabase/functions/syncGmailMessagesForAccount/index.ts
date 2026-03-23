@@ -57,7 +57,12 @@ const retryFetch = async (url: string, options: any, retries = MAX_RETRIES): Pro
 
 const extractEmailBody = (payload: any) => {
   const decode = (data: string) => {
-    try { return atob(data.replace(/-/g, '+').replace(/_/g, '/')); } catch { return ''; }
+    try {
+      const binary = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return new TextDecoder('utf-8').decode(bytes);
+    } catch { return ''; }
   };
   const walk = (part: any): { html: string; text: string } => {
     if (!part) return { html: '', text: '' };

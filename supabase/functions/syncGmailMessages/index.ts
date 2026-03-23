@@ -58,7 +58,11 @@ const retryFetch = async (url: string, options: any, retries = MAX_RETRIES): Pro
 const extractEmailBody = (payload: any) => {
   const decode = (data: string) => {
     try {
-      return atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+      // Decode base64url → binary → UTF-8 (atob alone corrupts non-ASCII)
+      const binary = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return new TextDecoder('utf-8').decode(bytes);
     } catch {
       return '';
     }
