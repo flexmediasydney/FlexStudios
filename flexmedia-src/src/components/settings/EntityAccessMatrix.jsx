@@ -16,6 +16,7 @@ const ENTITY_TYPES = [
   { key: "internal_teams", label: "Teams" },
   { key: "users", label: "Users" },
   { key: "request_templates", label: "Request Templates" },
+  { key: "pricing_visibility", label: "💲 Pricing Visibility" },
 ];
 
 const ACCESS_LEVELS = ["none", "view", "edit"];

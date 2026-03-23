@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, AlertCircle, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
+import Price from '@/components/common/Price';
 import { toast } from "sonner";
 import { api } from "@/api/supabaseClient";
 import { useProjectItemsManager } from "./hooks/useProjectItemsManager";
@@ -468,7 +469,7 @@ export default function ProjectProductsPackages({ project }) {
                           <div className="flex items-center gap-2 flex-shrink-0">
                             {totalPackagePrice > 0 && (
                               <span className="text-sm font-semibold text-primary min-w-[70px] text-right">
-                                ${totalPackagePrice.toFixed(2)}
+                                <Price value={totalPackagePrice} />
                               </span>
                             )}
                             <div className="flex items-center gap-1 border rounded px-1 py-0.5">
@@ -510,7 +511,7 @@ export default function ProjectProductsPackages({ project }) {
                                   <div className="flex items-center gap-2 flex-shrink-0">
                                     {prodPrice > 0 && (
                                       <span className="text-xs font-semibold text-primary min-w-[50px] text-right">
-                                        ${prodPrice.toFixed(2)}
+                                        <Price value={prodPrice} />
                                       </span>
                                     )}
                                     {product.pricing_type === "per_unit" && (
@@ -565,7 +566,7 @@ export default function ProjectProductsPackages({ project }) {
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {price > 0 && (
                             <span className="text-sm font-semibold text-primary min-w-[70px] text-right">
-                              ${price.toFixed(2)}
+                              <Price value={price} />
                             </span>
                           )}
                           {product.pricing_type === "per_unit" ? (
@@ -604,7 +605,7 @@ export default function ProjectProductsPackages({ project }) {
               {totalPrice > 0 && (
                 <div className="flex items-center justify-between pt-2 border-t mt-3">
                   <span className="text-sm font-semibold text-muted-foreground">Total</span>
-                  <span className="text-base font-bold text-primary">${totalPrice.toFixed(2)}</span>
+                  <span className="text-base font-bold text-primary"><Price value={totalPrice} /></span>
                 </div>
               )}
             </>

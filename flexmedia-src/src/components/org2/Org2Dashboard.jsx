@@ -8,12 +8,9 @@ import Org2MetricsCard, { calculateMetrics } from './Org2MetricsCard';
 import { createPageUrl } from '@/utils';
 import { differenceInDays, parseISO, startOfMonth, endOfMonth, format } from 'date-fns';
 import { fixTimestamp } from '@/components/utils/dateUtils';
+import Price from '@/components/common/Price';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
-const fmtCurrency = (n) => {
-  if (!n || isNaN(n)) return '$0';
-  return Math.abs(n) >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${Math.round(n)}`;
-};
 const fmtDate = (d) => { try { return d ? format(parseISO(d), 'dd MMM') : '—'; } catch { return '—'; } };
 
 // ─── Colour maps ──────────────────────────────────────────────────────────────
@@ -237,7 +234,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
                       <Row key={p.id} href={pUrl(p)} label={p.title} sub={p.property_address || ''}
                         right={
                           (p.calculated_price || p.price) > 0
-                            ? <span className="text-xs font-semibold">{fmtCurrency(p.calculated_price || p.price)}</span>
+                            ? <span className="text-xs font-semibold"><Price value={p.calculated_price || p.price} compact /></span>
                             : null
                         }
                       />
@@ -255,10 +252,10 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
         const paidWonRev = drill.wonProjects.filter(p => p.payment_status === 'paid').reduce((s, p) => s + (p.calculated_price || p.price || 0), 0);
         return (
           <div>
-            <DrillHeader title="Won Revenue" count={fmtCurrency(wonRev)} />
+            <DrillHeader title="Won Revenue" count={<Price value={wonRev} compact />} />
             <div className="flex gap-3 mb-3 text-xs">
-              <span className="text-green-700">Paid: <strong>{fmtCurrency(paidWonRev)}</strong></span>
-              <span className="text-orange-600">Outstanding: <strong>{fmtCurrency(wonRev - paidWonRev)}</strong></span>
+              <span className="text-green-700">Paid: <strong><Price value={paidWonRev} compact /></strong></span>
+              <span className="text-orange-600">Outstanding: <strong><Price value={wonRev - paidWonRev} compact /></strong></span>
             </div>
             <RecordList
               items={drill.wonProjects} limit={8} emptyText="No won projects" title="Won Projects"
@@ -270,7 +267,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
                         label={p.payment_status === 'paid' ? 'Paid' : 'Unpaid'}
                         cls={p.payment_status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}
                       />
-                      <span className="text-xs font-semibold">{fmtCurrency(p.calculated_price || p.price || 0)}</span>
+                      <span className="text-xs font-semibold"><Price value={p.calculated_price || p.price || 0} compact /></span>
                     </>
                   }
                 />
@@ -291,7 +288,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
     { label: 'Projects', value: projects.length, icon: Briefcase, color: 'bg-amber-100 text-amber-700' },
     {
       label: 'Revenue',
-      value: fmtCurrency(drill.wonProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0)),
+      value: <Price value={drill.wonProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0)} compact />,
       icon: DollarSign,
       color: 'bg-green-100 text-green-700',
     },
@@ -397,13 +394,13 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
                       <div className="h-2 w-2 rounded-full bg-green-500" />
                       <span className="text-muted-foreground">Paid</span>
                       <span className="font-bold text-green-700">{paid.length}</span>
-                      {paidRev > 0 && <span className="text-green-600">{fmtCurrency(paidRev)}</span>}
+                      {paidRev > 0 && <span className="text-green-600"><Price value={paidRev} compact /></span>}
                     </div>
                     <div className="flex items-center gap-1">
                       <div className="h-2 w-2 rounded-full bg-orange-400" />
                       <span className="text-muted-foreground">Unpaid</span>
                       <span className="font-bold text-orange-700">{unpaid.length}</span>
-                      {unpaidRev > 0 && <span className="text-orange-600">{fmtCurrency(unpaidRev)}</span>}
+                      {unpaidRev > 0 && <span className="text-orange-600"><Price value={unpaidRev} compact /></span>}
                     </div>
                   </div>
                 </div>
@@ -423,7 +420,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
           icon={DollarSign}
           color="bg-emerald-100 text-emerald-700"
           mainValue={`${metrics.paidCount}/${metrics.unpaidCount}`}
-          subValue={`${fmtCurrency(metrics.paidRevenue)} / ${fmtCurrency(metrics.unpaidRevenue)}`}
+          subValue={<><Price value={metrics.paidRevenue} compact /> / <Price value={metrics.unpaidRevenue} compact /></>}
           detailsRender={() => (
             <div>
               <DrillHeader title="Payment Breakdown" />
@@ -432,7 +429,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
                 items={drill.paid} limit={6} emptyText="No paid projects" title="Paid Projects"
                 renderItem={p => (
                   <Row key={p.id} href={pUrl(p)} label={p.title}
-                    right={<span className="text-xs font-semibold text-green-700">{fmtCurrency(p.calculated_price || p.price || 0)}</span>}
+                    right={<span className="text-xs font-semibold text-green-700"><Price value={p.calculated_price || p.price || 0} compact /></span>}
                   />
                 )}
               />
@@ -441,7 +438,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
                 items={drill.unpaid} limit={6} emptyText="No unpaid projects" title="Unpaid Projects"
                 renderItem={p => (
                   <Row key={p.id} href={pUrl(p)} label={p.title}
-                    right={<span className="text-xs font-semibold text-orange-700">{fmtCurrency(p.calculated_price || p.price || 0)}</span>}
+                    right={<span className="text-xs font-semibold text-orange-700"><Price value={p.calculated_price || p.price || 0} compact /></span>}
                   />
                 )}
               />
@@ -455,7 +452,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
           icon={TrendingUp}
           color="bg-blue-100 text-blue-700"
           mainValue={metrics.thisMonthCount}
-          subValue={`${fmtCurrency(metrics.thisMonthRevenue)} revenue`}
+          subValue={<><Price value={metrics.thisMonthRevenue} compact /> revenue</>}
           detailsRender={() => (
             <div>
               <DrillHeader title="This Month's Projects" count={drill.thisMonth.length} />
@@ -468,7 +465,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
                       <>
                         <Chip label={p.outcome || 'open'} cls={OUTCOME_CLS[p.outcome || 'open']} />
                         {(p.calculated_price || p.price) > 0 && (
-                          <span className="text-xs font-semibold">{fmtCurrency(p.calculated_price || p.price)}</span>
+                          <span className="text-xs font-semibold"><Price value={p.calculated_price || p.price} compact /></span>
                         )}
                       </>
                     }
@@ -563,7 +560,7 @@ export default function Org2Dashboard({ agency, agents, teams, projects, revisio
                       sub={p.delivery_date ? `Delivered ${fmtDate(p.delivery_date)}` : ''}
                       right={
                         (p.calculated_price || p.price) > 0
-                          ? <span className="text-xs font-semibold">{fmtCurrency(p.calculated_price || p.price)}</span>
+                          ? <span className="text-xs font-semibold"><Price value={p.calculated_price || p.price} compact /></span>
                           : null
                       }
                     />

@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Edit, Trash2 } from "lucide-react";
+import Price from '@/components/common/Price';
 
 export default function PackageKanbanView({ packages, onEdit, onDelete, projectTypes = [] }) {
   const grouped = {
@@ -47,8 +48,8 @@ export default function PackageKanbanView({ packages, onEdit, onDelete, projectT
                 </div>
 
                 <div className="text-xs text-muted-foreground mt-2">
-                  <div>Std: ${pkg.standard_tier?.package_price?.toFixed(2) || "0.00"}</div>
-                  <div>Prem: ${pkg.premium_tier?.package_price?.toFixed(2) || "0.00"}</div>
+                  <div>Std: <Price value={pkg.standard_tier?.package_price} /></div>
+                  <div>Prem: <Price value={pkg.premium_tier?.package_price} /></div>
                 </div>
 
                 <div className="flex gap-1 mt-2">

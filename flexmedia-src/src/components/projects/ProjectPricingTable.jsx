@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { DollarSign, Plus, AlertCircle, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import Price from '@/components/common/Price';
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useQueryClient } from "@tanstack/react-query";
@@ -560,7 +561,7 @@ export default function ProjectPricingTable({
                   </div>
                   <div className="text-right">
                     <p className="text-3xl font-bold text-primary font-mono">
-                      ${displayTotal.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      <Price value={displayTotal} />
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
                       {pricingTier === "premium" ? "Premium" : "Standard"} tier · Matrix-adjusted
@@ -601,7 +602,7 @@ export default function ProjectPricingTable({
                 <div className="rounded-lg border bg-primary/5 p-4 text-center">
                   <p className="text-xs text-muted-foreground mb-1">{pricingTier === "premium" ? "Premium" : "Standard"} tier · Matrix-adjusted</p>
                   <p className="text-3xl font-bold text-primary font-mono">
-                    ${(pendingTotal ?? 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <Price value={pendingTotal ?? 0} />
                   </p>
                 </div>
                 <p className="text-xs text-destructive/80 font-medium">

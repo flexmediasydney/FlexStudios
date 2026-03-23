@@ -1,6 +1,7 @@
 import React, { memo } from "react";
 import { TrendingUp, Package, Lock, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import Price from '@/components/common/Price';
 
 const QtyControl = memo(({ qty, minQty, maxQty, onChange }) => {
   return (
@@ -43,10 +44,10 @@ export const PackageRow = memo(({ pkg, canEdit, onRemove, rowBg }) => (
       </span>
     </td>
     <td className="py-3 px-3 text-right font-mono text-muted-foreground text-xs">
-      ${(pkg.basePrice || 0).toFixed(2)}
+      <Price value={pkg.basePrice || 0} />
     </td>
     <td className="py-3 px-3 text-right font-semibold font-mono">
-      ${(pkg.lineTotal || 0).toFixed(2)}
+      <Price value={pkg.lineTotal || 0} />
     </td>
     {canEdit && (
       <td className="py-3 px-3">
@@ -96,11 +97,11 @@ export const NestedProductRow = memo(({ nestedProd, pkg, canEdit, onUpdateQty, r
         )}
       </td>
       <td className="py-2 px-3 text-right font-mono text-muted-foreground">
-        {isPerUnit ? `$${(nestedProd.unitPrice || 0).toFixed(2)}/unit` : "—"}
+        {isPerUnit ? <><Price value={nestedProd.unitPrice || 0} />/unit</> : "—"}
       </td>
       <td className="py-2 px-3 text-right font-mono text-muted-foreground">
         {isPerUnit && actualExtraQty > 0
-          ? <span className="text-amber-700 font-semibold">+${extraCost.toFixed(2)}</span>
+          ? <span className="text-amber-700 font-semibold">+<Price value={extraCost} /></span>
           : <span className="text-muted-foreground">incl.</span>
         }
       </td>
@@ -148,12 +149,12 @@ export const ProductRow = memo(({ product, canEdit, onUpdateQty, onRemove, rowBg
       <td className="py-3 px-3 text-right font-mono text-muted-foreground text-xs">
         {isPerUnit
           ? product.unitPrice > 0
-            ? `$${product.unitPrice.toFixed(2)}/unit`
-            : `$${(product.basePrice || 0).toFixed(2)}/unit`
-          : `$${(product.basePrice || 0).toFixed(2)}`}
+            ? <><Price value={product.unitPrice} />/unit</>
+            : <><Price value={product.basePrice || 0} />/unit</>
+          : <Price value={product.basePrice || 0} />}
       </td>
       <td className="py-3 px-3 text-right font-semibold font-mono">
-        ${(product.lineTotal || 0).toFixed(2)}
+        <Price value={product.lineTotal || 0} />
       </td>
       {canEdit && (
         <td className="py-3 px-3">

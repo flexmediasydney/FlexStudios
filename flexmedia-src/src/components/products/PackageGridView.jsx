@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Edit, Trash2 } from "lucide-react";
+import Price from '@/components/common/Price';
 
 export default function PackageGridView({ packages, onEdit, onDelete, projectTypes = [] }) {
   return (
@@ -46,11 +47,11 @@ export default function PackageGridView({ packages, onEdit, onDelete, projectTyp
               <div className="space-y-1 text-sm border-t pt-3">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Standard:</span>
-                  <span className="font-medium">${pkg.standard_tier?.package_price?.toFixed(2) || "0.00"}</span>
+                  <span className="font-medium"><Price value={pkg.standard_tier?.package_price} /></span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Premium:</span>
-                  <span className="font-medium">${pkg.premium_tier?.package_price?.toFixed(2) || "0.00"}</span>
+                  <span className="font-medium"><Price value={pkg.premium_tier?.package_price} /></span>
                 </div>
               </div>
 

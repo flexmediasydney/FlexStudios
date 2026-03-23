@@ -2,14 +2,11 @@ import { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
+import Price from '@/components/common/Price';
 
 const roundToNearestFive = (value) => Math.ceil(value / 5) * 5;
 // Match backend: round the DISCOUNT amount to nearest 5, then subtract
 const applyDiscount = (price, pct) => Math.max(0, price - roundToNearestFive(price * pct / 100));
-
-function fmt(val) {
-  return `$${(Number(val) || 0).toFixed(2)}`;
-}
 
 function PricingModeBadge({ mode }) {
   if (mode === "club_flex") return <Badge className="text-xs bg-purple-100 text-purple-700 border-purple-200">Club Flex</Badge>;
@@ -189,10 +186,10 @@ export default function PriceMatrixSummaryTable({ priceMatrix, products, package
                 <tr key={row.id} className={`${i < resolvedProducts.length - 1 ? "border-b" : ""} ${row.mode === "club_flex" ? "bg-purple-50/40" : row.mode === "override" ? "bg-blue-50/40" : row.mode === "blanket" ? "bg-amber-50/40" : ""}`}>
                   <td className="px-3 py-1.5 text-xs font-medium">{row.name}</td>
                   <td className="px-2 py-1.5 text-center"><PricingModeBadge mode={row.mode} /></td>
-                  <td className="px-3 py-1.5 text-xs text-right tabular-nums">{fmt(row.stdBase)}</td>
-                  <td className="px-3 py-1.5 text-xs text-right tabular-nums text-muted-foreground">{row.pricing_type === "per_unit" ? fmt(row.stdUnit) : "—"}</td>
-                  <td className="px-3 py-1.5 text-xs text-right tabular-nums">{fmt(row.preBase)}</td>
-                  <td className="px-3 py-1.5 text-xs text-right tabular-nums text-muted-foreground">{row.pricing_type === "per_unit" ? fmt(row.preUnit) : "—"}</td>
+                  <td className="px-3 py-1.5 text-xs text-right tabular-nums"><Price value={row.stdBase} /></td>
+                  <td className="px-3 py-1.5 text-xs text-right tabular-nums text-muted-foreground">{row.pricing_type === "per_unit" ? <Price value={row.stdUnit} /> : "—"}</td>
+                  <td className="px-3 py-1.5 text-xs text-right tabular-nums"><Price value={row.preBase} /></td>
+                  <td className="px-3 py-1.5 text-xs text-right tabular-nums text-muted-foreground">{row.pricing_type === "per_unit" ? <Price value={row.preUnit} /> : "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -216,8 +213,8 @@ export default function PriceMatrixSummaryTable({ priceMatrix, products, package
                 <tr key={row.id} className={`${i < resolvedPackages.length - 1 ? "border-b" : ""} ${row.mode === "club_flex" ? "bg-purple-50/40" : row.mode === "override" ? "bg-blue-50/40" : row.mode === "blanket" ? "bg-amber-50/40" : ""}`}>
                   <td className="px-3 py-1.5 text-xs font-medium">{row.name}</td>
                   <td className="px-2 py-1.5 text-center"><PricingModeBadge mode={row.mode} /></td>
-                  <td className="px-3 py-1.5 text-xs text-right tabular-nums">{fmt(row.stdPrice)}</td>
-                  <td className="px-3 py-1.5 text-xs text-right tabular-nums">{fmt(row.prePrice)}</td>
+                  <td className="px-3 py-1.5 text-xs text-right tabular-nums"><Price value={row.stdPrice} /></td>
+                  <td className="px-3 py-1.5 text-xs text-right tabular-nums"><Price value={row.prePrice} /></td>
                 </tr>
               ))}
             </tbody>

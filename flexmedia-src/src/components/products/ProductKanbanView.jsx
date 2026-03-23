@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Edit, Trash2 } from "lucide-react";
+import Price from '@/components/common/Price';
 
 const categories = {
   photography: "Photography",
@@ -51,8 +52,8 @@ export default function ProductKanbanView({ products, onEdit, onDelete, projectT
                 </div>
 
                 <div className="text-xs text-muted-foreground mt-2">
-                  <div>Std: ${product.standard_tier?.base_price?.toFixed(2) || "0.00"}</div>
-                  <div>Prem: ${product.premium_tier?.base_price?.toFixed(2) || "0.00"}</div>
+                  <div>Std: <Price value={product.standard_tier?.base_price} /></div>
+                  <div>Prem: <Price value={product.premium_tier?.base_price} /></div>
                 </div>
 
                 <div className="flex gap-1 mt-2">

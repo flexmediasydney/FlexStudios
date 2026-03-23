@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Edit, Trash2 } from "lucide-react";
+import Price from '@/components/common/Price';
 
 const categories = {
   photography: "Photography",
@@ -51,11 +52,11 @@ export default function ProductGridView({ products, onEdit, onDelete, projectTyp
               <div className="space-y-1 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Standard:</span>
-                  <span className="font-medium">${product.standard_tier?.base_price?.toFixed(2) || "0.00"}</span>
+                  <span className="font-medium"><Price value={product.standard_tier?.base_price} /></span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Premium:</span>
-                  <span className="font-medium">${product.premium_tier?.base_price?.toFixed(2) || "0.00"}</span>
+                  <span className="font-medium"><Price value={product.premium_tier?.base_price} /></span>
                 </div>
                 {product.pricing_type === "per_unit" && (
                   <div className="text-xs text-muted-foreground mt-1">+ per-unit pricing</div>
