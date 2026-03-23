@@ -3,6 +3,23 @@ import { supabase, supabaseAdmin } from '@/api/supabaseClient';
 
 const AuthContext = createContext();
 
+// Read session directly from localStorage when Web Locks are stuck
+function getSessionFromStorage() {
+  try {
+    const key = Object.keys(localStorage).find(k => k.startsWith('sb-') && k.endsWith('-auth-token'));
+    if (!key) return null;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Handle both formats: direct object or nested under session
+    const session = parsed?.session || parsed;
+    if (session?.user?.email) return session;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -37,12 +54,11 @@ export const AuthProvider = ({ children }) => {
         setUser(appUser);
         setIsAuthenticated(true);
         setAuthError(null);
-        // Update last_login_at
+        // Update last_login_at (fire-and-forget)
         dbClient.from('users').update({ last_login_at: new Date().toISOString() }).eq('id', appUser.id).then(() => {});
       }
     } catch (err) {
       console.error('User fetch failed:', err);
-      // Don't sign out — just show the error
       setAuthError({ type: 'unknown', message: err.message || 'Failed to load user profile' });
       setIsAuthenticated(false);
     } finally {
@@ -54,7 +70,7 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     let cancelled = false;
 
-    const init = async (retries = 3) => {
+    const init = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (cancelled) return;
@@ -65,11 +81,15 @@ export const AuthProvider = ({ children }) => {
           setIsLoadingAuth(false);
         }
       } catch (err) {
-        // Web Locks contention — retry after a short delay
-        if (err?.name === 'AbortError' && retries > 0) {
-          console.warn('Auth lock contention, retrying...', retries);
-          await new Promise(r => setTimeout(r, 2000));
-          if (!cancelled) return init(retries - 1);
+        // Web Locks AbortError — the session IS in localStorage, just can't
+        // access it through the locked Supabase client. Read it directly.
+        if (err?.name === 'AbortError') {
+          console.warn('Auth lock contention — reading session from storage fallback');
+          const storedSession = getSessionFromStorage();
+          if (!cancelled && storedSession?.user) {
+            await fetchAppUser(storedSession.user);
+            return;
+          }
         }
         console.error('Auth init error:', err);
         if (!cancelled) setIsLoadingAuth(false);
@@ -86,7 +106,6 @@ export const AuthProvider = ({ children }) => {
             await fetchAppUser(session.user);
           }
         } else if (event === 'PASSWORD_RECOVERY') {
-          // User clicked a password reset link — redirect to reset page
           window.location.href = '/auth/reset-password';
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
