@@ -4,6 +4,7 @@ import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
 import { supabase } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Shield, UserCheck, UserX, Edit, Trash2, Phone, Mail, KeyRound, RotateCcw, Send, Clock, Loader2, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,7 @@ export default function UsersManagement() {
     mutationFn: ({ userId, updates }) => api.entities.User.update(userId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
+      refetchEntityList("User");
       toast.success("User updated");
       setEditingUser(null);
     },
@@ -66,6 +68,7 @@ export default function UsersManagement() {
     mutationFn: ({ userId, isActive }) => api.entities.User.update(userId, { is_active: isActive }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
+      refetchEntityList("User");
       toast.success("User status updated");
     },
     onError: (err) => toast.error(err?.message || "Failed to update"),
@@ -99,6 +102,7 @@ export default function UsersManagement() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
+      refetchEntityList("User");
       toast.success("User deleted");
       setDeletingUser(null);
     },

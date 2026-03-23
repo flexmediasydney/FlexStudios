@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from '@/api/supabaseClient';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -197,6 +198,7 @@ export default function ProductCategoriesManagement() {
     mutationFn: (data) => api.entities.ProductCategory.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
+      refetchEntityList("ProductCategory");
       setExpandedFormType(null);
       setEditingCategory(null);
       showNotification('success', 'Category created successfully');
@@ -208,6 +210,7 @@ export default function ProductCategoriesManagement() {
     mutationFn: ({ id, data }) => api.entities.ProductCategory.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
+      refetchEntityList("ProductCategory");
       setEditingCategory(null);
       setExpandedFormType(null);
       showNotification('success', 'Category updated successfully');
@@ -222,6 +225,7 @@ export default function ProductCategoriesManagement() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
+      refetchEntityList("ProductCategory");
       setDeleteDialog({ open: false, category: null, impact: null });
       showNotification('success', 'Category deleted successfully');
     },

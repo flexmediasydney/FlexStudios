@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,8 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
       await api.users.inviteUser(trimmedEmail, role, trimmedName || undefined);
       await queryClient.invalidateQueries({ queryKey: ["users"] });
       await queryClient.invalidateQueries({ queryKey: ["internal-teams"] });
+      refetchEntityList("User");
+      refetchEntityList("InternalTeam");
       toast.success("Invitation sent successfully!");
       setEmail("");
       setFullName("");

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +26,7 @@ export default function NoteTagsManagement() {
     mutationFn: (data) => api.entities.NoteTag.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["note-tags"] });
+      refetchEntityList("NoteTag");
       toast.success("Tag created");
     },
     onError: (err) => toast.error(err?.message || "Failed to create tag"),
@@ -34,6 +36,7 @@ export default function NoteTagsManagement() {
     mutationFn: ({ id, data }) => api.entities.NoteTag.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["note-tags"] });
+      refetchEntityList("NoteTag");
       setEditingId(null);
       toast.success("Tag updated");
     },
@@ -47,6 +50,7 @@ export default function NoteTagsManagement() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["note-tags"] });
+      refetchEntityList("NoteTag");
       setDeletingId(null);
       toast.success("Tag deleted");
     },
