@@ -54,7 +54,7 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     let cancelled = false;
 
-    const init = async () => {
+    const init = async (retries = 3) => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (cancelled) return;
@@ -65,6 +65,12 @@ export const AuthProvider = ({ children }) => {
           setIsLoadingAuth(false);
         }
       } catch (err) {
+        // Web Locks contention — retry after a short delay
+        if (err?.name === 'AbortError' && retries > 0) {
+          console.warn('Auth lock contention, retrying...', retries);
+          await new Promise(r => setTimeout(r, 500));
+          if (!cancelled) return init(retries - 1);
+        }
         console.error('Auth init error:', err);
         if (!cancelled) setIsLoadingAuth(false);
       }
