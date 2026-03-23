@@ -10,8 +10,8 @@ Deno.serve(async (req) => {
     const probeText = await cloned.text().catch(() => '');
     try {
       const probe = JSON.parse(probeText);
-      if (probe?._health_check) {
-        return jsonResponse({ _version: PROCESSOR_VERSION, _fn: 'receiveTonomoWebhook', _ts: '2026-03-17' });
+      if (probe?._health_check || probe?._isHealthCheck || probe?.action === 'health_check') {
+        return jsonResponse({ _version: PROCESSOR_VERSION, _fn: 'receiveTonomoWebhook', healthy: true, _ts: new Date().toISOString() });
       }
     } catch { /* not JSON or not a health check */ }
 
