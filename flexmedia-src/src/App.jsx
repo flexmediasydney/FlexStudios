@@ -13,6 +13,7 @@ import { clearEntityCache } from '@/components/hooks/useEntityData';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 import ResetPassword from './pages/ResetPassword';
+import Register from './pages/Register';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { canAccessRoute } from '@/components/lib/routeAccess';
 import { AlertCircle } from 'lucide-react';
@@ -117,6 +118,7 @@ const AuthenticatedApp = () => {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/auth/reset-password" element={<ResetPassword />} />
         <Route path="*" element={<Login />} />

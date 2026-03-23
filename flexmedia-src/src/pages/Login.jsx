@@ -370,6 +370,15 @@ export default function Login() {
             </p>
           </form>
         )}
+        {/* Create Account Link */}
+        <div className="text-center pt-2 border-t border-border/40">
+          <p className="text-xs text-muted-foreground">
+            Don't have an account?{' '}
+            <a href="/register" className="text-blue-600 hover:text-blue-700 font-medium hover:underline">
+              Create account
+            </a>
+          </p>
+        </div>
       </div>
     </Shell>
   );

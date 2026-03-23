@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import InviteUserDialog from "@/components/users/InviteUserDialog";
+import InviteCodesPanel from "@/components/users/InviteCodesPanel";
 import { toast } from "sonner";
 
 const roleConfig = {
@@ -407,6 +408,11 @@ export default function UsersManagement() {
             </AlertDialogContent>
           </AlertDialog>
         )}
+
+        {/* Invite Codes Section */}
+        <div className="mt-8 border-t pt-6">
+          <InviteCodesPanel />
+        </div>
       </div>
   );
 }
