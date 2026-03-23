@@ -6,7 +6,8 @@ const AuthContext = createContext();
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// Read session directly from localStorage when Web Locks are stuck
+// ─── Helpers that bypass Supabase client entirely ────────────────────────────
+
 function getSessionFromStorage() {
   try {
     const key = Object.keys(localStorage).find(k => k.startsWith('sb-') && k.endsWith('-auth-token'));
@@ -22,17 +23,10 @@ function getSessionFromStorage() {
   }
 }
 
-// Direct REST lookup — bypasses Supabase client entirely
-// Works even when Web Locks are stuck and auth session isn't initialized
 async function fetchUserByEmailDirect(email, accessToken) {
   try {
-    const headers = {
-      'apikey': SUPABASE_ANON_KEY,
-      'Accept': 'application/vnd.pgrst.object+json',
-    };
-    if (accessToken) {
-      headers['Authorization'] = `Bearer ${accessToken}`;
-    }
+    const headers = { 'apikey': SUPABASE_ANON_KEY, 'Accept': 'application/vnd.pgrst.object+json' };
+    if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/users?email=eq.${encodeURIComponent(email)}&select=*`,
       { headers }
@@ -44,60 +38,41 @@ async function fetchUserByEmailDirect(email, accessToken) {
   }
 }
 
+// ─── Auth Provider ───────────────────────────────────────────────────────────
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [authError, setAuthError] = useState(null);
   const fetchingRef = useRef(false);
+  const initDoneRef = useRef(false);
 
-  const dbClient = supabaseAdmin || supabase;
-
+  // Fetch app user via direct REST ONLY (no Supabase client queries during init)
   const fetchAppUser = useCallback(async (authUser, accessToken) => {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
 
     try {
-      // Try Supabase client first
-      let appUser = null;
-      let error = null;
+      const appUser = await fetchUserByEmailDirect(authUser.email, accessToken);
 
-      try {
-        const result = await dbClient
-          .from('users')
-          .select('*')
-          .eq('email', authUser.email)
-          .single();
-        appUser = result.data;
-        error = result.error;
-      } catch (queryErr) {
-        // Supabase client query failed (e.g., auth not ready)
-        // Fall through to direct REST
-        error = queryErr;
-      }
-
-      // If Supabase client failed, try direct REST
-      if ((error || !appUser) && authUser.email) {
-        const directUser = await fetchUserByEmailDirect(authUser.email, accessToken);
-        if (directUser?.id) {
-          appUser = directUser;
-          error = null;
-        }
-      }
-
-      if (error || !appUser) {
+      if (!appUser?.id) {
         setAuthError({ type: 'user_not_registered', message: 'User not registered for this app' });
         setIsAuthenticated(false);
       } else if (!appUser.is_active) {
-        setAuthError({ type: 'user_deactivated', message: 'Your account has been deactivated. Contact your admin.' });
+        setAuthError({ type: 'user_deactivated', message: 'Your account has been deactivated.' });
         setIsAuthenticated(false);
-        await supabase.auth.signOut({ scope: 'local' });
+        supabase.auth.signOut({ scope: 'local' }).catch(() => {});
       } else {
         setUser(appUser);
         setIsAuthenticated(true);
         setAuthError(null);
-        // Update last_login_at (fire-and-forget)
-        dbClient.from('users').update({ last_login_at: new Date().toISOString() }).eq('id', appUser.id).then(() => {});
+        // Update last_login_at (fire-and-forget via REST)
+        fetch(`${SUPABASE_URL}/rest/v1/users?id=eq.${appUser.id}`, {
+          method: 'PATCH',
+          headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+          body: JSON.stringify({ last_login_at: new Date().toISOString() }),
+        }).catch(() => {});
       }
     } catch (err) {
       console.error('User fetch failed:', err);
@@ -105,57 +80,62 @@ export const AuthProvider = ({ children }) => {
       setIsAuthenticated(false);
     } finally {
       fetchingRef.current = false;
+      initDoneRef.current = true;
       setIsLoadingAuth(false);
     }
-  }, [dbClient]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
 
+    // ─── ABSOLUTE SAFETY NET ────────────────────────────────────────
+    // If NOTHING resolves within 8 seconds, force show login page.
+    // This catches ALL possible hang scenarios.
+    const safetyTimer = setTimeout(() => {
+      if (!initDoneRef.current && !cancelled) {
+        console.warn('Auth safety timeout — forcing login page');
+        setIsLoadingAuth(false);
+      }
+    }, 8000);
+
     const init = async () => {
-      // Race getSession() against a 5-second timeout
-      // Web Locks can hang indefinitely if orphaned from closed tabs
+      // Step 1: Try getSession() with a 4-second timeout
       let session = null;
       try {
         const timeout = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 5000)
+          setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 4000)
         );
-        const result = await Promise.race([
-          supabase.auth.getSession(),
-          timeout,
-        ]);
+        const result = await Promise.race([supabase.auth.getSession(), timeout]);
         session = result?.data?.session;
-      } catch (err) {
-        // getSession() threw (AbortError) or timed out — use localStorage fallback
-        console.warn('Auth getSession failed/timed out — using localStorage fallback');
-        const storedSession = getSessionFromStorage();
-        if (!cancelled && storedSession?.user) {
-          await fetchAppUser(storedSession.user, storedSession.access_token);
-          return;
-        }
-        // No stored session either — user needs to log in
-        if (!cancelled) setIsLoadingAuth(false);
-        return;
+      } catch {
+        // getSession hung or threw — fall through to localStorage
       }
 
       if (cancelled) return;
 
-      if (session?.user) {
+      // Step 2: If getSession worked and has a session, use it
+      if (session?.user?.email) {
         await fetchAppUser(session.user, session.access_token);
-      } else {
-        // No active session — check localStorage as last resort
-        // (session may exist but getSession returned null due to race)
-        const storedSession = getSessionFromStorage();
-        if (storedSession?.user) {
-          await fetchAppUser(storedSession.user, storedSession.access_token);
-        } else {
-          setIsLoadingAuth(false);
-        }
+        return;
+      }
+
+      // Step 3: No session from client — try localStorage
+      const stored = getSessionFromStorage();
+      if (stored?.user?.email) {
+        await fetchAppUser(stored.user, stored.access_token);
+        return;
+      }
+
+      // Step 4: No session anywhere — show login
+      if (!cancelled) {
+        initDoneRef.current = true;
+        setIsLoadingAuth(false);
       }
     };
 
     init();
 
+    // Listen for auth state changes (login, logout, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (cancelled) return;
@@ -176,6 +156,7 @@ export const AuthProvider = ({ children }) => {
 
     return () => {
       cancelled = true;
+      clearTimeout(safetyTimer);
       subscription.unsubscribe();
     };
   }, [fetchAppUser]);
@@ -183,10 +164,8 @@ export const AuthProvider = ({ children }) => {
   const logout = async (shouldRedirect = true) => {
     setUser(null);
     setIsAuthenticated(false);
-    await supabase.auth.signOut({ scope: 'local' });
-    if (shouldRedirect) {
-      window.location.href = '/login';
-    }
+    await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+    if (shouldRedirect) window.location.href = '/login';
   };
 
   const navigateToLogin = () => {
@@ -195,14 +174,10 @@ export const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider value={{
-      user,
-      isAuthenticated,
-      isLoadingAuth,
+      user, isAuthenticated, isLoadingAuth,
       isLoadingPublicSettings: false,
-      authError,
-      appPublicSettings: null,
-      logout,
-      navigateToLogin,
+      authError, appPublicSettings: null,
+      logout, navigateToLogin,
       checkAppState: () => window.location.reload(),
     }}>
       {children}
@@ -212,8 +187,6 @@ export const AuthProvider = ({ children }) => {
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 };
