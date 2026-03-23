@@ -199,9 +199,14 @@ export default function ClientAgents() {
       });
     }
     if (activeFilters.has("at_risk")) result = result.filter(a => a.is_at_risk === true);
-    if (activeFilters.has("active")) result = result.filter(a => a.relationship_state === "Active");
-    if (activeFilters.has("prospecting")) result = result.filter(a => a.relationship_state === "Prospecting");
     if (activeFilters.has("no_email")) result = result.filter(a => !a.email);
+    // OR together mutually exclusive state filters so "Active" + "Prospecting" returns both
+    const stateFilters = ["active", "prospecting"].filter(f => activeFilters.has(f));
+    if (stateFilters.length > 0) {
+      const stateMap = { active: "Active", prospecting: "Prospecting" };
+      const allowedStates = new Set(stateFilters.map(f => stateMap[f]));
+      result = result.filter(a => allowedStates.has(a.relationship_state));
+    }
     if (tagFilter) result = result.filter(a => Array.isArray(a.tags) && a.tags.includes(tagFilter));
     if (orgFilter) result = result.filter(a => a.current_agency_id === orgFilter);
     return result;

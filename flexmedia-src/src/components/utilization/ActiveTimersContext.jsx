@@ -46,18 +46,25 @@ export function ActiveTimersProvider({ children, currentUser }) {
           }
           return prev;
         } else if (event.type === 'update') {
+          // BUG FIX (subscription audit): use event.data.id consistently instead of
+          // event.id. While they're typically equal for create/update, using event.data.id
+          // is more reliable because event.id falls back through a chain (record?.id ??
+          // payload.old?.id) which can differ from the actual record ID in edge cases.
+          const dataId = event.data.id;
           if (event.data.is_active && event.data.status === 'running') {
             // If already tracked, update it; otherwise add it (handles resume from paused)
-            const exists = prev.some(t => t.id === event.id);
+            const exists = prev.some(t => t.id === dataId);
             if (exists) {
-              return prev.map(t => t.id === event.id ? event.data : t);
+              return prev.map(t => t.id === dataId ? event.data : t);
             }
             return [...prev, event.data];
           } else {
-            return prev.filter(t => t.id !== event.id);
+            return prev.filter(t => t.id !== dataId);
           }
         } else if (event.type === 'delete') {
-          return prev.filter(t => t.id !== event.id);
+          // For DELETE, event.data may be null — fall back to event.id
+          const deletedId = event.data?.id || event.id;
+          return prev.filter(t => t.id !== deletedId);
         }
         return prev;
       });

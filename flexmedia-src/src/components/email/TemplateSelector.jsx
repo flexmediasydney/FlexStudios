@@ -92,9 +92,9 @@ export default function TemplateSelector({ onSelectTemplate, onSaveAsTemplate })
                     <HoverCardContent side="right" className="w-72 p-3">
                       <p className="text-xs font-semibold mb-1">{template.name}</p>
                       {template.subject && <p className="text-xs text-muted-foreground mb-2">Subject: {template.subject}</p>}
-                      <div className="text-xs text-muted-foreground line-clamp-6 prose prose-xs"
-                        dangerouslySetInnerHTML={{ __html: (template.body || '').replace(/<[^>]*>/g, ' ').slice(0, 300) }}
-                      />
+                      <div className="text-xs text-muted-foreground line-clamp-6 prose prose-xs">
+                        {(template.body || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 300)}
+                      </div>
                     </HoverCardContent>
                   </HoverCard>
                 ))}

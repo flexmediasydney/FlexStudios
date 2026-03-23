@@ -84,16 +84,28 @@ export default function ActiveTimersPanel({ projectId, tasks = [] }) {
     fetchLogs();
 
     // Subscribe to changes - update local state in real-time
+    //
+    // BUG FIX (subscription audit): When a timer was updated to is_active: false
+    // (e.g., completed or stopped), the UPDATE handler kept it in the list because
+    // it only checked `existing` (maps it) or `event.data?.is_active` (adds it).
+    // A deactivated timer stayed visible as an "active" timer until page refresh.
     const unsub = api.entities.TaskTimeLog.subscribe((event) => {
       if (!mounted) return;
-      if (event.data?.project_id !== projectId) return;
+      // For DELETE, event.data may be null — skip project_id check
+      if (event.type !== 'delete' && event.data?.project_id !== projectId) return;
 
       if (event.type === 'create' || event.type === 'update') {
         setTimeLogs(prev => {
           const existing = prev.find(l => l.id === event.id);
           if (existing) {
+            // BUG FIX: remove timer if it became inactive
+            if (!event.data?.is_active) {
+              return prev.filter(l => l.id !== event.id);
+            }
             return prev.map(l => l.id === event.id ? event.data : l);
           } else if (event.data?.is_active) {
+            // Prevent duplicates
+            if (prev.some(l => l.id === event.data.id)) return prev;
             return [...prev, event.data];
           }
           return prev;

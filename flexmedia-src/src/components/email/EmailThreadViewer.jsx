@@ -27,29 +27,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { formatEmailDateTime, formatFileSize } from "./emailDateUtils";
 
-// Sanitize HTML email bodies to prevent XSS.
-// Strips: <script>, <style>, all on* event attributes, javascript: hrefs, data: URIs.
-// Preserves: all visual formatting, links, images, tables, lists.
+import { sanitizeEmailHtml as _baseSanitize } from '@/utils/sanitizeHtml';
+
+// Wrap centralized sanitizer with email-specific auto-linking and target enforcement
 const sanitizeEmailHtml = (html) => {
   if (!html) return '';
-  // Remove script and style blocks entirely ([\s\S] for multiline matching)
-  let clean = html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<head[\s\S]*?<\/head>/gi, '');
-  // Strip all on* event handler attributes (onclick, onload, onerror, etc.)
-  clean = clean.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
-  // Strip javascript: and data: URI schemes from href and src
-  clean = clean.replace(/(href|src|action)\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"');
-  clean = clean.replace(/(href|src|action)\s*=\s*(?:"data:[^"]*"|'data:[^']*')/gi, 'href="#"');
-  // Strip <base> tags (can redirect all relative links)
-  clean = clean.replace(/<base\b[^>]*>/gi, '');
-  // Strip <form> tags (phishing risk)
-  clean = clean.replace(/<\/?form\b[^>]*>/gi, '');
+  let clean = _baseSanitize(html);
   // Auto-link plain text URLs that aren't already inside <a> tags
-  // Skip URLs inside attribute values (preceded by = or quotes) AND URLs
-  // that appear as text content within existing <a> tags (preceded by >)
   clean = clean.replace(
     /(?<![="'>])(https?:\/\/[^\s<>"']+)/gi,
     '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
@@ -136,9 +120,22 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       return;
     }
 
-    // Subscribe to EmailMessage updates — handle both updates to existing
-    // messages AND new messages arriving in this thread (e.g., new reply)
+    // Subscribe to EmailMessage updates — handle updates to existing messages,
+    // new messages arriving in this thread (e.g., new reply), AND deletions.
+    //
+    // BUG FIX (subscription audit): DELETE events were ignored because the guard
+    // `if (!event.data) return` exits early — Supabase sends data: null for DELETEs.
+    // Messages deleted server-side stayed visible in the thread viewer.
     const unsubscribe = api.entities.EmailMessage.subscribe((event) => {
+      if (!event) return;
+
+      // BUG FIX: handle DELETE events (event.data is null for deletes)
+      if (event.type === 'delete') {
+        const deletedId = event.data?.id || event.id;
+        setLiveMessages(prev => prev.filter(m => m.id !== deletedId));
+        return;
+      }
+
       if (!event.data) return;
       const data = event.data;
 
@@ -152,6 +149,8 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         }
         // New message — add it if it belongs to this thread and account
         if (data.gmail_thread_id === thread.threadId && data.email_account_id === thread.email_account_id) {
+          // Prevent duplicates from race between fetch and subscription
+          if (prevMessages.some(m => m.id === data.id)) return prevMessages;
           return [...prevMessages, data];
         }
         return prevMessages;
@@ -1088,9 +1087,14 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                               const handleDownload = async (e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                // If we have a direct URL, use it
+                                // If we have a direct URL, use it (validate protocol)
                                 if (att.file_url) {
-                                  window.open(att.file_url, '_blank');
+                                  try {
+                                    const u = new URL(att.file_url, window.location.origin);
+                                    if (u.protocol === 'http:' || u.protocol === 'https:') {
+                                      window.open(u.href, '_blank', 'noopener,noreferrer');
+                                    }
+                                  } catch { /* invalid URL, skip */ }
                                   return;
                                 }
                                 // Otherwise fetch from Gmail via edge function

@@ -111,23 +111,36 @@ export default function RealtimeActivityStream({ maxItems = 10, autoRefresh = tr
   }, [maxItems]);
 
   // Realtime subscription — push new events to the top of the feed
+  //
+  // BUG FIX (subscription audit): Only CREATE events were handled. UPDATE and DELETE
+  // were ignored, meaning edited activities showed stale data and deleted activities
+  // remained visible in the feed until page refresh.
   useEffect(() => {
+    const mapActivity = (data, id) => ({
+      id: id,
+      title: data.description || 'Project Updated',
+      description: data.action,
+      type: data.action === 'delete' ? 'alert' : data.action === 'create' ? 'completed' : 'update',
+      user: data.user_name,
+      timestamp: data.created_date || new Date().toISOString(),
+      project: data.project_title
+    });
+
     const unsubscribe = api.entities.ProjectActivity.subscribe((event) => {
       if (event.type === 'create' && event.data) {
-        const newActivity = {
-          id: event.id,
-          title: event.data.description || 'Project Updated',
-          description: event.data.action,
-          type: event.data.action === 'delete' ? 'alert' : event.data.action === 'create' ? 'completed' : 'update',
-          user: event.data.user_name,
-          timestamp: new Date().toISOString(),
-          project: event.data.project_title
-        };
         setActivities(prev => {
-          // Avoid duplicates
           if (prev.some(a => a.id === event.id)) return prev;
-          return [newActivity, ...prev.slice(0, maxItems - 1)];
+          return [mapActivity(event.data, event.id), ...prev.slice(0, maxItems - 1)];
         });
+      } else if (event.type === 'update' && event.data) {
+        // BUG FIX: update existing activity in-place
+        setActivities(prev =>
+          prev.map(a => a.id === event.id ? mapActivity(event.data, event.id) : a)
+        );
+      } else if (event.type === 'delete') {
+        // BUG FIX: remove deleted activity from feed
+        const deletedId = event.data?.id || event.id;
+        setActivities(prev => prev.filter(a => a.id !== deletedId));
       }
     });
 

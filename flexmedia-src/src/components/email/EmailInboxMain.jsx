@@ -647,11 +647,14 @@ export default function EmailInboxMain() {
     }
     
     if (filterFrom) {
-      result = result.filter(t => t.from_email === filterFrom);
+      // Case-insensitive email comparison — email addresses are case-insensitive per RFC
+      const fromLower = filterFrom.toLowerCase();
+      result = result.filter(t => t.from_email?.toLowerCase() === fromLower);
     }
-    
+
     if (filterLabel) {
-      result = result.filter(t => t.messages[0].labels?.includes(filterLabel));
+      // Check ALL messages in thread for the label, not just the first
+      result = result.filter(t => t.messages.some(m => m.labels?.includes(filterLabel)));
     }
     
     if (filterProject) {

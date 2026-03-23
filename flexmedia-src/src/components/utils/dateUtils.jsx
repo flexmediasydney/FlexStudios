@@ -58,9 +58,22 @@ export function todaySydney() {
   }).format(new Date()).split('/').reverse().join('-');
 }
 
+// BUG FIX: daysAgo was comparing raw Date objects — which works for elapsed-time
+// calculations (hours/minutes), but differenceInDays uses calendar-day boundaries
+// in the *local* machine timezone, not Sydney. On a UTC server at 23:00 UTC
+// (= 10:00 AEST next day), a timestamp from "today in Sydney" would show as "0d ago"
+// when it should show "1d ago". Now we compare Sydney date strings for day-level diffs.
 export function daysAgo(date) {
   if (!date) return 0;
-  return differenceInDays(new Date(), new Date(fixTimestamp(date)));
+  const todayStr = todaySydney();
+  const targetStr = fmtTimestampCustom(date, { year: 'numeric', month: '2-digit', day: '2-digit' });
+  if (!targetStr || targetStr === '—') return 0;
+  // targetStr is "DD/MM/YYYY" in en-AU format — convert to YYYY-MM-DD
+  const targetISO = targetStr.split('/').reverse().join('-');
+  const todayD = parseDate(todayStr);
+  const targetD = parseDate(targetISO);
+  if (!todayD || !targetD) return 0;
+  return differenceInDays(todayD, targetD);
 }
 
 export function hoursAgo(date) {
@@ -91,13 +104,17 @@ export function formatRelative(date) {
   return `${Math.floor(dys / 365)}y ago`;
 }
 
+// BUG FIX: was using new Date() which gives local machine's "today", not Sydney's "today".
+// On a Vercel edge or any non-AEST server, "today" could be yesterday/tomorrow in Sydney.
+// Now we derive "today" from todaySydney() and build ranges from that date-only string.
 export function getDateRange(type) {
-  const today = new Date();
+  const sydneyToday = parseDate(todaySydney()); // midnight local-parse of Sydney date
+  if (!sydneyToday) return undefined;
   const ranges = {
-    today: { start: startOfDay(today), end: endOfDay(today) },
-    yesterday: { start: startOfDay(addDays(today, -1)), end: endOfDay(addDays(today, -1)) },
-    week: { start: startOfDay(addDays(today, -7)), end: endOfDay(today) },
-    month: { start: startOfDay(addDays(today, -30)), end: endOfDay(today) },
+    today: { start: startOfDay(sydneyToday), end: endOfDay(sydneyToday) },
+    yesterday: { start: startOfDay(addDays(sydneyToday, -1)), end: endOfDay(addDays(sydneyToday, -1)) },
+    week: { start: startOfDay(addDays(sydneyToday, -7)), end: endOfDay(sydneyToday) },
+    month: { start: startOfDay(addDays(sydneyToday, -30)), end: endOfDay(sydneyToday) },
   };
   return ranges[type];
 }
@@ -195,6 +212,32 @@ export function sydneyInputToUtc(localStr) {
   } catch {
     return null;
   }
+}
+
+// ─── Sydney-aware time extraction ─────────────────────────────────────────────
+// Returns { hour, minute } in Sydney time for a UTC timestamp string.
+// Used by Calendar views to position events on the hour grid correctly.
+export function getSydneyHourMinute(utcStr) {
+  if (!utcStr) return { hour: 0, minute: 0 };
+  try {
+    const parts = new Intl.DateTimeFormat('en-AU', {
+      timeZone: APP_TZ,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(fixTimestamp(utcStr)));
+    const get = (t) => parseInt(parts.find(p => p.type === t)?.value ?? '0', 10);
+    const h = get('hour');
+    return { hour: h === 24 ? 0 : h, minute: get('minute') };
+  } catch {
+    return { hour: 0, minute: 0 };
+  }
+}
+
+// Format a UTC timestamp in Sydney time using date-fns-compatible pattern shorthand.
+// Convenience wrapper around fmtTimestampCustom for common time-only displays.
+export function fmtSydneyTime(utcStr, options = { hour: 'numeric', minute: '2-digit', hour12: true }) {
+  return fmtTimestampCustom(utcStr, options);
 }
 
 // ─── Shared duration formatters ───────────────────────────────────────────────

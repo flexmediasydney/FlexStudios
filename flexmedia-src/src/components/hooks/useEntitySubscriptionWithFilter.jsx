@@ -29,6 +29,10 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
     fetchInitial();
 
     // Subscribe to all changes - let subscription update state
+    //
+    // BUG FIX (subscription audit): CREATE events could add duplicates if the
+    // subscription fires after fetchInitial() already included the item.
+    // Now checks for existing ID before appending.
     const unsubscribe = api.entities[entityName].subscribe((event) => {
       if (!isMounted) return;
 
@@ -36,6 +40,8 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
         if (event.type === 'create') {
           // Check if new entity matches filter
           if (matchesFilter(event.data, filter)) {
+            // BUG FIX: prevent duplicates from race between fetchInitial and subscription
+            if (prevData.some(item => item.id === event.data?.id)) return prevData;
             return [...prevData, event.data];
           }
           return prevData;

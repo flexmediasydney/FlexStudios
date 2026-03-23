@@ -74,14 +74,18 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
   const [stageTimers, setStageTimers] = useState([]);
   const [timerKey, setTimerKey] = useState(0);
 
+  // BUG FIX (subscription audit): Was fetching ALL ProjectStageTimers across all
+  // projects via .list(), then filtering client-side. For a system with many projects
+  // this is wasteful and creates a race condition where subscription events for other
+  // projects cause unnecessary state churn. Now uses .filter() to fetch only this
+  // project's timers server-side.
   useEffect(() => {
     let mounted = true;
 
-    // Initial load
-    api.entities.ProjectStageTimer.list().then(all => {
+    // Initial load — fetch only timers for this project
+    api.entities.ProjectStageTimer.filter({ project_id: project.id }).then(timers => {
       if (!mounted) return;
-      const filtered = (all || []).filter(t => t.project_id === project.id);
-      setStageTimers(filtered);
+      setStageTimers(timers || []);
     });
 
     // Live subscription

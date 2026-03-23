@@ -4,6 +4,7 @@ import { usePermissions } from "@/components/auth/PermissionGuard";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
 import { validateProjectReadiness } from "@/components/lib/validateProjectReadiness";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
+import { sydneyInputToUtc } from "@/components/utils/dateUtils";
 import { announceToScreenReader } from "@/components/utils/a11yUtils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -432,10 +433,13 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               if (!formData.shoot_date) return;
               const timeStr = formData.shoot_time || '09:00';
               const hhmm = timeStr.length <= 5 ? timeStr : timeStr.slice(0, 5);
-              const newStart = new Date(`${formData.shoot_date}T${hhmm}:00`);
-              if (isNaN(newStart.getTime())) return;
+              // BUG FIX: was parsing as local machine time via new Date(string).
+              // On a UTC server, "2026-03-10T09:00:00" parses as 09:00 UTC, not 09:00 Sydney.
+              // Use sydneyInputToUtc to correctly convert Sydney wall-clock to UTC.
+              const utcIso = sydneyInputToUtc(`${formData.shoot_date}T${hhmm}`);
+              if (!utcIso) return;
               api.entities.CalendarEvent.update(ev.id, {
-                start_time: newStart.toISOString(),
+                start_time: utcIso,
               }).catch(() => {});
             });
           })

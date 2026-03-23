@@ -14,7 +14,7 @@ import {
   addMonths, subMonths, addWeeks, subWeeks, addDays, subDays,
   isSameMonth, isSameDay, isToday, differenceInMinutes, startOfDay
 } from "date-fns";
-import { fixTimestamp } from "@/components/utils/dateUtils";
+import { fixTimestamp, getSydneyHourMinute, fmtSydneyTime, fmtTimestampCustom, APP_TZ } from "@/components/utils/dateUtils";
 import { getActivityType, ACTIVITY_TYPE_LIST, getEventSource, EVENT_SOURCE_CONFIG } from "@/components/calendar/activityConfig";
 import EventDetailsDialog from "@/components/calendar/EventDetailsDialog";
 import CalendarIntegration from "@/components/calendar/CalendarIntegration";
@@ -909,7 +909,8 @@ function MonthEventPill({ event, owners, userColorMap, users, onClick, title, ha
      new Date(fixTimestamp(event.end_time)) < new Date() &&
      source === 'flexmedia';
 
-   const startTime = event.start_time ? format(new Date(fixTimestamp(event.start_time)), 'h:mm') : '';
+   // BUG FIX: was using date-fns format() which uses local machine timezone, not Sydney.
+   const startTime = event.start_time ? fmtSydneyTime(event.start_time, { hour: 'numeric', minute: '2-digit', hour12: false }) : '';
 
    return (
      <div
@@ -1052,9 +1053,10 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   <div className="h-[2px] bg-red-400/40" />
                 </div>
 
-                {/* Current time indicator */}
+                {/* Current time indicator — BUG FIX: use Sydney time for positioning */}
                 {isTodayCol && (() => {
-                  const nowMin = now.getHours() * 60 + now.getMinutes();
+                  const nowSyd = getSydneyHourMinute(now.toISOString());
+                  const nowMin = nowSyd.hour * 60 + nowSyd.minute;
                   const topPx = (nowMin / 60) * SLOT_HEIGHT + 44;
                   return (
                     <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
@@ -1074,7 +1076,9 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   // but show co-owner avatars
                   const start = new Date(fixTimestamp(event.start_time));
                   const end = event.end_time ? new Date(fixTimestamp(event.end_time)) : new Date(start.getTime() + 3600000);
-                  const startMin = start.getHours() * 60 + start.getMinutes();
+                  // BUG FIX: use Sydney hours for grid positioning, not local machine hours
+                  const startSyd = getSydneyHourMinute(event.start_time);
+                  const startMin = startSyd.hour * 60 + startSyd.minute;
                   const durMin = Math.max(15, differenceInMinutes(end, start));
                   const topPx = (startMin / 60) * SLOT_HEIGHT + 44;
                   const heightPx = Math.max(22, (durMin / 60) * SLOT_HEIGHT - 2);
@@ -1109,11 +1113,11 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                         color: isExternal ? userColor?.text : '#fff',
                       }}
                       onClick={(e) => onEventClick(e, event)}
-                      title={`${event.title}\n${format(start, 'h:mm a')} - ${format(end, 'h:mm a')}${event.location ? '\n' + event.location : ''}`}
+                      title={`${event.title}\n${fmtSydneyTime(event.start_time)} - ${fmtSydneyTime(event.end_time)}${event.location ? '\n' + event.location : ''}`}
                     >
                       <p className="text-[11px] font-bold leading-tight truncate">{event.title || 'Untitled'}</p>
                       {heightPx > 26 && (
-                        <p className="text-[10px] leading-tight" style={{ opacity: 0.75 }}>{format(start, 'h:mm')} - {format(end, 'h:mm')}</p>
+                        <p className="text-[10px] leading-tight" style={{ opacity: 0.75 }}>{fmtSydneyTime(event.start_time, { hour: 'numeric', minute: '2-digit', hour12: false })} - {fmtSydneyTime(event.end_time, { hour: 'numeric', minute: '2-digit', hour12: false })}</p>
                       )}
                       {heightPx > 40 && owners.length > 1 && (
                         <div className="flex -space-x-1 mt-0.5">
@@ -1175,8 +1179,11 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   const e = event.end_time ? new Date(fixTimestamp(event.end_time)) : new Date(s.getTime() + 3600000);
                   const slotStart = h * 60;
                   const slotEnd = (h + 1) * 60;
-                  const evStart = s.getHours() * 60 + s.getMinutes();
-                  const evEnd = e.getHours() * 60 + e.getMinutes() || 24 * 60;
+                  // BUG FIX: use Sydney hours for slot overlap detection
+                  const evStartSyd = getSydneyHourMinute(event.start_time);
+                  const evEndSyd = event.end_time ? getSydneyHourMinute(event.end_time) : { hour: evStartSyd.hour + 1, minute: evStartSyd.minute };
+                  const evStart = evStartSyd.hour * 60 + evStartSyd.minute;
+                  const evEnd = (evEndSyd.hour * 60 + evEndSyd.minute) || 24 * 60;
                   return evStart < slotEnd && evEnd > slotStart;
                 });
                 return (
@@ -1198,9 +1205,10 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                 );
               })}
 
-              {/* Current time indicator line */}
+              {/* Current time indicator line — BUG FIX: use Sydney time */}
               {isTodayCol && (() => {
-                const nowMin = now.getHours() * 60 + now.getMinutes();
+                const nowSyd = getSydneyHourMinute(now.toISOString());
+                const nowMin = nowSyd.hour * 60 + nowSyd.minute;
                 const topPx = (nowMin / 60) * SLOT_HEIGHT;
                 return (
                   <div
@@ -1380,10 +1388,11 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
                       );
                     })()}
 
-                    {/* Current time indicator */}
+                    {/* Current time indicator — BUG FIX: use Sydney time */}
                     {isToday(currentDate) && (() => {
                       const n = new Date();
-                      const nowMin = n.getHours() * 60 + n.getMinutes();
+                      const nSyd = getSydneyHourMinute(n.toISOString());
+                      const nowMin = nSyd.hour * 60 + nSyd.minute;
                       const topPx = (nowMin / 60) * SLOT_HEIGHT;
                       return (
                         <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
@@ -1464,7 +1473,9 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
     ? new Date(fixTimestamp(event.end_time))
     : new Date(start.getTime() + 60 * 60 * 1000);
 
-  const startMinutes = start.getHours() * 60 + start.getMinutes();
+  // BUG FIX: use Sydney hours for grid positioning, not local machine hours
+  const startSyd = getSydneyHourMinute(event.start_time);
+  const startMinutes = startSyd.hour * 60 + startSyd.minute;
   const durationMinutes = Math.max(15, differenceInMinutes(end, start));
 
   const topPx = (startMinutes / 60) * slotHeight + headerOffset;
@@ -1485,14 +1496,14 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
         color: typeColor.text,
       }}
       onClick={onClick}
-      title={`${event.title} (${format(start, 'h:mm a')} - ${format(end, 'h:mm a')})`}
+      title={`${event.title} (${fmtSydneyTime(event.start_time)} - ${fmtSydneyTime(event.end_time)})`}
     >
       <div className="flex items-center gap-1">
         <p className="text-xs font-semibold leading-tight truncate flex-1">{event.title}</p>
         {hasConflict && <AlertTriangle className="h-3 w-3 text-orange-500 flex-shrink-0" title="Scheduling conflict" />}
       </div>
       {heightPx > 30 && (
-        <p className="text-[11px] opacity-70 leading-tight">{format(start, 'h:mm')} - {format(end, 'h:mm a')}</p>
+        <p className="text-[11px] opacity-70 leading-tight">{fmtSydneyTime(event.start_time, { hour: 'numeric', minute: '2-digit', hour12: false })} - {fmtSydneyTime(event.end_time)}</p>
       )}
       {heightPx > 30 && event.travel_time_minutes > 0 && (
         <span className="inline-flex items-center gap-0.5 text-[9px] bg-blue-100 text-blue-700 rounded px-1 py-0 w-fit">
@@ -1528,7 +1539,9 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
     ? new Date(fixTimestamp(event.end_time))
     : new Date(start.getTime() + 60 * 60 * 1000);
 
-  const startMinutes = start.getHours() * 60 + start.getMinutes();
+  // BUG FIX: use Sydney hours for grid positioning, not local machine hours
+  const startSyd = getSydneyHourMinute(event.start_time);
+  const startMinutes = startSyd.hour * 60 + startSyd.minute;
   const durationMinutes = Math.max(15, differenceInMinutes(end, start));
   const topPx = (startMinutes / 60) * slotHeight;
   const heightPx = Math.max(24, (durationMinutes / 60) * slotHeight - 2);
@@ -1599,7 +1612,7 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
         color: textColor,
       }}
       onClick={onClick}
-      title={`${event.title || 'Untitled'}\n${format(start, 'h:mm a')} - ${format(end, 'h:mm a')}${event.location ? '\n' + event.location : ''}`}
+      title={`${event.title || 'Untitled'}\n${fmtSydneyTime(event.start_time)} - ${fmtSydneyTime(event.end_time)}${event.location ? '\n' + event.location : ''}`}
     >
       <div className="flex items-center gap-1 min-w-0">
         <p className="text-xs font-bold leading-tight truncate flex-1">{displayTitle}</p>
@@ -1610,7 +1623,7 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
         <p className="text-[11px] leading-tight truncate mt-0.5" style={{ opacity: 0.85 }}>{event.location}</p>
       )}
       {heightPx > 28 && (
-        <p className="text-[11px] leading-tight mt-auto" style={{ opacity: 0.75 }}>{format(start, 'h:mm')} - {format(end, 'h:mm')}</p>
+        <p className="text-[11px] leading-tight mt-auto" style={{ opacity: 0.75 }}>{fmtSydneyTime(event.start_time, { hour: 'numeric', minute: '2-digit', hour12: false })} - {fmtSydneyTime(event.end_time, { hour: 'numeric', minute: '2-digit', hour12: false })}</p>
       )}
       {heightPx > 28 && event.travel_time_minutes > 0 && (
         <span className="inline-flex items-center gap-0.5 text-[8px] rounded px-0.5 py-0 w-fit" style={{ opacity: 0.7 }}>

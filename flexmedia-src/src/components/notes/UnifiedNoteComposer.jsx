@@ -8,11 +8,9 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-const sanitizeHtml = (html) => html
-  .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-  .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-  .replace(/ on\w+="[^"]*"/gi, '')
-  .replace(/ on\w+='[^']*'/gi, '');
+// Use centralized sanitizer — covers script, iframe, object, embed, on* handlers,
+// javascript:/data:/vbscript: URIs, base, form, meta, and HTML comments.
+import { sanitizeEditorHtml as sanitizeHtml } from '@/utils/sanitizeHtml';
 
 export default function UnifiedNoteComposer({
   agencyId, projectId, agentId, teamId,

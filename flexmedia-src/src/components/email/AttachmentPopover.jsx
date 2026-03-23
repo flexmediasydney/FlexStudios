@@ -11,29 +11,32 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import { validateUrl, safeWindowOpen } from '@/utils/sanitizeHtml';
 
 export default function AttachmentPopover({ attachments }) {
   if (!attachments || attachments.length === 0) return null;
 
   const handleDownload = async (attachment) => {
-    if (!attachment.file_url) {
-      alert('No download link available');
+    const safeUrl = validateUrl(attachment.file_url);
+    if (!safeUrl) {
+      alert('No valid download link available');
       return;
     }
 
     try {
       // Try direct download first
       const link = document.createElement("a");
-      link.href = attachment.file_url;
+      link.href = safeUrl;
       link.download = attachment.filename || 'download';
       link.setAttribute('target', '_blank');
+      link.setAttribute('rel', 'noopener noreferrer');
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     } catch (error) {
       console.error('Download error:', error);
       // Fallback: open in new tab
-      window.open(attachment.file_url, '_blank');
+      safeWindowOpen(safeUrl);
     }
   };
 

@@ -10,18 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FileText, Signature, Save, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
-function sanitizeSignatureHtml(html) {
-  if (!html) return '';
-  let clean = html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-  clean = clean.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
-  clean = clean.replace(/(href|src|action)\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"');
-  clean = clean.replace(/(href|src|action)\s*=\s*(?:"data:[^"]*"|'data:[^']*')/gi, 'href="#"');
-  clean = clean.replace(/<base\b[^>]*>/gi, '');
-  clean = clean.replace(/<\/?form\b[^>]*>/gi, '');
-  return clean;
-}
+import { sanitizeDisplayHtml as sanitizeSignatureHtml } from '@/utils/sanitizeHtml';
 
 export default function EmailSettings({ onClose }) {
   const queryClient = useQueryClient();

@@ -145,13 +145,20 @@ export default function People() {
   }, [agents, search]);
 
   // Stage 2: smart filters + tag/org dropdowns
+  // State filters (active, prospecting) are OR'd together since they are mutually exclusive.
+  // Behavioral filters (idle, at_risk, no_email) are AND'd as independent conditions.
   const filtered = useMemo(() => {
     let result = searchFiltered;
     if (activeFilters.has("idle")) result = result.filter(a => { const lc = a.last_contacted_at; return !lc || differenceInDays(new Date(), new Date(lc)) > 30; });
     if (activeFilters.has("at_risk")) result = result.filter(a => a.is_at_risk === true);
-    if (activeFilters.has("active")) result = result.filter(a => a.relationship_state === "Active");
-    if (activeFilters.has("prospecting")) result = result.filter(a => a.relationship_state === "Prospecting");
     if (activeFilters.has("no_email")) result = result.filter(a => !a.email);
+    // OR together mutually exclusive state filters
+    const stateFilters = ["active", "prospecting"].filter(f => activeFilters.has(f));
+    if (stateFilters.length > 0) {
+      const stateMap = { active: "Active", prospecting: "Prospecting" };
+      const allowedStates = new Set(stateFilters.map(f => stateMap[f]));
+      result = result.filter(a => allowedStates.has(a.relationship_state));
+    }
     if (tagFilter) result = result.filter(a => Array.isArray(a.tags) && a.tags.includes(tagFilter));
     if (orgFilter) result = result.filter(a => a.current_agency_id === orgFilter);
     return result;

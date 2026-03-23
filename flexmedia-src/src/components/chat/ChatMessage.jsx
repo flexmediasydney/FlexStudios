@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Pin, Trash2, Download, FileText, Image, Music, Video } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { safeWindowOpen } from '@/utils/sanitizeHtml';
 
 const getFileIcon = (fileType) => {
   if (!fileType) return FileText;
@@ -108,7 +109,7 @@ export default function ChatMessage({ message, currentUserEmail, onPin, onDelete
                       src={attachment.file_url} 
                       alt={attachment.file_name}
                       className="w-full h-auto max-h-64 object-cover cursor-pointer hover:opacity-90"
-                      onClick={() => window.open(attachment.file_url, '_blank')}
+                      onClick={() => safeWindowOpen(attachment.file_url)}
                     />
                   </div>
                 ) : (

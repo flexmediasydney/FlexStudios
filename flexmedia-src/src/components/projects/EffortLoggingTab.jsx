@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { fmtTimestampCustom, fixTimestamp } from "@/components/utils/dateUtils";
+import { fmtTimestampCustom, fixTimestamp, APP_TZ } from "@/components/utils/dateUtils";
 import { ChevronDown, ChevronRight, Clock, Layout, List, X, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffortLogs, formatDuration, getStatusColor } from "./useEffortLogging";
@@ -19,7 +19,10 @@ import TimerLogDetailModal from "./TimerLogDetailModal";
 function computeLiveSeconds(log) {
   if (!log) return 0;
   if (log.status === 'running' && log.is_active && log.start_time) {
-    return Math.max(0, Math.floor((Date.now() - new Date(log.start_time).getTime()) / 1000) - (log.paused_duration || 0));
+    // BUG FIX: use fixTimestamp to ensure start_time parses as UTC, not local time.
+    // Without this, a timestamp like "2026-03-10T02:00:00" (no Z) is parsed as local midnight
+    // on a UTC server, producing an 11h error in Sydney.
+    return Math.max(0, Math.floor((Date.now() - new Date(fixTimestamp(log.start_time)).getTime()) / 1000) - (log.paused_duration || 0));
   }
   return log.total_seconds || 0;
 }

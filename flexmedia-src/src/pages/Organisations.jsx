@@ -121,20 +121,25 @@ export default function Organisations() {
   const filtered = useMemo(() => {
     let result = agencies;
 
-    // Search filter
+    // Search filter — include suburb and phone for consistency with GlobalSearch
     if (search) {
       const q = search.toLowerCase();
       result = result.filter(a =>
         a?.name?.toLowerCase().includes(q) ||
         a?.email?.toLowerCase().includes(q) ||
-        a?.address?.toLowerCase().includes(q)
+        a?.address?.toLowerCase().includes(q) ||
+        a?.suburb?.toLowerCase().includes(q) ||
+        a?.phone?.toLowerCase().includes(q)
       );
     }
 
-    // Smart filters
-    if (activeFilters.has('active')) result = result.filter(a => a.relationship_state === 'Active');
-    if (activeFilters.has('prospecting')) result = result.filter(a => a.relationship_state === 'Prospecting');
-    if (activeFilters.has('dormant')) result = result.filter(a => a.relationship_state === 'Dormant');
+    // Smart filters: OR together mutually exclusive state filters, AND behavioral filters
+    const stateFilters = ['active', 'prospecting', 'dormant'].filter(f => activeFilters.has(f));
+    if (stateFilters.length > 0) {
+      const stateMap = { active: 'Active', prospecting: 'Prospecting', dormant: 'Dormant' };
+      const allowedStates = new Set(stateFilters.map(f => stateMap[f]));
+      result = result.filter(a => allowedStates.has(a.relationship_state));
+    }
     if (activeFilters.has('has_teams')) result = result.filter(a => (teamCountByAgency[a.id] || 0) > 0);
     if (activeFilters.has('has_people')) result = result.filter(a => (agentCountByAgency[a.id] || 0) > 0);
 

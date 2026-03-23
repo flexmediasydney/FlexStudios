@@ -15,6 +15,7 @@ import {
   Eye, Download, Calendar, Shield, CheckCircle 
 } from "lucide-react";
 import { format } from "date-fns";
+import { safeWindowOpen } from '@/utils/sanitizeHtml';
 
 export default function MediaDeliveryManager({ projectId, project }) {
   const [config, setConfig] = useState({
@@ -137,7 +138,7 @@ export default function MediaDeliveryManager({ projectId, project }) {
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => window.open(config.dropbox_link, '_blank')}
+                onClick={() => safeWindowOpen(config.dropbox_link)}
               >
                 <ExternalLink className="h-4 w-4" />
               </Button>

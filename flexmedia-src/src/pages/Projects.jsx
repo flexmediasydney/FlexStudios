@@ -43,9 +43,11 @@ export default function Projects() {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => setSearchQuery(value), 250);
   }, []);
-  // Keep searchInput in sync when searchQuery is cleared programmatically
+  // Clean up debounce timer on unmount to prevent setState on unmounted component
+  useEffect(() => () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); }, []);
+  // Keep searchInput in sync when searchQuery is cleared programmatically (e.g. via Escape key)
   useEffect(() => {
-    if (searchQuery === "" && searchInput !== "") setSearchInput("");
+    if (searchQuery === "") setSearchInput("");
   }, [searchQuery]);
   const [viewMode, setViewMode] = useState("kanban");
   const [fitToScreen, setFitToScreen] = useState(false);
@@ -176,10 +178,12 @@ export default function Projects() {
       // Hide archived unless toggled on
       if (!showArchived && project.is_archived) return false;
 
-      const matchesSearch = 
-        project.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        project.property_address?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        project.client_name?.toLowerCase().includes(searchQuery.toLowerCase());
+      const sq = searchQuery.toLowerCase();
+      const matchesSearch = !sq ||
+        project.title?.toLowerCase().includes(sq) ||
+        project.property_address?.toLowerCase().includes(sq) ||
+        project.client_name?.toLowerCase().includes(sq) ||
+        project.agent_name?.toLowerCase().includes(sq);
 
       if (!matchesSearch) return false;
 

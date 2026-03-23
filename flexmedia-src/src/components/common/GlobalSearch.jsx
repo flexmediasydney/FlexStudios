@@ -46,15 +46,22 @@ function clearRecentSearches() {
 // ── Highlight helper ──────────────────────────────────────────────────────────
 function highlight(text = "", query = "") {
   if (!query || !text) return text;
-  const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return text;
+  // Escape regex special chars so user input like "C++" or "(test)" doesn't break
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${escaped})`, 'gi');
+  const parts = text.split(regex);
+  if (parts.length === 1) return text; // no match
   return (
     <>
-      {text.slice(0, idx)}
-      <mark className="bg-yellow-100 text-yellow-900 dark:bg-yellow-800/40 dark:text-yellow-200 rounded-sm px-0.5 not-italic">
-        {text.slice(idx, idx + query.length)}
-      </mark>
-      {text.slice(idx + query.length)}
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} className="bg-yellow-100 text-yellow-900 dark:bg-yellow-800/40 dark:text-yellow-200 rounded-sm px-0.5 not-italic">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
     </>
   );
 }
@@ -137,7 +144,8 @@ export default function GlobalSearch({ open, onClose }) {
       e.subject?.toLowerCase().includes(q) ||
       e.from?.toLowerCase().includes(q) ||
       e.from_name?.toLowerCase().includes(q) ||
-      e.to?.toLowerCase().includes(q)
+      e.to?.toLowerCase().includes(q) ||
+      stripHtml(e.body).toLowerCase().includes(q)
     ).slice(0, 6);
   }, [allEmails, q]);
 

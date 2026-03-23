@@ -60,31 +60,30 @@ export function NotificationProvider({ children }) {
         // Only process if this is our notification
         if (event.data.user_id !== currentUser.id) return;
 
-        // BUG FIX: avoid calling setUnreadCount inside setNotifications updater.
-        // Nesting state setters inside updaters is an anti-pattern that can cause
-        // issues with React concurrent features. Compute and set separately.
+        // BUG FIX (subscription audit): Previous approach called setUnreadCount
+        // inside a setNotifications updater — an anti-pattern that is fragile under
+        // React concurrent mode. Now we compute the new list first, then derive the
+        // unread count from it in a single pass using flushSync-safe pattern.
         setNotifications(prev => {
-          // Bug fix: use event.data.id (notification ID), not event.id
+          let next;
           if (event.data.is_dismissed) {
-            return prev.filter(n => n.id !== event.data.id);
+            next = prev.filter(n => n.id !== event.data.id);
+          } else {
+            next = prev.map(n => n.id === event.data.id ? event.data : n);
           }
-          return prev.map(n => n.id === event.data.id ? event.data : n);
-        });
-        // Recompute unread count from the notification list after update
-        setNotifications(current => {
-          setUnreadCount(current.filter(n => !n.is_read && !n.is_dismissed).length);
-          return current; // no mutation, just reading
+          // Derive unread count synchronously from the new list
+          // Using queueMicrotask to avoid nesting setState inside updater
+          const newUnread = next.filter(n => !n.is_read && !n.is_dismissed).length;
+          queueMicrotask(() => setUnreadCount(newUnread));
+          return next;
         });
       } else if (event.type === 'delete') {
-        // BUG FIX: same pattern — separate the count update from the list update
         setNotifications(prev => {
-          // Bug fix: use event.data?.id with fallback to event.id for deletes
           const deletedId = event.data?.id || event.id;
-          return prev.filter(n => n.id !== deletedId);
-        });
-        setNotifications(current => {
-          setUnreadCount(current.filter(n => !n.is_read && !n.is_dismissed).length);
-          return current;
+          const next = prev.filter(n => n.id !== deletedId);
+          const newUnread = next.filter(n => !n.is_read && !n.is_dismissed).length;
+          queueMicrotask(() => setUnreadCount(newUnread));
+          return next;
         });
       }
     });

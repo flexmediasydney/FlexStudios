@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { safeWindowOpen } from '@/utils/sanitizeHtml';
 
 /**
  * Unified file attachment manager with:
@@ -198,7 +199,7 @@ export default function FileAttachmentManager({
                       src={att.file_url}
                       alt={att.file_name}
                       className="w-full h-auto max-h-48 object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                      onClick={() => window.open(att.file_url, '_blank')}
+                      onClick={() => safeWindowOpen(att.file_url)}
                       title="Click to open full size"
                     />
                     <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/5 transition-colors flex items-center justify-center">

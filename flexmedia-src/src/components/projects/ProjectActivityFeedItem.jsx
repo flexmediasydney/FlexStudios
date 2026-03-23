@@ -16,19 +16,9 @@ import { toast } from 'sonner';
 import ActivityLogItem from './ActivityLogItem';
 import EmailComposeDialog from '@/components/email/EmailComposeDialog';
 
-// Sanitize HTML email bodies to prevent XSS
-const sanitizeEmailHtml = (html) => {
-  if (!html) return '';
-  let clean = html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-  clean = clean.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '');
-  clean = clean.replace(/(href|src|action)\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*')/gi, 'href="#"');
-  clean = clean.replace(/(href|src|action)\s*=\s*(?:"data:[^"]*"|'data:[^']*')/gi, 'href="#"');
-  clean = clean.replace(/<base\b[^>]*>/gi, '');
-  clean = clean.replace(/<\/?form\b[^>]*>/gi, '');
-  return clean;
-};
+// Use centralized sanitizer — covers script, style, iframe, object, embed, on* handlers,
+// javascript:/data:/vbscript: URIs, base, form, meta, HTML comments, and head blocks.
+import { sanitizeEmailHtml } from '@/utils/sanitizeHtml';
 
 const TYPE_CONFIG = {
   note: {

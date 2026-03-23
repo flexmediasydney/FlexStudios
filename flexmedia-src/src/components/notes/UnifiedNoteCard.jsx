@@ -77,13 +77,9 @@ function relativeTime(utcStr) {
   } catch { return ''; }
 }
 
-function sanitizeDisplay(html) {
-  return html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-    .replace(/ on\w+="[^"]*"/gi, '')
-    .replace(/ on\w+='[^']*'/gi, '');
-}
+// Use centralized sanitizer — covers script, iframe, object, embed, on* handlers,
+// javascript:/data:/vbscript: URIs, base, form, meta, and HTML comments.
+import { sanitizeDisplayHtml as sanitizeDisplay } from '@/utils/sanitizeHtml';
 
 function ReplyBubble({ reply }) {
   return (

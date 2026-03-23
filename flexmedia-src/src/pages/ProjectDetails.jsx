@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { fmtDate } from "@/components/utils/dateUtils";
+import { fmtDate, fixTimestamp } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import Timer from "@/components/ui/timer";
 import ProjectStatusBadge from "@/components/dashboard/ProjectStatusBadge";
@@ -1249,12 +1249,13 @@ export default function ProjectDetails() {
                     <div className="flex items-center gap-1">
                       <Camera className="h-3 w-3 text-muted-foreground flex-shrink-0" />
                       <span className="text-xs font-medium">
-                        {new Date(project.shooting_started_at).toLocaleTimeString('en-AU', {
+                        {/* BUG FIX: use fixTimestamp to handle timestamps without Z suffix */}
+                        {new Intl.DateTimeFormat('en-AU', {
                           timeZone: 'Australia/Sydney',
                           hour: '2-digit',
                           minute: '2-digit',
                           hour12: true,
-                        })}
+                        }).format(new Date(fixTimestamp(project.shooting_started_at)))}
                       </span>
                     </div>
                   </div>
@@ -1331,7 +1332,8 @@ export default function ProjectDetails() {
                       {project.price_matrix_snapshot && (
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
                           <p className="text-xs text-blue-700 font-semibold">📋 Price locked at calculation</p>
-                          <p className="text-xs text-blue-600 mt-0.5">Snapshot captured: {new Date(project.updated_date).toLocaleString()}</p>
+                          {/* BUG FIX: was using toLocaleString() without timezone — shows UTC on servers, not Sydney */}
+                          <p className="text-xs text-blue-600 mt-0.5">Snapshot captured: {fmtDate(project.updated_date, 'd MMM yyyy')}</p>
                         </div>
                       )}
                       <ErrorBoundary>

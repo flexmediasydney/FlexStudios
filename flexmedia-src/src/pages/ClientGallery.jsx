@@ -11,6 +11,7 @@ import {
   Download, Eye, CheckCircle, AlertCircle 
 } from "lucide-react";
 import { format } from "date-fns";
+import { safeWindowOpen } from '@/utils/sanitizeHtml';
 
 export default function ClientGallery() {
   const urlParams = new URLSearchParams(window.location.search);
@@ -227,7 +228,7 @@ export default function ClientGallery() {
               <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
                 <Button
                   size="lg"
-                  onClick={() => window.open(mediaConfig.dropbox_link, '_blank')}
+                  onClick={() => safeWindowOpen(mediaConfig.dropbox_link)}
                   className="gap-2"
                 >
                   <ExternalLink className="h-5 w-5" />
@@ -238,7 +239,7 @@ export default function ClientGallery() {
                   <Button
                     size="lg"
                     variant="outline"
-                    onClick={() => window.open(mediaConfig.dropbox_link, '_blank')}
+                    onClick={() => safeWindowOpen(mediaConfig.dropbox_link)}
                     className="gap-2"
                   >
                     <Download className="h-5 w-5" />

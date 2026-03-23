@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Link2, X, Check, RefreshCw, Clock, ChevronDown } from "lucide-react";
-import { utcToSydneyInput, sydneyInputToUtc } from "@/components/utils/dateUtils";
+import { utcToSydneyInput, sydneyInputToUtc, fixTimestamp, fmtTimestampCustom, APP_TZ } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import { ACTIVITY_TYPE_LIST, getActivityType, getEventSource, isEventEditable, canMarkDone, getEventExternalUrl, EVENT_SOURCE_CONFIG } from "./activityConfig";
 import { ExternalLink } from "lucide-react";
@@ -307,8 +307,9 @@ export default function EventDetailsDialog({
     if (!event?.id) return;
     setRescheduling(true);
     try {
-      const start = new Date(event.start_time);
-      const end = event.end_time ? new Date(event.end_time) : null;
+      // BUG FIX: use fixTimestamp to ensure timestamps parse as UTC, not local time
+      const start = new Date(fixTimestamp(event.start_time));
+      const end = event.end_time ? new Date(fixTimestamp(event.end_time)) : null;
       const durationMs = end ? end.getTime() - start.getTime() : 3600000;
 
       let newStart;
@@ -709,7 +710,8 @@ export default function EventDetailsDialog({
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{email.subject || "(no subject)"}</p>
                       <p className="text-xs text-muted-foreground truncate">
-                        {email.from_name || email.from} · {email.received_at ? new Date(email.received_at + 'Z').toLocaleDateString("en-AU", { timeZone: "Australia/Sydney" }) : ""}
+                        {/* BUG FIX: was appending 'Z' blindly — use fixTimestamp which handles all offset formats */}
+                        {email.from_name || email.from} · {email.received_at ? fmtTimestampCustom(email.received_at, { day: '2-digit', month: '2-digit', year: '2-digit' }) : ""}
                       </p>
                     </div>
                   </label>

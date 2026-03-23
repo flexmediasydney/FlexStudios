@@ -4,6 +4,9 @@ import * as RechartsPrimitive from "recharts"
 
 import { cn } from "@/lib/utils"
 
+// Sanitize CSS values to prevent style injection via config colors
+const safeCssValue = (v) => typeof v === 'string' ? v.replace(/[^a-zA-Z0-9#(),.\-_%\s]/g, '') : '';
+
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = {
   light: "",
@@ -61,13 +64,13 @@ const ChartStyle = ({
       dangerouslySetInnerHTML={{
         __html: Object.entries(THEMES)
           .map(([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+${prefix} [data-chart=${safeCssValue(id)}] {
 ${colorConfig
 .map(([key, itemConfig]) => {
 const color =
   itemConfig.theme?.[theme] ||
   itemConfig.color
-return color ? `  --color-${key}: ${color};` : null
+return color ? `  --color-${safeCssValue(key)}: ${safeCssValue(color)};` : null
 })
 .join("\n")}
 }
