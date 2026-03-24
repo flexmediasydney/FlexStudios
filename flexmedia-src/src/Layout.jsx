@@ -37,11 +37,10 @@ import { cn } from "@/lib/utils";
 import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { canAccessRoute } from "@/components/lib/routeAccess";
-import { useNotifications } from "@/components/notifications/NotificationContext";
+import { useNotifications, NotificationProvider } from "@/components/notifications/NotificationContext";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useTheme } from "@/lib/ThemeContext";
 
-import { NotificationProvider } from "@/components/notifications/NotificationContext";
 import GlobalNotificationBar, { NotificationBell } from "@/components/notifications/GlobalNotificationBar";
 import NotificationToast from "@/components/notifications/NotificationToast";
 import { ChatProvider, useChat } from "@/components/chat/ChatContext";

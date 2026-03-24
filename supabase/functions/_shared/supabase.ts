@@ -80,11 +80,19 @@ export function getUserClient(req: Request): SupabaseClient {
  * Returns the app-level user record from the `users` table (with role, full_name, etc.)
  * Returns null if not authenticated or user not found.
  */
-export async function getUserFromReq(req: Request): Promise<any | null> {
+export interface AppUser {
+  id: string;
+  email: string;
+  role: string;
+  full_name: string;
+  [key: string]: unknown;
+}
+
+export async function getUserFromReq(req: Request): Promise<AppUser | null> {
   const authHeader = req.headers.get('Authorization');
   if (!authHeader) return null;
 
-  const token = authHeader.replace('Bearer ', '');
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
   if (!token) return null;
 
   // Service-role key bypass: treat as master_admin (used by cron, cross-function calls, and admin scripts)
@@ -106,6 +114,12 @@ export async function getUserFromReq(req: Request): Promise<any | null> {
   const { data: { user: authUser }, error } = await admin.auth.getUser(token);
   if (error || !authUser) return null;
 
+  // authUser.email can be undefined for phone-only or anonymous auth
+  if (!authUser.email) {
+    console.warn('getUserFromReq: auth user has no email, cannot resolve app user', authUser.id);
+    return null;
+  }
+
   // Fetch app-level user from our users table
   const { data: appUser } = await admin
     .from('users')
@@ -118,10 +132,10 @@ export async function getUserFromReq(req: Request): Promise<any | null> {
 
 // ─── Entity helpers (mirrors the Base44 SDK pattern) ──────────────────────────
 
-/** Convert PascalCase entity name to snake_case plural table name. */
 const _tableCache = new Map<string, string>();
 
-export function toTableName(entityName: string): string {
+/** Convert PascalCase entity name to snake_case plural table name. Internal use only. */
+function toTableName(entityName: string): string {
   if (_tableCache.has(entityName)) return _tableCache.get(entityName)!;
 
   let snake = entityName.replace(/([A-Z])/g, (m, l, o) =>
@@ -237,7 +251,7 @@ export function createEntities(client: SupabaseClient) {
  * Invoke another Edge Function by name.
  * Replaces base44.asServiceRole.functions.invoke(name, params).
  */
-export async function invokeFunction(functionName: string, params: any = {}): Promise<any> {
+export async function invokeFunction(functionName: string, params: Record<string, unknown> = {}): Promise<unknown> {
   const url = `${SUPABASE_URL}/functions/v1/${functionName}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -249,7 +263,8 @@ export async function invokeFunction(functionName: string, params: any = {}): Pr
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => 'Unknown error');
+    // Clone before reading so the body isn't consumed twice
+    const text = await res.clone().text().catch(() => 'Unknown error');
     throw new Error(`Function ${functionName} failed (${res.status}): ${text}`);
   }
 
@@ -258,7 +273,7 @@ export async function invokeFunction(functionName: string, params: any = {}): Pr
 
 // ─── Notification helper ──────────────────────────────────────────────────────
 
-/** Fire a notification via the notificationService function. */
+/** Fire a notification via the notificationService function. Returns false if notification failed. */
 export async function fireNotif(params: {
   userId?: string;
   type?: string;
@@ -271,14 +286,16 @@ export async function fireNotif(params: {
   ctaLabel?: string;
   source?: string;
   idempotencyKey?: string;
-}) {
+}): Promise<boolean> {
   try {
     await invokeFunction('notificationService', {
       action: 'create',
       ...params,
-    });
+    } as Record<string, unknown>);
+    return true;
   } catch (err: any) {
     console.warn('fireNotif failed:', err?.message);
+    return false;
   }
 }
 

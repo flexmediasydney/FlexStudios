@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, corsHeaders } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors } from '../_shared/supabase.ts';
 
 function oauthResultPage(type: string, payload: Record<string, string> = {}) {
   const isSuccess = type.includes('success');

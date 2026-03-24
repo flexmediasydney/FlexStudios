@@ -22,7 +22,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import { useCardFields } from "@/components/projects/useCardFields";
 import { ProjectFieldValue } from "@/components/projects/ProjectCardFields";

@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { 
   ArrowLeft, Reply, ReplyAll, Forward, Archive, Trash2,
@@ -48,14 +47,12 @@ import EmailComposeDialog from "./EmailComposeDialog";
 import ProjectLinkDialog from "./ProjectLinkDialog";
 import LabelSelectorRobust from "./LabelSelectorRobust";
 import LabelBadge from "./LabelBadge";
-import ProjectHoverCard from "./ProjectHoverCard";
 import EmailHeaderInfo from "./EmailHeaderInfo";
 import EmailDetailSidebar from "./EmailDetailSidebar";
 import PrioritySelector from "./PrioritySelector";
 import EmailActivityLog from "./EmailActivityLog";
 import EmailOpenStats from "./EmailOpenStats";
 import EmailLinkStats from "./EmailLinkStats";
-import EmailHeaderActions from "./EmailHeaderActions";
 import SnoozeDialog from "./SnoozeDialog";
 import QuickReplyTemplates from "./QuickReplyTemplates";
 import ContactInfoCard from "./ContactInfoCard";

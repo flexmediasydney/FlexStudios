@@ -7,7 +7,7 @@ import { api } from '@/api/supabaseClient';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
 import { cn } from '@/lib/utils';
-import { fmtDate, fmtTimestampCustom, fixTimestamp, formatRelative } from '@/components/utils/dateUtils';
+import { fmtDate, fixTimestamp, formatRelative } from '@/components/utils/dateUtils';
 import {
   ArrowLeft, ChevronDown, Mail, Phone, Building2,
   MessageSquare, Activity, AlertCircle, Plus, Trash2, Calendar, User, Paperclip, Pencil,
@@ -20,7 +20,6 @@ import UnifiedNotesPanel from '@/components/notes/UnifiedNotesPanel';
 import ProjectStatusBadge from '@/components/dashboard/ProjectStatusBadge';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import EntityEmailTab from '@/components/email/EntityEmailTab';
-import ContactAuditLog from '@/components/contacts/ContactAuditLog';
 import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';

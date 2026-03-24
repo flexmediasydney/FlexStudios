@@ -6,7 +6,7 @@ import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityDa
 import { api } from '@/api/supabaseClient';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
-import { fmtDate, fmtTimestampCustom, fixTimestamp, formatRelative } from '@/components/utils/dateUtils';
+import { fmtDate, fmtTimestampCustom, fixTimestamp } from '@/components/utils/dateUtils';
 import {
   ArrowLeft, ChevronDown, ChevronRight, Mail, Phone, Building2, Calendar,
   DollarSign, MessageSquare, FileText, Activity, Info, AlertCircle, Plus, Trash2, User, Copy, Check,
@@ -16,16 +16,11 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
-import ProspectTimeline from '@/components/prospecting/ProspectTimeline';
 import UnifiedNotesPanel from '@/components/notes/UnifiedNotesPanel';
 import PriceMatrixSummaryTable from '@/components/priceMatrix/PriceMatrixSummaryTable';
-import ProjectStatusBadge from '@/components/dashboard/ProjectStatusBadge';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import EntityEmailTab from '@/components/email/EntityEmailTab';
-import EmailActivityLog from '@/components/email/EmailActivityLog';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
-import ContactAuditLog from '@/components/contacts/ContactAuditLog';
 import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
 import { toast } from 'sonner';

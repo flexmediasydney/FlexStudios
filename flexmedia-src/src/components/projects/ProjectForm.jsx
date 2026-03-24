@@ -14,25 +14,22 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { api } from "@/api/supabaseClient";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, X, Star, Zap, Package, Box, Trash2, Edit, Plus, MapPin, AlertCircle, User, DollarSign, Info, CheckCircle, Copy } from "lucide-react";
+import { Loader2, Star, Zap, Package, Box, Trash2, Edit, Plus, MapPin, AlertCircle, User, DollarSign, Info, CheckCircle } from "lucide-react";
 import AddressInput from "./AddressInput";
 import AgentSearchField from "./AgentSearchField";
 import AddItemsDialog from "./AddItemsDialog";
 import StaffAssignmentField from "./StaffAssignmentField";
 import ProjectFormPricingDisplay from "./ProjectFormPricingDisplay";
 import { PROJECT_STAGES } from "./projectStatuses";
-import { projectHasCategory, STAFF_ROLES_CONFIG, isRoleRequired } from "./ProjectStaffBar";
 import { useRoleMappings, isRoleRequiredForProject } from "@/components/hooks/useRoleMappings";
-import { createNotification, createNotificationsForUsers, writeFeedEvent } from "@/components/notifications/createNotification";
+import { createNotification, createNotificationsForUsers } from "@/components/notifications/createNotification";
 import RemoveItemConfirmation from "@/components/common/RemoveItemConfirmation";
 import UnsavedChangesWarning from "@/components/common/UnsavedChangesWarning";
 import CharacterLimitWarning from "@/components/common/CharacterLimitWarning";
 import SubmitButtonGuard from "@/components/common/SubmitButtonGuard";
 import RequiredFieldIndicator from "@/components/common/RequiredFieldIndicator";
 import RealtimeValidationFeedback from "@/components/common/RealtimeValidationFeedback";
-import OverwriteConfirmation from "@/components/common/OverwriteConfirmation";
 import { useEscapeKeyWarning, EscapeKeyWarningBanner } from "@/components/common/EscapeKeyWarning";
-import CopyButton from "@/components/common/CopyFeedback";
 import NetworkErrorRetry from "@/components/common/NetworkErrorRetry";
 import { toast } from "sonner";
 

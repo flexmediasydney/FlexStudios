@@ -14,7 +14,6 @@ import { PricingTableBody } from "./PricingTableBody";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
-import { writeFeedEvent } from "@/components/notifications/createNotification";
 
 export default function ProjectPricingTable({ 
   project, 

@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, handleCors, getCorsHeaders, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CLIENT_ID')!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_CLIENT_SECRET')!;
@@ -77,12 +77,10 @@ Deno.serve(async (req) => {
     // Gmail returns base64url-encoded data — convert to standard base64
     const base64Data = gmailData.data.replace(/-/g, '+').replace(/_/g, '/');
 
-    return new Response(JSON.stringify({
+    return jsonResponse({
       data: base64Data,
       size: gmailData.size || 0,
-    }), {
-      headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
-    });
+    }, 200, req);
   } catch (err: any) {
     console.error('getEmailAttachment error:', err);
     return errorResponse(err.message || 'Internal error', 500, req);

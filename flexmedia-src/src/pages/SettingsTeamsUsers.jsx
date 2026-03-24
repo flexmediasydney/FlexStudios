@@ -3,7 +3,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import InternalTeamsManagement from "@/components/settings/InternalTeamsManagement";
 import UsersManagement from "@/components/settings/UsersManagement";
-import PermissionMatrix from "@/components/settings/PermissionMatrix";
 import CalendarIntegration from "@/components/calendar/CalendarIntegration";
 import { Shield, Calendar, Users, ChevronDown, ChevronRight, Clock } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";

@@ -39,12 +39,10 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import FieldInsertMenu from "./FieldInsertMenu";
 import TemplateSelector from "./TemplateSelector";
 import SaveAsTemplateModal from "./SaveAsTemplateModal";
-import FieldPlaceholder from "./FieldPlaceholder";
 import ReactQuill from "react-quill";
 import "react-quill/dist/quill.snow.css";
 import { toast } from "sonner";

@@ -16,10 +16,9 @@ import UnifiedNotesPanel from "@/components/notes/UnifiedNotesPanel";
 import PriceMatrixSummaryTable from "@/components/priceMatrix/PriceMatrixSummaryTable";
 import EntityEmailTab from "@/components/email/EntityEmailTab";
 import EntityActivitiesTab from "@/components/calendar/EntityActivitiesTab";
-import ContactAuditLog from "@/components/contacts/ContactAuditLog";
 import ContactActivityLog from "@/components/contacts/ContactActivityLog";
 import ContactFiles from "@/components/contacts/ContactFiles";
-import { fixTimestamp, formatRelative } from "@/components/utils/dateUtils";
+import { fixTimestamp } from "@/components/utils/dateUtils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 const STATE_BADGE = {

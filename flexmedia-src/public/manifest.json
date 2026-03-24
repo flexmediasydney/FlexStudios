@@ -9,6 +9,9 @@
   "background_color": "#ffffff",
   "theme_color": "#0f172a",
   "orientation": "any",
+  "categories": ["business", "productivity"],
+  "lang": "en",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icons/icon-192x192.png",

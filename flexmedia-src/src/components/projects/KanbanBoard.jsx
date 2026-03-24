@@ -1,10 +1,9 @@
-import { useState, useMemo, useCallback } from "react";
-import React from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,9 +20,7 @@ import {
   Filter, X, ChevronDown, ChevronRight, Columns3, LayoutList, Camera, Building, CalendarRange
 } from "lucide-react";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useQuery } from "@tanstack/react-query";
-import { fixTimestamp, fmtTimestampCustom } from "@/components/utils/dateUtils";
+import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { usePrefetchProjectDetails } from "@/components/lib/prefetchRoutes";
 
 const statusColumns = PROJECT_STAGES.map(s => ({ id: s.value, label: s.label, color: s.color }));

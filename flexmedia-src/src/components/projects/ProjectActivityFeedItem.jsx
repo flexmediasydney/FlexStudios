@@ -5,13 +5,12 @@ import {
   MessageSquare, Mail, Activity, Pin, ChevronDown, ChevronUp,
   MoreVertical, Lock, Users, Reply, Share2, ArrowRight, Trash2
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { fmtTimestampCustom, fixTimestamp } from '@/components/utils/dateUtils';
+import { fmtTimestampCustom } from '@/components/utils/dateUtils';
 import { toast } from 'sonner';
 import ActivityLogItem from './ActivityLogItem';
 import EmailComposeDialog from '@/components/email/EmailComposeDialog';

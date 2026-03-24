@@ -1,12 +1,9 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+import { handleCors, getCorsHeaders } from '../_shared/supabase.ts';
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  const _cors = handleCors(req); if (_cors) return _cors;
+  const corsHeaders = getCorsHeaders(req);
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -23,7 +20,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
     const { data: { user: caller }, error: authErr } = await admin.auth.getUser(token);
     if (authErr || !caller) {
       return new Response(JSON.stringify({ error: 'Invalid token' }), {
@@ -176,16 +173,16 @@ Deno.serve(async (req) => {
   }
 });
 
-function json(data: any, status = 200) {
+function json(data: any, status = 200, req?: Request) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' },
+    headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
   });
 }
 
-function error(msg: string, status = 400) {
+function error(msg: string, status = 400, req?: Request) {
   return new Response(JSON.stringify({ error: msg }), {
     status,
-    headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' },
+    headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
   });
 }
