@@ -97,7 +97,9 @@ export default function NotificationsPage() {
     if (!n.cta_url) return;
     try {
       const params = n.cta_params ? JSON.parse(n.cta_params) : {};
-      navigate(createPageUrl(n.cta_url) + (params.id ? `?id=${params.id}` : ""));
+      // Strip leading slash to avoid createPageUrl producing "//PageName"
+      const pageName = n.cta_url.replace(/^\/+/, '');
+      navigate(createPageUrl(pageName) + (params.id ? `?id=${params.id}` : ""));
     } catch { /* ignore */ }
   }
 
@@ -110,8 +112,11 @@ export default function NotificationsPage() {
   }
 
   async function bulkMarkRead() {
-    const ids = Array.from(selected);
-    // Process in batches of 10 to avoid overwhelming the API
+    // Only mark unread items — skip already-read ones to avoid wasted API calls
+    const ids = Array.from(selected).filter(id => {
+      const n = notifications.find(n => n.id === id);
+      return n && !n.is_read;
+    });
     for (let i = 0; i < ids.length; i += 10) {
       await Promise.all(ids.slice(i, i + 10).map(id => markRead(id)));
     }
@@ -119,7 +124,10 @@ export default function NotificationsPage() {
   }
 
   async function bulkDismiss() {
-    const ids = Array.from(selected);
+    // Only dismiss items still present in notifications (not already dismissed via realtime)
+    const ids = Array.from(selected).filter(id =>
+      notifications.some(n => n.id === id && !n.is_dismissed)
+    );
     for (let i = 0; i < ids.length; i += 10) {
       await Promise.all(ids.slice(i, i + 10).map(id => dismiss(id)));
     }

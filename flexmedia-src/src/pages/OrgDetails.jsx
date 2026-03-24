@@ -52,7 +52,7 @@ const HISTORY_FILTERS = [
 function ErrorState({ navigate, title, message }) {
   return (
     <div className="p-8">
-      <Button variant="ghost" className="gap-2 mb-4" onClick={() => navigate(-1)}>
+      <Button variant="ghost" className="gap-2 mb-4" onClick={() => window.history.length > 1 ? navigate(-1) : navigate(createPageUrl('Organisations'))}>
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
       <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 rounded-xl p-6 flex gap-3">
@@ -246,7 +246,7 @@ export default function OrgDetails() {
           variant="ghost"
           size="icon"
           className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={() => navigate(-1)}
+          onClick={() => window.history.length > 1 ? navigate(-1) : navigate(createPageUrl('Organisations'))}
           aria-label="Go back"
         >
           <ArrowLeft className="h-4 w-4" />

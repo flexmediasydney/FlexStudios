@@ -256,7 +256,7 @@ function PipelineBar({ status }) {
 function ErrorState({ navigate, title, message }) {
   return (
     <div className="p-8">
-      <Button variant="ghost" className="gap-2 mb-4" onClick={() => navigate(-1)}>
+      <Button variant="ghost" className="gap-2 mb-4" onClick={() => window.history.length > 1 ? navigate(-1) : navigate(createPageUrl('People'))}>
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
       <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 rounded-xl p-6 flex gap-3">
@@ -501,14 +501,14 @@ export default function PersonDetails() {
     try {
       await api.entities.Agent.delete(agentId);
       toast.success('Person deleted');
-      navigate(createPageUrl('ClientAgents'));
+      navigate(createPageUrl('People'));
     } catch (err) {
       toast.error(err?.message || 'Failed to delete person');
     }
   };
 
   if (!agentId) {
-    navigate(createPageUrl('ClientAgents'));
+    navigate(createPageUrl('People'));
     return null;
   }
 
@@ -552,7 +552,7 @@ export default function PersonDetails() {
           variant="ghost"
           size="icon"
           className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={() => navigate(-1)}
+          onClick={() => window.history.length > 1 ? navigate(-1) : navigate(createPageUrl('People'))}
           aria-label="Go back"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -935,7 +935,7 @@ export default function PersonDetails() {
                       </p>
                       {agency && (
                         <p className="text-xs text-muted-foreground">
-                          Using <Link to={createPageUrl(`OrgDetails?id=${agency.id}`)} className="text-primary hover:underline">
+                          Using <Link to={createPageUrl('OrgDetails') + `?id=${agency.id}`} className="text-primary hover:underline">
                             {agency.name}
                           </Link> agency-level pricing.
                         </p>

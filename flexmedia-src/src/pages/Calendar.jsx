@@ -537,7 +537,7 @@ export default function CalendarPage() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [navigate, handleTodayClick, dialogOpen]);
+  }, [navigate, handleTodayClick, dialogOpen, setView]);
 
   // Are we in lane mode?
   const isLaneMode = view !== "month" &&

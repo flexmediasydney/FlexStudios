@@ -6,13 +6,14 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ArrowLeft, Mail, Phone, Building, AlertCircle } from 'lucide-react';
 import { createPageUrl } from '@/utils';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import ProspectEditPanel from '@/components/prospecting/ProspectEditPanel';
 import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
 import ProspectTimeline from '@/components/prospecting/ProspectTimeline';
 import ProspectStatusManager from '@/components/prospecting/ProspectStatusManager';
 
 export default function ProspectDetails() {
+  const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const agentId = urlParams.get('id');
   const { data: currentUser } = useCurrentUser();
@@ -51,7 +52,7 @@ export default function ProspectDetails() {
     }).catch(() => {}); // non-fatal
 
     await api.entities.Agent.delete(agentId);
-    window.location.href = createPageUrl('Prospecting');
+    navigate(createPageUrl('Prospecting'));
   };
 
   if (loading) {
@@ -90,6 +91,10 @@ export default function ProspectDetails() {
       <div className="max-w-6xl mx-auto">
         {/* Breadcrumb Navigation */}
         <div className="flex items-center gap-2 text-sm mb-6 pb-4 border-b">
+          <Link to={createPageUrl('Dashboard')} className="text-muted-foreground hover:text-foreground transition-colors">
+            Dashboard
+          </Link>
+          <span className="text-muted-foreground">/</span>
           <Link to={createPageUrl('Prospecting')} className="text-muted-foreground hover:text-foreground transition-colors">
             Prospecting
           </Link>

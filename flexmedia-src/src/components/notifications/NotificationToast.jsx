@@ -10,6 +10,15 @@ export default function NotificationToast() {
   const seenRef = useRef(new Set());
   const navigate = useNavigate();
 
+  // Clear seen set when notifications are fully replaced (e.g. user switch / logout)
+  // by pruning IDs no longer present — prevents unbounded memory growth
+  useEffect(() => {
+    const currentIds = new Set(notifications.map(n => n.id));
+    for (const id of seenRef.current) {
+      if (!currentIds.has(id)) seenRef.current.delete(id);
+    }
+  }, [notifications]);
+
   useEffect(() => {
     const critical = notifications.filter(
       n => n.severity === "critical" && !n.is_read && !n.is_dismissed
@@ -51,7 +60,8 @@ export default function NotificationToast() {
                 onClick={() => {
                   try {
                     const params = toast.cta_params ? JSON.parse(toast.cta_params) : {};
-                    navigate(createPageUrl(toast.cta_url) + (params.id ? `?id=${params.id}` : ""));
+                    const pageName = toast.cta_url.replace(/^\/+/, '');
+                    navigate(createPageUrl(pageName) + (params.id ? `?id=${params.id}` : ""));
                   } catch { /* ignore */ }
                   markRead(toast.id);
                   setToasts(prev => prev.filter(t => t.id !== toast.id));

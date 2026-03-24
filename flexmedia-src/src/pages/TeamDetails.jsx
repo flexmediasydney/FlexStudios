@@ -84,7 +84,7 @@ function fmtMoney(val) {
 function ErrorState({ navigate, title, message }) {
   return (
     <div className="p-8">
-      <Button variant="ghost" className="gap-2 mb-4" onClick={() => navigate(-1)}>
+      <Button variant="ghost" className="gap-2 mb-4" onClick={() => window.history.length > 1 ? navigate(-1) : navigate(createPageUrl('Teams'))}>
         <ArrowLeft className="h-4 w-4" /> Back
       </Button>
       <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 rounded-xl p-6 flex gap-3">
@@ -605,7 +605,7 @@ export default function TeamDetails() {
           variant="ghost"
           size="icon"
           className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={() => navigate(-1)}
+          onClick={() => window.history.length > 1 ? navigate(-1) : navigate(createPageUrl('Teams'))}
           aria-label="Go back"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -671,7 +671,7 @@ export default function TeamDetails() {
                 <InlineName value={team.name} field="name" onSave={handleFieldSave} />
                 {agency && (
                   <Link
-                    to={createPageUrl(`OrgDetails?id=${agency.id}`)}
+                    to={createPageUrl('OrgDetails') + `?id=${agency.id}`}
                     className="text-xs text-primary hover:underline truncate block mt-0.5"
                   >
                     {agency.name}
@@ -687,7 +687,7 @@ export default function TeamDetails() {
                 <InlineField label="Team Name" value={team.name} field="name" onSave={handleFieldSave} placeholder="Team name" />
                 <InlineField label="Agency" value={team.agency_id} field="agency_id" onSave={handleFieldSave} type="select" options={agencyOptions} icon={Building2}
                   viewRender={agency ? (
-                    <Link to={createPageUrl(`OrgDetails?id=${agency.id}`)} className="text-sm text-primary hover:underline mt-0.5 block" onClick={e => e.stopPropagation()}>
+                    <Link to={createPageUrl('OrgDetails') + `?id=${agency.id}`} className="text-sm text-primary hover:underline mt-0.5 block" onClick={e => e.stopPropagation()}>
                       {agency.name}
                     </Link>
                   ) : undefined}

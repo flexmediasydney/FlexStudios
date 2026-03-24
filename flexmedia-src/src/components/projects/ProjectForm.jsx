@@ -390,7 +390,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         packagesList
       );
       if (normalized.removed.length > 0) {
-        console.info('Product dedup:', normalized.removed.map(r => r.reason).join('; '));
+        // Product dedup occurred — normalized.removed contains details
       }
       if (normalized.warnings.length > 0) {
         normalized.warnings.forEach(w => console.warn('Category overlap:', w.message));

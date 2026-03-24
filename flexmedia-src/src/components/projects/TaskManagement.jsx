@@ -234,12 +234,27 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     enabled: !!projectId
   });
 
-  // Sync task assignee denormalized fields when users/teams change
+  // Sync task assignee denormalized fields when users/teams change.
+  // BUG FIX: `tasks` is a new array reference on every render from useEntityList,
+  // which caused this effect to re-run constantly. Use a stable fingerprint
+  // derived from the task IDs + their assignee fields so it only fires when
+  // assignee data actually changes.
+  const taskAssigneeFingerprintRef = React.useRef('');
+  const taskAssigneeFingerprint = React.useMemo(() =>
+    (Array.isArray(tasks) ? tasks : [])
+      .map(t => `${t.id}:${t.assigned_to || ''}:${t.assigned_to_name || ''}:${t.assigned_to_team_id || ''}:${t.assigned_to_team_name || ''}`)
+      .join('|'),
+    [tasks]
+  );
   useEffect(() => {
+    // Skip if fingerprint hasn't changed (avoids re-running on unrelated task field updates)
+    if (taskAssigneeFingerprint === taskAssigneeFingerprintRef.current) return;
+    taskAssigneeFingerprintRef.current = taskAssigneeFingerprint;
+
     let mounted = true;
     const syncTasks = async () => {
       if (!projectId || !Array.isArray(tasks) || tasks.length === 0) return;
-      
+
       const tasksToUpdate = tasks.filter(task => {
         if (!task?.id) return false;
         const userChanged = task.assigned_to && !task.assigned_to_name;
@@ -250,12 +265,12 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       for (const task of tasksToUpdate) {
         if (!mounted) break;
         const updates = {};
-        
+
         if (task.assigned_to && Array.isArray(users)) {
           const user = users.find(u => u?.id === task.assigned_to);
           if (user?.full_name) updates.assigned_to_name = user.full_name;
         }
-        
+
         if (task.assigned_to_team_id && Array.isArray(teams)) {
           const team = teams.find(t => t?.id === task.assigned_to_team_id);
           if (team?.name) updates.assigned_to_team_name = team.name;
@@ -273,7 +288,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
     syncTasks();
     return () => { mounted = false; };
-  }, [projectId, tasks, users, teams]);
+  }, [projectId, taskAssigneeFingerprint, users, teams]);
 
   const UPLOADED_STAGES_FOR_CREATE = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
 

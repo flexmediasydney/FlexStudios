@@ -9,7 +9,7 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker
       .register('/sw.js')
       .then((registration) => {
-        console.log('SW registered:', registration.scope);
+        // SW registered successfully
 
         // Listen for new service worker updates
         registration.addEventListener('updatefound', () => {
@@ -28,7 +28,7 @@ if ('serviceWorker' in navigator) {
         });
       })
       .catch((error) => {
-        console.log('SW registration failed:', error);
+        console.error('SW registration failed:', error);
       });
   });
 

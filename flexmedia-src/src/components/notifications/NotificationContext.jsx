@@ -53,9 +53,11 @@ export function NotificationProvider({ children }) {
           // Bug fix: check event.data.id (notification ID), not event.id (supabase event ID)
           if (prev.some(n => n.id === event.data.id)) return prev;
           const updated = [event.data, ...prev].slice(0, MAX_DISPLAY);
+          // Derive unread count from the new list to account for items sliced off
+          const newUnread = updated.filter(n => !n.is_read && !n.is_dismissed).length;
+          queueMicrotask(() => setUnreadCount(newUnread));
           return updated;
         });
-        setUnreadCount(prev => prev + (event.data.is_read ? 0 : 1));
       } else if (event.type === 'update' && event.data) {
         // Only process if this is our notification
         if (event.data.user_id !== currentUser.id) return;
@@ -131,14 +133,17 @@ export function NotificationProvider({ children }) {
     });
     setUnreadCount(0);
     try {
-      await Promise.all(
-        unreadIds.map(id =>
-          api.entities.Notification.update(id, {
-            is_read: true,
-            read_at: new Date().toISOString(),
-          })
-        )
-      );
+      // Batch in groups of 10 to avoid overwhelming the API
+      for (let i = 0; i < unreadIds.length; i += 10) {
+        await Promise.all(
+          unreadIds.slice(i, i + 10).map(id =>
+            api.entities.Notification.update(id, {
+              is_read: true,
+              read_at: new Date().toISOString(),
+            })
+          )
+        );
+      }
     } catch { fetchNotifications(true); }
   }, [fetchNotifications]);
 

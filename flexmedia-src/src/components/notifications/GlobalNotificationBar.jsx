@@ -48,7 +48,7 @@ const CATEGORY_ICON = {
   system:     "🔧",
 };
 
-function CriticalBanner({ notifications, onMarkRead, onNavigate }) {
+function CriticalBanner({ notifications, onMarkRead, onDismiss, onNavigate }) {
   if (!notifications.length) return null;
   const n = notifications[0];
   return (
@@ -63,7 +63,7 @@ function CriticalBanner({ notifications, onMarkRead, onNavigate }) {
           {n.cta_label || "View"} →
         </button>
       )}
-      <button onClick={() => onMarkRead(n.id)} className="text-red-200 hover:text-white hover:bg-white/10 p-1 rounded transition-colors" title="Dismiss" aria-label="Dismiss critical notification">
+      <button onClick={() => onDismiss(n.id)} className="text-red-200 hover:text-white hover:bg-white/10 p-1 rounded transition-colors" title="Dismiss" aria-label="Dismiss critical notification">
         <X className="h-4 w-4" />
       </button>
     </div>
@@ -157,13 +157,15 @@ export function NotificationBell() {
     if (!n.cta_url) return;
     try {
       const params = n.cta_params ? JSON.parse(n.cta_params) : {};
-      navigate(createPageUrl(n.cta_url) + (params.id ? `?id=${params.id}` : ""));
+      const pageName = n.cta_url.replace(/^\/+/, '');
+      navigate(createPageUrl(pageName) + (params.id ? `?id=${params.id}` : ""));
     } catch { /* ignore */ }
     setOpen(false);
   }
 
-  const groups = groupByDay(notifications.filter(n => !n.is_dismissed));
-  const hasAny = notifications.length > 0;
+  const visible = notifications.filter(n => !n.is_dismissed);
+  const groups = groupByDay(visible);
+  const hasAny = visible.length > 0;
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -263,14 +265,15 @@ export function NotificationBell() {
  * placement inside header bars.
  */
 export default function GlobalNotificationBar() {
-  const { criticalUnread, markRead } = useNotifications();
+  const { criticalUnread, markRead, dismiss } = useNotifications();
   const navigate = useNavigate();
 
   function handleNavigate(n) {
     if (!n.cta_url) return;
     try {
       const params = n.cta_params ? JSON.parse(n.cta_params) : {};
-      navigate(createPageUrl(n.cta_url) + (params.id ? `?id=${params.id}` : ""));
+      const pageName = n.cta_url.replace(/^\/+/, '');
+      navigate(createPageUrl(pageName) + (params.id ? `?id=${params.id}` : ""));
     } catch { /* ignore */ }
   }
 
@@ -278,6 +281,7 @@ export default function GlobalNotificationBar() {
     <CriticalBanner
       notifications={criticalUnread}
       onMarkRead={markRead}
+      onDismiss={dismiss}
       onNavigate={handleNavigate}
     />
   );

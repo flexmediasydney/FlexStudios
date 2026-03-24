@@ -298,7 +298,7 @@ export default function ProjectDetails() {
       isMounted = false;
       clearTimeout(timeout);
     };
-  }, [project?.client_id, agent?.name]);
+  }, [project?.client_id, project?.client_name, agent?.name]);
 
   // Memoize canEditProject to prevent unnecessary child re-renders.
   // canEditProject is stable (from usePermissions hook), but we include it

@@ -140,7 +140,15 @@ function LayoutContent({ currentPageName, children, onBack }) {
       TonomoIntegrationDashboard: pendingReview,
     };
   }, [navEmails, navProjects, notifUnread]);
-  const canGoBack = typeof window !== 'undefined' && window.history.length > 1;
+  // Track in-app navigation depth so back button only shows when there is a
+  // real in-app page to go back to (not an external site or first load).
+  const [canGoBack, setCanGoBack] = useState(false);
+  useEffect(() => {
+    const depth = parseInt(sessionStorage.getItem('nav-depth') || '0', 10);
+    const next = depth + 1;
+    sessionStorage.setItem('nav-depth', String(next));
+    setCanGoBack(next > 1);
+  }, [currentPageName]);
   
   // Collapsible sections state — persisted to localStorage
   const [expandedSections, setExpandedSections] = useState(() => {

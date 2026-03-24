@@ -77,9 +77,7 @@ function ensurePruneTimer() {
         pruned++;
       }
     }
-    if (pruned > 0 && import.meta.env.DEV) {
-      console.debug(`[useEntityData] Cache pruned: ${pruned} expired single-entity entries removed`);
-    }
+    // pruned count intentionally not logged
   }, CACHE_PRUNE_INTERVAL);
 }
 
@@ -271,12 +269,7 @@ function fetchEntityList(entityName) {
 
       // Dev-mode RLS warning: if we expected data but got nothing, it may be an
       // RLS policy misconfiguration (Supabase returns [] instead of an error).
-      if (raw.length === 0 && import.meta.env.DEV) {
-        console.debug(
-          `[useEntityData] ${entityName}.list() returned 0 rows. ` +
-          `If this is unexpected, check RLS policies for the corresponding table.`
-        );
-      }
+      // Dev note: if raw.length === 0 unexpectedly, check RLS policies
 
       entityCache.set(entityName, raw);
       const now = Date.now();

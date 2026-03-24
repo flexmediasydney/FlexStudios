@@ -171,7 +171,11 @@ const AuthenticatedApp = () => {
           }
         />
       ))}
-      <Route path="*" element={<PageNotFound />} />
+      <Route path="*" element={
+        <LayoutWrapper currentPageName="404">
+          <PageNotFound />
+        </LayoutWrapper>
+      } />
     </Routes>
     </Suspense>
   );

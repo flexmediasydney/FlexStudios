@@ -72,7 +72,7 @@ export default function NotificationsPulse() {
 
     const unsubscribe = api.entities.Notification.subscribe((event) => {
       if (!event) return;
-      if (event.type === 'create' || event.type === 'update') {
+      if (event.type === 'create' || event.type === 'update' || event.type === 'delete') {
         queryClient.invalidateQueries({ queryKey: ["pulse-all-notifications"] });
       }
     });
@@ -95,6 +95,7 @@ export default function NotificationsPulse() {
 
   const filtered = useMemo(() => {
     return allNotifications.filter(n => {
+      if (n.is_dismissed) return false;
       if (category !== "all" && n.category !== category) return false;
       if (severity !== "all" && n.severity !== severity) return false;
       if (readFilter === "unread" && n.is_read) return false;
@@ -115,17 +116,18 @@ export default function NotificationsPulse() {
     });
   }, [allNotifications, category, severity, readFilter, userFilter, search, userMap]);
 
+  const activeNotifications = useMemo(() => allNotifications.filter(n => !n.is_dismissed), [allNotifications]);
   const stats = useMemo(() => ({
-    total: allNotifications.length,
-    unread: allNotifications.filter(n => !n.is_read).length,
-    critical: allNotifications.filter(n => n.severity === "critical" && !n.is_read).length,
-    today: allNotifications.filter(n => {
+    total: activeNotifications.length,
+    unread: activeNotifications.filter(n => !n.is_read).length,
+    critical: activeNotifications.filter(n => n.severity === "critical" && !n.is_read).length,
+    today: activeNotifications.filter(n => {
       if (!n.created_date) return false;
       const d = new Date(fixTimestamp(n.created_date));
       const now = new Date();
       return d.toDateString() === now.toDateString();
     }).length,
-  }), [allNotifications]);
+  }), [activeNotifications]);
 
   if (!isAdmin) {
     return (
@@ -239,7 +241,7 @@ export default function NotificationsPulse() {
       ) : (
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground mb-2">
-            Showing {filtered.length} of {allNotifications.length} notifications
+            Showing {filtered.length} of {activeNotifications.length} notifications
           </p>
           {filtered.map(n => {
             const sc = SEVERITY_CONFIG[n.severity] || SEVERITY_CONFIG.info;
@@ -249,19 +251,35 @@ export default function NotificationsPulse() {
             return (
               <div
                 key={n.id}
-                role={n.project_id ? "button" : undefined}
-                tabIndex={n.project_id ? 0 : undefined}
+                role={n.cta_url || n.project_id ? "button" : undefined}
+                tabIndex={n.cta_url || n.project_id ? 0 : undefined}
                 className={`flex items-start gap-3 p-3 rounded-lg border transition-colors
                   ${!n.is_read ? sc.bg || "bg-blue-50/30 border-blue-100 dark:bg-blue-950/10" : "border-border/40 hover:bg-muted/30"}
-                  ${n.project_id ? "cursor-pointer" : ""}
+                  ${n.cta_url || n.project_id ? "cursor-pointer" : ""}
                 `}
                 onClick={() => {
-                  if (n.project_id) navigate(createPageUrl("ProjectDetails") + `?id=${n.project_id}`);
+                  if (n.cta_url) {
+                    try {
+                      const params = n.cta_params ? JSON.parse(n.cta_params) : {};
+                      const pageName = n.cta_url.replace(/^\/+/, '');
+                      navigate(createPageUrl(pageName) + (params.id ? `?id=${params.id}` : ""));
+                    } catch { /* ignore */ }
+                  } else if (n.project_id) {
+                    navigate(createPageUrl("ProjectDetails") + `?id=${n.project_id}`);
+                  }
                 }}
                 onKeyDown={(e) => {
-                  if ((e.key === 'Enter' || e.key === ' ') && n.project_id) {
+                  if ((e.key === 'Enter' || e.key === ' ') && (n.cta_url || n.project_id)) {
                     e.preventDefault();
-                    navigate(createPageUrl("ProjectDetails") + `?id=${n.project_id}`);
+                    if (n.cta_url) {
+                      try {
+                        const params = n.cta_params ? JSON.parse(n.cta_params) : {};
+                        const pageName = n.cta_url.replace(/^\/+/, '');
+                        navigate(createPageUrl(pageName) + (params.id ? `?id=${params.id}` : ""));
+                      } catch { /* ignore */ }
+                    } else if (n.project_id) {
+                      navigate(createPageUrl("ProjectDetails") + `?id=${n.project_id}`);
+                    }
                   }
                 }}
               >

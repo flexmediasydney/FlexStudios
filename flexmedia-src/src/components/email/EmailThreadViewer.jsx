@@ -476,7 +476,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       }).catch(() => {}); // Silent — don't surface errors for background action
     }, 1500);
     return () => clearTimeout(timer);
-  }, [thread.threadId, account?.id]);
+  }, [thread.threadId, account?.id, queryClient]);
 
   // Track email opens (deduped: max once per 5 minutes per message)
   const lastOpenLogRef = useRef({});
@@ -569,7 +569,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [replyExpanded, showForward, freshThread, onNextThread, onPrevThread, onBack]);
+  }, [replyExpanded, showForward, freshThread, onNextThread, onPrevThread, onBack, archiveEmailMutation]);
 
   const { data: labelData = [] } = useQuery({
    queryKey: ["email-labels", account?.id],

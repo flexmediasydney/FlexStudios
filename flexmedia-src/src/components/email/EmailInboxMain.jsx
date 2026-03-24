@@ -143,18 +143,16 @@ export default function EmailInboxMain() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
   
-  // Enforce undo stack limit using functional updater to avoid infinite loops
-  useEffect(() => {
-    if (undoStack.length > MAX_UNDO_STACK) {
-      setUndoStack(prev => prev.length > MAX_UNDO_STACK ? prev.slice(-MAX_UNDO_STACK) : prev);
-    }
-  }, [undoStack.length]);
-
-  useEffect(() => {
-    if (redoStack.length > MAX_UNDO_STACK) {
-      setRedoStack(prev => prev.length > MAX_UNDO_STACK ? prev.slice(-MAX_UNDO_STACK) : prev);
-    }
-  }, [redoStack.length]);
+  // BUG FIX: Removed useEffect-based undo/redo stack trimming — it caused
+  // unnecessary re-renders every time stack length changed (effect reads .length,
+  // then writes to the same state, triggering another render cycle).
+  // Instead, enforce the limit at push time via helper functions below.
+  const pushUndoAction = (action) => {
+    setUndoStack(prev => [...prev.slice(-(MAX_UNDO_STACK - 1)), action]);
+  };
+  const pushRedoAction = (action) => {
+    setRedoStack(prev => [...prev.slice(-(MAX_UNDO_STACK - 1)), action]);
+  };
 
   const {
     columns,
@@ -179,11 +177,14 @@ export default function EmailInboxMain() {
     {}
   );
 
+  // BUG FIX: `emailAccounts` array gets a new reference on every subscription update,
+  // causing this effect to re-run unnecessarily. Use .length for the dep since we
+  // only care about the first account appearing/disappearing, not field-level changes.
   useEffect(() => {
     if (emailAccounts.length > 0 && !selectedAccount) {
       setSelectedAccount(emailAccounts[0]);
     }
-  }, [emailAccounts, selectedAccount]);
+  }, [emailAccounts.length, selectedAccount]);
 
   // Real-time subscription for messages based on current view filter
   const messageFilters = useMemo(() => {
@@ -338,7 +339,7 @@ export default function EmailInboxMain() {
       // BUG FIX: clear staggered sync timers on unmount
       staggeredTimers.forEach(t => clearTimeout(t));
     };
-  }, [emailAccounts.length, user?.id]);
+  }, [emailAccounts.length, user?.id, queryClient]);
 
   // Update message mutation - subscription handles UI updates automatically
   const updateMessageMutation = useMutation({
@@ -366,10 +367,10 @@ export default function EmailInboxMain() {
       // Store ALL account IDs so undo restores across all accounts in multi-account selections
       const threadIds = Array.from(selectedMessages);
       const accountIds = getAccountIdsFromThreads(threadIds, threads);
-      setUndoStack(prev => [...prev, {
+      pushUndoAction({
         type: 'delete',
         data: { threadIds, accountIds }
-      }]);
+      });
       setSelectedMessages(new Set());
       setRedoStack([]);
     },
@@ -382,7 +383,7 @@ export default function EmailInboxMain() {
     if (undoStack.length === 0) return;
     const lastAction = undoStack[undoStack.length - 1];
     // Use functional updaters to avoid stale closure issues (e.g., called from toast action)
-    setRedoStack(prev => [...prev, lastAction]);
+    pushRedoAction(lastAction);
     setUndoStack(prev => prev.slice(0, -1));
     
     // Reverse the action
@@ -440,7 +441,7 @@ export default function EmailInboxMain() {
     if (redoStack.length === 0) return;
     const action = redoStack[redoStack.length - 1];
     // Use functional updaters to avoid stale closure issues
-    setUndoStack(prev => [...prev, action]);
+    pushUndoAction(action);
     setRedoStack(prev => prev.slice(0, -1));
     
     // Redo the action
@@ -1411,10 +1412,10 @@ export default function EmailInboxMain() {
                         emailAccountId: thread.email_account_id,
                       });
                       // Push to undo stack so user can undo via Ctrl+Z or undo button
-                      setUndoStack(prev => [...prev, {
+                      pushUndoAction({
                         type: 'archive',
                         data: { threadIds: [thread.threadId], accountIds: [thread.email_account_id] }
-                      }]);
+                      });
                       setRedoStack([]);
                       toast.success('Archived', {
                         action: { label: 'Undo', onClick: handleUndo }
@@ -1427,10 +1428,10 @@ export default function EmailInboxMain() {
                         permanently: false,
                       });
                       // Push to undo stack
-                      setUndoStack(prev => [...prev, {
+                      pushUndoAction({
                         type: 'delete',
                         data: { threadIds: [thread.threadId], accountIds: [thread.email_account_id] }
-                      }]);
+                      });
                       setRedoStack([]);
                       toast.success('Deleted', {
                         action: { label: 'Undo', onClick: handleUndo }

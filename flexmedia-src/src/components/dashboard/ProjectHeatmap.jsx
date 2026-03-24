@@ -289,8 +289,6 @@ export default function ProjectHeatmap() {
         const response = await api.functions.invoke('geocodeProject', {
           projectIds: chunk.map(p => p.id)
         });
-        console.log('Geocoding batch result:', response?.data);
-        
         // Force refresh the projects list after each batch
         await new Promise(resolve => setTimeout(resolve, 500));
       }
@@ -309,7 +307,6 @@ export default function ProjectHeatmap() {
     let mounted = true;
     if (Array.isArray(allProjects) && allProjects.length && !geocodedOnce.current && mounted) {
       geocodedOnce.current = true;
-      console.log('Starting geocoding for', allProjects.filter(p => p?.property_address && (p.lat == null || p.lng == null)).length, 'projects');
       geocodeMissing(allProjects);
     }
     return () => { mounted = false; };
