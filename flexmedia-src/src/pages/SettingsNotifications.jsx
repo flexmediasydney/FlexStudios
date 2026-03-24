@@ -343,7 +343,7 @@ function NotificationLogTab() {
       .filter(n => readFilter === "all" || (readFilter === "unread" ? !n.is_read : n.is_read))
       .filter(n => {
         if (!search) return true;
-        return (n.title + n.message + n.project_name + n.type).toLowerCase().includes(search.toLowerCase());
+        return ((n.title || '') + (n.message || '') + (n.project_name || '') + (n.type || '')).toLowerCase().includes(search.toLowerCase());
       });
   }, [notifs, catFilter, severityFilter, readFilter, search]);
 

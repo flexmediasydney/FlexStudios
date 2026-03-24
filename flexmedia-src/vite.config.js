@@ -23,6 +23,9 @@ export default defineConfig({
     },
     dedupe: ['react', 'react-dom'], // Prevents duplicate React in worktrees
   },
+  esbuild: {
+    drop: ['console', 'debugger'],
+  },
   build: {
     target: 'es2020',
     outDir: 'dist',

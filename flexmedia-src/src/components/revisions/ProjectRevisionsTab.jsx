@@ -264,9 +264,9 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
                   : statusConfig.label}
               </Badge>
             )}
-            {revision.priority !== "normal" && (
+            {revision.priority && revision.priority !== "normal" && (
               <span className={`text-xs font-medium ${PRIORITY_COLORS[revision.priority]}`}>
-                {revision.priority.charAt(0).toUpperCase() + revision.priority.slice(1)}
+                {(revision.priority || 'normal').charAt(0).toUpperCase() + (revision.priority || 'normal').slice(1)}
               </span>
             )}
           </div>

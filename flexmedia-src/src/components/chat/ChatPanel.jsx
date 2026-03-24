@@ -295,7 +295,7 @@ export default function ChatPanel({
           createMutation.mutate({
             content,
             attachments,
-            authorName: currentUserEmail.split('@')[0],
+            authorName: (currentUserEmail || '').split('@')[0] || 'User',
             authorId: users.find(u => u.email === currentUserEmail)?.id || currentUserEmail
           });
         }}

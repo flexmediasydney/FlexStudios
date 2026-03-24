@@ -60,7 +60,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
               >
                 <Avatar className="h-8 w-8">
                   <AvatarFallback className="text-xs bg-primary/10 text-primary font-semibold">
-                    {agent.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                    {(agent.name || '?').split(' ').map(n => n[0]).join('').slice(0, 2)}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
@@ -89,7 +89,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
               >
                 <Avatar className="h-8 w-8">
                   <AvatarFallback className="text-xs bg-blue-500/10 text-blue-600 font-semibold">
-                    {user.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                    {(user.name || '?').split(' ').map(n => n[0]).join('').slice(0, 2)}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">

@@ -81,7 +81,7 @@ export default function FilePreviewModal({ isOpen, onClose, file }) {
                 <p className="text-muted-foreground mb-4">Preview not available in browser</p>
                 <Button asChild>
                   <a href={previewUrl} target="_blank" rel="noopener noreferrer">
-                    Open {ext.toUpperCase()} <ExternalLink className="h-4 w-4 ml-2" />
+                    Open {(ext || 'file').toUpperCase()} <ExternalLink className="h-4 w-4 ml-2" />
                   </a>
                 </Button>
               </div>

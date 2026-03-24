@@ -288,7 +288,7 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
                    <div className="flex items-center gap-2 mb-2">
                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${colors.dot}`}></div>
                     <span className={`text-xs font-semibold ${colors.text}`}>
-                      {parentLog.status.charAt(0).toUpperCase() + parentLog.status.slice(1)}
+                      {(parentLog.status || 'unknown').charAt(0).toUpperCase() + (parentLog.status || 'unknown').slice(1)}
                     </span>
                     {isMultiSession && (
                       <span className="text-xs text-muted-foreground ml-auto">

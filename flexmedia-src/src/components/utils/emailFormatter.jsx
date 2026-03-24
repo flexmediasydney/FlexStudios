@@ -1,11 +1,14 @@
 export function maskEmail(email) {
+  if (!email) return "";
   const [local, domain] = email.split("@");
-  const masked = local.slice(0, 2) + "*".repeat(local.length - 2) + "@" + domain;
+  if (!local || !domain) return email;
+  const masked = local.slice(0, 2) + "*".repeat(Math.max(0, local.length - 2)) + "@" + domain;
   return masked;
 }
 
 export function getEmailDomain(email) {
-  return email.split("@")[1];
+  if (!email) return "";
+  return email.split("@")[1] || "";
 }
 
 export function isValidEmail(email) {

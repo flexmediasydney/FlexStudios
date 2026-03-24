@@ -562,7 +562,7 @@ export default function SettingsTonomoIntegration() {
                   setIsDiagnosing(true);
                   try {
                     const res = await api.functions.invoke('diagnoseTonomoProcessor', {});
-                    console.log('DIAGNOSIS:', JSON.stringify(res.data || res, null, 2));
+                    // Diagnosis details available via browser DevTools network tab
                     const steps = res.data?.steps || res?.steps || [];
                     const failed = steps.filter(s => s.ok === false);
                     if (failed.length > 0) {

@@ -15,7 +15,7 @@ const PriorityBadge = ({ priority }) => {
   };
   return (
     <Badge variant="outline" className={cn(styles[priority] || styles.medium)}>
-      {priority.toUpperCase()}
+      {(priority || 'medium').toUpperCase()}
     </Badge>
   );
 };

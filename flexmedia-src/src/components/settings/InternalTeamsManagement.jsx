@@ -246,7 +246,7 @@ export default function InternalTeamsManagement() {
                         <span className="text-sm font-medium">{members.length}</span>
                         {members.length > 0 && (
                           <span className="text-xs text-muted-foreground">
-                            ({members.slice(0, 2).map(m => m.full_name.split(' ')[0]).join(", ")}{members.length > 2 ? "..." : ""})
+                            ({members.slice(0, 2).map(m => (m.full_name || m.email || '?').split(' ')[0]).join(", ")}{members.length > 2 ? "..." : ""})
                           </span>
                         )}
                       </div>
