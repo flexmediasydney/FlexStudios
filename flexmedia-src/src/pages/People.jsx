@@ -144,6 +144,10 @@ export default function People() {
     );
   }, [agents, search]);
 
+  // BUG FIX #8: Clear selection when search/filters change so phantom IDs
+  // from a previous filter set don't linger invisibly in the selection.
+  useEffect(() => { setSelectedIds(new Set()); }, [search, activeFilters, tagFilter, orgFilter]);
+
   // Stage 2: smart filters + tag/org dropdowns
   // State filters (active, prospecting) are OR'd together since they are mutually exclusive.
   // Behavioral filters (idle, at_risk, no_email) are AND'd as independent conditions.
@@ -167,6 +171,14 @@ export default function People() {
   // ─── Selection handlers ───
   const toggleSelect = (id) => setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleSelectAll = () => setSelectedIds(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(a => a.id)));
+  // Page-aware select: toggle only the visible page's IDs
+  const selectPage = (pageIds) => {
+    setSelectedIds(prev => {
+      const allSelected = pageIds.every(id => prev.has(id));
+      if (allSelected) return new Set();  // deselect all
+      return new Set(pageIds);
+    });
+  };
   const clearSelection = () => setSelectedIds(new Set());
 
   const handleBulkStateChange = async (newState) => {
@@ -374,6 +386,7 @@ export default function People() {
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
             onToggleSelectAll={toggleSelectAll}
+            onSelectPage={selectPage}
             onRowClick={row => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}
             emptyMessage={search ? 'No people match your search' : 'No people added yet'}
             pageSize={100}

@@ -99,6 +99,8 @@ export function canAccessRoute(routeName, userRole) {
  * Get the access level description for a page + role combination.
  */
 export function getAccessLevel(routeName, userRole) {
+  // BUG FIX: Guard against null/undefined role — must deny access, not fall through.
+  if (!userRole) return 'none';
   const allowed = ROUTE_ACCESS[routeName];
   if (!allowed || !allowed.includes(userRole)) return 'none';
   // Pages where contractors get filtered data, not full access
@@ -111,6 +113,8 @@ export function getAccessLevel(routeName, userRole) {
  * Get all route names accessible by a given role.
  */
 export function getAccessibleRoutes(userRole) {
+  // BUG FIX: Guard against null/undefined role — return empty array, not all routes
+  if (!userRole) return [];
   return Object.entries(ROUTE_ACCESS)
     .filter(([_, roles]) => roles.includes(userRole))
     .map(([route]) => route);

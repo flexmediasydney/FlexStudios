@@ -28,8 +28,7 @@ export function trimFormData(data) {
 
 /** Returns an error string or "" */
 export function validateField(name, value) {
-  if (value === null || value === undefined) return "";
-  const v = typeof value === "string" ? value.trim() : value;
+  const v = (value === null || value === undefined) ? "" : (typeof value === "string" ? value.trim() : value);
 
   // Required fields
   if (["name", "agent_name", "agency_name", "title", "property_address"].includes(name)) {

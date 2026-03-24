@@ -321,7 +321,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
                 const num = parseInt(raw);
                 if (isNaN(num)) return; // reject non-numeric input
                 // Clamp to valid range
-                const clamped = Math.min(365, Math.max(1, num));
+                const clamped = Math.min(365, Math.max(7, num));
                 setFormData(prev => ({ ...prev, contact_frequency_days: clamped }));
               }}
               placeholder="e.g. 30 for monthly, 90 for quarterly"

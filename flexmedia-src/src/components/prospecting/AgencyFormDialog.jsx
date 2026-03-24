@@ -138,6 +138,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                     setFormData(prev => ({ ...prev, name: e.target.value }));
                     if (errors.name) setErrors(prev => ({ ...prev, name: null }));
                   }}
+                  maxLength={120}
                   className={errors.name ? 'border-red-500' : ''}
                   placeholder="Agency name"
                 />
@@ -152,6 +153,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                     type="email"
                     value={formData.email}
                     onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                    maxLength={100}
                     placeholder="contact@agency.com"
                   />
                 </div>
@@ -162,6 +164,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                     type="tel"
                     value={formData.phone}
                     onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                    maxLength={30}
                     placeholder="+61 2 1234 5678"
                   />
                 </div>
@@ -173,6 +176,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                   id="address"
                   value={formData.address}
                   onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
+                  maxLength={255}
                   placeholder="Street address"
                 />
               </div>
@@ -327,6 +331,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                   value={formData.video_branding_notes}
                   onChange={(e) => setFormData(prev => ({ ...prev, video_branding_notes: e.target.value }))}
                   placeholder="Video requirements and preferences"
+                  maxLength={2000}
                   rows={2}
                 />
               </div>
@@ -354,6 +359,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                   value={formData.pricing_notes}
                   onChange={(e) => setFormData(prev => ({ ...prev, pricing_notes: e.target.value }))}
                   placeholder="Special pricing terms, volume discounts, etc."
+                  maxLength={2000}
                   rows={2}
                 />
               </div>
@@ -368,6 +374,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
               value={formData.notes}
               onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
               placeholder="Add any additional notes about this agency..."
+              maxLength={2000}
               rows={3}
             />
           </div>
@@ -384,7 +391,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
             </Button>
             <Button
               type="submit"
-              disabled={loading}
+              disabled={loading || !formData.name?.trim()}
               className="gap-2"
             >
               {loading ? (

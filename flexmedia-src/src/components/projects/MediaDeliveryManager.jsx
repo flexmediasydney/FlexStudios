@@ -226,6 +226,7 @@ export default function MediaDeliveryManager({ projectId, project }) {
             <Input
               id="expiry_date"
               type="date"
+              min={new Date().toISOString().split('T')[0]}
               value={config.expiry_date}
               onChange={(e) => setConfig({ ...config, expiry_date: e.target.value })}
             />

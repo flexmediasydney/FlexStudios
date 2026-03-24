@@ -1,4 +1,5 @@
-const CACHE_NAME = 'flexstudios-v1';
+const CACHE_VERSION = 2;
+const CACHE_NAME = `flexstudios-v${CACHE_VERSION}`;
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -15,30 +16,44 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activate: clean up old caches
+// Activate: clean up old caches and notify clients of update
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys
-          .filter((key) => key !== CACHE_NAME)
+          .filter((key) => key.startsWith('flexstudios-') && key !== CACHE_NAME)
           .map((key) => caches.delete(key))
       );
+    }).then(() => {
+      // Notify all clients that a new version is active
+      return self.clients.matchAll().then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: 'SW_UPDATED', version: CACHE_VERSION });
+        });
+      });
     })
   );
   self.clients.claim();
 });
 
-// Fetch: network-first for navigation, cache-first for static assets
+// Listen for SKIP_WAITING message from the client (update prompt)
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
+// Fetch: network-first for navigation, cache-first for static assets, network-only for API
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
-  // Skip non-GET requests and chrome-extension / cross-origin requests
+  // Skip non-GET requests and cross-origin requests
   if (request.method !== 'GET' || !request.url.startsWith(self.location.origin)) {
     return;
   }
 
-  // Navigation requests: network-first with fallback to cache
+  // Navigation requests: network-first with fallback to cached shell
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
@@ -53,6 +68,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Static assets (JS, CSS, images, fonts): cache-first
+  // Vite hashes filenames, so cached versions are always correct for that hash
   if (
     request.destination === 'script' ||
     request.destination === 'style' ||
@@ -74,16 +90,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else: network-first
-  event.respondWith(
-    fetch(request)
-      .then((response) => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-        }
-        return response;
-      })
-      .catch(() => caches.match(request))
-  );
+  // API calls and other requests: network-only (do NOT cache dynamic data)
+  // This prevents stale Supabase/API responses from being served from cache
+  event.respondWith(fetch(request));
 });

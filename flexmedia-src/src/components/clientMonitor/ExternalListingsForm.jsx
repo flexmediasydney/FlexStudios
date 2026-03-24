@@ -34,8 +34,8 @@ export default function ExternalListingsForm({ agent, onSuccess, onCancel }) {
       setIsSubmitting(false);
       return;
     }
-    if (formData.price && isNaN(Number(formData.price))) {
-      setError("Price must be a valid number");
+    if (formData.price && (isNaN(Number(formData.price)) || Number(formData.price) < 0)) {
+      setError("Price must be a valid positive number");
       setIsSubmitting(false);
       return;
     }
@@ -89,6 +89,8 @@ export default function ExternalListingsForm({ agent, onSuccess, onCancel }) {
           <Input
             id="price"
             type="number"
+            min="0"
+            step="1"
             placeholder="e.g., 750000"
             value={formData.price}
             onChange={(e) => setFormData({ ...formData, price: e.target.value })}

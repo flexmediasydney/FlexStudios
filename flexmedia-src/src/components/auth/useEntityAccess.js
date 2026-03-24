@@ -18,9 +18,18 @@ export function useEntityAccess(entityType) {
   const { data: rules = [], isLoading } = useQuery({
     queryKey: ['entity-access-rules'],
     queryFn: () => api.entities.EntityAccessRule.list('role', 200),
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    // BUG FIX: staleTime must match useAllEntityAccessRules (30s) to avoid cache
+    // inconsistency — the admin matrix writes at 30s stale but this hook was reading
+    // from the same cache key with 5-min stale, causing stale rules after admin edits.
+    staleTime: 30 * 1000,
     enabled: !!role,
   });
+
+  // BUG FIX: Guard against null/undefined role — without this, rules.find() could
+  // match a DB rule with a null role field, granting unintended access during loading.
+  if (!role) {
+    return { accessLevel: 'none', canEdit: false, canView: false, isLoading };
+  }
 
   const rule = rules.find(r => r.role === role && r.entity_type === entityType);
   const accessLevel = rule?.access_level || 'none';

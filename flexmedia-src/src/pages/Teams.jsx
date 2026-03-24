@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -73,6 +73,9 @@ export default function Teams() {
     empty: teams.filter(t => (agentCountByTeam[t.id] || 0) === 0).length,
   }), [teams, agentCountByTeam]);
 
+  // BUG FIX #8: Clear selection when search/filters change
+  useEffect(() => { setSelectedIds(new Set()); }, [search, activeFilters, agencyFilter]);
+
   const filtered = useMemo(() => {
     let result = teams;
 
@@ -111,6 +114,15 @@ export default function Teams() {
     } else {
       setSelectedIds(new Set(filtered.map(t => t.id)));
     }
+  };
+
+  // Page-aware select: toggle only the visible page's IDs
+  const handleSelectPage = (pageIds) => {
+    setSelectedIds(prev => {
+      const allSelected = pageIds.every(id => prev.has(id));
+      if (allSelected) return new Set();
+      return new Set(pageIds);
+    });
   };
 
   const columns = [
@@ -232,6 +244,7 @@ export default function Teams() {
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
             onToggleSelectAll={handleToggleSelectAll}
+            onSelectPage={handleSelectPage}
           />
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">

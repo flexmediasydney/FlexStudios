@@ -34,6 +34,15 @@ export default function PermissionMatrix() {
   const [showGrantDialog, setShowGrantDialog] = useState(false);
   const [grantingPermission, setGrantingPermission] = useState(null);
 
+  // BUG FIX: Verify the current user is master_admin before allowing grant/revoke.
+  // Without this, any employee who navigates to Settings can modify permissions.
+  const { data: currentUser } = useQuery({
+    queryKey: ["current-user-for-perms"],
+    queryFn: () => api.auth.me(),
+    staleTime: 60_000,
+  });
+  const isMasterAdmin = currentUser?.role === 'master_admin';
+
   // Fetch data
   const { data: users = [], isLoading: usersLoading } = useQuery({
     queryKey: ["users"],
@@ -62,9 +71,22 @@ export default function PermissionMatrix() {
         throw new Error("User and permission are required");
       }
       const user = await api.auth.me();
+      // BUG FIX: Server-side role check — only master_admin can grant permissions
+      if (user.role !== 'master_admin') {
+        throw new Error("Only admins can grant permissions");
+      }
       const permission = permissions.find(p => p.name === data.permissionName);
       if (!permission) throw new Error("Permission not found");
-      
+
+      // BUG FIX: Check for existing active, non-expired grant to prevent duplicates
+      const existing = userPermissions.find(
+        up => up.user_email === data.userEmail &&
+              up.permission_name === data.permissionName &&
+              up.is_active &&
+              (!up.expires_at || new Date(up.expires_at) > new Date())
+      );
+      if (existing) throw new Error("Permission already active for this user");
+
       return await api.entities.UserPermission.create({
         user_email: data.userEmail,
         permission_id: permission.id,
@@ -92,11 +114,20 @@ export default function PermissionMatrix() {
       if (!data.userEmail || !data.permissionName) {
         throw new Error("User and permission are required");
       }
+      // BUG FIX: Server-side role check — only master_admin can revoke permissions
+      const me = await api.auth.me();
+      if (me.role !== 'master_admin') {
+        throw new Error("Only admins can revoke permissions");
+      }
+      // BUG FIX: Also check expires_at — don't "revoke" an already-expired permission
       const userPerm = userPermissions.find(
-        up => up.user_email === data.userEmail && up.permission_name === data.permissionName && up.is_active
+        up => up.user_email === data.userEmail &&
+              up.permission_name === data.permissionName &&
+              up.is_active &&
+              (!up.expires_at || new Date(up.expires_at) > new Date())
       );
-      if (!userPerm) throw new Error("Permission not found");
-      
+      if (!userPerm) throw new Error("Active permission not found");
+
       return await api.entities.UserPermission.update(userPerm.id, { is_active: false });
     },
     onSuccess: () => {
@@ -295,11 +326,14 @@ export default function PermissionMatrix() {
           permissions={permissions}
           userPermissions={userPermissions}
           onClose={() => setSelectedUser(null)}
+          isMasterAdmin={isMasterAdmin}
           onGrant={(permission) => {
+            if (!isMasterAdmin) { toast.error("Only admins can grant permissions"); return; }
             setGrantingPermission(permission);
             setShowGrantDialog(true);
           }}
           onRevoke={(permission) => {
+            if (!isMasterAdmin) { toast.error("Only admins can revoke permissions"); return; }
             revokeMutation.mutate({
               userEmail: selectedUser.email,
               permissionName: permission.name
@@ -335,6 +369,7 @@ function UserPermissionDetails({
   user,
   permissions,
   userPermissions,
+  isMasterAdmin,
   onClose,
   onGrant,
   onRevoke
@@ -383,14 +418,16 @@ function UserPermissionDetails({
                           </p>
                         )}
                       </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => onRevoke(perm)}
-                        className="text-destructive"
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
+                      {isMasterAdmin && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => onRevoke(perm)}
+                          className="text-destructive"
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      )}
                     </div>
                   );
                 })}
@@ -408,13 +445,15 @@ function UserPermissionDetails({
                     <div className="flex-1">
                       <p className="font-mono font-medium">{perm.name}</p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => onGrant(perm)}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
+                    {isMasterAdmin && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onGrant(perm)}
+                      >
+                        <Plus className="h-3 w-3" />
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -428,12 +467,14 @@ function UserPermissionDetails({
 
 
 function GrantPermissionDialog({ user, permission, isLoading, onClose, onSubmit }) {
-  if (!user || !permission) return null;
-
+  // BUG FIX: Moved useState hooks BEFORE the early return to comply with Rules of Hooks.
+  // React requires hooks to be called in the same order on every render.
   const [reason, setReason] = useState("");
   const [temporary, setTemporary] = useState(false);
   const [expiryDays, setExpiryDays] = useState(7);
   const [error, setError] = useState("");
+
+  if (!user || !permission) return null;
 
   const handleSubmit = () => {
     if (expiryDays < 1) {

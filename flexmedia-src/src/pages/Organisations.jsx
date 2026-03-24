@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -118,6 +118,9 @@ export default function Organisations() {
     dnc: agencies.filter(a => a.relationship_state === 'Do Not Contact').length,
   }), [agencies]);
 
+  // BUG FIX #8: Clear selection when search/filters change
+  useEffect(() => { setSelectedIds(new Set()); }, [search, activeFilters]);
+
   const filtered = useMemo(() => {
     let result = agencies;
 
@@ -161,6 +164,15 @@ export default function Organisations() {
     } else {
       setSelectedIds(new Set(filtered.map(r => r.id)));
     }
+  };
+
+  // Page-aware select: toggle only the visible page's IDs
+  const selectPage = (pageIds) => {
+    setSelectedIds(prev => {
+      const allSelected = pageIds.every(id => prev.has(id));
+      if (allSelected) return new Set();
+      return new Set(pageIds);
+    });
   };
 
   const clearSelection = () => setSelectedIds(new Set());
@@ -336,6 +348,7 @@ export default function Organisations() {
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
             onToggleSelectAll={toggleSelectAll}
+            onSelectPage={selectPage}
           />
         ) : (
           <>

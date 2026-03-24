@@ -213,13 +213,14 @@ export default function PackagesPage() {
 
 
 
-  const filteredPackages = packages.filter(p => {
+  // BUG FIX #9: Memoize filteredPackages to avoid re-computing on every render
+  const filteredPackages = useMemo(() => packages.filter(p => {
     const matchesSearch = p.name?.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesType = !filterTypeId
       ? true
       : (p.project_type_ids || []).includes(filterTypeId);
     return matchesSearch && matchesType;
-  });
+  }), [packages, searchQuery, filterTypeId]);
 
   return (
     <div className="space-y-6">

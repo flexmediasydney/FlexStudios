@@ -24,7 +24,9 @@ export function useCurrentUser() {
 export function usePermissions() {
   const { data: user } = useCurrentUser();
 
-  const role = user?.role || 'contractor';
+  // BUG FIX: Never default to 'contractor' — a missing role means no access.
+  // Defaulting to 'contractor' would grant project access to null/deleted users.
+  const role = user?.role || null;
   const isMasterAdmin = role === 'master_admin';
   const isAdminOrEmployee = role === 'master_admin' || role === 'employee';
   const isEmployee = role === 'employee';
@@ -57,7 +59,9 @@ export function usePermissions() {
     // Project access
     canSeeAllProjects: isAdminOrEmployee,
     canAccessProject: (project) => isAdminOrEmployee || isAssignedToProject(project),
-    canEditProject: (project) => isAdminOrEmployee || isAssignedToProject(project),
+    // BUG FIX: contractors can view assigned projects but should NOT get full edit access.
+    // canEditProject requires admin/employee role; contractors get read-only on assigned projects.
+    canEditProject: (project) => isAdminOrEmployee,
     canDeleteProject: isMasterAdmin,
 
     // Pricing & financial
@@ -175,6 +179,21 @@ export function PermissionGuard({
             <Button onClick={() => api.auth.redirectToLogin()}>
               Sign In
             </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  // BUG FIX: If user.role is null/undefined, deny access even when `require` is not set.
+  // A user record with no role should not be able to see any protected content.
+  if (!user.role) {
+    return fallback || (
+      <div className="flex items-center justify-center min-h-screen p-8">
+        <Alert className="max-w-md" variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            <p>Your account does not have a role assigned. Contact your admin.</p>
           </AlertDescription>
         </Alert>
       </div>

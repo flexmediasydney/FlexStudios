@@ -68,6 +68,10 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
     if (formData.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       newErrors.email = 'Invalid email format';
     }
+    if (formData.phone.trim() && !/^[+\d\s\-().]{5,30}$/.test(formData.phone)) {
+      newErrors.phone = 'Enter a valid phone number';
+    }
+    if (formData.name.trim().length > 120) newErrors.name = 'Name must be 120 characters or less';
     if (!formData.current_agency_name.trim()) newErrors.current_agency_name = 'Agency name is required';
 
     setErrors(newErrors);
@@ -159,6 +163,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
                       setFormData(prev => ({ ...prev, name: e.target.value }));
                       if (errors.name) setErrors(prev => ({ ...prev, name: null }));
                     }}
+                    maxLength={120}
                     className={errors.name ? 'border-red-500' : ''}
                     placeholder="Full name"
                   />
@@ -178,7 +183,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="email">Email *</Label>
+                  <Label htmlFor="email">Email</Label>
                   <Input
                     id="email"
                     type="email"
@@ -187,6 +192,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
                       setFormData(prev => ({ ...prev, email: e.target.value }));
                       if (errors.email) setErrors(prev => ({ ...prev, email: null }));
                     }}
+                    maxLength={100}
                     className={errors.email ? 'border-red-500' : ''}
                     placeholder="name@company.com"
                   />
@@ -199,9 +205,15 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
                     id="phone"
                     type="tel"
                     value={formData.phone}
-                    onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                    onChange={(e) => {
+                      setFormData(prev => ({ ...prev, phone: e.target.value }));
+                      if (errors.phone) setErrors(prev => ({ ...prev, phone: null }));
+                    }}
+                    maxLength={30}
+                    className={errors.phone ? 'border-red-500' : ''}
                     placeholder="+61 2 1234 5678"
                   />
+                  {errors.phone && <p className="text-xs text-red-600 mt-1">{errors.phone}</p>}
                 </div>
               </div>
 
@@ -310,6 +322,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
               value={formData.notes}
               onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
               placeholder="Add any relevant notes about this prospect..."
+              maxLength={2000}
               rows={3}
             />
           </div>
@@ -326,7 +339,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
             </Button>
             <Button
               type="submit"
-              disabled={loading}
+              disabled={loading || !formData.name?.trim() || !formData.current_agency_name?.trim()}
               className="gap-2"
             >
               {loading ? (
