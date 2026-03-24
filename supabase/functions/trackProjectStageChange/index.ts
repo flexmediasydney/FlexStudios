@@ -406,13 +406,18 @@ Deno.serve(async (req) => {
         );
         const stopNow = new Date().toISOString();
         for (const log of activeLogs) {
-          const startMs = log.start_time ? new Date(log.start_time).getTime() : Date.now();
-          const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+          let finalSeconds = log.total_seconds || 0;
+          if (log.status === 'running' && log.start_time) {
+            const startMs = new Date(log.start_time).getTime();
+            const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+            finalSeconds = elapsedSeconds - (log.paused_duration || 0);
+          }
+          // For paused timers, total_seconds is already correct — don't add elapsed
           await entities.TaskTimeLog.update(log.id, {
             is_active: false,
             status: 'completed',
             end_time: stopNow,
-            total_seconds: (log.total_seconds || 0) + elapsedSeconds,
+            total_seconds: Math.max(0, finalSeconds),
           }).catch(() => {});
         }
         if (activeLogs.length > 0) {

@@ -38,8 +38,26 @@ function formatDurationCompact(seconds) {
 function LiveTimer({ since, baseSeconds = 0, compact = false }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    const iv = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(iv);
+    let iv = setInterval(() => setTick(t => t + 1), 1000);
+    // Pause ticking when tab is hidden to avoid CPU waste and queued state updates.
+    // The elapsed time is always computed from wall-clock (Date.now() - since) so
+    // pausing the interval does not cause drift — it just skips unnecessary renders.
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        clearInterval(iv);
+        iv = null;
+      } else {
+        if (!iv) {
+          setTick(t => t + 1); // immediate refresh on return
+          iv = setInterval(() => setTick(t => t + 1), 1000);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
   const sinceMs = since ? new Date(fixTimestamp(since)).getTime() : Date.now();
   const elapsed = Math.floor(baseSeconds + Math.max(0, (Date.now() - sinceMs) / 1000));

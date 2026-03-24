@@ -315,8 +315,11 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
       {columns.map(column => {
         const colProjects = activeProjects.filter(p => p.status === column.id);
+        // Bug fix: also exclude revision tasks (matching TaskProgressBar's filter)
+        // so the collapsed overview progress bar is consistent with card-level bars.
         const colTasks = allTasks.filter(t =>
           colProjects.some(p => p.id === t.project_id) && !t.parent_task_id && !t.is_deleted
+          && !/^\[Revision #\d+\]/.test(t.title || "")
         );
         const tasksDone = colTasks.filter(t => t.is_completed).length;
         const tasksTotal = colTasks.length;
@@ -670,13 +673,15 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
               const columnRevenue = columnProjects.reduce((sum, p) => sum + (p.calculated_price || p.price || 0), 0);
               // Bug fix: use pre-computed tasksByProject map instead of O(projects*tasks) filter
               const columnTasks = columnProjects.flatMap(p => (tasksByProject[p.id] || []).filter(t => !t.is_deleted));
-              const columnOverdueThreshold = new Date();
-              columnOverdueThreshold.setHours(0, 0, 0, 0);
+              // Bug fix: use string comparison (YYYY-MM-DD) to avoid UTC-vs-local timezone
+              // mismatch — new Date("2026-03-25") parses as midnight UTC which is previous
+              // day in AEST, causing off-by-one overdue counts vs card-level indicators.
+              const todayStr = new Date().toLocaleDateString('en-CA'); // "YYYY-MM-DD"
               const tasksDone = columnTasks.filter(t => t.is_completed).length;
               const tasksInProgress = columnTasks.filter(t => !t.is_completed && !t.is_blocked).length;
               const tasksOverdue = columnTasks.filter(t => {
                 if (t.is_completed || !t.due_date) return false;
-                return new Date(t.due_date) < columnOverdueThreshold;
+                return t.due_date.slice(0, 10) < todayStr;
               }).length;
 
               return (
@@ -843,8 +848,8 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                               {columnTasks
                                 .filter(t => {
                                   if (t.is_completed || !t.due_date) return false;
-                                  // Bug fix: zero out hours to match the count badge logic
-                                  return new Date(t.due_date) < columnOverdueThreshold;
+                                  // Bug fix: use string comparison to match the count badge logic
+                                  return t.due_date.slice(0, 10) < todayStr;
                                 })
                                 .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
                                 .map(t => {

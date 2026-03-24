@@ -366,10 +366,16 @@ export default function ProjectProductsPackages({ project }) {
         await api.functions.invoke('cleanupOrphanedProjectTasks', { project_id: project.id });
       } catch { /* non-fatal */ }
 
-      // Fix 9 — recalculate price to reflect the updated product/package set
-      api.functions.invoke('recalculateProjectPricingServerSide', {
-        project_id: project.id,
-      }).catch(() => {});
+      // Fix 9 — recalculate price to reflect the updated product/package set.
+      // Must be awaited so the refreshed Project entity has the updated calculated_price.
+      // Previously fire-and-forget, causing stale pricing in the UI after save.
+      try {
+        await api.functions.invoke('recalculateProjectPricingServerSide', {
+          project_id: project.id,
+        });
+      } catch (pricingErr) {
+        console.warn('Pricing recalc failed:', pricingErr?.message);
+      }
 
       // Invalidate task caches — syncProjectTasksFromProducts may have created/updated tasks
       refetchEntityList("ProjectTask");

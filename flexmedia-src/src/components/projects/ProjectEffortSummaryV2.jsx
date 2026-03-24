@@ -288,7 +288,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
   }
 
   // Show card even with no data
-  const hasData = data.task.estimatedTotal > 0 || data.revision.estimatedTotal > 0;
+  const hasData = data.task.estimatedTotal > 0 || data.task.actualTotal > 0 || data.revision.estimatedTotal > 0 || data.revision.actualTotal > 0;
 
   return (
     <Card
@@ -314,7 +314,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
         )}
 
         {/* Total */}
-        {data.totalEstimated > 0 && (
+        {(data.totalEstimated > 0 || data.totalActual > 0) && (
           <div className="space-y-2">
             <p className="text-xs font-medium text-muted-foreground">Total</p>
             <div className="grid grid-cols-2 gap-3">
@@ -345,7 +345,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
         )}
 
         {/* Tasks */}
-        {data.task.estimatedTotal > 0 && (
+        {(data.task.estimatedTotal > 0 || data.task.actualTotal > 0) && (
           <div className="space-y-2 pt-2 border-t">
             <p className="text-xs font-medium text-muted-foreground">Tasks</p>
             <div className="grid grid-cols-2 gap-3">
@@ -376,7 +376,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
         )}
 
         {/* Requests */}
-        {data.revision.estimatedTotal > 0 && (
+        {(data.revision.estimatedTotal > 0 || data.revision.actualTotal > 0) && (
           <div className="space-y-2 pt-2 border-t">
             <p className="text-xs font-medium text-muted-foreground">Requests</p>
             <div className="grid grid-cols-2 gap-3">

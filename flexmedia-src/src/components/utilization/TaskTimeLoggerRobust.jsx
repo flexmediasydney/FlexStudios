@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '@/api/supabaseClient';
+import { fixTimestamp } from '@/components/utils/dateUtils';
 import { retryWithBackoff } from '@/lib/networkResilience';
 import { Button } from '@/components/ui/button';
 import { Play, Pause, CheckCircle, Clock, AlertCircle, AlertTriangle, Plus } from 'lucide-react';
@@ -66,7 +67,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   // When running: compute live from start_time minus all accumulated paused_duration
   // When paused/finished: use the stored total_seconds value
   const totalDisplaySeconds = isRunning && activeLog?.start_time
-    ? Math.max(0, Math.floor((Date.now() - new Date(activeLog.start_time).getTime()) / 1000) - (activeLog.paused_duration || 0))
+    ? Math.max(0, Math.floor((Date.now() - new Date(fixTimestamp(activeLog.start_time)).getTime()) / 1000) - (activeLog.paused_duration || 0))
     : (activeLog?.total_seconds || completedLog?.total_seconds || 0);
 
   // Detect conflicts: another user actively logging
@@ -118,7 +119,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
           // auto-finalize it at the cap rather than letting it silently accumulate phantom time.
           if (active.status === 'running' && active.start_time) {
             const wallClockSeconds = Math.floor(
-              (Date.now() - new Date(active.start_time).getTime()) / 1000
+              (Date.now() - new Date(fixTimestamp(active.start_time)).getTime()) / 1000
             ) - (active.paused_duration || 0);
 
             if (wallClockSeconds > MAX_SESSION_DURATION) {
@@ -231,7 +232,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       const log = activeLogRef.current;
       if (!log?.id || !log?.start_time) return;
 
-      const liveSeconds = Math.max(0, Math.floor((Date.now() - new Date(log.start_time).getTime()) / 1000) - (log.paused_duration || 0));
+      const liveSeconds = Math.max(0, Math.floor((Date.now() - new Date(fixTimestamp(log.start_time)).getTime()) / 1000) - (log.paused_duration || 0));
 
       if (liveSeconds > MAX_SESSION_DURATION) {
         try {
@@ -334,15 +335,15 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       // When paused: recompute from (pause_time - start_time - paused_duration) instead of
       // relying on total_seconds which may be stale from the last 15s DB sync.
       const finalPausedDuration = activeLog.pause_time
-        ? (activeLog.paused_duration || 0) + Math.floor((Date.now() - new Date(activeLog.pause_time).getTime()) / 1000)
+        ? (activeLog.paused_duration || 0) + Math.floor((Date.now() - new Date(fixTimestamp(activeLog.pause_time)).getTime()) / 1000)
         : (activeLog.paused_duration || 0);
 
       let finalSeconds;
       if (activeLog.status === 'running' && activeLog.start_time) {
-        finalSeconds = Math.max(0, Math.floor((Date.now() - new Date(activeLog.start_time).getTime()) / 1000) - (activeLog.paused_duration || 0));
+        finalSeconds = Math.max(0, Math.floor((Date.now() - new Date(fixTimestamp(activeLog.start_time)).getTime()) / 1000) - (activeLog.paused_duration || 0));
       } else if (activeLog.status === 'paused' && activeLog.start_time && activeLog.pause_time) {
         // Use pause_time as the effective end, minus all accumulated paused time
-        finalSeconds = Math.max(0, Math.floor((new Date(activeLog.pause_time).getTime() - new Date(activeLog.start_time).getTime()) / 1000) - (activeLog.paused_duration || 0));
+        finalSeconds = Math.max(0, Math.floor((new Date(fixTimestamp(activeLog.pause_time)).getTime() - new Date(fixTimestamp(activeLog.start_time)).getTime()) / 1000) - (activeLog.paused_duration || 0));
       } else {
         finalSeconds = activeLog.total_seconds || 0;
       }
@@ -533,7 +534,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
       // Calculate pause duration and add to cumulative
       const pauseDuration = activeLog.pause_time
-        ? Math.floor((Date.now() - new Date(activeLog.pause_time).getTime()) / 1000)
+        ? Math.floor((Date.now() - new Date(fixTimestamp(activeLog.pause_time)).getTime()) / 1000)
         : 0;
 
       lastActivityTime.current = Date.now();

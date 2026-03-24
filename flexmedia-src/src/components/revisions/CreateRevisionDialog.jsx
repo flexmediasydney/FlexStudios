@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { CalendarIcon, Layers, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { wallClockToUTC, calculatePresetDeadline, APP_TIMEZONE } from "@/components/lib/deadlinePresets";
+import { getSydneyHourMinute, utcToSydneyInput } from "@/components/utils/dateUtils";
 import { calculateConstrainedTaskDeadline } from "@/components/lib/revisionTaskDeadlineValidator";
 import RevisionPricingImpact from "./RevisionPricingImpact";
 import RevisionAttachments from "./RevisionAttachments";
@@ -481,11 +482,11 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
                                 type="number"
                                 min="0"
                                 max="23"
-                                value={String(new Date(form.due_date).getHours()).padStart(2, "0")}
+                                value={String(getSydneyHourMinute(form.due_date).hour).padStart(2, "0")}
                                 onChange={e => {
-                                  const d = new Date(form.due_date);
+                                  const sydParts = utcToSydneyInput(form.due_date).split(/[-T:]/);
                                   const h = Math.max(0, Math.min(23, parseInt(e.target.value, 10) || 0));
-                                  const utc = wallClockToUTC(d.getFullYear(), d.getMonth(), d.getDate(), h, d.getMinutes(), 0, "Australia/Sydney");
+                                  const utc = wallClockToUTC(+sydParts[0], +sydParts[1] - 1, +sydParts[2], h, +sydParts[4], 0, "Australia/Sydney");
                                   setForm(p => ({ ...p, due_date: utc.toISOString() }));
                                 }}
                                 className="h-8 text-sm text-center"
@@ -497,11 +498,11 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
                                 type="number"
                                 min="0"
                                 max="59"
-                                value={String(new Date(form.due_date).getMinutes()).padStart(2, "0")}
+                                value={String(getSydneyHourMinute(form.due_date).minute).padStart(2, "0")}
                                 onChange={e => {
-                                  const d = new Date(form.due_date);
+                                  const sydParts = utcToSydneyInput(form.due_date).split(/[-T:]/);
                                   const m = Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0));
-                                  const utc = wallClockToUTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), m, 0, "Australia/Sydney");
+                                  const utc = wallClockToUTC(+sydParts[0], +sydParts[1] - 1, +sydParts[2], +sydParts[3], m, 0, "Australia/Sydney");
                                   setForm(p => ({ ...p, due_date: utc.toISOString() }));
                                 }}
                                 className="h-8 text-sm text-center"

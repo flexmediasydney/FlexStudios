@@ -221,6 +221,7 @@ Deno.serve(async (req) => {
 
     for (const task of allTasks) {
       if (!task?.id || !task?.title) { console.warn('Skipping malformed task:', task); continue; }
+      if (task.is_deleted) continue;
       if (task.is_manually_set_due_date) continue;
       const newState = calculateTaskState(task, project, allTasks, APP_TIMEZONE);
       if (newState.shouldUpdate) {

@@ -306,6 +306,9 @@ export default function EventDetailsDialog({
       invalidateAll();
       onSave?.();
       onClose();
+    } catch (err) {
+      const hint = isTransientError(err) ? ' — check your connection and try again' : '';
+      toast.error('Failed to delete event: ' + (err?.message || 'Unknown error') + hint);
     } finally {
       setDeleting(false);
     }

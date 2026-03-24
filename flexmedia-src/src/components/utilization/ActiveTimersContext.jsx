@@ -6,6 +6,12 @@ export const ActiveTimersContext = createContext();
 export function ActiveTimersProvider({ children, currentUser }) {
   const [activeTimers, setActiveTimers] = useState([]);
 
+  // Reset active timers when user changes (e.g. logout then login as different user)
+  // Without this, stale timers from the previous user remain visible until the fetch completes.
+  useEffect(() => {
+    if (!currentUser?.id) setActiveTimers([]);
+  }, [currentUser?.id]);
+
   useEffect(() => {
     if (!currentUser?.id) return;
 

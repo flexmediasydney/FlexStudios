@@ -593,6 +593,9 @@ export default function TaskManagement({ projectId, project, canEdit }) {
         }
       }
 
+      // Bug fix: refresh task list so dependent tasks' is_blocked state updates in the UI.
+      // Without this, the entity cache retains stale data until the next subscription push.
+      refetchEntityList("ProjectTask");
       scheduleDeadlineSync(projectId, 'task_completed');
       toast.success(wasCompleted ? "Task re-opened" : "Task completed");
     } catch (err) {

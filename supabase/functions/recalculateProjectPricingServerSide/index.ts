@@ -54,7 +54,11 @@ Deno.serve(async (req) => {
       return errorResponse('Pricing calculation returned invalid result', 500);
     }
 
-    const newPrice = Math.max(0, parseFloat(calcResult.calculated_price) || 0);
+    const parsedPrice = parseFloat(calcResult.calculated_price);
+    if (isNaN(parsedPrice)) {
+      return errorResponse('Pricing calculation returned non-numeric price', 500);
+    }
+    const newPrice = Math.max(0, parsedPrice);
     const tier = calcResult.pricing_tier || project.pricing_tier || 'standard';
 
     await entities.Project.update(project_id, {

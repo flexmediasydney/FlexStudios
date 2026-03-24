@@ -613,6 +613,15 @@ export default function ProjectPricingTable({
                 <p>
                   You're about to update the pricing for this project. The backend has verified the following total using the current price matrix:
                 </p>
+                {/* Show old vs new price so the user can see what's changing */}
+                {(project?.calculated_price ?? project?.price ?? 0) > 0 && (
+                  <div className="rounded-lg border bg-muted/50 p-3 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Current price</p>
+                    <p className="text-lg font-semibold text-muted-foreground font-mono line-through">
+                      <Price value={project?.calculated_price ?? project?.price ?? 0} />
+                    </p>
+                  </div>
+                )}
                 <div className="rounded-lg border bg-primary/5 p-4 text-center">
                   <p className="text-xs text-muted-foreground mb-1">{pricingTier === "premium" ? "Premium" : "Standard"} tier · Matrix-adjusted</p>
                   <p className="text-3xl font-bold text-primary font-mono">

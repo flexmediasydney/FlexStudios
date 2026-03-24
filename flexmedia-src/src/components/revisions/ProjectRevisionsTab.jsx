@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -93,7 +93,11 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
       await api.functions.invoke('handleRevisionCancellation', { revision_id: revision.id }).catch(() => {});
       await api.entities.ProjectRevision.delete(revision.id);
     },
-    onSuccess: () => toast.success('Request deleted'),
+    onSuccess: () => {
+      toast.success('Request deleted');
+      refetchEntityList("ProjectRevision");
+      refetchEntityList("ProjectTask");
+    },
     onError: (e) => toast.error(e.message || 'Failed to delete'),
   });
 
