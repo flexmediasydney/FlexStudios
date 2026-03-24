@@ -66,7 +66,7 @@ export default function EmailDetailSidebar({ thread, onProjectLinkClick, onProje
         <CardContent className="space-y-3">
           {msg.project_id ? (
             <>
-              <div className="bg-white p-3 rounded-lg border border-emerald-200">
+              <div className="bg-card p-3 rounded-lg border border-emerald-200">
                 <p className="font-bold text-sm text-foreground">{msg.project_title}</p>
                 <p className="text-xs text-emerald-700 mt-1.5 font-semibold">✓ Connected</p>
               </div>

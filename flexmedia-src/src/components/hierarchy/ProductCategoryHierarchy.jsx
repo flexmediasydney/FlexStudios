@@ -107,7 +107,7 @@ export default function ProductCategoryHierarchy() {
                             <p className="text-xs text-muted-foreground italic">No products in this category</p>
                           ) : (
                             categoryProducts.map(({ product, packages: productPackages }) => (
-                              <div key={product.id} className="bg-white rounded p-2 border border-border/50">
+                              <div key={product.id} className="bg-card rounded p-2 border border-border/50">
                                 <div className="flex items-start justify-between gap-2 mb-1">
                                   <div>
                                     <p className="text-sm font-medium">{product.name}</p>

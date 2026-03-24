@@ -169,7 +169,7 @@ export default function EditTemplateModal({ template, onClose }) {
               onChange={setBody}
               modules={modules}
               theme="snow"
-              className="bg-white"
+              className="bg-card"
             />
           </div>
 

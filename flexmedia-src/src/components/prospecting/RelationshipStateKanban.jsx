@@ -97,7 +97,7 @@ export default function RelationshipStateKanban({ entitiesByState, onDrillDown }
                 return (
                   <div
                     key={entity.id}
-                    className="bg-white rounded-lg p-2.5 border border-border/50 hover:shadow-md transition-all cursor-grab active:cursor-grabbing"
+                    className="bg-card rounded-lg p-2.5 border border-border/50 hover:shadow-md transition-all cursor-grab active:cursor-grabbing"
                     draggable
                     onDragStart={(e) => handleDragStart(e, entity)}
                     onClick={() => handleEntityClick(entity)}

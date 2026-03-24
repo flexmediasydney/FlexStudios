@@ -21,7 +21,7 @@ export default function PackageKanbanView({ packages, onEdit, onDelete, projectT
             const typeId = (pkg.project_type_ids || [])[0];
             const projectType = typeId ? projectTypes.find(t => t.id === typeId) : null;
             return (
-              <div key={pkg.id} className="bg-white border rounded-lg p-3 hover:shadow transition-shadow">
+              <div key={pkg.id} className="bg-card border rounded-lg p-3 hover:shadow transition-shadow">
                 <div className="flex items-start justify-between gap-1">
                   <h4 className="font-medium text-sm truncate">{pkg.name}</h4>
                   {projectType ? (

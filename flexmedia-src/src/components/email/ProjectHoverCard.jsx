@@ -63,7 +63,7 @@ export default function ProjectHoverCard({ projectId, children }) {
         {children}
       </HoverCardTrigger>
       <HoverCardContent side="right" align="start" className="w-80 p-0 border-0 shadow-lg">
-        <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+        <div className="bg-card rounded-lg border border-border overflow-hidden">
           {/* Header */}
           <div className="px-4 py-2 bg-slate-50 border-b border-slate-200">
             <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">LINKED PROJECT</p>

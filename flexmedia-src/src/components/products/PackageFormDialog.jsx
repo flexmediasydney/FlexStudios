@@ -466,14 +466,14 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
                             value={task.title}
                             onChange={(e) => updateTaskTemplate(tier, index, "title", e.target.value)}
                             placeholder="Task title"
-                            className="text-sm bg-white"
+                            className="text-sm bg-card"
                           />
                           <Textarea
                             value={task.description}
                             onChange={(e) => updateTaskTemplate(tier, index, "description", e.target.value)}
                             placeholder="Description (optional)"
                             rows={2}
-                            className="text-sm bg-white"
+                            className="text-sm bg-card"
                           />
                           <div className="grid grid-cols-2 gap-2">
                             <div>
@@ -482,7 +482,7 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
                                 value={task.task_type || "back_office"}
                                 onValueChange={(v) => updateTaskTemplate(tier, index, "task_type", v)}
                               >
-                                <SelectTrigger className="h-7 text-xs bg-white">
+                                <SelectTrigger className="h-7 text-xs bg-card">
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -500,7 +500,7 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
                                 value={task.auto_assign_role || "none"}
                                 onValueChange={(v) => updateTaskTemplate(tier, index, "auto_assign_role", v)}
                               >
-                                <SelectTrigger className="h-7 text-xs bg-white">
+                                <SelectTrigger className="h-7 text-xs bg-card">
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -521,7 +521,7 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
                               value={task.estimated_minutes || 0}
                               onChange={(e) => updateTaskTemplate(tier, index, "estimated_minutes", Number(e.target.value) || 0)}
                               placeholder="0"
-                              className="h-7 text-sm bg-white"
+                              className="h-7 text-sm bg-card"
                             />
                           </div>
                           <div>
@@ -530,7 +530,7 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
                               value={task.timer_trigger || "none"}
                               onValueChange={(v) => updateTaskTemplate(tier, index, "timer_trigger", v)}
                             >
-                              <SelectTrigger className="h-7 text-xs bg-white">
+                              <SelectTrigger className="h-7 text-xs bg-card">
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
@@ -569,7 +569,7 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
                                   }
                                 }}
                               >
-                                <SelectTrigger className="h-7 text-xs bg-white">
+                                <SelectTrigger className="h-7 text-xs bg-card">
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -593,7 +593,7 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
                                 value={task.deadline_hours_after_trigger || 24}
                                 onChange={(e) => updateTaskTemplate(tier, index, "deadline_hours_after_trigger", Number(e.target.value))}
                                 placeholder="e.g., 24"
-                                className="h-7 text-sm bg-white"
+                                className="h-7 text-sm bg-card"
                               />
                             </div>
                           )}

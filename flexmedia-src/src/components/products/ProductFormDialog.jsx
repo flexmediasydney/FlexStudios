@@ -677,14 +677,14 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                    value={task?.title || ""}
                                    onChange={(e) => updateTaskTemplate(tier, index, "title", e.target.value)}
                                    placeholder="Task title"
-                                   className="text-sm bg-white"
+                                   className="text-sm bg-card"
                                   />
                                   <Textarea
                                    value={task?.description || ""}
                                    onChange={(e) => updateTaskTemplate(tier, index, "description", e.target.value)}
                                    placeholder="Task description (optional)"
                                    rows={2}
-                                   className="text-sm bg-white"
+                                   className="text-sm bg-card"
                                   />
                                   {/* Task Type */}
                                   <div>
@@ -693,7 +693,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                      value={task?.task_type || "back_office"}
                                      onValueChange={(v) => updateTaskTemplate(tier, index, "task_type", v)}
                                    >
-                                     <SelectTrigger className="h-7 text-xs bg-white">
+                                     <SelectTrigger className="h-7 text-xs bg-card">
                                        <SelectValue />
                                      </SelectTrigger>
                                      <SelectContent>
@@ -711,7 +711,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                        value={task?.auto_assign_role || "none"}
                                        onValueChange={(v) => updateTaskTemplate(tier, index, "auto_assign_role", v)}
                                      >
-                                       <SelectTrigger className="h-7 text-xs bg-white">
+                                       <SelectTrigger className="h-7 text-xs bg-card">
                                          <SelectValue />
                                        </SelectTrigger>
                                        <SelectContent>
@@ -732,7 +732,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                           updateTaskTemplate(tier, index, "estimated_minutes", isNaN(val) ? 0 : Math.max(0, val));
                                         }}
                                         placeholder="0"
-                                        className="h-7 text-sm bg-white"
+                                        className="h-7 text-sm bg-card"
                                       />
                                     </div>
                                   </div>
@@ -743,7 +743,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                      value={task?.timer_trigger || "none"}
                                      onValueChange={(v) => updateTaskTemplate(tier, index, "timer_trigger", v)}
                                    >
-                                     <SelectTrigger className="h-7 text-xs bg-white">
+                                     <SelectTrigger className="h-7 text-xs bg-card">
                                        <SelectValue />
                                      </SelectTrigger>
                                      <SelectContent>
@@ -774,7 +774,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                          }
                                        }}
                                      >
-                                       <SelectTrigger className="h-7 text-xs bg-white">
+                                       <SelectTrigger className="h-7 text-xs bg-card">
                                          <SelectValue />
                                        </SelectTrigger>
                                        <SelectContent>
@@ -799,7 +799,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                          updateTaskTemplate(tier, index, "deadline_hours_after_trigger", isNaN(val) ? 24 : Math.max(0, val));
                                        }}
                                        placeholder="e.g., 24"
-                                       className="h-7 text-sm bg-white"
+                                       className="h-7 text-sm bg-card"
                                      />
                                      <p className="text-xs text-muted-foreground mt-1">Due {task?.deadline_hours_after_trigger ?? 24} hours after trigger</p>
                                    </div>
@@ -813,7 +813,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                        value={task?.deadline_preset || "tonight"}
                                        onValueChange={(v) => updateTaskTemplate(tier, index, "deadline_preset", v)}
                                      >
-                                       <SelectTrigger className="h-7 text-xs bg-white">
+                                       <SelectTrigger className="h-7 text-xs bg-card">
                                          <SelectValue />
                                        </SelectTrigger>
                                        <SelectContent>

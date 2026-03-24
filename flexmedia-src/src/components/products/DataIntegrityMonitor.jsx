@@ -199,7 +199,7 @@ export default function DataIntegrityMonitor() {
                   )}
 
                   {!issue.fixable && (
-                    <div className="mt-2 p-2 bg-white bg-opacity-30 rounded text-xs">
+                    <div className="mt-2 p-2 bg-card bg-opacity-30 rounded text-xs">
                       <p className="opacity-75">⚠️ This issue requires manual intervention</p>
                     </div>
                   )}

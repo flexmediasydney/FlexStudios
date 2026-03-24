@@ -46,7 +46,7 @@ const getTaskRowColor = (task, revisionKind) => {
   if (task.is_completed) return "bg-green-50 border-green-200";
   if (revisionKind && !task.is_blocked) return REVISION_KIND_BORDER[revisionKind] || "border-l-4 border-l-red-500 border border-red-200 bg-red-50/40";
   if (task.is_blocked) return "bg-orange-50 border-orange-200";
-  return "bg-white border-border";
+  return "bg-card border-border";
 };
 
 export default function TaskListView({

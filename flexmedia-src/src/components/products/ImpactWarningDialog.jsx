@@ -71,7 +71,7 @@ export default function ImpactWarningDialog({
               <p className="text-xs font-semibold text-blue-900 uppercase tracking-wider mb-2.5">Changes Being Made</p>
               <div className="space-y-2">
                 {changes.map((change, i) => (
-                  <div key={i} className="text-sm bg-white rounded p-2">
+                  <div key={i} className="text-sm bg-card rounded p-2">
                     <div className="font-medium text-gray-900">{formatFieldLabel(change.field)}</div>
                     <div className="text-xs text-gray-600 mt-1">
                       <span className="inline-block bg-red-100 text-red-700 px-2 py-1 rounded mr-2">
@@ -135,7 +135,7 @@ export default function ImpactWarningDialog({
 function ImpactGroup({ icon, label, count, items }) {
   const Icon = ImpactIcons[icon];
   return (
-    <div className="bg-white rounded p-2.5 border border-red-100">
+    <div className="bg-card rounded p-2.5 border border-red-100">
       <div className="flex items-center gap-2 mb-2">
         <Icon className="h-4 w-4 text-red-600" />
         <span className="text-sm font-semibold text-gray-900">{label}</span>

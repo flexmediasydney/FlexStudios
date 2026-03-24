@@ -30,7 +30,7 @@ export default function ProductKanbanView({ products, onEdit, onDelete, projectT
             const typeId = (product.project_type_ids || [])[0];
             const projectType = typeId ? projectTypes.find(t => t.id === typeId) : null;
             return (
-              <div key={product.id} className="bg-white border rounded-lg p-3 hover:shadow transition-shadow">
+              <div key={product.id} className="bg-card border rounded-lg p-3 hover:shadow transition-shadow">
                 <h4 className="font-medium text-sm truncate">{product.name}</h4>
                 <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{product.description}</p>
 

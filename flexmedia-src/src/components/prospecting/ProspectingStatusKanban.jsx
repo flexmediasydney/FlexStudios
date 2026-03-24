@@ -96,7 +96,7 @@ export default function ProspectingStatusKanban({ agentsByStatus }) {
               {agents.map((agent) => (
                 <div
                   key={agent.id}
-                  className="bg-white rounded-lg p-2 border border-border/50 hover:shadow-md transition-all cursor-grab active:cursor-grabbing text-xs"
+                  className="bg-card rounded-lg p-2 border border-border/50 hover:shadow-md transition-all cursor-grab active:cursor-grabbing text-xs"
                   draggable
                   onDragStart={(e) => handleDragStart(e, agent)}
                   onClick={() => handleAgentClick(agent)}

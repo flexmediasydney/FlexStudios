@@ -227,7 +227,7 @@ function AgentTreeRow({ agent, navigate, onEdit, onDelete, agentProjectCounts, a
   return (
     <div
       className={cn(
-        "flex items-center justify-between py-2 px-3 bg-white border rounded-lg",
+        "flex items-center justify-between py-2 px-3 bg-card border rounded-lg",
         "hover:shadow-sm transition-shadow cursor-pointer group",
         agent.is_at_risk && "border-amber-200 bg-amber-50/20"
       )}
