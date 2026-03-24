@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { retryWithBackoff } from '@/lib/networkResilience';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -114,9 +115,11 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
         const storagePath = `${entityType}/${entityId}/${ts}_${safeName}`;
 
-        const { data, error } = await supabase.storage
-          .from(bucket)
-          .upload(storagePath, file, { contentType: file.type || 'application/octet-stream' });
+        const { data, error } = await retryWithBackoff(
+          () => supabase.storage.from(bucket).upload(storagePath, file, { contentType: file.type || 'application/octet-stream' })
+            .then(res => { if (res.error) throw res.error; return res; }),
+          { maxRetries: 2, onRetry: (err, attempt) => console.warn(`Upload retry ${attempt} for ${file.name}:`, err.message) }
+        );
 
         if (error) throw error;
 

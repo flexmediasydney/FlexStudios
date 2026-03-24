@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { api, supabase } from "@/api/supabaseClient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { retryWithBackoff, isTransientError } from "@/lib/networkResilience";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -436,7 +437,7 @@ export default function EmailComposeDialog({
       }
 
       const idemKey = buildIdempotencyKey(recipients, subject, body);
-      const response = await api.functions.invoke("sendGmailMessage", {
+      const response = await retryWithBackoff(() => api.functions.invoke("sendGmailMessage", {
         emailAccountId: selectedAccount,
         to: recipients,
         cc: cc.trim() || undefined,
@@ -450,7 +451,7 @@ export default function EmailComposeDialog({
         attachments: attachments.length > 0 ? attachments : undefined,
         signatureId: selectedSignatureId || undefined,
         idempotency_key: idemKey,
-      });
+      }), { maxRetries: 2, onRetry: (err, attempt) => console.warn(`Email send retry ${attempt}:`, err.message) });
 
       return response;
     },

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Paperclip, Users } from "lucide-react";
 import {
@@ -27,6 +27,15 @@ export default function EmailListHeader({
 }) {
   const [draggedId, setDraggedId] = useState(null);
   const [resizingId, setResizingId] = useState(null);
+  // BUG FIX: track resize cleanup function so we can remove document listeners
+  // on unmount if the component is destroyed mid-resize (memory leak).
+  const resizeCleanupRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (resizeCleanupRef.current) resizeCleanupRef.current();
+    };
+  }, []);
 
   const totalWidth = columns.reduce((sum, c) => sum + (c.width ?? 0), 0);
 
@@ -62,10 +71,12 @@ export default function EmailListHeader({
       setResizingId(null);
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
+      resizeCleanupRef.current = null;
     };
 
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
+    resizeCleanupRef.current = onMouseUp;
   };
 
   return (

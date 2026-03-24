@@ -285,8 +285,9 @@ export default function ClientAgents() {
       } else if (deletingItem.type === 'agent') {
         try {
           const agentProjects = await api.entities.Project.filter({ agent_id: deletingItem.item.id }, null, 500);
-          const openProjects = agentProjects.filter(p => !['delivered', 'cancelled'].includes(p.status));
-          await Promise.all(openProjects.map(p =>
+          // Clear agent reference on ALL projects (not just open ones) to prevent
+          // stale agent_name on delivered/cancelled projects and broken ID references
+          await Promise.all(agentProjects.map(p =>
             api.entities.Project.update(p.id, { agent_id: null, agent_name: null }).catch(() => {})
           ));
         } catch { /* non-fatal */ }

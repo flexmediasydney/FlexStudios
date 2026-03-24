@@ -38,7 +38,7 @@ function relTime(ts) {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   if (h < 168) return `${Math.floor(h/24)}d ago`;
-  return new Date(ts).toLocaleDateString("en-AU", { day:"numeric", month:"short" });
+  return new Date(ts).toLocaleDateString("en-AU", { day:"numeric", month:"short", timeZone: "Australia/Sydney" });
 }
 
 export default function NotificationsPage() {
@@ -76,15 +76,16 @@ export default function NotificationsPage() {
   }, [notifications, tab, readFilter, search]);
 
   const grouped = useMemo(() => {
-    const now = new Date();
-    const todayStr = now.toDateString();
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    // Use Sydney date boundaries so "today" matches the business day, not browser locale
+    const sydneyDate = (d) => d.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' }); // YYYY-MM-DD
+    const todayStr = sydneyDate(new Date());
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const groups = { today: [], thisWeek: [], earlier: [] };
     for (const n of filtered) {
       if (!n.created_date) { groups.earlier.push(n); continue; }
       const d = new Date(n.created_date.endsWith('Z') ? n.created_date : n.created_date + 'Z');
-      if (d.toDateString() === todayStr) groups.today.push(n);
+      if (sydneyDate(d) === todayStr) groups.today.push(n);
       else if (d >= weekAgo) groups.thisWeek.push(n);
       else groups.earlier.push(n);
     }

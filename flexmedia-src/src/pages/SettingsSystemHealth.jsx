@@ -237,6 +237,14 @@ export default function SettingsSystemHealth() {
   const tickRef = useRef(null);
   const startRef = useRef(null);
 
+  // BUG FIX: clear diagnostic elapsed-time interval on unmount so it doesn't
+  // keep ticking (and calling setState) after navigating away mid-diagnostic.
+  useEffect(() => {
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    };
+  }, []);
+
   const toggleCategory = useCallback((name) => {
     setExpandedCategories(prev => {
       const next = new Set(prev);

@@ -51,43 +51,55 @@ export const AuthProvider = ({ children }) => {
   const fetchingRef = useRef(false);
   const initDoneRef = useRef(false);
 
+  // Race condition fix: track pending fetch as a promise so concurrent callers
+  // (e.g. two TOKEN_REFRESHED events) coalesce onto the same request instead of racing.
+  const pendingFetchRef = useRef(null);
+
   // Fetch app user via direct REST ONLY (no Supabase client queries during init)
   const fetchAppUser = useCallback(async (authUser, accessToken) => {
+    // If a fetch is already in flight, wait for it instead of starting a second one
+    if (pendingFetchRef.current) return pendingFetchRef.current;
     if (fetchingRef.current) return;
     fetchingRef.current = true;
 
-    try {
-      const appUser = await fetchUserByEmailDirect(authUser.email, accessToken);
+    const doFetch = async () => {
+      try {
+        const appUser = await fetchUserByEmailDirect(authUser.email, accessToken);
 
-      if (!appUser?.id) {
-        setAuthError({ type: 'user_not_registered', message: 'User not registered for this app' });
+        if (!appUser?.id) {
+          setAuthError({ type: 'user_not_registered', message: 'User not registered for this app' });
+          setIsAuthenticated(false);
+        } else if (!appUser.is_active) {
+          setAuthError({ type: 'user_deactivated', message: 'Your account has been deactivated.' });
+          setIsAuthenticated(false);
+          // BUG FIX: defer signOut so it doesn't re-enter onAuthStateChange
+          // and clear the deactivated error via the SIGNED_OUT handler
+          setTimeout(() => supabase.auth.signOut({ scope: 'local' }).catch(() => {}), 0);
+        } else {
+          setUser(appUser);
+          setIsAuthenticated(true);
+          setAuthError(null);
+          // Update last_login_at (fire-and-forget via REST)
+          fetch(`${SUPABASE_URL}/rest/v1/users?id=eq.${appUser.id}`, {
+            method: 'PATCH',
+            headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+            body: JSON.stringify({ last_login_at: new Date().toISOString() }),
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.error('User fetch failed:', err);
+        setAuthError({ type: 'unknown', message: err.message || 'Failed to load user profile' });
         setIsAuthenticated(false);
-      } else if (!appUser.is_active) {
-        setAuthError({ type: 'user_deactivated', message: 'Your account has been deactivated.' });
-        setIsAuthenticated(false);
-        // BUG FIX: defer signOut so it doesn't re-enter onAuthStateChange
-        // and clear the deactivated error via the SIGNED_OUT handler
-        setTimeout(() => supabase.auth.signOut({ scope: 'local' }).catch(() => {}), 0);
-      } else {
-        setUser(appUser);
-        setIsAuthenticated(true);
-        setAuthError(null);
-        // Update last_login_at (fire-and-forget via REST)
-        fetch(`${SUPABASE_URL}/rest/v1/users?id=eq.${appUser.id}`, {
-          method: 'PATCH',
-          headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-          body: JSON.stringify({ last_login_at: new Date().toISOString() }),
-        }).catch(() => {});
+      } finally {
+        fetchingRef.current = false;
+        pendingFetchRef.current = null;
+        initDoneRef.current = true;
+        setIsLoadingAuth(false);
       }
-    } catch (err) {
-      console.error('User fetch failed:', err);
-      setAuthError({ type: 'unknown', message: err.message || 'Failed to load user profile' });
-      setIsAuthenticated(false);
-    } finally {
-      fetchingRef.current = false;
-      initDoneRef.current = true;
-      setIsLoadingAuth(false);
-    }
+    };
+
+    pendingFetchRef.current = doFetch();
+    return pendingFetchRef.current;
   }, []);
 
   useEffect(() => {
@@ -165,9 +177,29 @@ export const AuthProvider = ({ children }) => {
       }
     );
 
+    // ─── PROACTIVE TOKEN REFRESH ──────────────────────────────────────
+    // Supabase auto-refresh can silently fail on flaky networks.
+    // Check every 4 minutes; if the token expires within 5 minutes,
+    // proactively call refreshSession so the user never hits a 401
+    // mid-workflow (e.g. while saving a project or sending an email).
+    const tokenRefreshInterval = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const { data: { session: s } } = await supabase.auth.getSession();
+        if (!s?.expires_at) return;
+        const expiresInMs = s.expires_at * 1000 - Date.now();
+        if (expiresInMs < 5 * 60 * 1000) {
+          await supabase.auth.refreshSession();
+        }
+      } catch {
+        // Refresh failed — onAuthStateChange will handle SIGNED_OUT if needed
+      }
+    }, 4 * 60 * 1000);
+
     return () => {
       cancelled = true;
       clearTimeout(safetyTimer);
+      clearInterval(tokenRefreshInterval);
       subscription.unsubscribe();
     };
   }, [fetchAppUser]);

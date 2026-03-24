@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { api } from "@/api/supabaseClient";
+import { retryWithBackoff } from "@/lib/networkResilience";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Star, Zap, Package, Box, Trash2, Edit, Plus, MapPin, AlertCircle, User, DollarSign, Info, CheckCircle } from "lucide-react";
@@ -354,6 +355,8 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // Race condition fix: prevent double-submit if already saving (e.g. rapid Ctrl+S)
+    if (saving) return;
     const hasItems = formData.products.length > 0 || formData.packages.length > 0;
     
     // Run shared readiness validation
@@ -404,10 +407,16 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
       let projectId;
       if (project?.id) {
-        await api.entities.Project.update(project.id, dataToSave);
+        await retryWithBackoff(() => api.entities.Project.update(project.id, dataToSave), {
+          maxRetries: 2,
+          onRetry: (err, attempt) => console.warn(`Project save retry ${attempt}:`, err.message),
+        });
         projectId = project.id;
       } else {
-        const newProject = await api.entities.Project.create(dataToSave);
+        const newProject = await retryWithBackoff(() => api.entities.Project.create(dataToSave), {
+          maxRetries: 2,
+          onRetry: (err, attempt) => console.warn(`Project create retry ${attempt}:`, err.message),
+        });
         projectId = newProject.id;
       }
 

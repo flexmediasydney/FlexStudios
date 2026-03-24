@@ -124,8 +124,8 @@ export default function NotificationsPulse() {
     today: activeNotifications.filter(n => {
       if (!n.created_date) return false;
       const d = new Date(fixTimestamp(n.created_date));
-      const now = new Date();
-      return d.toDateString() === now.toDateString();
+      const sydneyDate = (dt) => dt.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+      return sydneyDate(d) === sydneyDate(new Date());
     }).length,
   }), [activeNotifications]);
 

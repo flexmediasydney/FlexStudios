@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { PROJECT_STAGES } from "./projectStatuses";
 import { api } from "@/api/supabaseClient";
+import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
@@ -143,6 +144,8 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
     if (!canEdit) return;
     const s = sessionRef.current;
     if (s.status === stageValue) return;
+    // in_revision is managed automatically by the revision system — block manual entry
+    if (stageValue === 'in_revision') return;
 
     const now = new Date().toISOString();
     const nowMs = Date.now();
@@ -192,7 +195,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
         // Actually close the orphaned timer in DB
         api.entities.ProjectStageTimer.update(t.id, {
           exit_time: t.updated_date || new Date().toISOString(),
-        }).catch(() => {});
+        }).catch(() => toast.error('Failed to close orphaned stage timer — stage time may be inaccurate'));
         return {
           ...t,
           exit_time: t.updated_date || new Date().toISOString(),

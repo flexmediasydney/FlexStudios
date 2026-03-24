@@ -386,13 +386,31 @@ const entitiesProxyAdmin = new Proxy({}, {
  * Maps to: supabase.functions.invoke(functionName, { body: params })
  */
 async function invokeFunction(client, functionName, params = {}) {
-  const { data, error } = await client.functions.invoke(functionName, {
-    body: params,
+  // Timeout: Edge Functions should not hang indefinitely on slow networks.
+  // 45s covers the Supabase default 30s function timeout + network overhead.
+  const FUNCTION_TIMEOUT = 45000;
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error(`Edge function "${functionName}" timed out after ${FUNCTION_TIMEOUT / 1000}s`)),
+      FUNCTION_TIMEOUT
+    );
   });
-  if (error) throw new Error(error.message || `Function ${functionName} failed`);
-  // Wrap in { data } to match Base44's response format:
-  // Frontend code does: result.data.someField
-  return { data };
+
+  try {
+    const { data, error } = await Promise.race([
+      client.functions.invoke(functionName, { body: params }),
+      timeoutPromise,
+    ]);
+    clearTimeout(timeoutId);
+    if (error) throw new Error(error.message || `Function ${functionName} failed`);
+    // Wrap in { data } to match Base44's response format:
+    // Frontend code does: result.data.someField
+    return { data };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
 }
 
 const functionsApi = {

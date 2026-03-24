@@ -11,6 +11,14 @@ export default function AddressInput({ value, onChange, placeholder }) {
   const [error, setError] = useState(null);
   const containerRef = useRef(null);
   const debounceTimer = useRef(null);
+  const mountedRef = useRef(true);
+
+  // BUG FIX: track mounted state so the async callback inside setTimeout
+  // doesn't call setState after the component unmounts (memory leak).
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     if (!value || value.length < 2) {
@@ -21,15 +29,17 @@ export default function AddressInput({ value, onChange, placeholder }) {
     }
 
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    
+
     debounceTimer.current = setTimeout(async () => {
+      if (!mountedRef.current) return;
       setLoading(true);
       setError(null);
       try {
         const response = await api.functions.invoke('searchAustralianAddresses', {
           searchText: value
         });
-        
+
+        if (!mountedRef.current) return;
         if (response.data?.error) {
           setError(response.data.error);
           setSuggestions([]);
@@ -38,11 +48,12 @@ export default function AddressInput({ value, onChange, placeholder }) {
           setOpen(true);
         }
       } catch (err) {
+        if (!mountedRef.current) return;
         console.error('Error fetching address suggestions:', err);
         setError('Failed to fetch address suggestions');
         setSuggestions([]);
       } finally {
-        setLoading(false);
+        if (mountedRef.current) setLoading(false);
       }
     }, 300);
 

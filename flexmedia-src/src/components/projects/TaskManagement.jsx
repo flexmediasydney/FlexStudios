@@ -507,9 +507,15 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
   const UPLOADED_STAGES = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
 
+  // Race condition fix: guard against double-click while toggleComplete is in flight
+  const togglingRef = React.useRef(new Set());
+
   const toggleComplete = async (task) => {
     if (!canEdit) return;
     if (isBlocked(task)) return;
+
+    // Race condition fix: prevent double-toggle if already in flight for this task
+    if (togglingRef.current.has(task.id)) return;
 
     // Locked tasks cannot be toggled (e.g. onsite tasks auto-completed on upload)
     if (task.is_locked) {
@@ -526,16 +532,20 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       }
     }
 
+    // Race condition fix: capture the value at call time to prevent stale closure reads
+    const wasCompleted = task.is_completed;
+    togglingRef.current.add(task.id);
+
     try {
-      await api.entities.ProjectTask.update(task.id, { is_completed: !task.is_completed });
+      await api.entities.ProjectTask.update(task.id, { is_completed: !wasCompleted });
       logActivity(
-        task.is_completed ? 'task_added' : 'task_completed',
-        task.is_completed
+        wasCompleted ? 'task_added' : 'task_completed',
+        wasCompleted
           ? `Task re-opened: "${task.title}"`
           : `Task completed: "${task.title}"`
       );
 
-      if (!task.is_completed) {
+      if (!wasCompleted) {
         // task is now being marked complete (was false, now true)
         writeFeedEvent({
           eventType: 'task_completed',
@@ -572,9 +582,11 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       }
 
       scheduleDeadlineSync(projectId, 'task_completed');
-      toast.success(task.is_completed ? "Task re-opened" : "Task completed");
+      toast.success(wasCompleted ? "Task re-opened" : "Task completed");
     } catch (err) {
       toast.error(err.message || "Failed to update task");
+    } finally {
+      togglingRef.current.delete(task.id);
     }
   };
 
@@ -625,15 +637,22 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                 size="sm"
                 className="h-8 text-xs gap-1"
                 title="Mark all remaining tasks complete"
+                disabled={updateMutation.isPending || deleteMutation.isPending}
                 onClick={async () => {
                   const incomplete = tasks.filter(t => !t.is_completed && !t.is_locked && !isBlocked(t));
                   if (incomplete.length === 0) { toast.info("No completable tasks — all remaining tasks are blocked or locked"); return; }
-                  try {
-                    await Promise.all(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: new Date().toISOString() })));
-                    queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
-                    toast.success(`Completed ${incomplete.length} task${incomplete.length > 1 ? 's' : ''}`);
-                    logActivity('tasks_completed', `Marked all ${incomplete.length} remaining tasks complete`);
-                  } catch { toast.error('Failed to complete some tasks'); }
+                  // Race condition fix: use Promise.allSettled to handle partial failures gracefully
+                  const results = await Promise.allSettled(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: new Date().toISOString() })));
+                  const succeeded = results.filter(r => r.status === 'fulfilled').length;
+                  const failed = results.filter(r => r.status === 'rejected').length;
+                  queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+                  refetchEntityList("ProjectTask");
+                  if (failed > 0) {
+                    toast.warning(`Completed ${succeeded} task${succeeded !== 1 ? 's' : ''}, ${failed} failed`);
+                  } else {
+                    toast.success(`Completed ${succeeded} task${succeeded !== 1 ? 's' : ''}`);
+                  }
+                  logActivity('tasks_completed', `Marked ${succeeded} of ${incomplete.length} remaining tasks complete`);
                 }}
               >
                 <CheckCheck className="h-3.5 w-3.5" />

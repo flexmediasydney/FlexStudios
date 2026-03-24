@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
+import { retryWithBackoff } from "@/lib/networkResilience";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Card, CardContent } from "@/components/ui/card";
@@ -509,7 +510,10 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
         updateData.shooting_started_at = new Date().toISOString();
       }
 
-      await api.entities.Project.update(projectId, updateData);
+      await retryWithBackoff(() => api.entities.Project.update(projectId, updateData), {
+        maxRetries: 2,
+        onRetry: (err, attempt) => console.warn(`Kanban status update retry ${attempt}:`, err.message),
+      });
 
       api.entities.ProjectActivity.create({
         project_id: projectId,
@@ -559,6 +563,8 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
 
   const onDragEnd = (result) => {
     if (!result.destination) return;
+    // Race condition fix: block drag while a status update is already in flight
+    if (updateStatusMutation.isPending) return;
     const projectId = result.draggableId;
     const newStatus = result.destination.droppableId;
     const project = filteredProjects.find(p => p.id === projectId);
@@ -574,6 +580,10 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
     }
     if (newStatus === 'pending_review') {
       toast.error('Projects cannot be manually moved to Pending Review.');
+      return;
+    }
+    if (newStatus === 'in_revision') {
+      toast.error('In Revision is managed automatically by the revision system.');
       return;
     }
     if (project.status === 'delivered') {

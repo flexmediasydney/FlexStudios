@@ -494,8 +494,14 @@ export default function ProjectDetails() {
      // Mark all active tasks as cancelled when project is cancelled
      if (newStatus === 'cancelled') {
        const activeTasks = (projectTasks || []).filter(t => !t.is_deleted && !t.is_completed);
-       for (const task of activeTasks) {
-         api.entities.ProjectTask.update(task.id, { is_completed: true, completed_at: new Date().toISOString() }).catch(() => {});
+       const cancelResults = await Promise.allSettled(
+         activeTasks.map(task =>
+           api.entities.ProjectTask.update(task.id, { is_completed: true, completed_at: new Date().toISOString() })
+         )
+       );
+       const failedCount = cancelResults.filter(r => r.status === 'rejected').length;
+       if (failedCount > 0) {
+         toast.error(`Failed to close ${failedCount} of ${activeTasks.length} tasks — some may need manual cleanup`);
        }
      }
 
@@ -664,9 +670,11 @@ export default function ProjectDetails() {
     mutationFn: (agentId) => {
       if (!project) throw new Error('Project not loaded');
       const selectedAgent = agentId ? allAgents.find(a => a.id === agentId) : null;
-      return api.entities.Project.update(projectId, { 
-        agent_id: agentId || null, 
-        agency_id: selectedAgent?.current_agency_id || null 
+      return api.entities.Project.update(projectId, {
+        agent_id: agentId || null,
+        agent_name: selectedAgent?.name || null,
+        agency_id: selectedAgent?.current_agency_id || null,
+        agency_name: selectedAgent?.current_agency_name || null,
       });
     },
     onSuccess: (_, agentId) => {
@@ -720,12 +728,16 @@ export default function ProjectDetails() {
       const deleteMutation = useMutation({
       mutationFn: async () => {
       if (!project) throw new Error('Project not loaded');
-      // ── Soft-delete via backend function (batched, efficient) ────────────────────────────
+      // ── Soft-delete children via backend function (batched, efficient) ──────────────────
+      // Must await so children are cleaned up BEFORE the project row is hard-deleted,
+      // otherwise foreign-key-less orphans remain permanently.
       try {
-        api.functions.invoke('cleanupProjectOnDelete', {
+        await api.functions.invoke('cleanupProjectOnDelete', {
           project_id: projectId
-        }).catch(err => console.warn('Async cleanup failed (non-fatal):', err?.message));
-      } catch { /* non-fatal — proceed with project deletion */ }
+        });
+      } catch (err) {
+        console.warn('Cleanup before delete failed (proceeding):', err?.message);
+      }
 
 
 

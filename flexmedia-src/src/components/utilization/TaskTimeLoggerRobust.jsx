@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '@/api/supabaseClient';
+import { retryWithBackoff } from '@/lib/networkResilience';
 import { Button } from '@/components/ui/button';
 import { Play, Pause, CheckCircle, Clock, AlertCircle, AlertTriangle, Plus } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -337,14 +338,17 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
         ? (activeLog.paused_duration || 0) + Math.floor((Date.now() - new Date(activeLog.pause_time).getTime()) / 1000)
         : (activeLog.paused_duration || 0);
 
-      await api.entities.TaskTimeLog.update(activeLog.id, {
-        end_time: new Date().toISOString(),
-        status: 'completed',
-        is_active: false,
-        pause_time: null,
-        paused_duration: finalPausedDuration,
-        total_seconds: finalSeconds
-      });
+      await retryWithBackoff(
+        () => api.entities.TaskTimeLog.update(activeLog.id, {
+          end_time: new Date().toISOString(),
+          status: 'completed',
+          is_active: false,
+          pause_time: null,
+          paused_duration: finalPausedDuration,
+          total_seconds: finalSeconds
+        }),
+        { maxRetries: 3, onRetry: (err, attempt) => console.warn(`Timer finish retry ${attempt}:`, err.message) }
+      );
 
       logTimerActivity('timer_completed', `Timer completed on "${task.title}" — ${Math.round(finalSeconds / 60)}m by ${currentUser?.full_name}`);
       if (onTaskComplete) onTaskComplete(task.id);

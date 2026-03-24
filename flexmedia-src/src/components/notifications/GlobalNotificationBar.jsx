@@ -19,12 +19,13 @@ function relTime(ts) {
 }
 
 function groupByDay(notifications) {
-  const today = new Date().toDateString();
-  const yesterday = new Date(Date.now() - 86400000).toDateString();
+  const sydneyDate = (dt) => dt.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+  const today = sydneyDate(new Date());
+  const yesterday = sydneyDate(new Date(Date.now() - 86400000));
   const groups = { Today: [], Yesterday: [], Older: [] };
   for (const n of notifications) {
     const ts = n.created_date || "";
-    const d = new Date((ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) ? ts : ts + "Z").toDateString();
+    const d = sydneyDate(new Date((ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) ? ts : ts + "Z"));
     if (d === today) groups.Today.push(n);
     else if (d === yesterday) groups.Yesterday.push(n);
     else groups.Older.push(n);

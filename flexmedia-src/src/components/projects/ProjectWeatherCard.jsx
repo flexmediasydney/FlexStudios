@@ -97,7 +97,9 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
       return;
     }
 
-    let cancelled = false;
+    // BUG FIX: use AbortController so both sequential fetches are cancelled on
+    // unmount instead of completing in the background and leaking memory.
+    const controller = new AbortController();
 
     async function fetchWeather() {
       setLoading(true);
@@ -105,7 +107,8 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
       try {
         // Step 1: Geocode suburb
         const geoRes = await fetch(
-          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(suburb)}&count=5&language=en&format=json`
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(suburb)}&count=5&language=en&format=json`,
+          { signal: controller.signal }
         );
         const geoData = await geoRes.json();
 
@@ -120,7 +123,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
         }
 
         if (!auResult) {
-          if (!cancelled) { setError("Location not found"); setLoading(false); }
+          if (!controller.signal.aborted) { setError("Location not found"); setLoading(false); }
           return;
         }
 
@@ -130,11 +133,12 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
          const weatherRes = await fetch(
            `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
            `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,sunset` +
-           `&timezone=Australia%2FSydney&start_date=${shootDate}&end_date=${shootDate}`
+           `&timezone=Australia%2FSydney&start_date=${shootDate}&end_date=${shootDate}`,
+           { signal: controller.signal }
          );
          const weatherData = await weatherRes.json();
 
-         if (!cancelled && weatherData.daily) {
+         if (!controller.signal.aborted && weatherData.daily) {
            const d = weatherData.daily;
            setWeather({
              suburb: name,
@@ -150,14 +154,14 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
            });
          }
       } catch (e) {
-        if (!cancelled) setError("Weather unavailable");
+        if (!controller.signal.aborted) setError("Weather unavailable");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
 
     fetchWeather();
-    return () => { cancelled = true; };
+    return () => { controller.abort(); };
   }, [suburb, shootDate]);
 
   if (!suburb) return null;

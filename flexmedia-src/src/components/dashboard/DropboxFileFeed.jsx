@@ -63,6 +63,12 @@ function Lightbox({ files, initialIndex, projectName, onClose }) {
   const [tempUrl, setTempUrl] = useState(null);
   const [loadingUrl, setLoadingUrl] = useState(false);
   const file = files[index];
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const fetchTempUrl = useCallback(async (path) => {
     setLoadingUrl(true);
@@ -71,9 +77,11 @@ function Lightbox({ files, initialIndex, projectName, onClose }) {
       const res = await api.functions.invoke('getDeliveryMediaFeed', {
         action: 'get_temp_link', path
       });
-      setTempUrl(res?.url || null);
-    } catch { setTempUrl(null); }
-    finally { setLoadingUrl(false); }
+      // BUG FIX: guard setState with mounted check so navigating away
+      // mid-fetch doesn't trigger a memory leak / React warning.
+      if (mountedRef.current) setTempUrl(res?.url || null);
+    } catch { if (mountedRef.current) setTempUrl(null); }
+    finally { if (mountedRef.current) setLoadingUrl(false); }
   }, []);
 
   useEffect(() => {
@@ -321,7 +329,15 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
   const [files, setFiles] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+  const blockMountedRef = useRef(true);
 
+  useEffect(() => {
+    blockMountedRef.current = true;
+    return () => { blockMountedRef.current = false; };
+  }, []);
+
+  // BUG FIX: guard setState calls with mounted check so unmounting mid-fetch
+  // doesn't cause setState-after-unmount warnings and memory leaks.
   const load = useCallback(async () => {
     if (!project.tonomo_deliverable_path) return;
     setStatus('loading');
@@ -330,9 +346,11 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
       const res = await api.functions.invoke('getDeliveryMediaFeed', {
         path: project.tonomo_deliverable_path
       });
+      if (!blockMountedRef.current) return;
       setFiles(res?.files || []);
       setStatus('done');
     } catch (e) {
+      if (!blockMountedRef.current) return;
       setErrorMsg(e?.message || 'Failed to load media');
       setStatus('error');
     }

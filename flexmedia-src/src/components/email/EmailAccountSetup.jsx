@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -14,6 +14,7 @@ export default function EmailAccountSetup() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [popupBlocked, setPopupBlocked] = useState(false);
   const queryClient = useQueryClient();
+  const pollTimerRef = useRef(null);
 
   const { data: teams = [] } = useQuery({
     queryKey: ["teams"],
@@ -37,7 +38,12 @@ export default function EmailAccountSetup() {
 
   useEffect(() => {
     window.addEventListener('message', handleAuthMessage);
-    return () => window.removeEventListener('message', handleAuthMessage);
+    return () => {
+      window.removeEventListener('message', handleAuthMessage);
+      // BUG FIX: clear popup poll timer on unmount so it doesn't keep calling
+      // setState after the component is gone (memory leak + React warning).
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
   }, [handleAuthMessage]);
 
   const handleConnect = async () => {
@@ -73,9 +79,10 @@ export default function EmailAccountSetup() {
       }
 
       // Monitor popup close — if user closes it without completing auth, reset state
-      const pollTimer = setInterval(() => {
+      pollTimerRef.current = setInterval(() => {
         if (popup.closed) {
-          clearInterval(pollTimer);
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
           // Give postMessage a moment to arrive before resetting
           setTimeout(() => {
             setIsConnecting((prev) => {

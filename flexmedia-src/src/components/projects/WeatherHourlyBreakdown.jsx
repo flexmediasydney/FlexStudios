@@ -27,20 +27,23 @@ export default function WeatherHourlyBreakdown({ latitude, longitude, shootDate 
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
 
     async function fetchHourly() {
       setLoading(true);
       setError(null);
       try {
+        // BUG FIX: use AbortController so the fetch is cancelled on unmount
+        // instead of completing in the background and leaking memory.
         const res = await fetch(
           `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
           `&hourly=temperature_2m,weather_code,precipitation,precipitation_probability` +
-          `&timezone=Australia%2FSydney&start_date=${shootDate}&end_date=${shootDate}`
+          `&timezone=Australia%2FSydney&start_date=${shootDate}&end_date=${shootDate}`,
+          { signal: controller.signal }
         );
         const data = await res.json();
 
-        if (!cancelled && data.hourly) {
+        if (!controller.signal.aborted && data.hourly) {
           const h = data.hourly;
           const hourlyData = [];
           // Extract 8am to 9pm (hours 8-21 inclusive)
@@ -56,14 +59,14 @@ export default function WeatherHourlyBreakdown({ latitude, longitude, shootDate 
           setHours(hourlyData);
         }
       } catch (e) {
-        if (!cancelled) setError("Unable to load hourly forecast");
+        if (!controller.signal.aborted) setError("Unable to load hourly forecast");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
 
     fetchHourly();
-    return () => { cancelled = true; };
+    return () => { controller.abort(); };
   }, [latitude, longitude, shootDate]);
 
   if (loading) {

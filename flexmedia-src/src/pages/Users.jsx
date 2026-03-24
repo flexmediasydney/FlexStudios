@@ -98,6 +98,13 @@ export default function UsersManagement() {
         const roles = await api.entities.EmployeeRole.filter({ user_id: userId }, null, 50);
         await Promise.all(roles.map(r => api.entities.EmployeeRole.delete(r.id).catch(() => {})));
       } catch {}
+      // Clear task assignments referencing this user so they don't show a stale name
+      try {
+        const assignedTasks = await api.entities.ProjectTask.filter({ assigned_to: userId }, null, 500);
+        await Promise.all(assignedTasks.map(t =>
+          api.entities.ProjectTask.update(t.id, { assigned_to: null, assigned_to_name: null }).catch(() => {})
+        ));
+      } catch {}
       return api.entities.User.delete(userId);
     },
     onSuccess: () => {

@@ -531,6 +531,22 @@ export default function TeamDetails() {
       }
       await api.entities.Team.update(team.id, updates);
 
+      // Propagate team name change to all agents and users with this team
+      if (field === 'name' && value !== oldValue) {
+        try {
+          const teamAgents = members.filter(a => a.current_team_id === team.id);
+          await Promise.all(teamAgents.map(a =>
+            api.entities.Agent.update(a.id, { current_team_name: value || '' }).catch(() => {})
+          ));
+        } catch { /* non-fatal propagation */ }
+        try {
+          const allUsers = await api.entities.User.filter({ internal_team_id: team.id }, null, 200);
+          await Promise.all(allUsers.map(u =>
+            api.entities.User.update(u.id, { internal_team_name: value || '' }).catch(() => {})
+          ));
+        } catch { /* non-fatal propagation */ }
+      }
+
       // Write audit log
       const user = await api.auth.me();
       await api.entities.AuditLog.create({

@@ -198,9 +198,12 @@ export function useProjectPricingCalculator(formState, allProducts, allPackages,
       .map(item => getProductLineItem(item))
       .filter(item => item.valid);
 
-    const subtotal =
-      packageItems.reduce((sum, p) => sum + p.lineTotal, 0) +
-      productItems.reduce((sum, p) => sum + p.lineTotal, 0);
+    // Round to 2 decimal places to prevent float accumulation drift
+    // (e.g. 245.00000000001 from repeated parseFloat * qty additions)
+    const subtotal = Math.round(
+      (packageItems.reduce((sum, p) => sum + p.lineTotal, 0) +
+       productItems.reduce((sum, p) => sum + p.lineTotal, 0)) * 100
+    ) / 100;
 
     return {
       packages: packageItems,

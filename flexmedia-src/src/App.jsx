@@ -18,6 +18,7 @@ import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { canAccessRoute } from '@/components/lib/routeAccess';
 import { AlertCircle } from 'lucide-react';
 import InstallPrompt from '@/components/pwa/InstallPrompt';
+import OfflineBanner from '@/components/ui/OfflineBanner';
 
 const LazyFallback = () => (
   <div className="fixed inset-0 flex items-center justify-center">
@@ -208,6 +209,7 @@ function App() {
         <AuthProvider>
           <QueryClientProvider client={queryClientInstance}>
             <Router>
+              <OfflineBanner />
               <AuthenticatedApp />
               <InstallPrompt />
             </Router>

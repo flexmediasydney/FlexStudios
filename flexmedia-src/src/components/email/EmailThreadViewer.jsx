@@ -289,12 +289,17 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   const setPriorityMutation = useMutation({
     mutationFn: async (priority) => {
       const oldPriority = msg?.priority || 'none';
-      await Promise.all(
-        freshThread.messages.map(m =>
-          api.entities.EmailMessage.update(m.id, { priority })
+      // Race condition fix: capture message IDs at call time to avoid stale freshThread reference,
+      // and use allSettled so partial failures don't lose successful updates
+      const messageIds = freshThread.messages.map(m => m.id);
+      const results = await Promise.allSettled(
+        messageIds.map(id =>
+          api.entities.EmailMessage.update(id, { priority })
         )
       );
-      return { oldPriority, newPriority: priority || 'none' };
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed === messageIds.length) throw new Error('All priority updates failed');
+      return { oldPriority, newPriority: priority || 'none', partialFailure: failed > 0 };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["email-thread"] });
@@ -343,8 +348,17 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   });
 
   const updateLabelsMutation = useMutation({
-   mutationFn: (labels) =>
-     Promise.all(freshThread.messages.map(m => api.entities.EmailMessage.update(m.id, { labels }))),
+   mutationFn: (labels) => {
+     // Race condition fix: snapshot message IDs at mutation time from liveMessages
+     // (not freshThread which is derived from render-time liveMessages and may be stale)
+     const currentIds = liveMessages.map(m => m.id);
+     return Promise.allSettled(currentIds.map(id => api.entities.EmailMessage.update(id, { labels })))
+       .then(results => {
+         const failed = results.filter(r => r.status === 'rejected').length;
+         if (failed === currentIds.length) throw new Error('All label updates failed');
+         return results;
+       });
+   },
    onMutate: (newLabels) => {
      // Optimistic update — immediately reflect label changes in UI
      const previousMessages = [...liveMessages];
@@ -394,14 +408,17 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   });
 
   const unlinkProjectMutation = useMutation({
-    mutationFn: () => 
-      Promise.all(freshThread.messages.map(m =>
-        api.entities.EmailMessage.update(m.id, {
+    mutationFn: () => {
+      // Race condition fix: snapshot IDs at call time to avoid stale freshThread reference
+      const ids = liveMessages.map(m => m.id);
+      return Promise.all(ids.map(id =>
+        api.entities.EmailMessage.update(id, {
           project_id: null,
           project_title: null,
           visibility: 'private'
         })
-      )),
+      ));
+    },
     onSuccess: () => {
       if (msg?.id) {
         api.functions.invoke('logEmailActivity', {
@@ -424,14 +441,17 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   });
 
   const linkProjectMutation = useMutation({
-    mutationFn: (projectData) => 
-      Promise.all(freshThread.messages.map(m =>
-        api.entities.EmailMessage.update(m.id, {
+    mutationFn: (projectData) => {
+      // Race condition fix: snapshot IDs at call time to avoid stale freshThread reference
+      const ids = liveMessages.map(m => m.id);
+      return Promise.all(ids.map(id =>
+        api.entities.EmailMessage.update(id, {
           project_id: projectData.id,
           project_title: projectData.title
           // Do NOT force visibility to shared — owner controls that separately
         })
-      )),
+      ));
+    },
     onSuccess: (_, projectData) => {
       if (msg?.id) {
         api.functions.invoke('logEmailActivity', {
