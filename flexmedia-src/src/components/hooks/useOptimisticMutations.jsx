@@ -17,6 +17,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
 import { queryKeys } from '@/components/lib/query-client';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { toast } from 'sonner';
 
 
@@ -75,6 +76,7 @@ export function useOptimisticProjectStatusChange(projectId, { onMutate: external
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(projectId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.lists() });
       queryClient.invalidateQueries({ queryKey: queryKeys.projects.pending() });
+      refetchEntityList("Project");
     },
   });
 }
@@ -121,6 +123,7 @@ export function useOptimisticTaskCompletion(projectId, { onSuccess: externalOnSu
 
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: tasksKey });
+      refetchEntityList("ProjectTask");
     },
   });
 }

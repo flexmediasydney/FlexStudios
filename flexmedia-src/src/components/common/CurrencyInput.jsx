@@ -9,7 +9,7 @@ export default function CurrencyInput({ value, onChange, currency = "USD", label
   });
 
   const handleChange = (e) => {
-    const numericValue = parseFloat(e.target.value.replace(/\D/g, "")) || 0;
+    const numericValue = parseFloat(e.target.value.replace(/[^\d.]/g, "")) || 0;
     onChange(numericValue / 100);
   };
 

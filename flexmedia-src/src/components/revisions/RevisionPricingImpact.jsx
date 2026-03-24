@@ -184,13 +184,13 @@ export default function RevisionPricingImpact({ pricingImpact, onChange, project
                       step="1"
                       value={item.quantity || 1}
                       onChange={e => {
-                        const val = parseInt(e.target.value);
+                        const val = parseInt(e.target.value, 10);
                         if (!isNaN(val)) {
                           updateAddedProduct(i, "quantity", Math.max(1, Math.min(999, val)));
                         }
                       }}
                       onBlur={e => {
-                        const val = parseInt(e.target.value);
+                        const val = parseInt(e.target.value, 10);
                         if (isNaN(val) || val < 1) {
                           updateAddedProduct(i, "quantity", 1);
                         }
@@ -243,13 +243,13 @@ export default function RevisionPricingImpact({ pricingImpact, onChange, project
                         step="1"
                         value={item.new_quantity || 1}
                         onChange={e => {
-                          const val = parseInt(e.target.value);
+                          const val = parseInt(e.target.value, 10);
                           if (!isNaN(val)) {
                             updateQtyChange(i, "new_quantity", Math.max(1, Math.min(999, val)));
                           }
                         }}
                         onBlur={e => {
-                          const val = parseInt(e.target.value);
+                          const val = parseInt(e.target.value, 10);
                           if (isNaN(val) || val < 1) {
                             updateQtyChange(i, "new_quantity", 1);
                           }

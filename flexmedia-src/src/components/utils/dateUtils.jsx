@@ -172,12 +172,12 @@ function getLocalDateComponents(utcInstant, timezone) {
   const parts = fmt.formatToParts(d);
   const get = (type) => parts.find(p => p.type === type)?.value ?? '0';
   return {
-    year: parseInt(get('year')),
-    month0: parseInt(get('month')) - 1,
-    day: parseInt(get('day')),
-    hour: parseInt(get('hour')),
-    minute: parseInt(get('minute')),
-    second: parseInt(get('second'))
+    year: parseInt(get('year'), 10),
+    month0: parseInt(get('month'), 10) - 1,
+    day: parseInt(get('day'), 10),
+    hour: parseInt(get('hour'), 10),
+    minute: parseInt(get('minute'), 10),
+    second: parseInt(get('second'), 10)
   };
 }
 

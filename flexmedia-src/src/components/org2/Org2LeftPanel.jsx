@@ -503,7 +503,7 @@ export default function Org2LeftPanel({
                   <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${isDelivered ? 'bg-green-100 text-green-800' : 'bg-blue-50 text-blue-700'}`}>
                     {isDelivered ? 'COMPLETED' : project.status?.replace(/_/g, ' ').toUpperCase()}
                   </span>
-                  {price && (
+                  {price != null && (
                     <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>
                   )}
                 </div>

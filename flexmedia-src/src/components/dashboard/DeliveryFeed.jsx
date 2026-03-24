@@ -57,7 +57,7 @@ function relativeTime(dateStr) {
 }
 
 function fmtRevenue(amount) {
-  if (!amount || amount === 0) return '$0';
+  if (amount == null || amount === 0) return '$0';
   if (amount >= 1000) return `$${(amount / 1000).toFixed(1).replace(/\.0$/, '')}k`;
   return `$${Math.round(amount).toLocaleString()}`;
 }

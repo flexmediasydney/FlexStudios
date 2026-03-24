@@ -241,7 +241,7 @@ export default function RevisionTemplateFormDialog({ open, onClose, template, on
                             min="0"
                             className="h-8 text-sm"
                             value={task.estimated_minutes || 0}
-                            onChange={e => updateTask(idx, "estimated_minutes", parseInt(e.target.value) || 0)}
+                            onChange={e => updateTask(idx, "estimated_minutes", parseInt(e.target.value, 10) || 0)}
                           />
                         </div>
                         <div>
@@ -302,7 +302,7 @@ export default function RevisionTemplateFormDialog({ open, onClose, template, on
                             <label className="text-xs font-medium block mb-1">Depends on Task #</label>
                             <Select
                               value={task.depends_on_indices?.[0] !== undefined ? String(task.depends_on_indices[0]) : "none"}
-                              onValueChange={v => updateTask(idx, "depends_on_indices", v === "none" ? [] : [parseInt(v)])}
+                              onValueChange={v => updateTask(idx, "depends_on_indices", v === "none" ? [] : [parseInt(v, 10)])}
                             >
                               <SelectTrigger className="h-8 text-sm">
                                 <SelectValue placeholder="No dependency" />

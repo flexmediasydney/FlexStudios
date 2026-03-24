@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { api } from '@/api/supabaseClient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -32,6 +33,7 @@ export default function BrandingPreferencesModule({ agency }) {
   useEffect(() => {
     const unsubscribe = api.entities.ProjectType.subscribe((event) => {
       queryClient.invalidateQueries({ queryKey: ['projectTypes'] });
+      refetchEntityList("ProjectType");
     });
     return unsubscribe;
   }, [queryClient]);
@@ -47,6 +49,7 @@ export default function BrandingPreferencesModule({ agency }) {
   useEffect(() => {
     const unsubscribe = api.entities.ProductCategory.subscribe((event) => {
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
+      refetchEntityList("ProductCategory");
     });
     return unsubscribe;
   }, [queryClient]);

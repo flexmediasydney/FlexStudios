@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import {
   Bold, Italic, Underline, Link2, AtSign, List, ListOrdered,
@@ -185,6 +186,7 @@ export default function UnifiedNoteComposer({
             last_contacted_at: new Date().toISOString(),
           }).then(() => {
             queryClient.invalidateQueries({ queryKey: ['agents'] });
+            refetchEntityList("Agent");
           }).catch(() => {});
         }
       }

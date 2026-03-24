@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -116,6 +116,8 @@ export default function ProductPackageHierarchy() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await queryClient.invalidateQueries();
+    refetchEntityList("Product");
+    refetchEntityList("Package");
     setIsRefreshing(false);
     setSelectedItem(null);
   };

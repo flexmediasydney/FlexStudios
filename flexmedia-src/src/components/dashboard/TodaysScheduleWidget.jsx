@@ -135,5 +135,5 @@ function parseTimeToMinutes(timeStr) {
   if (!timeStr) return 999;
   const parts = timeStr.match(/(\d+):(\d+)/);
   if (!parts) return 999;
-  return parseInt(parts[1]) * 60 + parseInt(parts[2]);
+  return parseInt(parts[1], 10) * 60 + parseInt(parts[2], 10);
 }

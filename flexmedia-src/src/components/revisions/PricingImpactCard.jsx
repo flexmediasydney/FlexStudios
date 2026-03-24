@@ -50,7 +50,7 @@ export default function PricingImpactCard({
        const p = allProducts.find(x => x.id === val);
        next[i] = { product_id: val, product_name: p?.name || "", quantity: next[i].quantity || 1 };
      } else if (field === "quantity") {
-       const q = Math.max(1, parseInt(val) || 1);
+       const q = Math.max(1, parseInt(val, 10) || 1);
        next[i] = { ...next[i], [field]: q };
      } else {
        next[i] = { ...next[i], [field]: val };
@@ -141,13 +141,13 @@ export default function PricingImpactCard({
                 step="1"
                 value={item.quantity || 1}
                 onChange={e => {
-                  const val = parseInt(e.target.value);
+                  const val = parseInt(e.target.value, 10);
                   if (!isNaN(val)) {
                     updateProduct(i, "quantity", Math.max(1, Math.min(999, val)));
                   }
                 }}
                 onBlur={e => {
-                  const val = parseInt(e.target.value);
+                  const val = parseInt(e.target.value, 10);
                   if (isNaN(val) || val < 1) {
                     updateProduct(i, "quantity", 1);
                   }

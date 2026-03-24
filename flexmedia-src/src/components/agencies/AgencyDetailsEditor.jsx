@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { AlertCircle, CheckCircle2, Loader2, Upload, X } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 
 export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
   const queryClient = useQueryClient();
@@ -27,6 +28,7 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
     const unsubscribe = api.entities.ProductCategory.subscribe((event) => {
       // Force refetch on any category change
       queryClient.invalidateQueries({ queryKey: ['productCategories'] });
+      refetchEntityList("ProductCategory");
     });
     return unsubscribe;
   }, []);

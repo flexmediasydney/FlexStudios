@@ -85,7 +85,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
         email: data.email,
         phone: data.phone,
         notes: data.notes,
-        contact_frequency_days: data.contact_frequency_days ? parseInt(data.contact_frequency_days) : null,
+        contact_frequency_days: data.contact_frequency_days ? parseInt(data.contact_frequency_days, 10) : null,
         tags: data.tags || [],
         current_agency_id: data.agency_id,
         current_agency_name: agency.name,
@@ -318,7 +318,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
                   setFormData(prev => ({ ...prev, contact_frequency_days: "" }));
                   return;
                 }
-                const num = parseInt(raw);
+                const num = parseInt(raw, 10);
                 if (isNaN(num)) return; // reject non-numeric input
                 // Clamp to valid range
                 const clamped = Math.min(365, Math.max(7, num));

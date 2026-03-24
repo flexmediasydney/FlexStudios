@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { api } from '@/api/supabaseClient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -30,8 +31,8 @@ export default function CompactBrandingPreferences({ agency }) {
   });
 
   useEffect(() => {
-    const u1 = api.entities.ProjectType.subscribe(() => queryClient.invalidateQueries({ queryKey: ['projectTypes'] }));
-    const u2 = api.entities.ProductCategory.subscribe(() => queryClient.invalidateQueries({ queryKey: ['productCategories'] }));
+    const u1 = api.entities.ProjectType.subscribe(() => { queryClient.invalidateQueries({ queryKey: ['projectTypes'] }); refetchEntityList("ProjectType"); });
+    const u2 = api.entities.ProductCategory.subscribe(() => { queryClient.invalidateQueries({ queryKey: ['productCategories'] }); refetchEntityList("ProductCategory"); });
     return () => { u1(); u2(); };
   }, [queryClient]);
 

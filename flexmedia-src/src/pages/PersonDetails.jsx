@@ -792,7 +792,7 @@ export default function PersonDetails() {
                         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
                           {proj.status?.replace(/_/g, ' ').toUpperCase()}
                         </span>
-                        {price && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
+                        {price != null && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
                       </div>
                       {(proj.shoot_date || proj.delivery_date) && (
                         <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">

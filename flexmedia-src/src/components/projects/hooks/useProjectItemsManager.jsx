@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 
 /**
  * Simple, bulletproof hook for project items management
@@ -40,6 +41,7 @@ export function useProjectItemsManager(projectId) {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       queryClient.invalidateQueries({ queryKey: ["Project"] });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      refetchEntityList("Project");
       // Force immediate refetch to ensure UI sees updated nested product quantities
       queryClient.refetchQueries({ queryKey: ["project", projectId] });
     },

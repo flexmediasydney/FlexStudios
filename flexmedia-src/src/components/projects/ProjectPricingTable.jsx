@@ -87,9 +87,9 @@ export default function ProjectPricingTable({
     // includedQty = what the package definition bundles; user can't go below this
     const includedQty = Math.max(1, pkgProduct?.quantity || 1);
     const minQty = Math.max(1, product?.min_quantity || 1, includedQty);
-    const maxQty = product?.max_quantity ? parseInt(product.max_quantity) : null;
+    const maxQty = product?.max_quantity ? parseInt(product.max_quantity, 10) : null;
 
-    let qty = Math.max(minQty, parseInt(newQty) || minQty);
+    let qty = Math.max(minQty, parseInt(newQty, 10) || minQty);
     if (maxQty !== null) qty = Math.min(qty, maxQty);
 
     setFormState(prev => ({
@@ -111,8 +111,8 @@ export default function ProjectPricingTable({
   const handleUpdateQty = (productId, newQty) => {
     const product = allProducts.find(p => p.id === productId);
     const minQty = Math.max(1, product?.min_quantity || 1);
-    const maxQty = product?.max_quantity ? parseInt(product.max_quantity) : null;
-    let qty = Math.max(minQty, parseInt(newQty) || minQty);
+    const maxQty = product?.max_quantity ? parseInt(product.max_quantity, 10) : null;
+    let qty = Math.max(minQty, parseInt(newQty, 10) || minQty);
     if (maxQty !== null) qty = Math.min(qty, maxQty);
 
     setFormState(prev => ({

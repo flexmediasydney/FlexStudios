@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useQuery } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -137,6 +138,7 @@ export default function TonomoTab({ project }) {
       queryClient.invalidateQueries({ queryKey: ['pendingReviewProjects'] });
       queryClient.invalidateQueries({ queryKey: ['tonomoQueueStats'] });
       queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      refetchEntityList("Project");
       toast.success(reviewType === 'cancellation' ? 'Cancellation confirmed' : 'Booking approved');
       setSubTab('brief');
     } catch (err) {
@@ -213,6 +215,7 @@ export default function TonomoTab({ project }) {
                       pending_review_reason: (project.pending_review_reason || '') + ' [Flagged by admin]',
                     });
                     queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+                    refetchEntityList("Project");
                     toast.success('Issue flagged — marked as urgent');
                   } catch (err) {
                     toast.error('Failed to flag: ' + (err?.message || 'Unknown error'));

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -246,6 +246,9 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
       queryClient.invalidateQueries({ queryKey: ['project-revisions'] });
       queryClient.invalidateQueries({ queryKey: ['project-tasks'] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      refetchEntityList("ProjectRevision");
+      refetchEntityList("ProjectTask");
+      refetchEntityList("Project");
       const revNum = data.revision_number;
       logActivity?.('request_created',
         `${requestKind === 'change_request' ? 'Change request' : 'Revision'} #${revNum} created: "${data.title}"`
@@ -475,7 +478,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
                                 value={String(new Date(form.due_date).getHours()).padStart(2, "0")}
                                 onChange={e => {
                                   const d = new Date(form.due_date);
-                                  const h = Math.max(0, Math.min(23, parseInt(e.target.value) || 0));
+                                  const h = Math.max(0, Math.min(23, parseInt(e.target.value, 10) || 0));
                                   const utc = wallClockToUTC(d.getFullYear(), d.getMonth(), d.getDate(), h, d.getMinutes(), 0, "Australia/Sydney");
                                   setForm(p => ({ ...p, due_date: utc.toISOString() }));
                                 }}
@@ -491,7 +494,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
                                 value={String(new Date(form.due_date).getMinutes()).padStart(2, "0")}
                                 onChange={e => {
                                   const d = new Date(form.due_date);
-                                  const m = Math.max(0, Math.min(59, parseInt(e.target.value) || 0));
+                                  const m = Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0));
                                   const utc = wallClockToUTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), m, 0, "Australia/Sydney");
                                   setForm(p => ({ ...p, due_date: utc.toISOString() }));
                                 }}

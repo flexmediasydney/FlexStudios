@@ -15,13 +15,13 @@ export function getLocalDateComponents(utcInstant, timezone) {
   });
   const parts = fmt.formatToParts(d);
   const get = (type) => parts.find(p => p.type === type)?.value ?? '0';
-  const hour = parseInt(get('hour')) % 24;
+  const hour = parseInt(get('hour'), 10) % 24;
   const wdMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return {
-    year: parseInt(get('year')),
-    month0: parseInt(get('month')) - 1,
-    day: parseInt(get('day')),
-    hour, minute: parseInt(get('minute')), second: parseInt(get('second')),
+    year: parseInt(get('year'), 10),
+    month0: parseInt(get('month'), 10) - 1,
+    day: parseInt(get('day'), 10),
+    hour, minute: parseInt(get('minute'), 10), second: parseInt(get('second'), 10),
     weekday0: wdMap[get('weekday')] ?? -1
   };
 }
