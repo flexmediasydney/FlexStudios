@@ -113,6 +113,8 @@ async function fetchThumbnails(pathOrUrl, isShareUrl = false) {
     processThumbnailQueue();
   });
   pendingRequests.set(cacheKey, promise);
+  // Clean up pending entry once resolved to prevent memory leak
+  promise.then(() => pendingRequests.delete(cacheKey));
   return promise;
 }
 

@@ -14,7 +14,9 @@ import { format } from "date-fns";
 import { safeWindowOpen } from '@/utils/sanitizeHtml';
 
 export default function ClientGallery() {
-  const urlParams = new URLSearchParams(window.location.search);
+  // App uses hash routing (#/ClientGallery?project=...), so params are in hash, not search
+  const hashQuery = window.location.hash.split('?')[1] || '';
+  const urlParams = new URLSearchParams(hashQuery || window.location.search);
   const projectId = urlParams.get("project");
   const [accessCode, setAccessCode] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -58,12 +60,16 @@ export default function ClientGallery() {
     }
   });
 
+  const [viewTracked, setViewTracked] = useState(false);
   useEffect(() => {
     if (mediaConfig && !mediaConfig.access_code) {
       setIsUnlocked(true);
-      trackViewMutation.mutate();
+      if (!viewTracked) {
+        setViewTracked(true);
+        trackViewMutation.mutate();
+      }
     }
-  }, [mediaConfig]);
+  }, [mediaConfig?.id, viewTracked]);
 
   const handleUnlock = () => {
     if (accessCode === mediaConfig?.access_code) {
@@ -75,8 +81,11 @@ export default function ClientGallery() {
     }
   };
 
-  // Check expiry
-  const isExpired = mediaConfig?.expiry_date && new Date(mediaConfig.expiry_date) < new Date();
+  // Check expiry — compare date-only values so gallery stays accessible the entire expiry day
+  const isExpired = mediaConfig?.expiry_date && (() => {
+    const expiry = new Date(mediaConfig.expiry_date + 'T23:59:59');
+    return expiry < new Date();
+  })();
 
   if (projectLoading || mediaLoading) {
     return (
@@ -159,7 +168,7 @@ export default function ClientGallery() {
                 placeholder="Enter access code"
                 value={accessCode}
                 onChange={(e) => setAccessCode(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleUnlock()}
+                onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
               />
               {error && (
                 <p className="text-sm text-destructive">{error}</p>
@@ -235,11 +244,20 @@ export default function ClientGallery() {
                   Open Media Gallery
                 </Button>
                 
-                {mediaConfig.download_enabled && (
+                {mediaConfig.download_enabled && mediaConfig.dropbox_link && (
                   <Button
                     size="lg"
                     variant="outline"
-                    onClick={() => safeWindowOpen(mediaConfig.dropbox_link)}
+                    onClick={() => {
+                      // Append dl=1 to Dropbox link to trigger download instead of preview
+                      try {
+                        const dlUrl = new URL(mediaConfig.dropbox_link);
+                        dlUrl.searchParams.set('dl', '1');
+                        safeWindowOpen(dlUrl.toString());
+                      } catch {
+                        safeWindowOpen(mediaConfig.dropbox_link);
+                      }
+                    }}
                     className="gap-2"
                   >
                     <Download className="h-5 w-5" />

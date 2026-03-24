@@ -103,7 +103,7 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
       if (!project.property_type) return null;
       return (
         <Badge variant="outline" className="text-xs capitalize">
-          {project.property_type.replace("_", " ")}
+          {project.property_type.replaceAll("_", " ")}
         </Badge>
       );
     }

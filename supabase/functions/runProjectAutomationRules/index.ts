@@ -8,7 +8,7 @@ function toSydneyTime(date: Date): string {
 }
 
 function getSydneyDateStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString("en-CA", { timeZone: SYDNEY_TZ });
 }
 
 function fixTS(ts: string | undefined): Date | null {
@@ -178,8 +178,9 @@ const STAGE_ORDER = [
 ];
 
 function stageIndex(stage: string): number {
+  if (!stage) return -1;
   const i = STAGE_ORDER.indexOf(stage);
-  return i === -1 ? 5 : i;
+  return i === -1 ? -1 : i;
 }
 
 // --- Condition evaluator ---
@@ -193,8 +194,14 @@ function evaluateCondition(project: any, condition: any): boolean {
     case "is_set": return pval !== null && pval !== undefined && pval !== "" && pval !== "[]";
     case "is_empty": return pval === null || pval === undefined || pval === "" || pval === "[]";
     case "contains": return String(pval ?? "").toLowerCase().includes(String(value ?? "").toLowerCase());
-    case "greater_than": return parseFloat(pval) > parseFloat(value);
-    case "less_than": return parseFloat(pval) < parseFloat(value);
+    case "greater_than": {
+      const a = parseFloat(pval), b = parseFloat(value);
+      return !isNaN(a) && !isNaN(b) && a > b;
+    }
+    case "less_than": {
+      const a = parseFloat(pval), b = parseFloat(value);
+      return !isNaN(a) && !isNaN(b) && a < b;
+    }
     case "in_list": {
       const list = Array.isArray(value) ? value : String(value).split(",").map(s => s.trim());
       return list.includes(String(pval ?? ""));
@@ -203,8 +210,14 @@ function evaluateCondition(project: any, condition: any): boolean {
       const list = Array.isArray(value) ? value : String(value).split(",").map(s => s.trim());
       return !list.includes(String(pval ?? ""));
     }
-    case "stage_is_before": return stageIndex(pval) < stageIndex(value);
-    case "stage_is_after": return stageIndex(pval) > stageIndex(value);
+    case "stage_is_before": {
+      const pi = stageIndex(pval), vi = stageIndex(value);
+      return pi >= 0 && vi >= 0 && pi < vi;
+    }
+    case "stage_is_after": {
+      const pi = stageIndex(pval), vi = stageIndex(value);
+      return pi >= 0 && vi >= 0 && pi > vi;
+    }
     case "date_is_today": {
       const d = fixTS(pval);
       if (!d) return false;
@@ -244,9 +257,20 @@ async function safeList(entities: any, entity: string, limit = 100) {
   catch { return []; }
 }
 
-async function hasRecentLog(entities: any, idempotencyKey: string): Promise<boolean> {
+async function hasRecentLog(entities: any, idempotencyKey: string, cooldownMinutes?: number, ruleId?: string, projectId?: string): Promise<boolean> {
   const recent = await safeList(entities, 'AutomationRuleLog', 500);
-  return recent.some((l: any) => l.idempotency_key === idempotencyKey);
+  // Exact idempotency key match (daily rules, etc.)
+  if (recent.some((l: any) => l.idempotency_key === idempotencyKey)) return true;
+  // Cooldown window check: prevent re-firing same rule+project within cooldown period
+  if (cooldownMinutes && cooldownMinutes > 0 && ruleId && projectId) {
+    const cutoff = Date.now() - cooldownMinutes * 60 * 1000;
+    return recent.some((l: any) => {
+      if (l.rule_id !== ruleId || l.project_id !== projectId || l.result !== 'executed') return false;
+      const ts = fixTS(l.fired_at);
+      return ts && ts.getTime() > cutoff;
+    });
+  }
+  return false;
 }
 
 // --- Action executor ---
@@ -416,13 +440,15 @@ Deno.serve(async (req) => {
     const entities = createEntities(admin);
 
     const allRules = await safeList(entities, 'ProjectAutomationRule', 200);
-    const enabledRules = allRules.filter((r: any) => r.is_enabled);
+    const enabledRules = allRules.filter((r: any) => r.is_enabled)
+      .sort((a: any, b: any) => (a.priority || 50) - (b.priority || 50));
 
     if (!enabledRules.length) {
       return jsonResponse({ processed: 0, message: "no_enabled_rules" });
     }
 
-    const projects = await safeList(entities, 'Project', 2000);
+    const allProjects = await safeList(entities, 'Project', 2000);
+    const projects = allProjects.filter((p: any) => !p.is_deleted && !p.archived);
 
     // Pre-load notification preferences and recent notifications ONCE
     let prefsCache: Map<string, any[]> = new Map();
@@ -447,6 +473,7 @@ Deno.serve(async (req) => {
     const stats = { rules_evaluated: 0, actions_taken: 0, skipped: 0, errors: 0 };
 
     for (const rule of enabledRules) {
+     try {
       const conditions: any[] = (() => {
         try { return JSON.parse(rule.conditions_json || '[]'); } catch { return []; }
       })();
@@ -457,7 +484,14 @@ Deno.serve(async (req) => {
 
       if (rule.trigger_type === "schedule_daily") {
         const ruleTime = triggerCfg.time || "09:00";
-        if (sydneyTime !== ruleTime) continue;
+        // Normalize both to HH:MM for comparison, allow +/- 5 minute window
+        const [rH, rM] = ruleTime.split(":").map(Number);
+        const [sH, sM] = sydneyTime.split(":").map(Number);
+        if (isNaN(rH) || isNaN(sH)) continue;
+        const ruleMinutes = rH * 60 + rM;
+        const sydneyMinutes = sH * 60 + sM;
+        const diff = Math.abs(sydneyMinutes - ruleMinutes);
+        if (diff > 5 && diff < (24 * 60 - 5)) continue;
       }
 
       for (const project of projects) {
@@ -481,7 +515,7 @@ Deno.serve(async (req) => {
           idemKey = `${rule.id}:${project.id}:${(updatedAt || "").slice(0, 16)}`;
         }
 
-        const alreadyRan = await hasRecentLog(entities, idemKey);
+        const alreadyRan = await hasRecentLog(entities, idemKey, rule.cooldown_minutes, rule.id, project.id);
         if (alreadyRan) { stats.skipped++; continue; }
 
         const conditionsMet = evaluateConditions(project, conditions, conditionLogic);
@@ -520,6 +554,10 @@ Deno.serve(async (req) => {
           });
         }
       }
+     } catch (ruleErr: any) {
+       console.error(`Rule "${rule.name}" (${rule.id}) failed:`, ruleErr.message);
+       stats.errors++;
+     }
     }
 
     return jsonResponse({ ...stats, processor_version: PROCESSOR_VERSION });

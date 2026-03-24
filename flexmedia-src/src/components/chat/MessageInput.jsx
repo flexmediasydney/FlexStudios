@@ -20,9 +20,9 @@ export default function MessageInput({
   const textareaRef = useRef(null);
 
   const filteredUsers = mentionQuery
-    ? users.filter(u => 
-        u.full_name.toLowerCase().includes(mentionQuery.toLowerCase()) ||
-        u.email.toLowerCase().includes(mentionQuery.toLowerCase())
+    ? users.filter(u =>
+        (u.full_name || '').toLowerCase().includes(mentionQuery.toLowerCase()) ||
+        (u.email || '').toLowerCase().includes(mentionQuery.toLowerCase())
       )
     : users;
 
@@ -49,8 +49,15 @@ export default function MessageInput({
   const insertMention = (user) => {
     const lastAt = content.lastIndexOf('@');
     const beforeMention = content.substring(0, lastAt);
-    const afterMention = content.substring(content.indexOf(' ', lastAt) + 1 || content.length);
-    const newContent = `${beforeMention}@${user.email} ${afterMention}`.trim();
+    // Find the next space or newline after the @; if none, take rest of string
+    const spaceIdx = content.indexOf(' ', lastAt);
+    const newlineIdx = content.indexOf('\n', lastAt);
+    let endIdx = content.length;
+    if (spaceIdx !== -1 && newlineIdx !== -1) endIdx = Math.min(spaceIdx, newlineIdx);
+    else if (spaceIdx !== -1) endIdx = spaceIdx;
+    else if (newlineIdx !== -1) endIdx = newlineIdx;
+    const afterMention = content.substring(endIdx);
+    const newContent = `${beforeMention}@${user.email} ${afterMention.trimStart()}`;
     setContent(newContent);
     setShowMentions(false);
     setMentionQuery('');
@@ -61,10 +68,16 @@ export default function MessageInput({
     const files = Array.from(e.target.files || []);
     for (const file of files) {
       try {
-        const fileContent = await file.arrayBuffer();
-        const base64 = btoa(String.fromCharCode.apply(null, new Uint8Array(fileContent)));
+        // Use FileReader instead of arrayBuffer + fromCharCode to avoid
+        // stack overflow on large files (fromCharCode.apply has arg limit)
+        const base64DataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
         const { file_url } = await api.integrations.Core.UploadFile({
-          file: `data:${file.type};base64,${base64}`
+          file: base64DataUrl
         });
         setAttachments(prev => [...prev, {
           file_url,
@@ -75,6 +88,8 @@ export default function MessageInput({
         console.error('Upload failed:', error);
       }
     }
+    // Bug 9 fix: Reset file input so the same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSend = () => {
@@ -103,7 +118,8 @@ export default function MessageInput({
       return;
     }
 
-    if (e.key === 'Enter' && e.ctrlKey && content.trim()) {
+    // Enter sends, Shift+Enter inserts newline
+    if (e.key === 'Enter' && !e.shiftKey && (content.trim() || attachments.length > 0)) {
       e.preventDefault();
       handleSend();
     }

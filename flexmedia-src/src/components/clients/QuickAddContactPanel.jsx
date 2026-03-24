@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription
@@ -117,6 +117,8 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
       return { result, addAnother };
     },
     onSuccess: ({ addAnother }) => {
+      refetchEntityList("Agent");
+      refetchEntityList("Agency");
       toast.success("Contact created");
       if (addAnother) {
         // Reset form but keep the org

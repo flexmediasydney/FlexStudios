@@ -28,7 +28,7 @@ function canThumbnail(name: string): boolean {
   return THUMBNAILABLE.has(ext) && !SKIP_EXTS.has(ext);
 }
 
-async function dropboxPost(token: string, endpoint: string, body: any, isContent = false) {
+async function dropboxPost(token: string, endpoint: string, body: any, isContent = false, retries = 2) {
   const base = isContent ? DROPBOX_CONTENT_BASE : DROPBOX_API_BASE;
   const res = await fetch(`${base}${endpoint}`, {
     method: 'POST',
@@ -38,6 +38,13 @@ async function dropboxPost(token: string, endpoint: string, body: any, isContent
     },
     body: JSON.stringify(body),
   });
+  // Retry on 429 rate limit with Retry-After header
+  if (res.status === 429 && retries > 0) {
+    const retryAfter = parseInt(res.headers.get('Retry-After') || '1', 10);
+    const waitMs = Math.min(retryAfter, 10) * 1000; // cap at 10s
+    await new Promise(r => setTimeout(r, waitMs));
+    return dropboxPost(token, endpoint, body, isContent, retries - 1);
+  }
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`Dropbox ${endpoint}: ${res.status} — ${err.slice(0, 200)}`);

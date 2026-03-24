@@ -18,12 +18,17 @@ export function ChatProvider({ children }) {
 
   const closeChat = (type, id) => {
     const chatKey = `${type}:${id}`;
-    setOpenChats(prev => prev.filter(c => `${c.type}:${c.type === 'task' ? c.taskId : 'project'}` !== chatKey));
-    
-    if (activeChat === chatKey) {
-      const remaining = openChats.filter(c => `${c.type}:${c.type === 'task' ? c.taskId : 'project'}` !== chatKey);
-      setActiveChat(remaining.length > 0 ? `${remaining[0].type}:${remaining[0].type === 'task' ? remaining[0].taskId : 'project'}` : null);
-    }
+    setOpenChats(prev => {
+      const remaining = prev.filter(c => `${c.type}:${c.type === 'task' ? c.taskId : 'project'}` !== chatKey);
+      // Use setActiveChat inside the updater to avoid stale closure over openChats
+      setActiveChat(current => {
+        if (current !== chatKey) return current;
+        return remaining.length > 0
+          ? `${remaining[0].type}:${remaining[0].type === 'task' ? remaining[0].taskId : 'project'}`
+          : null;
+      });
+      return remaining;
+    });
   };
 
   const closeAllChats = () => {

@@ -17,10 +17,16 @@ import { cn } from "@/lib/utils";
  */
 
 function computeHealthScore(agent, projectCount = 0, totalRevenue = 0) {
+  // Guard against null/undefined/NaN inputs
+  projectCount = Number(projectCount) || 0;
+  totalRevenue = Number(totalRevenue) || 0;
+
   let recencyScore = 0;
   let projectScore = 0;
   let revenueScore = 0;
   const breakdown = {};
+
+  if (!agent) return { score: 0, recencyScore: 0, projectScore: 0, revenueScore: 0, breakdown: { recency: "N/A", projects: "0 projects", revenue: "$0" }, grade: "Critical" };
 
   // Recency score (40 pts)
   // Use agent's contact_frequency_days if set, otherwise default to 90 days

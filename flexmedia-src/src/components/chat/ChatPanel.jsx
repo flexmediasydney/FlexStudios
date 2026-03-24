@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { X, Search, Filter } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 import ChatMessage from './ChatMessage';
 import MessageInput from './MessageInput';
 
@@ -37,7 +38,10 @@ export default function ChatPanel({
   const taskTitle = currentChat?.taskTitle || null;
   const projectTitle = currentChat?.projectTitle || null;
   const entityName = chatType === 'task' ? 'TaskChat' : 'ProjectChat';
-  const filterQuery = chatType === 'task' ? { task_id: taskId, project_id: projectId } : { project_id: projectId };
+  const filterQuery = useMemo(
+    () => chatType === 'task' ? { task_id: taskId, project_id: projectId } : { project_id: projectId },
+    [chatType, taskId, projectId]
+  );
   const hasValidChat = !!currentChat;
 
   // Fetch messages, project users, and project data
@@ -72,10 +76,14 @@ export default function ChatPanel({
     return unsubscribe;
   }, [hasValidChat, entityName, filterQuery, chatType, taskId, projectId, queryClient]);
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom — ScrollArea ref points to the Root;
+  // the actual scrollable element is the Radix Viewport child.
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const viewport = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
     }
   }, [allMessages]);
 
@@ -101,7 +109,35 @@ export default function ChatPanel({
         setIsUploading(false);
       }
     },
-    onSuccess: () => {
+    onMutate: async (payload) => {
+      // Cancel outgoing refetches so they don't overwrite our optimistic update
+      await queryClient.cancelQueries({ queryKey: [entityName, filterQuery] });
+      const previous = queryClient.getQueryData([entityName, filterQuery]);
+      const optimistic = {
+        id: `optimistic-${Date.now()}`,
+        content: payload.content,
+        project_id: projectId,
+        task_id: taskId,
+        author_email: currentUserEmail,
+        author_name: payload.authorName,
+        author_id: payload.authorId,
+        mentions: extractMentions(payload.content),
+        attachments: payload.attachments || [],
+        created_date: new Date().toISOString(),
+        is_pinned: false,
+        _optimistic: true
+      };
+      queryClient.setQueryData([entityName, filterQuery], (old = []) => [optimistic, ...old]);
+      return { previous };
+    },
+    onError: (_err, _payload, context) => {
+      // Roll back optimistic update on failure
+      if (context?.previous) {
+        queryClient.setQueryData([entityName, filterQuery], context.previous);
+      }
+      toast.error('Failed to send message. Please try again.');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: [entityName, filterQuery] });
     }
   });
@@ -131,9 +167,10 @@ export default function ChatPanel({
   let filteredMessages = allMessages;
 
   if (searchQuery) {
+    const q = searchQuery.toLowerCase();
     filteredMessages = filteredMessages.filter(m =>
-      m.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      m.author_name.toLowerCase().includes(searchQuery.toLowerCase())
+      (m.content || '').toLowerCase().includes(q) ||
+      (m.author_name || '').toLowerCase().includes(q)
     );
   }
 
@@ -272,6 +309,7 @@ export default function ChatPanel({
 
 // Helper function to extract mentions (@email)
 function extractMentions(content) {
+  if (!content) return [];
   const mentionRegex = /@([a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+)/g;
   const matches = content.match(mentionRegex) || [];
   return matches.map(m => m.slice(1));

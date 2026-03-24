@@ -14,30 +14,51 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const path = body.path ? (body.path.startsWith('/') ? body.path : '/' + body.path) : '';
 
-    // Fetch folder contents from Dropbox
-    const response = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        path: path,
-        recursive: true,
-        include_media_info: true,
-        include_deleted: false,
-      }),
-    });
+    // Fetch folder contents from Dropbox (with pagination for large folders)
+    let allEntries: any[] = [];
+    let cursor: string | null = null;
+    let hasMore = true;
 
-    if (!response.ok) {
-      const error = await response.text();
-      return errorResponse(`Dropbox API error: ${error}`, response.status);
+    while (hasMore) {
+      let response: Response;
+      if (!cursor) {
+        response = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            path: path,
+            recursive: true,
+            include_media_info: true,
+            include_deleted: false,
+          }),
+        });
+      } else {
+        response = await fetch('https://api.dropboxapi.com/2/files/list_folder/continue', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ cursor }),
+        });
+      }
+
+      if (!response.ok) {
+        const error = await response.text();
+        return errorResponse(`Dropbox API error: ${error}`, response.status);
+      }
+
+      const data = await response.json();
+      allEntries = allEntries.concat(data.entries || []);
+      cursor = data.cursor || null;
+      hasMore = !!data.has_more && allEntries.length < 2000;
     }
 
-    const data = await response.json();
-
     // Filter and format files only (not folders)
-    const files = (data.entries || [])
+    const files = allEntries
       .filter((entry: any) => entry['.tag'] === 'file')
       .sort((a: any, b: any) => new Date(b.client_modified).getTime() - new Date(a.client_modified).getTime())
       .map((file: any) => ({

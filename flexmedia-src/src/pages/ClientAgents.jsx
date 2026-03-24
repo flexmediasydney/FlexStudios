@@ -222,9 +222,12 @@ export default function ClientAgents() {
 
   const teamsForView = useMemo(() => {
     if (viewMode === "table") return teams;
+    if (!searchQuery && activeFilters.size === 0 && !tagFilter && !orgFilter) return teams;
+    // Only show teams that have matching agents OR belong to a filtered agency
     const agencyIds = new Set(filteredAgencies.map(a => a.id));
-    return teams.filter(t => agencyIds.has(t.agency_id));
-  }, [teams, filteredAgencies, viewMode]);
+    const teamsWithMatchingAgents = new Set(filteredAgents.map(a => a.current_team_id).filter(Boolean));
+    return teams.filter(t => agencyIds.has(t.agency_id) && teamsWithMatchingAgents.has(t.id));
+  }, [teams, filteredAgencies, filteredAgents, viewMode, searchQuery, activeFilters, tagFilter, orgFilter]);
 
   // Health checks for badge count
   const warningCount = useMemo(() => {

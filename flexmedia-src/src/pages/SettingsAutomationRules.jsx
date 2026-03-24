@@ -118,21 +118,33 @@ function safeParse(json, fallback) {
 }
 
 function RuleBuilderModal({ open, onClose, initialRule, onSave }) {
+  // Use a stable key combining id + open state to detect any change in rule context
+  const ruleKey = initialRule?.id || "__new__";
+  const [prevRuleKey, setPrevRuleKey] = useState(ruleKey);
+
   const [form, setForm] = useState(initialRule || EMPTY_RULE);
   const [conditions, setConditions] = useState(() => safeParse(initialRule?.conditions_json, []));
   const [triggerCfg, setTriggerCfg] = useState(() => safeParse(initialRule?.trigger_config, {}));
   const [actionCfg, setActionCfg] = useState(() => safeParse(initialRule?.action_config, {}));
 
   // Reset all internal state when initialRule changes (edit vs new, or different rule)
-  const ruleId = initialRule?.id || null;
-  const [prevRuleId, setPrevRuleId] = useState(ruleId);
-  if (ruleId !== prevRuleId) {
-    setPrevRuleId(ruleId);
+  if (ruleKey !== prevRuleKey) {
+    setPrevRuleKey(ruleKey);
     setForm(initialRule || EMPTY_RULE);
     setConditions(safeParse(initialRule?.conditions_json, []));
     setTriggerCfg(safeParse(initialRule?.trigger_config, {}));
     setActionCfg(safeParse(initialRule?.action_config, {}));
   }
+
+  // Also reset when dialog opens fresh (handles new->new after editing)
+  useEffect(() => {
+    if (open) {
+      setForm(initialRule || EMPTY_RULE);
+      setConditions(safeParse(initialRule?.conditions_json, []));
+      setTriggerCfg(safeParse(initialRule?.trigger_config, {}));
+      setActionCfg(safeParse(initialRule?.action_config, {}));
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateForm(k, v) { setForm(prev => ({ ...prev, [k]: v })); }
 
@@ -274,7 +286,7 @@ function RuleBuilderModal({ open, onClose, initialRule, onSave }) {
               {form.action_type === "set_stage" && (
                 <div>
                   <Label>Target Stage</Label>
-                  <Select value={actionCfg.stage || ""} onValueChange={v => setActionCfg({ stage: v })}>
+                  <Select value={actionCfg.stage || ""} onValueChange={v => setActionCfg(p => ({ ...p, stage: v }))}>
                     <SelectTrigger><SelectValue placeholder="Select stage" /></SelectTrigger>
                     <SelectContent>
                       {STAGE_OPTIONS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
@@ -315,10 +327,38 @@ function RuleBuilderModal({ open, onClose, initialRule, onSave }) {
                 </>
               )}
 
-              {(form.action_type === "add_activity_log" || form.action_type === "notify_roles") && (
+              {form.action_type === "notify_roles" && (
+                <>
+                  <div className="col-span-2">
+                    <Label>Notify Roles (comma-separated)</Label>
+                    <Input value={(actionCfg.roles || []).join(", ")} onChange={e => setActionCfg(p => ({ ...p, roles: e.target.value.split(",").map(s => s.trim()).filter(Boolean) }))} placeholder="e.g. master_admin, project_owner, photographer" />
+                    <p className="text-xs text-muted-foreground mt-1">Available: master_admin, project_owner, photographer, image_editor, video_editor, videographer, assigned_users</p>
+                  </div>
+                  <div className="col-span-2">
+                    <Label>Message</Label>
+                    <Textarea value={actionCfg.message || ""} onChange={e => setActionCfg(p => ({ ...p, message: e.target.value }))} rows={2} placeholder="Notification message" />
+                  </div>
+                  <div>
+                    <Label>Notification Title</Label>
+                    <Input value={actionCfg.title || ""} onChange={e => setActionCfg(p => ({ ...p, title: e.target.value }))} placeholder="Optional title override" />
+                  </div>
+                  <div>
+                    <Label>Severity</Label>
+                    <Select value={actionCfg.severity || "info"} onValueChange={v => setActionCfg(p => ({ ...p, severity: v }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="info">Info</SelectItem>
+                        <SelectItem value="warning">Warning</SelectItem>
+                        <SelectItem value="critical">Critical</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+              {form.action_type === "add_activity_log" && (
                 <div className="col-span-2">
                   <Label>Message</Label>
-                  <Textarea value={actionCfg.message || ""} onChange={e => setActionCfg(p => ({ ...p, message: e.target.value }))} rows={2} placeholder="Message to log or send" />
+                  <Textarea value={actionCfg.message || ""} onChange={e => setActionCfg(p => ({ ...p, message: e.target.value }))} rows={2} placeholder="Message to log" />
                 </div>
               )}
             </div>

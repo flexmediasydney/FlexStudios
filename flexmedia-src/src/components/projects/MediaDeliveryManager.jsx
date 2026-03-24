@@ -70,6 +70,19 @@ export default function MediaDeliveryManager({ projectId, project }) {
     }
     const linkErr = validateField("dropbox_link", config.dropbox_link);
     if (linkErr) { toast.error(linkErr); return; }
+    // Validate Dropbox domain to prevent saving non-Dropbox URLs
+    if (config.dropbox_link) {
+      try {
+        const parsed = new URL(config.dropbox_link);
+        if (!parsed.hostname.endsWith('dropbox.com')) {
+          toast.error("Link must be a Dropbox URL (dropbox.com)");
+          return;
+        }
+      } catch {
+        toast.error("Invalid URL format");
+        return;
+      }
+    }
     saveMutation.mutate(config);
   };
 

@@ -49,7 +49,15 @@ export default function Projects() {
   useEffect(() => {
     if (searchQuery === "") setSearchInput("");
   }, [searchQuery]);
-  const [viewMode, setViewMode] = useState("kanban");
+  const [viewMode, setViewMode] = useState(() => {
+    try { const v = localStorage.getItem('projects_view_mode'); if (['kanban','grid','list'].includes(v)) return v; } catch {}
+    return "kanban";
+  });
+  // Wrap setViewMode to persist to localStorage
+  const setViewModePersisted = useCallback((mode) => {
+    setViewMode(mode);
+    try { localStorage.setItem('projects_view_mode', mode); } catch {}
+  }, []);
   const [fitToScreen, setFitToScreen] = useState(false);
   const [showFieldCustomizer, setShowFieldCustomizer] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -88,21 +96,21 @@ export default function Projects() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        setViewMode('kanban');
+        setViewModePersisted('kanban');
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
         e.preventDefault();
-        setViewMode('grid');
+        setViewModePersisted('grid');
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
         e.preventDefault();
-        setViewMode('list');
+        setViewModePersisted('list');
       }
       // Non-modifier shortcuts: skip if user is typing in an input
       if (isEditable) return;
       if ((e.shiftKey) && e.key === 'F') {
         e.preventDefault();
-        if (viewMode === 'kanban') setFitToScreen(!fitToScreen);
+        if (viewMode === 'kanban') setFitToScreen(prev => !prev);
       }
       if (e.key === '?') {
         e.preventDefault();
@@ -111,7 +119,7 @@ export default function Projects() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [searchQuery, viewMode, fitToScreen, handleCreateNew]);
+  }, [searchQuery, viewMode, fitToScreen, handleCreateNew, setViewModePersisted]);
 
   // Load essential entities first batch to avoid rate limiting
    const { data: allProjects = [], loading: projectsLoading } = useEntityList("Project", "-created_date", 200);
@@ -649,9 +657,9 @@ export default function Projects() {
             onClick={() => setShowArchived(v => !v)}
           >
             {showArchived ? "Hide archived" : "Show archived"}
-            {allProjects.filter(p => p.is_archived).length > 0 && (
-              <Badge variant="secondary" className="text-[9px] h-4 px-1">{allProjects.filter(p => p.is_archived).length}</Badge>
-            )}
+            {(() => { const count = allProjects.filter(p => p.is_archived).length; return count > 0 ? (
+              <Badge variant="secondary" className="text-[9px] h-4 px-1">{count}</Badge>
+            ) : null; })()}
           </Button>
           </div>
           </div>
@@ -679,7 +687,7 @@ export default function Projects() {
               {fitToScreen ? "📌 Fitted" : "↔ Fit"}
             </Button>
           )}
-          <Tabs value={viewMode} onValueChange={setViewMode}>
+          <Tabs value={viewMode} onValueChange={setViewModePersisted}>
            <TabsList className="bg-muted/60 hover:bg-muted/80 transition-colors duration-200">
              <TabsTrigger value="kanban" title="Kanban board view (Ctrl+K)" className="gap-1.5 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9" aria-label="Kanban view">
                <Columns3 className="h-4 w-4" />

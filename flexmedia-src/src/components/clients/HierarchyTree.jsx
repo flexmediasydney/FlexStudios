@@ -87,7 +87,7 @@ export default function HierarchyTree({
                         {agencyTeams.length} teams
                       </Badge>
                       <Badge variant="secondary" className="text-xs">
-                        {agencyAgents.length} direct people
+                        {agents.filter(a => a.current_agency_id === agency.id).length} people ({agencyAgents.length} direct)
                       </Badge>
                     </div>
                   </div>

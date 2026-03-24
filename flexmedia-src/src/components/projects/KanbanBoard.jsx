@@ -400,7 +400,15 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
   const activeProjects = projects.filter(p => !p.is_archived);
 
   // ── View mode: 'full' (normal kanban) or 'collapsed' (counts overview) ──
-  const [viewMode, setViewMode] = useState('full');
+  const [viewMode, setViewMode] = useState(() => {
+    try { const v = localStorage.getItem('kanban_view_mode'); if (v === 'full' || v === 'collapsed') return v; } catch {}
+    return 'full';
+  });
+  // Persist kanban sub-view to localStorage
+  const setViewModePersisted = useCallback((mode) => {
+    setViewMode(mode);
+    try { localStorage.setItem('kanban_view_mode', mode); } catch {}
+  }, []);
 
   // ── Kanban-specific filters ──
   const [kanbanFilters, setKanbanFilters] = useState({
@@ -458,6 +466,38 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
     2000,
     (e) => e.visibility === "shared" && !e.is_deleted && projectIds.includes(e.project_id)
   );
+
+  // Bug fix: pre-compute email map to avoid O(projects * emails) filtering per card render
+  const emailsByProject = useMemo(() => {
+    const map = {};
+    allProjectEmails.forEach(e => {
+      if (!map[e.project_id]) map[e.project_id] = [];
+      map[e.project_id].push(e);
+    });
+    return map;
+  }, [allProjectEmails]);
+
+  // Bug fix: pre-compute task map to avoid O(projects * tasks) filtering per card render
+  const tasksByProject = useMemo(() => {
+    const map = {};
+    allTasks.forEach(t => {
+      if (!t.parent_task_id) {
+        if (!map[t.project_id]) map[t.project_id] = [];
+        map[t.project_id].push(t);
+      }
+    });
+    return map;
+  }, [allTasks]);
+
+  // Bug fix: pre-compute time logs map
+  const timeLogsByProject = useMemo(() => {
+    const map = {};
+    allTimeLogs.forEach(l => {
+      if (!map[l.project_id]) map[l.project_id] = [];
+      map[l.project_id].push(l);
+    });
+    return map;
+  }, [allTimeLogs]);
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ projectId, newStatus, project }) => {
@@ -571,7 +611,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
             variant={viewMode === 'full' ? 'default' : 'outline'}
             size="sm"
             className="gap-1.5 h-8 text-xs"
-            onClick={() => setViewMode('full')}
+            onClick={() => setViewModePersisted('full')}
           >
             <Columns3 className="h-3.5 w-3.5" />
             Board
@@ -580,7 +620,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
             variant={viewMode === 'collapsed' ? 'default' : 'outline'}
             size="sm"
             className="gap-1.5 h-8 text-xs"
-            onClick={() => setViewMode('collapsed')}
+            onClick={() => setViewModePersisted('collapsed')}
           >
             <LayoutList className="h-3.5 w-3.5" />
             Overview
@@ -628,7 +668,8 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
               const tasksInProgress = columnTasks.filter(t => !t.is_completed && !t.is_blocked).length;
               const tasksOverdue = columnTasks.filter(t => {
                 if (t.is_completed || !t.due_date) return false;
-                return new Date(t.due_date) < new Date();
+                const today = new Date(); today.setHours(0, 0, 0, 0);
+                return new Date(t.due_date) < today;
               }).length;
 
               return (
@@ -844,10 +885,9 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                         )}
                         {(() => {
                           const renderCard = (project, index) => {
-                          const projectTasks = allTasks.filter(
-                            t => t.project_id === project.id && !t.parent_task_id
-                          );
-                          const projectTimeLogs = allTimeLogs.filter(l => l.project_id === project.id);
+                          // Bug fix: use pre-computed maps instead of O(n) filter per card
+                          const projectTasks = tasksByProject[project.id] || [];
+                          const projectTimeLogs = timeLogsByProject[project.id] || [];
 
                           // Urgency classification
                           const urgency = getProjectUrgency(project, projectTasks);
@@ -900,21 +940,23 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                     {project.shoot_date && (
                                       <div className={`flex items-center gap-1 text-[10px] mt-1 flex-wrap ${
                                         (() => {
-                                          const d = new Date(project.shoot_date);
-                                          const today = new Date();
-                                          today.setHours(0, 0, 0, 0);
-                                          if (d < today) return 'text-red-500 font-semibold';
-                                          if (d.getTime() === today.getTime()) return 'text-amber-600 font-semibold';
-                                          if (d.getTime() === new Date(today.getTime() + 86400000).getTime()) return 'text-blue-600';
+                                          // Bug fix: use string comparison to avoid UTC-vs-local timezone mismatch
+                                          const shootStr = project.shoot_date.slice(0, 10);
+                                          const todayStr = new Date().toLocaleDateString('en-CA');
+                                          const tmrStr = new Date(Date.now() + 86400000).toLocaleDateString('en-CA');
+                                          if (shootStr < todayStr) return 'text-red-500 font-semibold';
+                                          if (shootStr === todayStr) return 'text-amber-600 font-semibold';
+                                          if (shootStr === tmrStr) return 'text-blue-600';
                                           return 'text-muted-foreground';
                                         })()
                                       }`}>
                                         <Calendar className="h-3 w-3" />
                                         {(() => {
+                                          // Bug fix: use date-string diff to avoid timezone drift
+                                          const shootStr = project.shoot_date.slice(0, 10);
+                                          const todayStr = new Date().toLocaleDateString('en-CA');
                                           const d = new Date(project.shoot_date);
-                                          const today = new Date();
-                                          today.setHours(0, 0, 0, 0);
-                                          const diff = Math.floor((d - today) / 86400000);
+                                          const diff = Math.round((new Date(shootStr) - new Date(todayStr)) / 86400000);
                                           if (diff === 0) return 'Today';
                                           if (diff === 1) return 'Tomorrow';
                                           if (diff === -1) return 'Yesterday';
@@ -948,7 +990,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                     {/* Email indicator */}
                                     <div className="flex items-center justify-end mt-1.5">
                                       <ProjectEmailIndicator
-                                        emails={allProjectEmails.filter(e => e.project_id === project.id)}
+                                        emails={emailsByProject[project.id] || []}
                                       />
                                     </div>
                                   </div>
@@ -998,7 +1040,21 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
           role="dialog"
           aria-modal="true"
           aria-labelledby="backward-drag-title"
-          onKeyDown={(e) => { if (e.key === 'Escape') setPendingDrag(null); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setPendingDrag(null);
+            // Bug fix: trap Tab focus within the confirmation dialog
+            if (e.key === 'Tab') {
+              const focusable = e.currentTarget.querySelectorAll('button');
+              if (focusable.length === 0) return;
+              const first = focusable[0];
+              const last = focusable[focusable.length - 1];
+              if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault(); last.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault(); first.focus();
+              }
+            }
+          }}
         >
           <div className="bg-white dark:bg-card rounded-lg p-6 max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
             <h3 id="backward-drag-title" className="font-semibold text-base mb-2">Move Project Backward?</h3>

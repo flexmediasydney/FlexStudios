@@ -60,7 +60,7 @@ export default function HierarchyGridView({
           <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center
                           justify-center flex-shrink-0">
             <span className="text-[10px] font-bold text-primary">
-              {(agent.name || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()}
+              {(agent.name || '?').split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'}
             </span>
           </div>
           <div className="min-w-0">
@@ -294,17 +294,11 @@ export default function HierarchyGridView({
                             </div>
                           </CardHeader>
                           <CardContent className="pt-0 space-y-2">
-                            {teamAgents.slice(0, 3).map(agent => (
-                              <div key={agent.id} className="flex items-center gap-2 text-xs">
-                                <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center">
-                                  <User className="h-3 w-3 text-green-600" />
-                                </div>
-                                <span className="truncate flex-1">{agent.name}</span>
-                                <LastContactIndicator agent={agent} size="xs" />
-                              </div>
-                            ))}
-                            {teamAgents.length > 3 && (
-                              <p className="text-xs text-muted-foreground">+{teamAgents.length - 3} more</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              {teamAgents.map(renderAgentCard)}
+                            </div>
+                            {teamAgents.length === 0 && (
+                              <p className="text-xs text-muted-foreground text-center py-2">No people in this team</p>
                             )}
                             <Button
                               size="sm"
@@ -327,14 +321,7 @@ export default function HierarchyGridView({
               {agencyAgents.length > 0 && (
                 <div>
                   <div className="flex items-center gap-2 mb-3 px-1">
-                    {selectedAgentIds && toggleSelectAll && agentsFiltered && (
-                      <input
-                        type="checkbox"
-                        checked={selectedAgentIds.size === agentsFiltered.length && agentsFiltered.length > 0}
-                        onChange={toggleSelectAll}
-                        className="cursor-pointer"
-                      />
-                    )}
+                    {/* Note: removed global select-all from per-agency section to avoid selecting agents across all agencies */}
                     <h4 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
                       <User className="h-4 w-4" />
                       Direct Agents ({agencyAgents.length})

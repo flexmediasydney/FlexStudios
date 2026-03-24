@@ -16,7 +16,7 @@ export default function FilePreviewModal({ isOpen, onClose, file }) {
       api.functions
         .invoke('getDropboxFilePreview', { filePath: file.path })
         .then(res => {
-          setPreviewUrl(res.data.url);
+          setPreviewUrl(res?.data?.url || res?.url || null);
           setLoading(false);
         })
         .catch(err => {

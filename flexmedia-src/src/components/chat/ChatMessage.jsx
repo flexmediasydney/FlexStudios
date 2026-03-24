@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Pin, Trash2, Download, FileText, Image, Music, Video } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { safeWindowOpen } from '@/utils/sanitizeHtml';
+import { safeWindowOpen, validateUrl } from '@/utils/sanitizeHtml';
 
 const getFileIcon = (fileType) => {
   if (!fileType) return FileText;
@@ -100,21 +100,24 @@ export default function ChatMessage({ message, currentUserEmail, onPin, onDelete
           {message.attachments.map((attachment, idx) => {
             const Icon = getFileIcon(attachment.file_type);
             const isImage = attachment.file_type?.startsWith('image');
-            
+            // Sanitize URL — reject javascript:/data: schemes
+            const safeUrl = validateUrl(attachment.file_url);
+            if (!safeUrl) return null;
+
             return (
               <div key={idx}>
                 {isImage ? (
                   <div className="rounded-lg overflow-hidden max-w-xs bg-muted">
-                    <img 
-                      src={attachment.file_url} 
+                    <img
+                      src={safeUrl}
                       alt={attachment.file_name}
                       className="w-full h-auto max-h-64 object-cover cursor-pointer hover:opacity-90"
-                      onClick={() => safeWindowOpen(attachment.file_url)}
+                      onClick={() => safeWindowOpen(safeUrl)}
                     />
                   </div>
                 ) : (
                   <a
-                    href={attachment.file_url}
+                    href={safeUrl}
                     download={attachment.file_name}
                     className="flex items-center gap-2 p-2 rounded-lg bg-muted hover:bg-muted/80 transition-colors group/file"
                   >

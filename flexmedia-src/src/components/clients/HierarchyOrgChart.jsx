@@ -103,6 +103,15 @@ export default function HierarchyOrgChart({
               </div>
             )}
 
+            {/* Empty agency state */}
+            {!hasChildren && (
+              <div className="flex justify-center mt-4">
+                <p className="text-sm text-muted-foreground bg-muted/30 px-4 py-2 rounded-lg border border-dashed">
+                  No teams or people yet
+                </p>
+              </div>
+            )}
+
             {/* ─── Teams Level ─── */}
             <div className="flex justify-center gap-10 flex-wrap mt-0">
               {agencyTeams.map(team => {
@@ -153,7 +162,7 @@ export default function HierarchyOrgChart({
                     </Card>
 
                     {/* Team Agents */}
-                    {teamAgents.length > 0 && (
+                    {teamAgents.length > 0 ? (
                       <>
                         <div className="relative w-px h-6 bg-gray-300">
                           <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-gray-300" />
@@ -173,6 +182,8 @@ export default function HierarchyOrgChart({
                           ))}
                         </div>
                       </>
+                    ) : (
+                      <p className="text-[11px] text-muted-foreground mt-2 text-center">No people in this team</p>
                     )}
                   </div>
                 );
@@ -231,7 +242,7 @@ function AgentOrgNode({ agent, navigate, onEdit, onDelete, agentProjectCounts, a
           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-100 to-emerald-50
                           flex items-center justify-center border-2 border-green-200">
             <span className="text-xs font-bold text-green-700">
-              {(agent.name || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()}
+              {(agent.name || '?').split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'}
             </span>
           </div>
           {/* Health score badge (top-right of avatar) */}
@@ -283,7 +294,7 @@ function AgentOrgNode({ agent, navigate, onEdit, onDelete, agentProjectCounts, a
         )}
 
         {/* Quick actions (hover) */}
-        <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
           <QuickLogInteraction agent={agent} triggerSize="icon" />
           {onOpenActivityPanel && (
             <Button

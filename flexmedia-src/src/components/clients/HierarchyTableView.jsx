@@ -76,6 +76,13 @@ function InlineEditCell({ value, onSave, type = "text", className = "" }) {
     }
   }, [editing]);
 
+  // Sync draft when value changes externally (e.g. after save + refetch)
+  useEffect(() => {
+    if (!editing) {
+      setDraft(value || "");
+    }
+  }, [value, editing]);
+
   const commit = () => {
     setEditing(false);
     const trimmed = draft.trim();
@@ -351,7 +358,7 @@ const ContactRow = React.memo(function ContactRow({
   const [hovered, setHovered] = useState(false);
   const activityInfo = lastActivityInfo(agent);
   const stateStyle = STATE_STYLES[agent.relationship_state] || {};
-  const initials = (agent.name || "?").split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
+  const initials = (agent.name || "?").split(" ").filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase() || "?";
   const isIdle = activityInfo.days > 30 && activityInfo.days !== Infinity;
 
   const renderCell = (colId) => {
