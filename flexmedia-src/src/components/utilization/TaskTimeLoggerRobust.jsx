@@ -23,6 +23,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
   // Guard against double-click on start/finish/resume/pause
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
 
   // Dialog states
   const [showConfirm, setShowConfirm] = useState(false);
@@ -329,14 +330,22 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
         return;
       }
 
-      // Compute final seconds fresh to avoid stale closure value
-      const finalSeconds = activeLog.status === 'running' && activeLog.start_time
-        ? Math.max(0, Math.floor((Date.now() - new Date(activeLog.start_time).getTime()) / 1000) - (activeLog.paused_duration || 0))
-        : (activeLog.total_seconds || 0);
-
+      // Compute final seconds fresh to avoid stale closure / stale DB sync values.
+      // When paused: recompute from (pause_time - start_time - paused_duration) instead of
+      // relying on total_seconds which may be stale from the last 15s DB sync.
       const finalPausedDuration = activeLog.pause_time
         ? (activeLog.paused_duration || 0) + Math.floor((Date.now() - new Date(activeLog.pause_time).getTime()) / 1000)
         : (activeLog.paused_duration || 0);
+
+      let finalSeconds;
+      if (activeLog.status === 'running' && activeLog.start_time) {
+        finalSeconds = Math.max(0, Math.floor((Date.now() - new Date(activeLog.start_time).getTime()) / 1000) - (activeLog.paused_duration || 0));
+      } else if (activeLog.status === 'paused' && activeLog.start_time && activeLog.pause_time) {
+        // Use pause_time as the effective end, minus all accumulated paused time
+        finalSeconds = Math.max(0, Math.floor((new Date(activeLog.pause_time).getTime() - new Date(activeLog.start_time).getTime()) / 1000) - (activeLog.paused_duration || 0));
+      } else {
+        finalSeconds = activeLog.total_seconds || 0;
+      }
 
       await retryWithBackoff(
         () => api.entities.TaskTimeLog.update(activeLog.id, {
@@ -461,6 +470,8 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   };
 
   const startTimer = async () => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setShowConfirm(false);
     setShowTakeoverConfirm(false);
 
@@ -504,6 +515,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       setError(err.message || 'Failed to create timer');
     } finally {
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -541,7 +553,8 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   };
 
   const handleContinueConfirmed = async () => {
-    if (isSubmitting) return;
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setShowContinueConfirm(false);
 
     try {
@@ -594,6 +607,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       setError(err.message || 'Failed to continue timer');
     } finally {
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
     }
   };
 

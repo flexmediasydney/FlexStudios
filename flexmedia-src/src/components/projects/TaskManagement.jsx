@@ -85,17 +85,19 @@ export function CountdownTimer({ dueDate, compact = false, thresholds }) {
   const secs = absSeconds % 60;
 
   // Always show all components: xD XXh XXm XXs
+  const totalHours = absSeconds / 3600;
+
   let text, color;
   if (isPast) {
     text = `${days}d ${hours}h ${minutes}m overdue`;
     color = "text-red-600";
-  } else if (hours < t.red_threshold) {
+  } else if (totalHours < t.red_threshold) {
     text = `${days}d ${hours}h ${minutes}m`;
     color = "text-red-500";
-  } else if (hours < t.yellow_end) {
+  } else if (totalHours < t.yellow_end) {
     text = `${days}d ${hours}h ${minutes}m`;
     color = "text-orange-500";
-  } else if (hours < t.yellow_start) {
+  } else if (totalHours < t.yellow_start) {
     text = `${days}d ${hours}h ${minutes}m`;
     color = "text-amber-500";
   } else {
@@ -107,8 +109,15 @@ export function CountdownTimer({ dueDate, compact = false, thresholds }) {
 }
 
 export function CompletionTimer({ dueDate, completedDate }) {
-  const due = new Date(dueDate);
-  const completed = new Date(completedDate);
+  if (!dueDate || !completedDate) return null;
+  let due, completed;
+  try {
+    due = new Date(dueDate);
+    completed = new Date(completedDate);
+    if (isNaN(due.getTime()) || isNaN(completed.getTime())) return null;
+  } catch {
+    return null;
+  }
   const absSeconds = Math.abs(differenceInSeconds(completed, due));
   const days = Math.floor(absSeconds / 86400);
   const hours = Math.floor((absSeconds % 86400) / 3600);
@@ -537,7 +546,10 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     togglingRef.current.add(task.id);
 
     try {
-      await api.entities.ProjectTask.update(task.id, { is_completed: !wasCompleted });
+      await api.entities.ProjectTask.update(task.id, {
+        is_completed: !wasCompleted,
+        ...(wasCompleted ? { completed_at: null } : { completed_at: new Date().toISOString() }),
+      });
       logActivity(
         wasCompleted ? 'task_added' : 'task_completed',
         wasCompleted
@@ -653,6 +665,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                     toast.success(`Completed ${succeeded} task${succeeded !== 1 ? 's' : ''}`);
                   }
                   logActivity('tasks_completed', `Marked ${succeeded} of ${incomplete.length} remaining tasks complete`);
+                  scheduleDeadlineSync(projectId, 'bulk_complete');
                 }}
               >
                 <CheckCheck className="h-3.5 w-3.5" />

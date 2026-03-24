@@ -33,7 +33,7 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
   };
 
   // Validate role param (before mutation)
-  const validRole = role && ["photographer", "videographer", "image_editor", "video_editor", "admin"].includes(role)
+  const validRole = role && ["photographer", "videographer", "image_editor", "video_editor", "floorplan_editor", "drone_editor", "admin"].includes(role)
     ? role
     : "admin";
 

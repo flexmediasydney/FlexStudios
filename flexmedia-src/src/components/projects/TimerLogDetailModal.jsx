@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { fmtTimestampCustom } from "@/components/utils/dateUtils";
+import { fmtTimestampCustom, fixTimestamp } from "@/components/utils/dateUtils";
 import { Trash2 } from "lucide-react";
 import { formatDuration, getStatusColor } from "./useEffortLogging";
 import { toast } from "sonner";
@@ -17,7 +17,7 @@ import { toast } from "sonner";
 function computeLiveSeconds(log) {
   if (!log) return 0;
   if (log.status === 'running' && log.is_active && log.start_time) {
-    return Math.max(0, Math.floor((Date.now() - new Date(log.start_time).getTime()) / 1000) - (log.paused_duration || 0));
+    return Math.max(0, Math.floor((Date.now() - new Date(fixTimestamp(log.start_time)).getTime()) / 1000) - (log.paused_duration || 0));
   }
   return log.total_seconds || 0;
 }

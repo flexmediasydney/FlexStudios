@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, AlertCircle, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
@@ -48,6 +48,23 @@ export default function ProjectProductsPackages({ project }) {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [error, setError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Sync formState when project data changes externally (webhook, another user, etc.)
+  // Uses JSON comparison to avoid resetting mid-edit on subscription cache churn
+  const projectProductsJson = JSON.stringify(project.products || []);
+  const projectPackagesJson = JSON.stringify(project.packages || []);
+  const prevProjectJson = useRef({ products: projectProductsJson, packages: projectPackagesJson });
+  if (prevProjectJson.current.products !== projectProductsJson || prevProjectJson.current.packages !== projectPackagesJson) {
+    // Only reset if not currently saving (user's own save will update project prop too)
+    if (!isSaving) {
+      setFormState({
+        products: project.products || [],
+        packages: project.packages || [],
+      });
+      setError(null);
+    }
+    prevProjectJson.current = { products: projectProductsJson, packages: projectPackagesJson };
+  }
 
   const tierKey = project.pricing_tier === "premium" ? "premium_tier" : "standard_tier";
 
@@ -611,13 +628,11 @@ export default function ProjectProductsPackages({ project }) {
                 </div>
               )}
 
-              {/* Total */}
-              {totalPrice > 0 && (
-                <div className="flex items-center justify-between pt-2 border-t mt-3">
-                  <span className="text-sm font-semibold text-muted-foreground">Total</span>
-                  <span className="text-base font-bold text-primary"><Price value={totalPrice} /></span>
-                </div>
-              )}
+              {/* Total — always show when items exist (even if price is $0) */}
+              <div className="flex items-center justify-between pt-2 border-t mt-3">
+                <span className="text-sm font-semibold text-muted-foreground">Total</span>
+                <span className="text-base font-bold text-primary"><Price value={totalPrice} /></span>
+              </div>
             </>
           )}
         </CardContent>

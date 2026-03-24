@@ -379,6 +379,16 @@ export default function ProjectPricingTable({
     }, 200);
   }, [allProducts]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Debounce nested product qty changes the same way as standalone products
+  const nestedQtyTimerRef = useRef(null);
+  const debouncedUpdateNestedQty = useCallback((packageId, productId, newQty) => {
+    if (nestedQtyTimerRef.current) clearTimeout(nestedQtyTimerRef.current);
+    nestedQtyTimerRef.current = setTimeout(() => {
+      nestedQtyTimerRef.current = null;
+      handleUpdateNestedQty(packageId, productId, newQty);
+    }, 200);
+  }, [allProducts, allPackages]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Change detection
   const hasChanges = useMemo(() => {
     const origProducts = project?.products || [];
@@ -517,7 +527,7 @@ export default function ProjectPricingTable({
                         canEdit={canEdit}
                         onRemoveItem={handleRemoveItem}
                         onUpdateQty={debouncedUpdateQty}
-                        onUpdateNestedQty={handleUpdateNestedQty}
+                        onUpdateNestedQty={debouncedUpdateNestedQty}
                       />
 
                       </table>

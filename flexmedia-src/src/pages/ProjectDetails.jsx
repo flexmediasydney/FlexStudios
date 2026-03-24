@@ -844,7 +844,7 @@ export default function ProjectDetails() {
       {isArchived && (
         <div className="bg-muted border border-border rounded-xl p-4 mb-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-slate-200 flex items-center justify-center text-muted-foreground text-lg">📦</div>
+            <div className="w-8 h-8 rounded-lg bg-muted-foreground/15 flex items-center justify-center text-muted-foreground text-lg">📦</div>
             <div>
               <p className="text-sm font-semibold text-foreground/80">This project is archived</p>
               <p className="text-xs text-muted-foreground">Delivered, paid, and all work completed · Archived {project.archived_at ? fmtDate(project.archived_at, 'd MMM yyyy') : ''}</p>
@@ -876,15 +876,15 @@ export default function ProjectDetails() {
       )}
       {/* Error Banner */}
       {errorMessage && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
-          <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+        <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+          <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
-            <p className="text-sm font-semibold text-red-700">Error</p>
-            <p className="text-sm text-red-600 mt-0.5">{errorMessage}</p>
+            <p className="text-sm font-semibold text-red-700 dark:text-red-300">Error</p>
+            <p className="text-sm text-red-600 dark:text-red-400 mt-0.5">{errorMessage}</p>
           </div>
-          <button 
+          <button
             onClick={() => setErrorMessage(null)}
-            className="text-red-600 hover:text-red-700 flex-shrink-0 hover:scale-110 transition-all p-1 rounded hover:bg-red-100"
+            className="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 flex-shrink-0 hover:scale-110 transition-all p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40"
             aria-label="Close error message"
             title="Dismiss error"
           >
@@ -933,7 +933,7 @@ export default function ProjectDetails() {
           {project.calendar_auto_linked && (
             <div className="flex items-center gap-1 mt-0.5">
               <span
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 cursor-help"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 cursor-help"
                 title={`Calendar auto-linked via ${project.calendar_link_source === 'google_event_id_retroactive' ? 'retroactive match' : 'Google Calendar event ID'}`}
               >
                 <Zap className="h-3 w-3" />
@@ -944,8 +944,8 @@ export default function ProjectDetails() {
           {project.is_first_order && (
             <div className="flex items-center gap-1 mt-0.5">
               <span className="inline-flex items-center gap-1 text-xs font-semibold
-                             px-2 py-0.5 rounded-full bg-amber-100 text-amber-700
-                             border border-amber-200">
+                             px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300
+                             border border-amber-200 dark:border-amber-800">
                 ⭐ First order
               </span>
             </div>
@@ -1078,20 +1078,21 @@ export default function ProjectDetails() {
         <div className="flex items-center gap-3 px-4 py-2.5 bg-green-50 border
                         border-green-200 dark:bg-green-950/20 shrink-0 rounded-lg">
           <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
-          <p className="text-sm text-green-700 flex-1 font-medium">
+          <p className="text-sm text-green-700 dark:text-green-300 flex-1 font-medium">
             All tasks complete — ready to deliver?
           </p>
           <Button
             size="sm"
             className="h-8 text-xs bg-green-600 hover:bg-green-700 text-white"
             aria-label="Mark project as delivered"
+            disabled={!memoizedCanEdit || updateStatusMutation.isPending}
             onClick={() => {
-              if (memoizedCanEdit) {
+              if (memoizedCanEdit && !updateStatusMutation.isPending) {
                 updateStatusMutation.mutate('delivered');
               }
             }}
           >
-            Mark as Delivered
+            {updateStatusMutation.isPending ? "Updating..." : "Mark as Delivered"}
           </Button>
           <button
             className="text-xs text-green-600 hover:text-green-800"
@@ -1219,7 +1220,7 @@ export default function ProjectDetails() {
                  <CardTitle className="text-sm">Project Details</CardTitle>
                  {project.source === 'tonomo' ? (
                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium
-                                    bg-violet-100 text-violet-700 border border-violet-200">
+                                    bg-violet-100 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-800">
                      ⚡ Tonomo
                    </span>
                  ) : (
@@ -1273,8 +1274,8 @@ export default function ProjectDetails() {
                       <span className="text-xs font-medium">{project.shoot_time}</span>
                       {project.tonomo_is_twilight && (
                         <span className="inline-flex items-center gap-1 text-[10px] font-medium
-                                         px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700
-                                         border border-purple-200">
+                                         px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300
+                                         border border-purple-200 dark:border-purple-800">
                           🌅 Twilight
                         </span>
                       )}
@@ -1308,8 +1309,8 @@ export default function ProjectDetails() {
                   <p className="text-xs text-muted-foreground mb-0.5">Tier</p>
                   <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-semibold ${
                     project.pricing_tier === "premium"
-                      ? "bg-amber-100 text-amber-700"
-                      : "bg-blue-100 text-blue-700"
+                      ? "bg-amber-100 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300"
+                      : "bg-blue-100 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300"
                   }`}>
                     {project.pricing_tier === "premium" ? <Star className="h-2.5 w-2.5" /> : <Zap className="h-2.5 w-2.5" />}
                     {project.pricing_tier === "premium" ? "Prem" : "Std"}
@@ -1368,10 +1369,10 @@ export default function ProjectDetails() {
                     <>
                       <Separator />
                       {project.price_matrix_snapshot && (
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
-                          <p className="text-xs text-blue-700 font-semibold">📋 Price locked at calculation</p>
+                        <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-3">
+                          <p className="text-xs text-blue-700 dark:text-blue-300 font-semibold">📋 Price locked at calculation</p>
                           {/* BUG FIX: was using toLocaleString() without timezone — shows UTC on servers, not Sydney */}
-                          <p className="text-xs text-blue-600 mt-0.5">Snapshot captured: {fmtDate(project.updated_date, 'd MMM yyyy')}</p>
+                          <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">Snapshot captured: {fmtDate(project.updated_date, 'd MMM yyyy')}</p>
                         </div>
                       )}
                       <ErrorBoundary>

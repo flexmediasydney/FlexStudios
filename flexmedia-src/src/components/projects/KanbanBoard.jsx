@@ -55,27 +55,27 @@ const animationStyles = `
 
 /* ─────────────────────────── Urgency helpers ─────────────────────────── */
 function getProjectUrgency(project, projectTasks) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayEnd = new Date(today);
-  todayEnd.setHours(23, 59, 59, 999);
+  // Bug fix: use date-string comparison (YYYY-MM-DD) to avoid UTC-vs-local
+  // timezone mismatch when parsing date-only strings like "2026-03-25"
+  const todayStr = new Date().toLocaleDateString('en-CA'); // "YYYY-MM-DD"
 
-  // Check project-level dates
-  const shootDate = project.shoot_date ? new Date(project.shoot_date) : null;
-  const deliveryDate = project.delivery_date ? new Date(project.delivery_date) : null;
+  // Check project-level dates (slice to handle full ISO timestamps too)
+  const shootStr = project.shoot_date ? project.shoot_date.slice(0, 10) : null;
+  const deliveryStr = project.delivery_date ? project.delivery_date.slice(0, 10) : null;
 
-  // Check if any tasks are overdue
+  // Bug fix: exclude deleted tasks — the caller passes all tasks from the
+  // pre-computed map which does not filter is_deleted
   const hasOverdueTask = projectTasks.some(t => {
-    if (t.is_completed || !t.due_date) return false;
-    return new Date(t.due_date) < today;
+    if (t.is_completed || t.is_deleted || !t.due_date) return false;
+    return t.due_date.slice(0, 10) < todayStr;
   });
 
   // Check if project shoot date is past and project not delivered
-  const shootOverdue = shootDate && shootDate < today &&
+  const shootOverdue = shootStr && shootStr < todayStr &&
     !['delivered', 'in_revision', 'cancelled'].includes(project.status);
 
   // Check delivery date overdue
-  const deliveryOverdue = deliveryDate && deliveryDate < today &&
+  const deliveryOverdue = deliveryStr && deliveryStr < todayStr &&
     !['delivered', 'cancelled'].includes(project.status);
 
   if (hasOverdueTask || shootOverdue || deliveryOverdue) {
@@ -84,12 +84,11 @@ function getProjectUrgency(project, projectTasks) {
 
   // Check for due-today
   const hasTodayTask = projectTasks.some(t => {
-    if (t.is_completed || !t.due_date) return false;
-    const d = new Date(t.due_date);
-    return d >= today && d <= todayEnd;
+    if (t.is_completed || t.is_deleted || !t.due_date) return false;
+    return t.due_date.slice(0, 10) === todayStr;
   });
-  const shootToday = shootDate && shootDate >= today && shootDate <= todayEnd;
-  const deliveryToday = deliveryDate && deliveryDate >= today && deliveryDate <= todayEnd;
+  const shootToday = shootStr === todayStr;
+  const deliveryToday = deliveryStr === todayStr;
 
   if (hasTodayTask || shootToday || deliveryToday) {
     return 'today';
@@ -323,11 +322,12 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
         const tasksTotal = colTasks.length;
         const revenue = colProjects.reduce((sum, p) => sum + (p.calculated_price || p.price || 0), 0);
 
+        const todayStr = new Date().toLocaleDateString('en-CA');
         const overdue = colProjects.filter(p => {
           if (['delivered', 'cancelled'].includes(p.status)) return false;
-          const sd = p.shoot_date ? new Date(p.shoot_date) : null;
-          const today = new Date(); today.setHours(0,0,0,0);
-          return sd && sd < today;
+          const sd = p.shoot_date ? p.shoot_date.slice(0, 10) : null;
+          // Bug fix: use string comparison to avoid UTC-vs-local mismatch
+          return sd && sd < todayStr;
         }).length;
 
         return (
@@ -987,8 +987,8 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                         </span>
                                       )}
                                       {project.shoot_date && (() => {
-                                        const t = new Date(); t.setHours(0,0,0,0);
-                                        return new Date(project.shoot_date) < t;
+                                        // Bug fix: use string comparison to avoid UTC-vs-local mismatch
+                                        return project.shoot_date.slice(0, 10) < new Date().toLocaleDateString('en-CA');
                                       })() &&
                                        !['delivered', 'in_revision', 'cancelled'].includes(project.status) && (
                                         <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100

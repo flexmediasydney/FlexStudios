@@ -178,6 +178,16 @@ export default function Projects() {
     return map;
   }, [allTasks]);
 
+  // Pre-compute ALL tasks (including subtasks) by project for filter assignment checks
+  const allTasksByProject = useMemo(() => {
+    const map = {};
+    allTasks.forEach(t => {
+      if (!map[t.project_id]) map[t.project_id] = [];
+      map[t.project_id].push(t);
+    });
+    return map;
+  }, [allTasks]);
+
   // Memoize filtered projects to prevent excessive recalculation (Fix #10)
   const filteredProjects = useMemo(() => {
     return projects
@@ -213,8 +223,8 @@ export default function Projects() {
         project.video_editor_type === 'team' ? project.video_editor_id : null,
       ].filter(Boolean));
 
-      // Task-level assignments for this project
-      const projectTasksForProject = allTasks.filter(t => t.project_id === project.id);
+      // Task-level assignments for this project (use pre-computed map to avoid O(n*m))
+      const projectTasksForProject = allTasksByProject[project.id] || [];
 
       // "My Projects": current user is assigned at project-role level OR has a task assigned
       if (filters.assigned_to_me && currentUser) {
@@ -321,7 +331,7 @@ export default function Projects() {
             const sd = new Date(project.shoot_date);
             if (sd >= now) candidates.push(sd);
           }
-          const pTasks = allTasks.filter(t => t.project_id === project.id && !t.parent_task_id);
+          const pTasks = tasksByProject[project.id] || [];
           pTasks.forEach(t => {
             if (!t.is_completed && t.due_date) {
               const d = new Date(fixTimestamp(t.due_date));
@@ -340,7 +350,7 @@ export default function Projects() {
       }
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
-  }, [projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
+  }, [projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
 
   // tasksByProject is now computed above filteredProjects (Bug fix #7)
 
@@ -460,6 +470,13 @@ export default function Projects() {
     return cols;
   }, [enabledFields, canSeePricing, products, packages, tasksByProject, timeLogsByProject]);
 
+  // Memoize the tasks passed to QuickStatsBar to avoid O(tasks*projects) on every render
+  const filteredProjectIds = useMemo(() => new Set(filteredProjects.map(p => p.id)), [filteredProjects]);
+  const statsBarTasks = useMemo(() =>
+    allTasks.filter(t => filteredProjectIds.has(t.project_id) && !t.parent_task_id),
+    [allTasks, filteredProjectIds]
+  );
+
   // Memoize callbacks (Fix #13)
   const handleEdit = useCallback((project) => {
     setEditingProject(project);
@@ -469,7 +486,7 @@ export default function Projects() {
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6">
       {/* Quick Stats */}
-      <QuickStatsBar projects={filteredProjects} tasks={allTasks.filter(t => filteredProjects.some(p => p.id === t.project_id) && !t.parent_task_id)} />
+      <QuickStatsBar projects={filteredProjects} tasks={statsBarTasks} />
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">

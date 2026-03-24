@@ -179,6 +179,20 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
   const s = sessionRef.current;
   const currentIndex = PROJECT_STAGES.findIndex(st => st.value === s.status);
 
+  // Close orphaned timers once via useEffect (not during render) to avoid
+  // spamming the API on every re-render. Track which IDs we've already patched.
+  const closedOrphanIdsRef = useRef(new Set());
+  useEffect(() => {
+    stageTimers.forEach(t => {
+      if (!t.exit_time && t.stage !== s.status && !closedOrphanIdsRef.current.has(t.id)) {
+        closedOrphanIdsRef.current.add(t.id);
+        api.entities.ProjectStageTimer.update(t.id, {
+          exit_time: t.updated_date || new Date().toISOString(),
+        }).catch(() => toast.error('Failed to close orphaned stage timer — stage time may be inaccurate'));
+      }
+    });
+  }, [stageTimers, s.status]);
+
   function getStageTimeInfo(stage, index) {
     const isCurrent = index === currentIndex;
     const isFuture = index > currentIndex;
@@ -191,11 +205,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
     // Any open timer for a non-current stage is a bug — treat it as if it ended now
     const safeDbTimers = dbTimers.map(t => {
       if (!t.exit_time && !isCurrent) {
-        // Orphaned open timer for a non-current stage — treat as closed
-        // Actually close the orphaned timer in DB
-        api.entities.ProjectStageTimer.update(t.id, {
-          exit_time: t.updated_date || new Date().toISOString(),
-        }).catch(() => toast.error('Failed to close orphaned stage timer — stage time may be inaccurate'));
+        // Orphaned open timer — patched in useEffect above, treat as closed for display
         return {
           ...t,
           exit_time: t.updated_date || new Date().toISOString(),

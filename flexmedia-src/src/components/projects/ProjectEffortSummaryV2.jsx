@@ -3,6 +3,7 @@ import { Card } from '@/components/ui/card';
 import { Zap, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/api/supabaseClient';
+import { fixTimestamp } from '@/components/utils/dateUtils';
 
 const ROLE_LABELS = {
   photographer: 'Photographer',
@@ -23,7 +24,7 @@ function computeLogSeconds(log) {
   if (log.status === 'completed' || !log.is_active) return Math.max(0, log.total_seconds || 0);
   if (log.status === 'paused') return Math.max(0, log.total_seconds || 0);
   if (log.status === 'running' && log.start_time) {
-    return Math.max(0, Math.floor((Date.now() - new Date(log.start_time).getTime()) / 1000) - (log.paused_duration || 0));
+    return Math.max(0, Math.floor((Date.now() - new Date(fixTimestamp(log.start_time)).getTime()) / 1000) - (log.paused_duration || 0));
   }
   return Math.max(0, log.total_seconds || 0);
 }

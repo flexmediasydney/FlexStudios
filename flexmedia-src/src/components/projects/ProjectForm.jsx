@@ -739,7 +739,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
             <AgentSearchField
               agents={agents}
               value={agents.find(a => a.id === formData.agent_id) || null}
-              onChange={(agent) => { handleAgentChange(agent.id); setErrors(prev => ({ ...prev, agent_id: null })); }}
+              onChange={(agent) => { handleAgentChange(agent?.id); setErrors(prev => ({ ...prev, agent_id: null })); }}
               placeholder="Search agent..."
             />
             {errors.agent_id && <p className="text-xs text-destructive mt-1.5 flex items-center gap-1"><AlertCircle className="h-3 w-3" />{errors.agent_id}</p>}
@@ -817,7 +817,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <Label className="text-xs font-medium">Stage</Label>
-              <Select value={formData.status} onValueChange={(v) => setFormData(prev => ({ ...prev, status: v }))}>
+              <Select value={formData.status} onValueChange={(v) => { setFormData(prev => ({ ...prev, status: v })); setUnsavedChanges(true); }}>
                 <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {PROJECT_STAGES.map(s => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
@@ -826,11 +826,11 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
             </div>
             <div>
               <Label className="text-xs font-medium">Shoot Date</Label>
-              <Input type="date" className="h-9 text-sm" value={formData.shoot_date || ""} onChange={(e) => setFormData(prev => ({ ...prev, shoot_date: e.target.value }))} />
+              <Input type="date" className="h-9 text-sm" value={formData.shoot_date || ""} onChange={(e) => { setFormData(prev => ({ ...prev, shoot_date: e.target.value })); setUnsavedChanges(true); }} />
             </div>
             <div>
               <Label className="text-xs font-medium">Shoot Time</Label>
-              <Input type="time" className="h-9 text-sm" value={formData.shoot_time || ""} onChange={(e) => setFormData(prev => ({ ...prev, shoot_time: e.target.value }))} />
+              <Input type="time" className="h-9 text-sm" value={formData.shoot_time || ""} onChange={(e) => { setFormData(prev => ({ ...prev, shoot_time: e.target.value })); setUnsavedChanges(true); }} />
             </div>
           </div>
 
