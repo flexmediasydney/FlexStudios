@@ -658,15 +658,15 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
 
               // Calculate column metrics
               const columnRevenue = columnProjects.reduce((sum, p) => sum + (p.calculated_price || p.price || 0), 0);
-              const columnTasks = allTasks.filter(t =>
-                columnProjects.some(p => p.id === t.project_id) && !t.parent_task_id && !t.is_deleted
-              );
+              // Bug fix: use pre-computed tasksByProject map instead of O(projects*tasks) filter
+              const columnTasks = columnProjects.flatMap(p => (tasksByProject[p.id] || []).filter(t => !t.is_deleted));
+              const columnOverdueThreshold = new Date();
+              columnOverdueThreshold.setHours(0, 0, 0, 0);
               const tasksDone = columnTasks.filter(t => t.is_completed).length;
               const tasksInProgress = columnTasks.filter(t => !t.is_completed && !t.is_blocked).length;
               const tasksOverdue = columnTasks.filter(t => {
                 if (t.is_completed || !t.due_date) return false;
-                const today = new Date(); today.setHours(0, 0, 0, 0);
-                return new Date(t.due_date) < today;
+                return new Date(t.due_date) < columnOverdueThreshold;
               }).length;
 
               return (
@@ -833,7 +833,8 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                               {columnTasks
                                 .filter(t => {
                                   if (t.is_completed || !t.due_date) return false;
-                                  return new Date(t.due_date) < new Date();
+                                  // Bug fix: zero out hours to match the count badge logic
+                                  return new Date(t.due_date) < columnOverdueThreshold;
                                 })
                                 .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
                                 .map(t => {
@@ -975,7 +976,10 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                           Premium
                                         </span>
                                       )}
-                                      {project.shoot_date && new Date(project.shoot_date) < new Date() &&
+                                      {project.shoot_date && (() => {
+                                        const t = new Date(); t.setHours(0,0,0,0);
+                                        return new Date(project.shoot_date) < t;
+                                      })() &&
                                        !['delivered', 'in_revision', 'cancelled'].includes(project.status) && (
                                         <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100
                                                          text-red-700 border border-red-200 font-medium animate-pulse">

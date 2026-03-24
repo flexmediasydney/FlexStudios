@@ -36,15 +36,15 @@ export function getCountdownState({ dueDate, thresholds }) {
   const secondsLeft = differenceInSeconds(due, new Date());
   const isPast = secondsLeft < 0;
   const absSeconds = Math.abs(secondsLeft);
-  const hours = Math.floor((absSeconds % 86400) / 3600);
+  const totalHours = absSeconds / 3600;
 
   if (isPast) {
     return "overdue"; // red
-  } else if (hours < t.red_threshold) {
+  } else if (totalHours < t.red_threshold) {
     return "critical"; // red
-  } else if (hours < t.yellow_end) {
+  } else if (totalHours < t.yellow_end) {
     return "warning"; // orange
-  } else if (hours < t.yellow_start) {
+  } else if (totalHours < t.yellow_start) {
     return "caution"; // amber
   }
   return "normal"; // neutral
@@ -359,6 +359,12 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }) => {
+      // Clean empty string fields that would fail as UUIDs in PostgREST
+      if (data.assigned_to === '') data.assigned_to = null;
+      if (data.assigned_to_name === '') data.assigned_to_name = null;
+      if (data.assigned_to_team_id === '') data.assigned_to_team_id = null;
+      if (data.assigned_to_team_name === '') data.assigned_to_team_name = null;
+
       // Fix 3a — validate circular dependencies before saving
       if (data.depends_on_task_ids && data.depends_on_task_ids.length > 0) {
         try {
@@ -620,8 +626,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                 className="h-8 text-xs gap-1"
                 title="Mark all remaining tasks complete"
                 onClick={async () => {
-                  const incomplete = tasks.filter(t => !t.is_completed);
-                  if (incomplete.length === 0) return;
+                  const incomplete = tasks.filter(t => !t.is_completed && !t.is_locked && !isBlocked(t));
+                  if (incomplete.length === 0) { toast.info("No completable tasks — all remaining tasks are blocked or locked"); return; }
                   try {
                     await Promise.all(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: new Date().toISOString() })));
                     queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });

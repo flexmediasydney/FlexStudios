@@ -463,13 +463,17 @@ export default function CalendarPage() {
   };
 
   // Gap fix: Scroll to current hour on "Today" click
+  // BUG FIX: Use requestAnimationFrame so the DOM has re-rendered with the new
+  // date before we try to find and scroll to the hour element.
   const handleTodayClick = useCallback(() => {
     setCurrentDate(new Date());
-    const now = new Date();
-    const hourElement = document.querySelector(`[data-hour="${now.getHours()}"]`);
-    if (hourElement) {
-      hourElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
+    requestAnimationFrame(() => {
+      const now = new Date();
+      const hourElement = document.querySelector(`[data-hour="${now.getHours()}"]`);
+      if (hourElement) {
+        hourElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
   }, []);
 
   // Single-click on empty cell: no action (avoids accidental dialog opens)
@@ -987,11 +991,16 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
     return ranges;
   };
 
+  // Stable key for days array to avoid re-computing on every render
+  // (days is a new array ref each render but its content only changes with currentDate)
+  const weekStartKey = weekStart.getTime();
+
   // Compute booked hours per user per day for availability display
   const bookedHoursMap = useMemo(() => {
     const map = new Map(); // `${userId}-${dayIdx}` -> hours
     if (!isLaneMode) return map;
-    days.forEach((d, di) => {
+    const stableDays = Array.from({ length: 7 }, (_, i) => addDays(new Date(weekStartKey), i));
+    stableDays.forEach((d, di) => {
       users.forEach(u => {
         const userDayEvents = events
           .filter(({ owners }) => owners.includes(u.id))
@@ -1006,7 +1015,8 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
       });
     });
     return map;
-  }, [isLaneMode, events, users, days]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLaneMode, events, users, weekStartKey]);
 
   // Tonomo-style week view: full-width day columns with color-coded events per user
   // (Not sub-lanes — that's too cramped for 7 days. Color-coding by user is clearer.)
@@ -1019,7 +1029,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
           {hours.map(h => (
             <div key={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
               <span className="text-xs text-muted-foreground">
-                {h === 0 ? '' : format(new Date(new Date().setHours(h, 0)), 'h a')}
+                {h === 0 ? '' : `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`}
               </span>
             </div>
           ))}
@@ -1158,7 +1168,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
         {hours.map(h => (
           <div key={h} data-hour={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
             <span className="text-xs text-muted-foreground">
-              {h === 0 ? '' : format(new Date(new Date().setHours(h, 0)), 'h a')}
+              {h === 0 ? '' : `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`}
             </span>
           </div>
         ))}
@@ -1185,9 +1195,12 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   // BUG FIX: use Sydney hours for slot overlap detection
                   const evStartSyd = getSydneyHourMinute(event.start_time);
                   const evEndSyd = event.end_time ? getSydneyHourMinute(event.end_time) : { hour: evStartSyd.hour + 1, minute: evStartSyd.minute };
-                  const evStart = evStartSyd.hour * 60 + evStartSyd.minute;
-                  const evEnd = (evEndSyd.hour * 60 + evEndSyd.minute) || 24 * 60;
-                  return evStart < slotEnd && evEnd > slotStart;
+                  const evStartMin = evStartSyd.hour * 60 + evStartSyd.minute;
+                  // BUG FIX: Don't use `|| 24*60` — that turns midnight (00:00) into end-of-day.
+                  // Instead, if end <= start (e.g. cross-midnight event), treat end as end-of-day.
+                  let evEndMin = evEndSyd.hour * 60 + evEndSyd.minute;
+                  if (evEndMin <= evStartMin) evEndMin = 24 * 60;
+                  return evStartMin < slotEnd && evEndMin > slotStart;
                 });
                 return (
                   <div
@@ -1304,7 +1317,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
           {hours.map(h => (
             <div key={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
               <span className="text-xs text-muted-foreground">
-                {h === 0 ? '' : format(new Date(new Date().setHours(h, 0)), 'h a')}
+                {h === 0 ? '' : `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`}
               </span>
             </div>
           ))}

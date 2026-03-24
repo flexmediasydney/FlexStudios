@@ -4,7 +4,7 @@ import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { 
   ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Phone, Mail, 
@@ -141,9 +141,11 @@ function InvoicedAmountInput({ value, onSave, isPending }) {
 }
 
 export default function ProjectDetails() {
-   // BUG FIX: useMemo the URL parse — was creating new URLSearchParams on every render.
-   // projectId only changes when the URL changes (which triggers a re-render anyway).
-   const projectId = useMemo(() => new URLSearchParams(window.location.search).get("id"), []);
+   // BUG FIX: use useSearchParams so projectId updates reactively on client-side
+   // navigation.  The old useMemo(..., []) never re-ran, so navigating to a
+   // different project within the SPA left a stale ID forever.
+   const [searchParams] = useSearchParams();
+   const projectId = searchParams.get("id");
    const navigate = useNavigate();
 
    useEffect(() => {
@@ -167,13 +169,12 @@ export default function ProjectDetails() {
    // Tab state — persisted in URL ?tab= param so reload preserves active tab
    // (VALID_TABS is now at module level to avoid re-creating the Set every render)
    const [activeTab, setActiveTab] = useState(() => {
-     const params = new URLSearchParams(window.location.search);
-     const tab = params.get('tab');
+     const tab = searchParams.get('tab');
      return tab && VALID_TABS.has(tab) ? tab : 'tasks';
    });
    // projectRaw loaded below, so initialize without conditional tonomo tab
    const [mountedTabs, setMountedTabs] = useState(new Set([
-     (() => { const params = new URLSearchParams(window.location.search); return params.get('tab') || 'tasks'; })()
+     searchParams.get('tab') || 'tasks'
    ]));
 
    const handleTabChange = (tab) => {
@@ -257,11 +258,19 @@ export default function ProjectDetails() {
     [allProjectActivities]
    );
 
-  // One-time sync of blocking state — only fires once per project load, with longer debounce
+  // One-time sync of blocking state — only fires once per project load, with longer debounce.
+  // Reset syncedRef when projectId changes so navigating to a different project re-syncs.
   const syncedRef = useRef(false);
   const deadlineSyncTimeoutRef = useRef(null);
+  const lastSyncedProjectIdRef = useRef(null);
   useEffect(() => {
-    if (!projectId || !project?.id || syncedRef.current) return;
+    if (!projectId || !project?.id) return;
+    // Reset the sync gate when switching projects
+    if (lastSyncedProjectIdRef.current !== projectId) {
+      syncedRef.current = false;
+      lastSyncedProjectIdRef.current = projectId;
+    }
+    if (syncedRef.current) return;
     syncedRef.current = true;
     deadlineSyncTimeoutRef.current = setTimeout(() => {
       scheduleDeadlineSync(projectId, 'initial_sync', 0);
@@ -296,11 +305,12 @@ export default function ProjectDetails() {
   }, [project?.client_id, project?.client_name, agent?.name]);
 
   // Memoize canEditProject to prevent unnecessary child re-renders.
-  // canEditProject is stable (from usePermissions hook), but we include it
-  // to satisfy exhaustive-deps and avoid stale closure warnings.
+  // Use the full project reference so the memo recomputes if any field
+  // checked by canEditProject changes (future-proof against permission
+  // logic that inspects is_archived, assigned_users, etc.).
   const memoizedCanEdit = useMemo(
     () => canEditProject(project),
-    [canEditProject, project?.id, project?.status, project?.agent_id]
+    [canEditProject, project]
   );
 
   // Memoize enriched products for WeatherCard (O(n) lookup instead of O(n²))
@@ -900,7 +910,7 @@ export default function ProjectDetails() {
           <div className="flex items-center gap-1.5 text-muted-foreground text-sm">
             <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
             <button
-              onClick={() => { navigator.clipboard.writeText(project.property_address).then(() => toast.success('Address copied'), () => {}); }}
+              onClick={() => { if (project?.property_address) navigator.clipboard.writeText(project.property_address).then(() => toast.success('Address copied'), () => toast.error('Failed to copy address')); }}
               title="Copy address to clipboard"
               className="text-left hover:text-primary transition-colors group truncate"
             >
@@ -1092,7 +1102,11 @@ export default function ProjectDetails() {
           project={project}
           canEdit={memoizedCanEdit}
           onStartTimer={() => handleTabChange('effort')}
-          onAddNote={() => handleTabChange('notes')}
+          onAddNote={() => {
+            // 'notes' tab doesn't exist — scroll to the ActivityHub compose box instead
+            const hub = document.querySelector('[data-activity-hub]');
+            if (hub) hub.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
           onChangeStatus={(newStatus) => {
             if (updateStatusMutation.isPending) return;
             const stages = PROJECT_STAGES.map(s => s.value);

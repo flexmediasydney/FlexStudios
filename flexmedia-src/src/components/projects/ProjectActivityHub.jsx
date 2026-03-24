@@ -199,7 +199,7 @@ export default function ProjectActivityHub({ projectId, project }) {
   const isLoading = notesLoading || activitiesLoading || emailsLoading;
 
   return (
-    <div className="space-y-0">
+    <div className="space-y-0" data-activity-hub>
       {/* ── Compose Bar ── */}
       <Card className="overflow-hidden">
         {/* Compose tab bar */}

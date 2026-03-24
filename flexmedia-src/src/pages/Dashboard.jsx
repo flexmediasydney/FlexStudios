@@ -30,10 +30,8 @@ import ActiveTimersWidget from '@/components/dashboard/ActiveTimersWidget';
 import PendingReviewsWidget from '@/components/dashboard/PendingReviewsWidget';
 
 // Lazy-load heavy chart/analytics widgets (each pulls in recharts or large data processing)
-const RevenueBreakdownChart = React.lazy(() => import("@/components/dashboard/RevenueBreakdownChart"));
 const ProjectVelocityChart = React.lazy(() => import("@/components/dashboard/ProjectVelocityChart"));
 const StageDistributionChart = React.lazy(() => import("@/components/dashboard/StageDistributionChart"));
-const RevenueByClientTypeChart = React.lazy(() => import("@/components/dashboard/RevenueByClientTypeChart"));
 const CashFlowForecast = React.lazy(() => import("@/components/dashboard/CashFlowForecast"));
 const TerritoryMap = React.lazy(() => import('@/components/dashboard/TerritoryMap'));
 const DeliveryFeed = React.lazy(() => import('@/components/dashboard/DeliveryFeed'));
@@ -224,20 +222,6 @@ export default function Dashboard() {
     };
   }, [analytics, projects]);
 
-  // Revenue breakdown by status
-  const revenueBreakdown = useMemo(() => {
-    const projectValue = (p) => p.invoiced_amount ?? p.calculated_price ?? p.price ?? 0;
-    const won = projects.filter(p => p.outcome === "won").reduce((sum, p) => sum + projectValue(p), 0);
-    const active = projects.filter(p => p.outcome === "open" && !["delivered"].includes(p.status)).reduce((sum, p) => sum + projectValue(p), 0);
-    const lost = projects.filter(p => p.outcome === "lost").reduce((sum, p) => sum + projectValue(p), 0);
-    
-    return [
-      { name: 'Won', value: won, status: 'won' },
-      { name: 'Active Pipeline', value: active, status: 'active' },
-      { name: 'Lost', value: lost, status: 'lost' }
-    ].filter(d => d.value > 0);
-  }, [projects]);
-
   // Velocity data (last 8 weeks)
   // BUG FIX: capture `now` once outside the loop to avoid calling new Date()
   // 8 times per memo invocation. Each call returns a slightly different ms value,
@@ -328,33 +312,21 @@ export default function Dashboard() {
     };
   }, [projects, allTasks, executiveMetrics]);
 
-  // Client type breakdown
-  const clientTypeRevenue = useMemo(() => {
-    const projectValue = (p) => p.invoiced_amount ?? p.calculated_price ?? p.price ?? 0;
-    const residential = projects.filter(p => p.property_type === "residential").reduce((sum, p) => sum + projectValue(p), 0);
-    const commercial = projects.filter(p => p.property_type === "commercial").reduce((sum, p) => sum + projectValue(p), 0);
-    const luxury = projects.filter(p => p.property_type === "luxury").reduce((sum, p) => sum + projectValue(p), 0);
-    
-    return [
-      { name: 'Residential', value: residential },
-      { name: 'Commercial', value: commercial },
-      { name: 'Luxury', value: luxury }
-    ].filter(d => d.value > 0);
-  }, [projects]);
-
   // Cash flow forecast
   const cashFlowData = useMemo(() => {
     const days = [];
     const now = new Date();
+    // Use the same revenue helper as the rest of the dashboard
+    const projectValue = (p) => p.invoiced_amount ?? p.calculated_price ?? p.price ?? 0;
     for (let i = -14; i <= 14; i++) {
       const date = addDays(now, i);
       const dateStr = format(date, 'MMM dd');
       const isPast = i <= 0;
-      
+
       const dayRevenue = projects.filter(p => {
         const completedDate = p.updated_date ? new Date(fixTimestamp(p.updated_date)) : null;
         return completedDate && format(completedDate, 'yyyy-MM-dd') === format(date, 'yyyy-MM-dd') && p.status === "delivered";
-      }).reduce((sum, p) => sum + (p.calculated_price || p.price || 0), 0);
+      }).reduce((sum, p) => sum + projectValue(p), 0);
 
       days.push({
         date: dateStr,
@@ -406,18 +378,20 @@ export default function Dashboard() {
       });
     }
 
-    const upcomingShoots = projects.filter(p => {
+    const upcomingShootProjects = projects.filter(p => {
       if (!p?.shoot_date || ["delivered"].includes(p?.status)) return false;
       try {
         const shootDate = parseISO(p.shoot_date);
         return isToday(shootDate) || isTomorrow(shootDate);
       } catch { return false; }
-    }).length;
+    });
+    const todayShootCount = upcomingShootProjects.filter(p => { try { return isToday(parseISO(p.shoot_date)); } catch { return false; } }).length;
 
-    if (upcomingShoots > 0) {
+    if (upcomingShootProjects.length > 0) {
+      const label = todayShootCount > 0 ? 'Today' : 'Tomorrow';
       insightsList.push({
         type: 'trend',
-        title: `${upcomingShoots} Shoots ${isToday(new Date()) ? 'Today' : 'Tomorrow'}`,
+        title: `${upcomingShootProjects.length} Shoot${upcomingShootProjects.length !== 1 ? 's' : ''} ${label}`,
         description: 'Ensure all equipment and staff are prepared.',
         action: { label: 'View Calendar', onClick: () => navigate(createPageUrl("Calendar")) }
       });
@@ -456,6 +430,7 @@ export default function Dashboard() {
       </div>
 
       {/* Dashboard Tabs */}
+      <React.Suspense fallback={<DashboardSkeleton />}>
       <Tabs defaultValue="overview" className="space-y-4">
        <div className="sticky top-0 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
          <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap -webkit-overflow-scrolling-touch" style={{ WebkitOverflowScrolling: 'touch' }}>
@@ -701,6 +676,7 @@ export default function Dashboard() {
           </ErrorBoundary>
         </TabsContent>
       </Tabs>
+      </React.Suspense>
 
       {showProjectForm && (
         <ProjectForm
