@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
 import { api } from '@/api/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
+const UnifiedNoteComposer = lazy(() => import('@/components/notes/UnifiedNoteComposer'));
 import {
   MessageSquare, Mail, Activity, Pin, ChevronDown, ChevronUp,
   MoreVertical, Lock, Users, Reply, Share2, ArrowRight, Trash2
@@ -61,6 +62,7 @@ export default function ProjectActivityFeedItem({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [replyType, setReplyType] = useState(null);
+  const [isCommentingOnNote, setIsCommentingOnNote] = useState(false);
   const queryClient = useQueryClient();
   const config = TYPE_CONFIG[item.type] || TYPE_CONFIG.activity;
   const IconComponent = config.icon;
@@ -246,23 +248,52 @@ export default function ProjectActivityFeedItem({
               )}
               {/* Reply thread */}
               {item._replies?.length > 0 && (
-                <div className="mt-2 border-t border-blue-100 pt-2 space-y-1.5">
+                <div className="mt-2 border-t border-border/30 pt-2 space-y-1.5">
                   <p className="text-[11px] font-medium text-blue-600">
-                    {item._replies.length} {item._replies.length === 1 ? 'reply' : 'replies'}
+                    {item._replies.length} {item._replies.length === 1 ? 'comment' : 'comments'}
                   </p>
                   {item._replies.map(reply => (
                     <div key={reply.id} className="flex gap-2 pl-1">
-                      <div className="w-5 h-5 rounded-full bg-blue-200 flex items-center justify-center text-[8px] font-bold text-blue-700 shrink-0 mt-0.5">
-                        {(reply.author_name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                      <div className="w-5 h-5 rounded-full bg-blue-200 dark:bg-blue-900 flex items-center justify-center text-[8px] font-bold text-blue-700 dark:text-blue-300 shrink-0 mt-0.5">
+                        {(reply.author_name || '?').split(' ').filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 2)}
                       </div>
                       <div className="min-w-0">
-                        <span className="text-[11px] font-semibold text-gray-700">{reply.author_name || 'Unknown'}</span>
-                        <p className="text-xs text-gray-600 whitespace-pre-wrap">{reply.content}</p>
+                        <span className="text-[11px] font-semibold text-foreground/80">{reply.author_name || 'Unknown'}</span>
+                        <p className="text-xs text-muted-foreground whitespace-pre-wrap">{reply.content}</p>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
+              {/* Add comment button + inline composer */}
+              <div className="mt-2 pt-1.5 border-t border-border/20">
+                {!isCommentingOnNote ? (
+                  <button
+                    onClick={() => setIsCommentingOnNote(true)}
+                    className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    <MessageSquare className="h-3 w-3" />
+                    Add comment
+                  </button>
+                ) : (
+                  <Suspense fallback={<div className="h-16 animate-pulse bg-muted/30 rounded" />}>
+                    <UnifiedNoteComposer
+                      agencyId={item._raw?.agency_id}
+                      projectId={item._raw?.project_id}
+                      agentId={item._raw?.agent_id}
+                      teamId={item._raw?.team_id}
+                      contextType={item._raw?.context_type}
+                      contextLabel={item._raw?.context_label}
+                      currentUser={currentUser}
+                      isReply
+                      parentNoteId={item._raw?.id}
+                      replyToAuthor={item._raw?.author_name}
+                      onSave={() => { setIsCommentingOnNote(false); onNoteRefresh?.(); }}
+                      onCancel={() => setIsCommentingOnNote(false)}
+                    />
+                  </Suspense>
+                )}
+              </div>
             </div>
           )}
 
