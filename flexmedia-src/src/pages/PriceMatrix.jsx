@@ -364,7 +364,7 @@ function CompactTableRow({ entity, matrix, entityType, Icon, isLast, isCreating,
   };
 
   const pricingMode = () => {
-    if (!hasMatrix || useDefault) return { label: "Default", cls: "bg-gray-100 text-gray-600 border-gray-200" };
+    if (!hasMatrix || useDefault) return { label: "Default", cls: "bg-muted text-muted-foreground border-border" };
     if (blanketEnabled) return {
       label: `Blanket ${blanket?.product_percent ?? 0}% / ${blanket?.package_percent ?? 0}%`,
       cls: "bg-amber-100 text-amber-800 border-amber-200"

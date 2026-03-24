@@ -362,7 +362,7 @@ export default function PackagesPage() {
                           <TableCell className="font-medium">${pkg.standard_tier?.package_price?.toFixed(2) || "0.00"}</TableCell>
                           <TableCell className="font-medium">${pkg.premium_tier?.package_price?.toFixed(2) || "0.00"}</TableCell>
                           <TableCell>
-                            <Badge variant="outline" className={pkg.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100"}>
+                            <Badge variant="outline" className={pkg.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-muted"}>
                               {pkg.is_active ? "Active" : "Inactive"}
                             </Badge>
                           </TableCell>

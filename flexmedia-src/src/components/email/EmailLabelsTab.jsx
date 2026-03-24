@@ -196,7 +196,7 @@ export default function EmailLabelsTab() {
                   <div
                     key={label.id}
                     className={`flex items-center gap-3 px-4 py-3 transition-colors ${
-                      isEditing ? "bg-blue-50/50" : "hover:bg-slate-50/50"
+                      isEditing ? "bg-blue-50/50" : "hover:bg-muted/50/50"
                     }`}
                   >
                     {isEditing ? (
@@ -235,7 +235,7 @@ export default function EmailLabelsTab() {
                         <LabelBadge label={label.name} color={label.color} className="text-[10px]" />
                         <div className="flex gap-1 ml-2">
                           <button
-                            className="p-1.5 hover:bg-slate-100 rounded-md transition-colors"
+                            className="p-1.5 hover:bg-muted rounded-md transition-colors"
                             onClick={() => startEdit(label)}
                             title="Edit label"
                           >

@@ -20,7 +20,7 @@ const FILTER_TABS = [
 
 function SkeletonNote() {
   return (
-    <div className="bg-white border border-border/60 rounded-xl shadow-sm mx-3 my-2.5 p-4 animate-pulse">
+    <div className="bg-card border border-border/60 rounded-xl shadow-sm mx-3 my-2.5 p-4 animate-pulse">
       <div className="flex gap-2.5 mb-3">
         <div className="w-8 h-8 rounded-full bg-muted shrink-0" />
         <div className="flex-1 space-y-1.5 pt-0.5">
@@ -182,7 +182,7 @@ export default function UnifiedNotesPanel({
                   {tab.label}
                   {count > 0 && (
                     <span className={`text-[9px] px-1 py-0.5 rounded-full leading-none ${
-                      filterType === tab.key ? 'bg-white/25 text-white' : 'bg-muted-foreground/15 text-muted-foreground'
+                      filterType === tab.key ? 'bg-card/25 text-white' : 'bg-muted-foreground/15 text-muted-foreground'
                     }`}>
                       {count}
                     </span>

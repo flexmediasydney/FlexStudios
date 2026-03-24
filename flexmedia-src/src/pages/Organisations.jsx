@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 const STATE_STYLES = {
   'Active':         'bg-green-50 text-green-700 border-green-200',
   'Prospecting':    'bg-orange-50 text-orange-700 border-orange-200',
-  'Dormant':        'bg-gray-100 text-gray-500 border-gray-200',
+  'Dormant':        'bg-muted text-muted-foreground border-border',
   'Do Not Contact': 'bg-red-50 text-red-700 border-red-200',
 };
 
@@ -283,7 +283,7 @@ export default function Organisations() {
             <span className="font-semibold text-foreground">{stats.total}</span> total ·
             <span className="text-green-600 font-medium ml-1">{stats.active}</span> active ·
             <span className="text-orange-500 font-medium ml-1">{stats.prospecting}</span> prospecting ·
-            <span className="text-gray-400 font-medium ml-1">{stats.dormant}</span> dormant
+            <span className="text-muted-foreground/70 font-medium ml-1">{stats.dormant}</span> dormant
             {stats.dnc > 0 && <><span className="text-red-500 font-medium ml-1">{stats.dnc}</span> DNC</>}
           </div>
         </div>

@@ -240,7 +240,7 @@ function PipelineBar({ status }) {
       {STAGES.map((stage, i) => (
         <div
           key={stage.key}
-          className={`h-1.5 flex-1 rounded-sm transition-colors ${i <= currentIdx ? stage.color : 'bg-gray-100'}`}
+          className={`h-1.5 flex-1 rounded-sm transition-colors ${i <= currentIdx ? stage.color : 'bg-muted'}`}
           title={stage.key.replace(/_/g, ' ')}
         />
       ))}
@@ -562,7 +562,7 @@ export default function PersonDetails() {
         <h1 className="text-base font-bold truncate leading-tight">{agent.name}</h1>
 
         {agent.relationship_state && (
-          <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+          <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-muted text-foreground/80'}`}>
             {agent.relationship_state.toUpperCase()}
           </Badge>
         )}
@@ -617,7 +617,7 @@ export default function PersonDetails() {
               </div>
             </div>
             {agent.relationship_state && (
-              <Badge className={`text-[10px] border font-semibold px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+              <Badge className={`text-[10px] border font-semibold px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-muted text-foreground/80'}`}>
                 {agent.relationship_state.toUpperCase()}
               </Badge>
             )}

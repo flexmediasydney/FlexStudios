@@ -134,7 +134,7 @@ export default function TaskDetailPanel({
   const effectiveCanEdit = canEdit && !isOnsite;
 
   return (
-    <div className="bg-white p-2.5 rounded-lg border border-border/50 space-y-1.5 text-xs">
+    <div className="bg-card p-2.5 rounded-lg border border-border/50 space-y-1.5 text-xs">
       {isOnsite && (
         <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-50 border border-blue-200 text-xs text-blue-700">
           <Lock className="h-3 w-3 flex-shrink-0" />
@@ -280,7 +280,7 @@ export default function TaskDetailPanel({
                 <Badge
                   key={depTask.id}
                   className={`text-xs px-1 py-0 ${
-                    depTask.is_completed ? "bg-green-100 text-green-700" : depTask.is_blocked ? "bg-orange-100 text-orange-700" : "bg-white border border-border text-muted-foreground"
+                    depTask.is_completed ? "bg-green-100 text-green-700" : depTask.is_blocked ? "bg-orange-100 text-orange-700" : "bg-card border border-border text-muted-foreground"
                   }`}
                 >
                   {depTask.is_completed ? "✓" : depTask.is_blocked ? "🔒" : "→"} {depTask.title}

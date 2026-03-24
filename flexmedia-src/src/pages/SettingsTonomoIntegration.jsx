@@ -709,7 +709,7 @@ export default function SettingsTonomoIntegration() {
                           item.status === 'failed' ? 'bg-red-100 text-red-700' :
                           item.status === 'dead_letter' ? 'bg-amber-100 text-amber-700' :
                           item.status === 'processing' ? 'bg-blue-100 text-blue-700' :
-                          item.status === 'superseded' ? 'bg-gray-100 text-gray-700' :
+                          item.status === 'superseded' ? 'bg-muted text-foreground/80' :
                           'bg-slate-100 text-slate-700'
                         }`}>
                           {statusLabels[item.status] || item.status}

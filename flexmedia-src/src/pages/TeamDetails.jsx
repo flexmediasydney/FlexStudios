@@ -252,7 +252,7 @@ function PipelineBar({ status }) {
       {STAGES.map((stage, i) => (
         <div
           key={stage.key}
-          className={`h-1.5 flex-1 rounded-sm transition-colors ${i <= currentIdx ? stage.color : 'bg-gray-100'}`}
+          className={`h-1.5 flex-1 rounded-sm transition-colors ${i <= currentIdx ? stage.color : 'bg-muted'}`}
           title={stage.key.replace(/_/g, ' ')}
         />
       ))}
@@ -392,7 +392,7 @@ function MemberCard({ member }) {
           {member.title && <p className="text-[10px] text-muted-foreground truncate mt-0.5">{member.title}</p>}
           {member.email && <p className="text-[10px] text-primary hover:underline truncate mt-0.5">{member.email}</p>}
           <div className="mt-2">
-            <Badge className={`text-[10px] border ${STATE_BADGE[member.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+            <Badge className={`text-[10px] border ${STATE_BADGE[member.relationship_state] || 'bg-muted text-foreground/80'}`}>
               {member.relationship_state || 'Unknown'}
             </Badge>
           </div>

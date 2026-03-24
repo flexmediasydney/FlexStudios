@@ -11,7 +11,7 @@ import { toast } from 'sonner';
 const stateConfig = {
   'Prospecting': { color: 'bg-orange-100', textColor: 'text-orange-900', badge: 'bg-orange-200 text-orange-800' },
   'Active': { color: 'bg-green-100', textColor: 'text-green-900', badge: 'bg-green-200 text-green-800' },
-  'Dormant': { color: 'bg-gray-100', textColor: 'text-gray-900', badge: 'bg-gray-200 text-gray-800' },
+  'Dormant': { color: 'bg-muted', textColor: 'text-foreground', badge: 'bg-gray-200 text-foreground' },
   'Do Not Contact': { color: 'bg-red-100', textColor: 'text-red-900', badge: 'bg-red-200 text-red-800' }
 };
 

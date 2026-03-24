@@ -388,7 +388,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                       type="number" step="1" min="0" max="100"
                       value={localData.blanket_discount?.product_percent ?? 0}
                       onChange={(e) => setField("blanket_discount.product_percent", clamp(e.target.value, 0, 100))}
-                      className="h-7 w-20 text-xs bg-white border-amber-200"
+                      className="h-7 w-20 text-xs bg-card border-amber-200"
                     />
                     <span className="text-xs text-amber-700">%</span>
                   </div>
@@ -398,7 +398,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                       type="number" step="1" min="0" max="100"
                       value={localData.blanket_discount?.package_percent ?? 0}
                       onChange={(e) => setField("blanket_discount.package_percent", clamp(e.target.value, 0, 100))}
-                      className="h-7 w-20 text-xs bg-white border-amber-200"
+                      className="h-7 w-20 text-xs bg-card border-amber-200"
                     />
                     <span className="text-xs text-amber-700">%</span>
                   </div>

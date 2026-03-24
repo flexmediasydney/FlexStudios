@@ -169,7 +169,7 @@ export default function LabelSelectorRobust({
               "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all",
               selectedLabels.length > 0
                 ? "bg-blue-50 text-blue-700 hover:bg-blue-100"
-                : "text-slate-500 hover:text-slate-700 hover:bg-slate-100"
+                : "text-slate-500 hover:text-foreground hover:bg-muted"
             )}
             title="Manage labels"
           >
@@ -271,7 +271,7 @@ export default function LabelSelectorRobust({
               return (
                 <div
                   key={label.id}
-                  className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-50 border-b last:border-b-0 group cursor-pointer transition-colors"
+                  className="flex items-center gap-2 px-3 py-1.5 hover:bg-muted/50 border-b last:border-b-0 group cursor-pointer transition-colors"
                   onClick={() => handleLabelToggle(label.name)}
                 >
                   {/* Checkbox — tri-state: checked / indeterminate / unchecked */}

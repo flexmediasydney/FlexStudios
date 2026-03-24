@@ -121,7 +121,7 @@ export default function InstallPrompt() {
   if (showIOSPrompt && !showPrompt) {
     return (
       <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md animate-in slide-in-from-bottom-4 duration-300">
-        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-card p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900">
             <Share className="h-5 w-5" />
           </div>
@@ -135,7 +135,7 @@ export default function InstallPrompt() {
           </div>
           <button
             onClick={handleDismiss}
-            className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            className="rounded-md p-1.5 text-slate-400 hover:bg-muted hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
             aria-label="Dismiss install prompt"
           >
             <X className="h-4 w-4" />
@@ -150,7 +150,7 @@ export default function InstallPrompt() {
 
   return (
     <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md animate-in slide-in-from-bottom-4 duration-300">
-      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-card p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900">
           <Download className="h-5 w-5" />
         </div>
@@ -168,7 +168,7 @@ export default function InstallPrompt() {
           </Button>
           <button
             onClick={handleDismiss}
-            className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            className="rounded-md p-1.5 text-slate-400 hover:bg-muted hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
             aria-label="Dismiss install prompt"
           >
             <X className="h-4 w-4" />

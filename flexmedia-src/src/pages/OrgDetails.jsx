@@ -265,7 +265,7 @@ export default function OrgDetails() {
           {agency.address && <p className="text-[11px] text-muted-foreground truncate leading-tight">{agency.address}</p>}
         </div>
 
-        <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agency.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+        <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agency.relationship_state] || 'bg-muted text-foreground/80'}`}>
           {agency.relationship_state || 'Unknown'}
         </Badge>
 

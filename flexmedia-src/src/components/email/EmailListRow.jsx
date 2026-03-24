@@ -367,7 +367,7 @@ const EmailListRow = React.memo(function EmailListRow({
             {realAttachments.length > 0 && (
               <AttachmentsHoverCard attachments={realAttachments}>
                 <button
-                  className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-slate-100 transition-colors"
+                  className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-muted transition-colors"
                         onClick={(e) => e.stopPropagation()}
                         aria-label={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
                         title={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
@@ -394,7 +394,7 @@ const EmailListRow = React.memo(function EmailListRow({
                     "w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150 active:scale-95",
                     isShared
                       ? "text-blue-600 hover:bg-blue-100/60 bg-blue-50/30"
-                      : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-slate-100/40"
+                      : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/40"
                   )}
                   onClick={(e) => {
                     e.stopPropagation();

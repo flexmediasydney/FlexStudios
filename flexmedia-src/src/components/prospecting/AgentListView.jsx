@@ -14,7 +14,7 @@ const statusColors = {
   'Qualified': 'bg-green-100 text-green-800',
   'Unqualified': 'bg-red-100 text-red-800',
   'Converted to Client': 'bg-emerald-100 text-emerald-800',
-  'Lost': 'bg-gray-100 text-gray-800'
+  'Lost': 'bg-muted text-foreground'
 };
 
 export default function AgentListView({ agents, interactions }) {
@@ -46,7 +46,7 @@ export default function AgentListView({ agents, interactions }) {
                     </div>
                   </div>
                   <div className="text-right">
-                    <Badge className={statusColors[agent.status] || 'bg-gray-100 text-gray-800'}>
+                    <Badge className={statusColors[agent.status] || 'bg-muted text-foreground'}>
                       {agent.status}
                     </Badge>
                     <p className="text-xs text-muted-foreground mt-2">{agent.interactionCount} interactions</p>

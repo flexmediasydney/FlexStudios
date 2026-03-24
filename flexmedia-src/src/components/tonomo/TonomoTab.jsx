@@ -306,7 +306,7 @@ export default function TonomoTab({ project }) {
                         failed: { dot: 'bg-red-500', bg: 'bg-red-50', text: 'text-red-700', label: 'Failed' },
                         dead_letter: { dot: 'bg-amber-500', bg: 'bg-amber-50', text: 'text-amber-700', label: 'Dead Letter' },
                         processing: { dot: 'bg-blue-500', bg: 'bg-blue-50', text: 'text-blue-700', label: 'Processing' },
-                        pending: { dot: 'bg-slate-400', bg: 'bg-slate-50', text: 'text-slate-600', label: 'Pending' },
+                        pending: { dot: 'bg-slate-400', bg: 'bg-muted/50', text: 'text-muted-foreground', label: 'Pending' },
                         superseded: { dot: 'bg-gray-400', bg: 'bg-gray-50', text: 'text-gray-500', label: 'Superseded' },
                       };
                       const cfg = statusConfig[item.status] || statusConfig.pending;

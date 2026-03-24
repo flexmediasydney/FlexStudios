@@ -329,7 +329,7 @@ export default function TonomoPulse() {
               {filter === "all" ? "No webhook events yet" : `No ${filter} events found`}
             </p>
             {filter === "all" && (
-              <p className="text-gray-500 text-sm mt-1">Waiting for Tonomo...</p>
+              <p className="text-muted-foreground text-sm mt-1">Waiting for Tonomo...</p>
             )}
           </div>
         ) : view === "dashboard" ? (

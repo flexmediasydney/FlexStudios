@@ -842,12 +842,12 @@ export default function ProjectDetails() {
     <div className="p-4 lg:p-8 space-y-4 lg:space-y-6">
       <ErrorBoundary>
       {isArchived && (
-        <div className="bg-slate-100 border border-slate-300 rounded-xl p-4 mb-6 flex items-center justify-between">
+        <div className="bg-muted border border-border rounded-xl p-4 mb-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-slate-200 flex items-center justify-center text-slate-500 text-lg">📦</div>
+            <div className="w-8 h-8 rounded-lg bg-slate-200 flex items-center justify-center text-muted-foreground text-lg">📦</div>
             <div>
-              <p className="text-sm font-semibold text-slate-700">This project is archived</p>
-              <p className="text-xs text-slate-500">Delivered, paid, and all work completed · Archived {project.archived_at ? fmtDate(project.archived_at, 'd MMM yyyy') : ''}</p>
+              <p className="text-sm font-semibold text-foreground/80">This project is archived</p>
+              <p className="text-xs text-muted-foreground">Delivered, paid, and all work completed · Archived {project.archived_at ? fmtDate(project.archived_at, 'd MMM yyyy') : ''}</p>
             </div>
           </div>
           {isMasterAdmin && (

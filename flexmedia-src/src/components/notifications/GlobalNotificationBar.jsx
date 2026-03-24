@@ -58,13 +58,13 @@ function CriticalBanner({ notifications, onMarkRead, onDismiss, onNavigate }) {
       <span className="flex-1 font-semibold">{n.title} — {n.message}</span>
       {n.cta_url && (
         <button
-          className="underline text-red-100 hover:text-white text-xs shrink-0 font-medium hover:bg-white/10 px-2 py-1 rounded transition-colors"
+          className="underline text-red-100 hover:text-white text-xs shrink-0 font-medium hover:bg-card/10 px-2 py-1 rounded transition-colors"
           onClick={() => { onNavigate(n); onMarkRead(n.id); }}
         >
           {n.cta_label || "View"} →
         </button>
       )}
-      <button onClick={() => onDismiss(n.id)} className="text-red-200 hover:text-white hover:bg-white/10 p-1 rounded transition-colors" title="Dismiss" aria-label="Dismiss critical notification">
+      <button onClick={() => onDismiss(n.id)} className="text-red-200 hover:text-white hover:bg-card/10 p-1 rounded transition-colors" title="Dismiss" aria-label="Dismiss critical notification">
         <X className="h-4 w-4" />
       </button>
     </div>

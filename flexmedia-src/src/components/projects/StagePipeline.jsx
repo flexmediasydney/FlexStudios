@@ -49,8 +49,8 @@ function LiveTimer({ since, baseSeconds = 0, compact = false }) {
 function PulseDot() {
   return (
     <span className="absolute top-1 left-1.5 flex h-2.5 w-2.5">
-      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75" />
-      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white opacity-95 shadow-sm" />
+      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-card opacity-75" />
+      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-card opacity-95 shadow-sm" />
     </span>
   );
 }
@@ -301,7 +301,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
                 {timeInfo?.isReEntry && (
                   <span className={cn(
                     "absolute top-0.5 right-1.5 text-[8px] font-bold rounded-full px-1.5 py-0.5 leading-tight shadow-sm",
-                    isCurrent || isCompleted ? "bg-white/40 text-white backdrop-blur-sm" : "bg-[#3c4043]/30 text-[#3c4043]"
+                    isCurrent || isCompleted ? "bg-card/40 text-white backdrop-blur-sm" : "bg-[#3c4043]/30 text-[#3c4043]"
                   )} title={`Visited ${timeInfo.visitCount} times`}>
                     ×{timeInfo.visitCount}
                   </span>
@@ -340,12 +340,12 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
                     )}>
                       <p className="font-semibold text-sm">{stage.label}</p>
                       {isCurrent ? (
-                        <span className="flex items-center gap-1 text-[10px] font-medium bg-white/20 rounded-full px-2 py-0.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                        <span className="flex items-center gap-1 text-[10px] font-medium bg-card/20 rounded-full px-2 py-0.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-card animate-pulse" />
                           LIVE
                         </span>
                       ) : timeInfo ? (
-                        <span className="text-[10px] font-medium bg-white/20 rounded-full px-2 py-0.5">
+                        <span className="text-[10px] font-medium bg-card/20 rounded-full px-2 py-0.5">
                           {timeInfo.visitCount}× visited
                         </span>
                       ) : null}
@@ -357,7 +357,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
                           <div className="space-y-1.5">
                             <p className="text-[10px] uppercase tracking-wider text-white/40 font-semibold">Visit History</p>
                             {sortedVisits.map((visit, i) => (
-                              <div key={visit.id || i} className="flex items-center justify-between bg-white/5 rounded px-2 py-1">
+                              <div key={visit.id || i} className="flex items-center justify-between bg-card/5 rounded px-2 py-1">
                                 <div className="text-white/60">
                                   <span className="text-white/40 text-[10px]">#{i + 1} </span>
                                   <span>{new Date(fixTimestamp(visit.entry_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</span>

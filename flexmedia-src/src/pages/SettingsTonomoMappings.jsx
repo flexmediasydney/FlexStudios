@@ -37,7 +37,7 @@ function getStatus(mapping, rightEntities) {
 const STATUS = {
   linked:    { dot: "bg-green-500",  line: "border-green-400",  label: "Linked",     icon: CheckCircle2, iconColor: "text-green-600"  },
   suggested: { dot: "bg-blue-400",   line: "border-blue-300",   label: "Suggested",  icon: Circle,       iconColor: "text-blue-500"   },
-  unlinked:  { dot: "bg-gray-300",   line: "border-dashed border-gray-300", label: "Unlinked", icon: Circle, iconColor: "text-gray-400" },
+  unlinked:  { dot: "bg-gray-300",   line: "border-dashed border-border", label: "Unlinked", icon: Circle, iconColor: "text-muted-foreground/70" },
   broken:    { dot: "bg-red-500",    line: "border-red-300",    label: "Broken",     icon: XCircle,      iconColor: "text-red-500"    },
 };
 

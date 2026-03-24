@@ -100,7 +100,7 @@ function SuburbPanel({ cluster, allProjects, onClose }) {
   const growth = prior > 0 ? Math.round(((recent - prior) / prior) * 100) : recent > 0 ? 100 : 0;
 
   return (
-    <div className="absolute top-0 right-0 h-full w-80 bg-background border-l shadow-xl z-[1000] flex flex-col">
+    <div className="absolute top-0 right-0 h-full w-80 bg-background border-l shadow-xl z-20 flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b shrink-0 bg-primary/5">
         <div>
           <h3 className="font-bold text-sm">{cluster.suburb}</h3>
@@ -328,7 +328,7 @@ export default function TerritoryMap() {
           </MapContainer>
         )}
         {(mode === 'territory' || mode === 'timeline') && topSuburbs.length > 0 && (
-          <div className="absolute top-3 left-3 w-56 bg-background/95 backdrop-blur-sm border rounded-xl shadow-lg z-[1000] overflow-hidden">
+          <div className="absolute top-3 left-3 w-56 bg-background/95 backdrop-blur-sm border rounded-xl shadow-lg z-20 overflow-hidden">
             <div className="px-3 py-2 border-b bg-muted/30"><div className="flex items-center justify-between"><span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{metric === 'revenue' ? 'Revenue by area' : 'Project volume'}</span><BarChart3 className="h-3 w-3 text-muted-foreground" /></div></div>
             <div className="max-h-80 overflow-y-auto">
               {topSuburbs.map((cluster, i) => {

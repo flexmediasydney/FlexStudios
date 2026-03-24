@@ -735,7 +735,7 @@ export default function EmailComposeDialog({
     <>
       <Dialog open onOpenChange={onClose}>
         <DialogContent
-          className="max-w-5xl w-[95vw] h-[88vh] flex flex-col p-0 bg-white !fixed"
+          className="max-w-5xl w-[95vw] h-[88vh] flex flex-col p-0 bg-card !fixed"
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -744,7 +744,7 @@ export default function EmailComposeDialog({
           {/* Full-dialog drag & drop overlay (Gmail-style) */}
           {isDragOver && (
             <div className="absolute inset-0 bg-blue-50/70 backdrop-blur-[2px] border-[3px] border-dashed border-blue-400 rounded-lg flex items-center justify-center z-50 pointer-events-none transition-all duration-150">
-              <div className="flex flex-col items-center gap-3 bg-white/80 px-10 py-8 rounded-2xl shadow-lg border border-blue-200">
+              <div className="flex flex-col items-center gap-3 bg-card/80 px-10 py-8 rounded-2xl shadow-lg border border-blue-200">
                 <div className="h-14 w-14 rounded-full bg-blue-100 flex items-center justify-center">
                   <Upload className="h-7 w-7 text-blue-600" />
                 </div>
@@ -761,7 +761,7 @@ export default function EmailComposeDialog({
                 variant="ghost"
                 size="icon"
                 onClick={onClose}
-                className="h-9 w-9 hover:bg-slate-100"
+                className="h-9 w-9 hover:bg-muted"
                 title="Close (Esc)"
               >
                 <ArrowLeft className="h-5 w-5 text-slate-600" />
@@ -793,9 +793,9 @@ export default function EmailComposeDialog({
           </div>
 
           {/* Main Content */}
-          <div className="flex flex-1 overflow-hidden bg-white">
+          <div className="flex flex-1 overflow-hidden bg-card">
             {/* Left Content */}
-            <div className="flex-1 overflow-y-auto flex flex-col bg-white">
+            <div className="flex-1 overflow-y-auto flex flex-col bg-card">
               <div className="p-6 space-y-5 flex-1">
                 {/* From */}
                 <div className="space-y-2">
@@ -803,7 +803,7 @@ export default function EmailComposeDialog({
                     From
                   </label>
                   <Select value={selectedAccount} onValueChange={setSelectedAccount}>
-                    <SelectTrigger className="w-full bg-white border-2 hover:border-blue-300">
+                    <SelectTrigger className="w-full bg-card border-2 hover:border-blue-300">
                       <SelectValue placeholder="Select email account" />
                     </SelectTrigger>
                     <SelectContent>
@@ -845,7 +845,7 @@ export default function EmailComposeDialog({
                     placeholder="recipient@example.com"
                     value={recipients}
                     onChange={(e) => setRecipients(e.target.value)}
-                    className="text-sm bg-white border-2 hover:border-blue-300"
+                    className="text-sm bg-card border-2 hover:border-blue-300"
                     required
                   />
                 </div>
@@ -858,7 +858,7 @@ export default function EmailComposeDialog({
                       placeholder="cc@example.com"
                       value={cc}
                       onChange={(e) => setCc(e.target.value)}
-                      className="text-sm bg-white border-2 hover:border-blue-300"
+                      className="text-sm bg-card border-2 hover:border-blue-300"
                     />
                   </div>
                 )}
@@ -871,7 +871,7 @@ export default function EmailComposeDialog({
                       placeholder="bcc@example.com"
                       value={bcc}
                       onChange={(e) => setBcc(e.target.value)}
-                      className="text-sm bg-white border-2 hover:border-blue-300"
+                      className="text-sm bg-card border-2 hover:border-blue-300"
                     />
                   </div>
                 )}
@@ -885,7 +885,7 @@ export default function EmailComposeDialog({
                     placeholder="Enter email subject..."
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
-                    className="text-sm bg-white border-2 hover:border-blue-300 font-medium"
+                    className="text-sm bg-card border-2 hover:border-blue-300 font-medium"
                     required
                   />
                 </div>
@@ -915,7 +915,7 @@ export default function EmailComposeDialog({
                     modules={modules}
                     formats={formats}
                     placeholder="Write your message..."
-                    className="bg-white rounded border-2 border-slate-200 flex-1 [&>.ql-container]:h-full [&>.ql-toolbar]:border-b-2 [&>.ql-toolbar]:border-slate-200"
+                    className="bg-card rounded border-2 border-slate-200 flex-1 [&>.ql-container]:h-full [&>.ql-toolbar]:border-b-2 [&>.ql-toolbar]:border-slate-200"
                   />
 
                   {body && /\{\{[^}]+\}\}/.test(body) && (
@@ -963,7 +963,7 @@ export default function EmailComposeDialog({
                         return (
                           <div
                             key={idx}
-                            className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs font-medium hover:border-blue-300 transition-colors group"
+                            className="flex items-center gap-2 bg-card px-3 py-2 rounded-lg border border-slate-200 text-xs font-medium hover:border-blue-300 transition-colors group"
                           >
                             <Icon className={`h-4 w-4 flex-shrink-0 ${color}`} />
                             <span className="truncate max-w-[160px]" title={att.filename}>
@@ -994,7 +994,7 @@ export default function EmailComposeDialog({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 hover:bg-slate-100 rounded-full transition-all active:scale-95"
+                      className="h-9 w-9 hover:bg-muted rounded-full transition-all active:scale-95"
                       asChild
                       disabled={uploadProgress === 'uploading'}
                     >
@@ -1143,7 +1143,7 @@ export default function EmailComposeDialog({
                       if (!linkedProject) setProjectSearch(e.target.value);
                     }}
                     disabled={!!linkedProject}
-                    className="text-sm bg-white border-2 hover:border-blue-300 disabled:opacity-50"
+                    className="text-sm bg-card border-2 hover:border-blue-300 disabled:opacity-50"
                     aria-label="Search projects"
                   />
                   {projectSearch && (
@@ -1184,7 +1184,7 @@ export default function EmailComposeDialog({
                 )}
 
                 {projectSearch && filteredProjects.length > 0 && (
-                  <div className="border-2 border-slate-200 rounded-lg bg-white flex-1 overflow-y-auto shadow-sm">
+                  <div className="border-2 border-slate-200 rounded-lg bg-card flex-1 overflow-y-auto shadow-sm">
                     {filteredProjects.map((project) => (
                       <button
                         key={project.id}

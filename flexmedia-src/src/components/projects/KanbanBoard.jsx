@@ -369,7 +369,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
 
             {/* Task progress bar */}
             {tasksTotal > 0 && (
-              <div className="h-1.5 bg-white/50 rounded-full overflow-hidden">
+              <div className="h-1.5 bg-card/50 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-green-500 rounded-full transition-all duration-500"
                   style={{ width: `${(tasksDone / tasksTotal) * 100}%` }}
@@ -691,7 +691,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                           ? 'bg-red-100 text-red-700'
                           : columnProjects.length > 6
                           ? 'bg-amber-100 text-amber-700'
-                          : 'bg-white/40 text-foreground'
+                          : 'bg-card/40 text-foreground'
                       }`}>
                         {columnProjects.length}
                       </span>
@@ -705,7 +705,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                       {/* Revenue */}
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs bg-white/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-white/40 transition-colors shadow-sm">
+                          <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
                             <DollarSign className="h-3 w-3 flex-shrink-0" />
                             <span className="font-bold tabular-nums">
                               {columnRevenue >= 1000000
@@ -752,7 +752,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                       {/* Tasks Done */}
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs bg-white/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-white/40 transition-colors shadow-sm">
+                          <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
                             <CheckCircle2 className="h-3 w-3 text-green-600 flex-shrink-0" />
                             <span className="font-bold tabular-nums">{tasksDone}</span>
                           </div>
@@ -790,7 +790,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                       {/* Tasks In Progress */}
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs bg-white/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-white/40 transition-colors shadow-sm">
+                          <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
                             <Clock className="h-3 w-3 text-blue-600 flex-shrink-0" />
                             <span className="font-bold tabular-nums">{tasksInProgress}</span>
                           </div>
@@ -828,7 +828,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                       {/* Tasks Overdue */}
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs bg-white/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-white/40 transition-colors shadow-sm">
+                          <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
                             <AlertCircle className="h-3 w-3 text-red-600 flex-shrink-0" />
                             <span className="font-bold tabular-nums">{tasksOverdue}</span>
                           </div>
@@ -1067,7 +1067,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
             }
           }}
         >
-          <div className="bg-white dark:bg-card rounded-lg p-6 max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
+          <div className="bg-card dark:bg-card rounded-lg p-6 max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
             <h3 id="backward-drag-title" className="font-semibold text-base mb-2">Move Project Backward?</h3>
             <p className="text-sm text-muted-foreground mb-4">
               Moving <strong>{pendingDrag.project?.title || 'this project'}</strong> from{' '}

@@ -156,12 +156,12 @@ export default function NoteComposer({
           onChange={handleContentChange}
           onKeyDown={handleKeyDown}
           data-note-textarea
-          className={`min-h-[72px] resize-none text-sm ${isReply ? 'bg-white' : 'bg-yellow-50 border-yellow-200'}`}
+          className={`min-h-[72px] resize-none text-sm ${isReply ? 'bg-card' : 'bg-yellow-50 border-yellow-200'}`}
         />
 
         {/* @mention dropdown */}
         {mentionOpen && filteredUsers.length > 0 && (
-          <div className="absolute left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
+          <div className="absolute left-0 right-0 top-full mt-1 bg-card border rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto">
             {filteredUsers.map(u => (
               <button
                 key={u.id}

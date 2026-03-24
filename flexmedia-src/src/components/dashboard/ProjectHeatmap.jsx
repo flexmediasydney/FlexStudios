@@ -103,7 +103,7 @@ function ProjectDrawer({ project, onClose }) {
   const value = project.invoiced_amount ?? project.calculated_price ?? project.price ?? null;
 
   return (
-    <div className="absolute top-0 right-0 h-full w-72 bg-background border-l shadow-xl z-[1000] flex flex-col">
+    <div className="absolute top-0 right-0 h-full w-72 bg-background border-l shadow-xl z-20 flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
         <div className="flex items-center gap-2">
@@ -208,7 +208,7 @@ function ProjectDrawer({ project, onClose }) {
 // ─── Side list panel ──────────────────────────────────────────────────────────
 function ProjectListPanel({ projects, selectedId, onSelect, loading }) {
   return (
-    <div className="absolute top-0 left-0 h-full w-64 bg-background/95 backdrop-blur-sm border-r z-[1000] flex flex-col">
+    <div className="absolute top-0 left-0 h-full w-64 bg-background/95 backdrop-blur-sm border-r z-20 flex flex-col">
       <div className="px-3 py-2.5 border-b shrink-0">
         <p className="text-xs font-semibold text-muted-foreground">
           {loading ? 'Loading…' : `${projects.length} project${projects.length !== 1 ? 's' : ''} in view`}

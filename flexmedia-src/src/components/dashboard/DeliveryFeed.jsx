@@ -223,7 +223,7 @@ function DeliveryCard({ project, isNew }) {
               <span className="font-semibold text-sm">{projectTitle(project)}</span>
               {isNew && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-200">NEW</Badge>}
               <Badge variant="outline" className="text-[9px]">{stageLabel(project.status)}</Badge>
-              {packageName && <Badge variant="outline" className="text-[9px] bg-slate-50">{packageName}</Badge>}
+              {packageName && <Badge variant="outline" className="text-[9px] bg-muted/50">{packageName}</Badge>}
             </div>
             <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
               {project.agent_name && <span>{project.agent_name}</span>}

@@ -161,7 +161,7 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
   const hasThread = sortedReplies.length > 0 || isReplying;
 
   return (
-    <div className="bg-white border border-border/60 rounded-xl shadow-sm mx-3 my-2.5 overflow-hidden transition-shadow hover:shadow-md">
+    <div className="bg-card border border-border/60 rounded-xl shadow-sm mx-3 my-2.5 overflow-hidden transition-shadow hover:shadow-md">
       {/* Header: avatar + author + time + context + actions */}
       <div className="flex items-start justify-between px-4 pt-3.5 pb-1 gap-2">
         <div className="flex items-start gap-2.5 min-w-0">

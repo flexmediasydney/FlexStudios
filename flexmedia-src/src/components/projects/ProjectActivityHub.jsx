@@ -324,7 +324,7 @@ export default function ProjectActivityHub({ projectId, project }) {
               {tab.label}
               {count > 0 && (
                 <span className={`text-[9px] px-1 py-0.5 rounded-full leading-none ${
-                  isActive ? 'bg-white/25 text-white' : 'bg-muted-foreground/15 text-muted-foreground'
+                  isActive ? 'bg-card/25 text-white' : 'bg-muted-foreground/15 text-muted-foreground'
                 }`}>
                   {count}
                 </span>

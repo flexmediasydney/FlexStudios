@@ -130,7 +130,7 @@ export default function ExecutiveMetricsGrid({ metrics, navigate }) {
                 {card.trend !== 0 && (
                   <div className={cn(
                     "flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold",
-                    card.trend > 0 ? "bg-green-100 text-green-700" : card.trend < 0 ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"
+                    card.trend > 0 ? "bg-green-100 text-green-700" : card.trend < 0 ? "bg-red-100 text-red-700" : "bg-muted text-muted-foreground"
                   )}>
                     <TrendIcon className="h-3 w-3" />
                     {Math.abs(card.trend)}%

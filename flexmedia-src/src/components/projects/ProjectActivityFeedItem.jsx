@@ -237,7 +237,7 @@ export default function ProjectActivityFeedItem({
                       href={att.file_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline bg-white/60 px-1.5 py-0.5 rounded border border-blue-100"
+                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline bg-card/60 px-1.5 py-0.5 rounded border border-blue-100"
                     >
                       {att.file_name || 'Attachment'}
                     </a>

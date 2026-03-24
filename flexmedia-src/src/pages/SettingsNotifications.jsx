@@ -22,7 +22,7 @@ const NOTIFICATION_CATEGORIES = {
   revision:   { label: "Revisions",  icon: "🔄", color: "bg-amber-100 text-amber-700" },
   tonomo:     { label: "Tonomo",     icon: "⚡", color: "bg-emerald-100 text-emerald-700" },
   financial:  { label: "Financial",  icon: "💰", color: "bg-green-100 text-green-700" },
-  system:     { label: "System",     icon: "🔧", color: "bg-slate-100 text-slate-600" },
+  system:     { label: "System",     icon: "🔧", color: "bg-muted text-muted-foreground" },
 };
 
 const NOTIFICATION_TYPES_LIST = [
@@ -258,7 +258,7 @@ function MyPreferencesTab({ userId }) {
           Notification Types
         </h3>
         {Object.entries(grouped).map(([category, types]) => {
-          const cfg = NOTIFICATION_CATEGORIES[category] || { label: category, icon: "🔔", color: "bg-slate-100 text-slate-600" };
+          const cfg = NOTIFICATION_CATEGORIES[category] || { label: category, icon: "🔔", color: "bg-muted text-muted-foreground" };
           const isExpanded = expanded.has(category);
           const catEnabled = getCategoryPref(category);
 

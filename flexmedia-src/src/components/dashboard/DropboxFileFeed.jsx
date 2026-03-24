@@ -124,12 +124,12 @@ function Lightbox({ files, initialIndex, projectName, onClose }) {
           {file.type === 'image' && (
             <>
               <button onClick={() => setZoom(z => Math.max(0.5, z - 0.25))}
-                className="text-white/60 hover:text-white p-1.5 rounded hover:bg-white/10">
+                className="text-white/60 hover:text-white p-1.5 rounded hover:bg-card/10">
                 <ZoomOut className="h-4 w-4" />
               </button>
               <span className="text-white/40 text-xs w-10 text-center">{Math.round(zoom * 100)}%</span>
               <button onClick={() => setZoom(z => Math.min(4, z + 0.25))}
-                className="text-white/60 hover:text-white p-1.5 rounded hover:bg-white/10">
+                className="text-white/60 hover:text-white p-1.5 rounded hover:bg-card/10">
                 <ZoomIn className="h-4 w-4" />
               </button>
             </>
@@ -137,12 +137,12 @@ function Lightbox({ files, initialIndex, projectName, onClose }) {
           {(tempUrl || file.thumbnail) && (
             <a href={tempUrl || `data:image/jpeg;base64,${file.thumbnail}`}
               download={file.name}
-              className="text-white/60 hover:text-white p-1.5 rounded hover:bg-white/10">
+              className="text-white/60 hover:text-white p-1.5 rounded hover:bg-card/10">
               <Download className="h-4 w-4" />
             </a>
           )}
           <button onClick={onClose}
-            className="text-white/60 hover:text-white p-1.5 rounded hover:bg-white/10">
+            className="text-white/60 hover:text-white p-1.5 rounded hover:bg-card/10">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -193,7 +193,7 @@ function Lightbox({ files, initialIndex, projectName, onClose }) {
               )}
               {tempUrl && (
                 <a href={tempUrl} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="sm" className="text-white border-white/30 hover:bg-white/10">
+                  <Button variant="outline" size="sm" className="text-white border-white/30 hover:bg-card/10">
                     Open PDF <Download className="h-3 w-3 ml-1.5" />
                   </Button>
                 </a>
@@ -252,7 +252,7 @@ function Lightbox({ files, initialIndex, projectName, onClose }) {
               {f.thumbnail ? (
                 <img src={`data:image/jpeg;base64,${f.thumbnail}`} alt="" className="w-full h-full object-cover" />
               ) : (
-                <div className="w-full h-full bg-white/10 flex items-center justify-center">
+                <div className="w-full h-full bg-card/10 flex items-center justify-center">
                   {f.type === 'video' ? <Film className="h-4 w-4 text-white/40" /> : <FileText className="h-4 w-4 text-white/40" />}
                 </div>
               )}

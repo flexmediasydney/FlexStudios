@@ -72,7 +72,7 @@ const STAGE_OPTIONS = [
 
 const RESULT_COLORS = {
   executed: "bg-emerald-100 text-emerald-700",
-  skipped_conditions: "bg-slate-100 text-slate-600",
+  skipped_conditions: "bg-muted text-muted-foreground",
   skipped_cooldown: "bg-blue-100 text-blue-700",
   skipped_overridden: "bg-orange-100 text-orange-700",
   skipped_dry_run: "bg-purple-100 text-purple-700",
@@ -80,7 +80,7 @@ const RESULT_COLORS = {
 };
 
 function groupConfig(g) {
-  return GROUPS.find(x => x.value === g) || { value: g, label: g, color: "bg-slate-100 text-slate-600", icon: "📋" };
+  return GROUPS.find(x => x.value === g) || { value: g, label: g, color: "bg-muted text-muted-foreground", icon: "📋" };
 }
 
 function relTime(ts) {
@@ -418,8 +418,8 @@ function RuleCard({ rule, onToggle, onEdit, onDelete }) {
               <span className="font-semibold text-sm">{rule.name}</span>
               <Badge className={`text-xs ${gc.color}`}>{gc.icon} {gc.label}</Badge>
               {rule.dry_run_only && <Badge className="text-xs bg-purple-100 text-purple-700">Dry Run</Badge>}
-              {rule.is_system && <Badge className="text-xs bg-slate-100 text-slate-600">System</Badge>}
-              <Badge className="text-xs bg-slate-100 text-slate-600">P{rule.priority}</Badge>
+              {rule.is_system && <Badge className="text-xs bg-muted text-muted-foreground">System</Badge>}
+              <Badge className="text-xs bg-muted text-muted-foreground">P{rule.priority}</Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{rule.description}</p>
             <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
@@ -732,7 +732,7 @@ export default function SettingsAutomationRules() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <Badge className={`text-xs ${RESULT_COLORS[log.result] || "bg-slate-100 text-slate-600"}`}>
+                            <Badge className={`text-xs ${RESULT_COLORS[log.result] || "bg-muted text-muted-foreground"}`}>
                               {log.result}
                             </Badge>
                             <span className="text-sm font-medium truncate">{log.rule_name}</span>
@@ -742,7 +742,7 @@ export default function SettingsAutomationRules() {
                             Project: <span className="font-medium">{log.project_name || log.project_id}</span>
                           </p>
                           {log.action_taken && (
-                            <p className="text-xs mt-0.5 text-slate-700">{log.action_taken}</p>
+                            <p className="text-xs mt-0.5 text-foreground/80">{log.action_taken}</p>
                           )}
                           {log.result_detail && (
                             <p className="text-xs mt-0.5 text-red-600">{log.result_detail}</p>

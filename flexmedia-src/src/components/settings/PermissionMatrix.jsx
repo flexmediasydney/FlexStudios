@@ -572,12 +572,12 @@ function PermissionDocumentation({ permissions }) {
               </div>
               <div className="flex gap-2 mt-2 text-xs">
                 {perm.requires_mfa && (
-                  <span className="flex items-center gap-1 bg-white/50 px-2 py-1 rounded">
+                  <span className="flex items-center gap-1 bg-card/50 px-2 py-1 rounded">
                     <Lock className="h-3 w-3" /> MFA
                   </span>
                 )}
                 {perm.requires_approval && (
-                  <span className="flex items-center gap-1 bg-white/50 px-2 py-1 rounded">
+                  <span className="flex items-center gap-1 bg-card/50 px-2 py-1 rounded">
                     <Shield className="h-3 w-3" /> Approval
                   </span>
                 )}

@@ -29,8 +29,8 @@ const CATEGORY_CONFIG = {
   tonomo:     { label: "Tonomo",          icon: "⚡", color: "bg-emerald-100 text-emerald-700 border-emerald-200" },
   financial:  { label: "Financial",       icon: "💰", color: "bg-green-100 text-green-700 border-green-200" },
   scheduling: { label: "Scheduling",      icon: "📅", color: "bg-blue-100 text-blue-700 border-blue-200" },
-  automation: { label: "Automation",      icon: "⚙️", color: "bg-slate-100 text-slate-600 border-slate-200" },
-  system:     { label: "System",          icon: "🔧", color: "bg-gray-100 text-gray-600 border-gray-200" },
+  automation: { label: "Automation",      icon: "⚙️", color: "bg-muted text-muted-foreground border-border" },
+  system:     { label: "System",          icon: "🔧", color: "bg-muted text-muted-foreground border-border" },
 };
 
 const SEVERITY_CONFIG = {
@@ -286,7 +286,7 @@ function LiveFeedView({ events, loading, paused, onTogglePause, newCount }) {
 
                   <div className="flex items-center gap-2 mt-2 flex-wrap">
                     {(event.project_name || event.project_address) && (
-                      <Badge className="text-[10px] h-4 bg-slate-100 text-slate-600 max-w-[180px] truncate font-medium shadow-sm" title={event.project_name || event.project_address}>
+                      <Badge className="text-[10px] h-4 bg-muted text-muted-foreground max-w-[180px] truncate font-medium shadow-sm" title={event.project_name || event.project_address}>
                         {event.project_name || event.project_address}
                       </Badge>
                     )}
@@ -303,7 +303,7 @@ function LiveFeedView({ events, loading, paused, onTogglePause, newCount }) {
                     {event.actor_name && (
                       <div className="flex items-center gap-1.5 ml-auto bg-muted/40 px-2 py-0.5 rounded-full">
                         <div className="w-5 h-5 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center
-                          text-[9px] font-bold text-slate-700 shrink-0 shadow-sm">
+                          text-[9px] font-bold text-foreground/80 shrink-0 shadow-sm">
                           {getInitials(event.actor_name)}
                         </div>
                         <span className="text-[10px] text-muted-foreground font-medium">{event.actor_name.split(" ")[0]}</span>
@@ -639,7 +639,7 @@ function StatsView({ events, users }) {
             {byCategory.length === 0
               ? <p className="text-xs text-muted-foreground">No events in this window</p>
               : byCategory.map(([cat, count]) => {
-                  const cfg = CATEGORY_CONFIG[cat] || { icon: "🔔", label: cat, color: "bg-slate-100 text-slate-600" };
+                  const cfg = CATEGORY_CONFIG[cat] || { icon: "🔔", label: cat, color: "bg-muted text-muted-foreground" };
                   return (
                     <div key={cat} className="flex items-center gap-2 text-xs">
                       <span className="w-5 shrink-0">{cfg.icon}</span>
@@ -695,7 +695,7 @@ function StatsView({ events, users }) {
               : byActor.map(([name, count]) => (
                   <div key={name} className="flex items-center gap-2 text-xs">
                     <div className="w-5 h-5 rounded-full bg-slate-200 flex items-center justify-center
-                      text-[9px] font-bold text-slate-600 shrink-0">
+                      text-[9px] font-bold text-muted-foreground shrink-0">
                       {getInitials(name)}
                     </div>
                     <span className="flex-1 text-muted-foreground truncate">{name.split(" ")[0]}</span>

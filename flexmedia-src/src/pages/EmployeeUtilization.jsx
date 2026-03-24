@@ -685,7 +685,7 @@ export default function EmployeeUtilization() {
             <AttentionCard
               icon={Moon}
               label="No hours logged"
-              color="bg-slate-50 border-slate-200 text-slate-600"
+              color="bg-muted/50 border-border text-muted-foreground"
               people={attentionSignals.dark}
               onSelect={setSelectedEmployee}
             />

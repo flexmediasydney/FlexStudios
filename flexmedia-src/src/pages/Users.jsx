@@ -300,7 +300,7 @@ export default function UsersManagement() {
                           )}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={user.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-500"}>
+                          <Badge variant="outline" className={user.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-muted text-muted-foreground"}>
                             {user.is_active ? "Active" : "Inactive"}
                           </Badge>
                         </TableCell>

@@ -77,10 +77,10 @@ export default function HierarchyOrgChart({
                   </DropdownMenu>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => onAddTeam(agency.id)} className="flex-1 bg-white/60">
+                  <Button size="sm" variant="outline" onClick={() => onAddTeam(agency.id)} className="flex-1 bg-card/60">
                     <Plus className="h-3 w-3 mr-1" />Team
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => onAddAgent(agency.id)} className="flex-1 bg-white/60">
+                  <Button size="sm" variant="outline" onClick={() => onAddAgent(agency.id)} className="flex-1 bg-card/60">
                     <Plus className="h-3 w-3 mr-1" />Person
                   </Button>
                 </div>
@@ -155,7 +155,7 @@ export default function HierarchyOrgChart({
                         size="sm"
                         variant="outline"
                         onClick={() => onAddAgent(agency.id, team.id)}
-                        className="w-full bg-white/60"
+                        className="w-full bg-card/60"
                       >
                         <Plus className="h-3 w-3 mr-1" />Add Person
                       </Button>
@@ -232,7 +232,7 @@ function AgentOrgNode({ agent, navigate, onEdit, onDelete, agentProjectCounts, a
         "w-40 p-2.5 hover:shadow-lg transition-all cursor-pointer group relative",
         agent.is_at_risk
           ? "border-amber-300 bg-amber-50/30"
-          : "bg-white"
+          : "bg-card"
       )}
       onClick={() => navigate(createPageUrl('PersonDetails') + `?id=${agent.id}`)}
     >

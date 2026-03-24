@@ -124,7 +124,7 @@ export default function NoteCard({
                 href={att.file_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2 p-2 rounded bg-white hover:bg-gray-50 border text-xs hover:text-blue-600 transition-colors"
+                className="flex items-center gap-2 p-2 rounded bg-white hover:bg-muted/50 border text-xs hover:text-blue-600 transition-colors"
               >
                 <FileIcon className="h-4 w-4 shrink-0" />
                 <span className="truncate flex-1">{att.file_name}</span>

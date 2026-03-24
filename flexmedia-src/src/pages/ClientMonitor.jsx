@@ -45,12 +45,12 @@ export default function ClientMonitor() {
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
         <div className="max-w-2xl mx-auto">
           <div className="mb-8">
-            <h1 className="text-4xl font-bold text-slate-900 mb-2">Client Monitor</h1>
-            <p className="text-slate-600">Cross-reference external listings with your internal projects</p>
+            <h1 className="text-4xl font-bold text-foreground mb-2">Client Monitor</h1>
+            <p className="text-muted-foreground">Cross-reference external listings with your internal projects</p>
           </div>
 
           <Card className="p-8 shadow-lg">
-            <h2 className="text-xl font-semibold text-slate-900 mb-6">Select an Agent</h2>
+            <h2 className="text-xl font-semibold text-foreground mb-6">Select an Agent</h2>
             <AgentSearch onSelect={setSelectedAgent} />
           </Card>
         </div>
@@ -65,8 +65,8 @@ export default function ClientMonitor() {
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h1 className="text-3xl font-bold text-slate-900">{selectedAgent.name}</h1>
-              <p className="text-slate-600 text-sm">{selectedAgent.current_agency_name}</p>
+              <h1 className="text-3xl font-bold text-foreground">{selectedAgent.name}</h1>
+              <p className="text-muted-foreground text-sm">{selectedAgent.current_agency_name}</p>
             </div>
             <Button variant="outline" onClick={() => {
               // BUG FIX: Reset refreshKey and close form when changing agent.
@@ -87,13 +87,13 @@ export default function ClientMonitor() {
                 href={selectedAgent.domain_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-border rounded-lg hover:bg-muted/50 transition-colors"
               >
                 <ExternalLink className="h-4 w-4" />
                 View on Domain
               </a>
             ) : (
-              <span className="inline-flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-400 cursor-not-allowed">
+              <span className="inline-flex items-center gap-2 px-4 py-2 bg-muted/50 border border-border rounded-lg text-muted-foreground/70 cursor-not-allowed">
                 <ExternalLink className="h-4 w-4" />
                 No Domain profile
               </span>
@@ -103,13 +103,13 @@ export default function ClientMonitor() {
                 href={selectedAgent.rea_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-border rounded-lg hover:bg-muted/50 transition-colors"
               >
                 <ExternalLink className="h-4 w-4" />
                 View on REA
               </a>
             ) : (
-              <span className="inline-flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-400 cursor-not-allowed">
+              <span className="inline-flex items-center gap-2 px-4 py-2 bg-muted/50 border border-border rounded-lg text-muted-foreground/70 cursor-not-allowed">
                 <ExternalLink className="h-4 w-4" />
                 No REA profile
               </span>
@@ -120,16 +120,16 @@ export default function ClientMonitor() {
         {/* Stats Bar */}
         <div className="grid grid-cols-3 gap-4 mb-8">
           <Card className="p-4">
-            <div className="text-sm text-slate-600 mb-1">Internal Projects</div>
-            <div className="text-3xl font-bold text-slate-900">{agentProjects.length}</div>
+            <div className="text-sm text-muted-foreground mb-1">Internal Projects</div>
+            <div className="text-3xl font-bold text-foreground">{agentProjects.length}</div>
           </Card>
           <Card className="p-4">
-            <div className="text-sm text-slate-600 mb-1">External Listings</div>
-            <div className="text-3xl font-bold text-slate-900">{externalListings.length}</div>
+            <div className="text-sm text-muted-foreground mb-1">External Listings</div>
+            <div className="text-3xl font-bold text-foreground">{externalListings.length}</div>
           </Card>
           <Card className="p-4">
-            <div className="text-sm text-slate-600 mb-1">Matched</div>
-            <div className="text-3xl font-bold text-slate-900">
+            <div className="text-sm text-muted-foreground mb-1">Matched</div>
+            <div className="text-3xl font-bold text-foreground">
               {externalListings.filter(e => e.matched_project_id).length}
             </div>
           </Card>
@@ -161,8 +161,8 @@ export default function ClientMonitor() {
         {(projectsLoading || listingsLoading) ? (
           <div className="flex items-center justify-center p-12">
             <div className="text-center">
-              <Loader2 className="h-8 w-8 animate-spin text-slate-400 mx-auto mb-2" />
-              <p className="text-sm text-slate-500">Loading projects and listings...</p>
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/70 mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">Loading projects and listings...</p>
             </div>
           </div>
         ) : (

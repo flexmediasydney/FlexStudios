@@ -33,7 +33,7 @@ const STATUS_COLORS = {
   'Proposal Sent': 'bg-cyan-100 text-cyan-800',
   'Nurturing': 'bg-pink-100 text-pink-800',
   'Qualified': 'bg-green-100 text-green-800',
-  'Unqualified': 'bg-gray-100 text-gray-800',
+  'Unqualified': 'bg-muted text-foreground',
   'Converted to Client': 'bg-emerald-100 text-emerald-800',
   'Lost': 'bg-red-100 text-red-800'
 };

@@ -156,7 +156,7 @@ export default function ActiveTimersPanel({ projectId, tasks = [] }) {
           <div className="flex items-center gap-1.5 flex-wrap">
             {runningCount > 0 && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500 text-white">
-                <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                <span className="h-1.5 w-1.5 rounded-full bg-card animate-pulse" />
                 {runningCount} running
               </span>
             )}
@@ -182,7 +182,7 @@ export default function ActiveTimersPanel({ projectId, tasks = [] }) {
             const taskTitle = taskMap[log.task_id];
             const isRunning = log.status === "running";
             return (
-              <div key={log.id} className="flex items-center gap-3 px-4 py-2.5 bg-white/60">
+              <div key={log.id} className="flex items-center gap-3 px-4 py-2.5 bg-card/60">
                 {/* Status dot */}
                 <span className={cn(
                   "h-2 w-2 rounded-full flex-shrink-0",

@@ -6,7 +6,7 @@ import { Building2 } from 'lucide-react';
 const stateColors = {
   'Prospecting': 'bg-orange-100 text-orange-800',
   'Active': 'bg-green-100 text-green-800',
-  'Dormant': 'bg-gray-100 text-gray-800'
+  'Dormant': 'bg-muted text-foreground'
 };
 
 export default function AgencyListView({ agencies, interactions }) {
@@ -33,7 +33,7 @@ export default function AgencyListView({ agencies, interactions }) {
                   </div>
                 </div>
                 <div className="text-right">
-                  <Badge className={stateColors[agency.relationship_state] || 'bg-gray-100 text-gray-800'}>
+                  <Badge className={stateColors[agency.relationship_state] || 'bg-muted text-foreground'}>
                     {agency.relationship_state}
                   </Badge>
                   <p className="text-xs text-muted-foreground mt-2">{agency.interactionCount} interactions</p>
