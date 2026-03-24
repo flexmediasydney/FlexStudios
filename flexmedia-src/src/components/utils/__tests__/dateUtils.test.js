@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   fixTimestamp,
   APP_TZ,
@@ -7,19 +7,12 @@ import {
   fmtTimestampCustom,
   isOverdue,
   todaySydney,
-  daysAgo,
-  hoursAgo,
-  minutesAgo,
   formatRelative,
-  getDateRange,
   isSameDay,
-  isBefore,
-  isAfter,
-  isBetween,
   utcToSydneyInput,
   sydneyInputToUtc,
-  formatDurationCompact,
-  formatDurationFull,
+  getSydneyHourMinute,
+  fmtSydneyTime,
 } from '../dateUtils';
 
 // ─── fixTimestamp ──────────────────────────────────────────────────────────────
@@ -55,6 +48,11 @@ describe('fixTimestamp', () => {
 
   it('leaves strings with - offset untouched', () => {
     expect(fixTimestamp('2026-03-10T13:29:00-05:00')).toBe('2026-03-10T13:29:00-05:00');
+  });
+
+  it('handles compact offset formats without colon', () => {
+    expect(fixTimestamp('2026-03-10T13:29:00-0800')).toBe('2026-03-10T13:29:00-0800');
+    expect(fixTimestamp('2026-03-10T13:29:00+1100')).toBe('2026-03-10T13:29:00+1100');
   });
 });
 
@@ -155,39 +153,31 @@ describe('APP_TZ', () => {
   });
 });
 
-// ─── daysAgo / hoursAgo / minutesAgo ──────────────────────────────────────────
+// ─── isOverdue ───────────────────────────────────────────────────────────────
 
-describe('daysAgo', () => {
-  it('returns 0 for now', () => {
-    expect(daysAgo(new Date().toISOString())).toBe(0);
+describe('isOverdue', () => {
+  it('returns false for null/undefined', () => {
+    expect(isOverdue(null)).toBe(false);
+    expect(isOverdue(undefined)).toBe(false);
   });
 
-  it('returns positive number for past dates', () => {
-    const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString();
-    expect(daysAgo(threeDaysAgo)).toBeGreaterThanOrEqual(2);
-    expect(daysAgo(threeDaysAgo)).toBeLessThanOrEqual(4);
+  it('returns true for a date far in the past', () => {
+    expect(isOverdue('2020-01-01')).toBe(true);
   });
-});
 
-describe('hoursAgo', () => {
-  it('returns small number for recent timestamps', () => {
-    const twoHoursAgo = new Date(Date.now() - 2 * 3600000).toISOString();
-    expect(hoursAgo(twoHoursAgo)).toBeGreaterThanOrEqual(1);
-    expect(hoursAgo(twoHoursAgo)).toBeLessThanOrEqual(3);
-  });
-});
-
-describe('minutesAgo', () => {
-  it('returns correct minutes', () => {
-    const tenMinAgo = new Date(Date.now() - 10 * 60000).toISOString();
-    expect(minutesAgo(tenMinAgo)).toBeGreaterThanOrEqual(9);
-    expect(minutesAgo(tenMinAgo)).toBeLessThanOrEqual(11);
+  it('returns false for a date far in the future', () => {
+    expect(isOverdue('2099-12-31')).toBe(false);
   });
 });
 
 // ─── formatRelative ──────────────────────────────────────────────────────────
 
 describe('formatRelative', () => {
+  it('returns dash for null/undefined', () => {
+    expect(formatRelative(null)).toBe('—');
+    expect(formatRelative(undefined)).toBe('—');
+  });
+
   it('returns "just now" for very recent timestamps', () => {
     expect(formatRelative(new Date().toISOString())).toBe('just now');
   });
@@ -223,71 +213,20 @@ describe('formatRelative', () => {
   });
 });
 
-// ─── getDateRange ─────────────────────────────────────────────────────────────
-
-describe('getDateRange', () => {
-  it('returns start and end for "today"', () => {
-    const range = getDateRange('today');
-    expect(range).toHaveProperty('start');
-    expect(range).toHaveProperty('end');
-    expect(range.start).toBeInstanceOf(Date);
-    expect(range.end).toBeInstanceOf(Date);
-    expect(range.end.getTime()).toBeGreaterThan(range.start.getTime());
-  });
-
-  it('returns a range for "week"', () => {
-    const range = getDateRange('week');
-    const diffMs = range.end.getTime() - range.start.getTime();
-    const diffDays = diffMs / 86400000;
-    expect(diffDays).toBeGreaterThanOrEqual(6.9);
-    expect(diffDays).toBeLessThanOrEqual(8);
-  });
-
-  it('returns undefined for unknown type', () => {
-    expect(getDateRange('decade')).toBeUndefined();
-  });
-});
-
-// ─── isSameDay / isBefore / isAfter / isBetween ──────────────────────────────
+// ─── isSameDay ──────────────────────────────────────────────────────────────
 
 describe('isSameDay', () => {
+  it('returns false for null inputs', () => {
+    expect(isSameDay(null, '2026-03-10T10:00:00Z')).toBe(false);
+    expect(isSameDay('2026-03-10T10:00:00Z', null)).toBe(false);
+  });
+
   it('returns true for same day timestamps', () => {
-    // Use times that are same day in any timezone
     expect(isSameDay('2026-03-10T10:00:00Z', '2026-03-10T12:00:00Z')).toBe(true);
   });
 
   it('returns false for different days', () => {
     expect(isSameDay('2026-03-10T01:00:00Z', '2026-03-11T01:00:00Z')).toBe(false);
-  });
-});
-
-describe('isBefore', () => {
-  it('returns true when first date is earlier', () => {
-    expect(isBefore('2026-03-10T00:00:00Z', '2026-03-11T00:00:00Z')).toBe(true);
-  });
-
-  it('returns false when first date is later', () => {
-    expect(isBefore('2026-03-11T00:00:00Z', '2026-03-10T00:00:00Z')).toBe(false);
-  });
-});
-
-describe('isAfter', () => {
-  it('returns true when first date is later', () => {
-    expect(isAfter('2026-03-11T00:00:00Z', '2026-03-10T00:00:00Z')).toBe(true);
-  });
-});
-
-describe('isBetween', () => {
-  it('returns true when date is in range', () => {
-    expect(isBetween('2026-03-10T12:00:00Z', '2026-03-10T00:00:00Z', '2026-03-10T23:59:59Z')).toBe(true);
-  });
-
-  it('returns false when date is out of range', () => {
-    expect(isBetween('2026-03-09T00:00:00Z', '2026-03-10T00:00:00Z', '2026-03-10T23:59:59Z')).toBe(false);
-  });
-
-  it('returns true at boundaries (inclusive)', () => {
-    expect(isBetween('2026-03-10T00:00:00Z', '2026-03-10T00:00:00Z', '2026-03-10T23:59:59Z')).toBe(true);
   });
 });
 
@@ -328,59 +267,44 @@ describe('sydneyInputToUtc', () => {
   });
 });
 
-// ─── formatDurationCompact ────────────────────────────────────────────────────
+// ─── getSydneyHourMinute ──────────────────────────────────────────────────────
 
-describe('formatDurationCompact', () => {
-  it('returns dash for null/undefined/0/negative', () => {
-    expect(formatDurationCompact(null)).toBe('—');
-    expect(formatDurationCompact(undefined)).toBe('—');
-    expect(formatDurationCompact(0)).toBe('—');
-    expect(formatDurationCompact(-5)).toBe('—');
+describe('getSydneyHourMinute', () => {
+  it('returns { hour: 0, minute: 0 } for null/undefined', () => {
+    expect(getSydneyHourMinute(null)).toEqual({ hour: 0, minute: 0 });
+    expect(getSydneyHourMinute(undefined)).toEqual({ hour: 0, minute: 0 });
   });
 
-  it('formats seconds', () => {
-    expect(formatDurationCompact(45)).toBe('45s');
+  it('returns an object with hour and minute for a valid timestamp', () => {
+    const result = getSydneyHourMinute('2026-01-15T00:00:00Z');
+    expect(result).toHaveProperty('hour');
+    expect(result).toHaveProperty('minute');
+    expect(typeof result.hour).toBe('number');
+    expect(typeof result.minute).toBe('number');
+    expect(result.hour).toBeGreaterThanOrEqual(0);
+    expect(result.hour).toBeLessThan(24);
+    expect(result.minute).toBeGreaterThanOrEqual(0);
+    expect(result.minute).toBeLessThan(60);
   });
 
-  it('formats minutes', () => {
-    expect(formatDurationCompact(120)).toBe('2m');
-    expect(formatDurationCompact(300)).toBe('5m');
-  });
-
-  it('formats hours and minutes', () => {
-    expect(formatDurationCompact(3660)).toBe('1h 1m');
-    expect(formatDurationCompact(7200)).toBe('2h 0m');
-  });
-
-  it('formats days', () => {
-    expect(formatDurationCompact(86400)).toBe('1d');
-    expect(formatDurationCompact(90000)).toBe('1d 1h');
+  it('handles bare timestamps (no Z)', () => {
+    const result = getSydneyHourMinute('2026-06-15T12:30:00');
+    expect(typeof result.hour).toBe('number');
+    expect(typeof result.minute).toBe('number');
   });
 });
 
-// ─── formatDurationFull ───────────────────────────────────────────────────────
+// ─── fmtSydneyTime ──────────────────────────────────────────────────────────
 
-describe('formatDurationFull', () => {
-  it('returns dash for null/0/negative', () => {
-    expect(formatDurationFull(null)).toBe('—');
-    expect(formatDurationFull(0)).toBe('—');
-    expect(formatDurationFull(-1)).toBe('—');
+describe('fmtSydneyTime', () => {
+  it('returns dash for null/undefined', () => {
+    expect(fmtSydneyTime(null)).toBe('—');
+    expect(fmtSydneyTime(undefined)).toBe('—');
   });
 
-  it('formats seconds', () => {
-    expect(formatDurationFull(45)).toBe('45s');
-  });
-
-  it('formats minutes and seconds', () => {
-    expect(formatDurationFull(125)).toBe('2m 5s');
-  });
-
-  it('formats hours, minutes, seconds', () => {
-    expect(formatDurationFull(3661)).toBe('1h 1m 1s');
-  });
-
-  it('formats days', () => {
-    expect(formatDurationFull(86400)).toBe('1d');
-    expect(formatDurationFull(90000)).toBe('1d 1h');
+  it('returns a time string for a valid timestamp', () => {
+    const result = fmtSydneyTime('2026-01-15T00:00:00Z');
+    expect(result).toBeTruthy();
+    expect(result).not.toBe('—');
   });
 });

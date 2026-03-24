@@ -47,6 +47,7 @@ export default function ProjectProductsPackages({ project }) {
   const [expandedPackages, setExpandedPackages] = useState(new Set());
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [error, setError] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const tierKey = project.pricing_tier === "premium" ? "premium_tier" : "standard_tier";
 
@@ -273,8 +274,10 @@ export default function ProjectProductsPackages({ project }) {
     });
   };
 
-  // Save all changes
+  // Save all changes — guarded against double-submit
   const handleSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
     try {
       setError(null);
       
@@ -359,6 +362,8 @@ export default function ProjectProductsPackages({ project }) {
     } catch (err) {
       setError(err.message || 'Failed to save changes');
       toast.error(err.message || 'Failed to save changes');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -412,12 +417,12 @@ export default function ProjectProductsPackages({ project }) {
                 >
                   Cancel
                 </Button>
-                <Button 
-                  size="sm" 
+                <Button
+                  size="sm"
                   onClick={handleSave}
-                  disabled={batchUpdate.isPending}
+                  disabled={isSaving || batchUpdate.isPending}
                 >
-                  {batchUpdate.isPending ? "Saving..." : "Save Changes"}
+                  {isSaving || batchUpdate.isPending ? "Saving..." : "Save Changes"}
                 </Button>
               </>
             )}

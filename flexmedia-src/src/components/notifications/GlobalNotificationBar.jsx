@@ -138,12 +138,16 @@ export function NotificationBell() {
   const dropdownRef = useRef(null);
   const navigate = useNavigate();
 
+  // BUG FIX: pulse setTimeout was not cleaned up on unmount — setPulse could fire
+  // on an unmounted component. Now the timer is cleared in the useEffect cleanup.
   useEffect(() => {
+    let pulseTimer;
     if (unreadCount > prevUnread && prevUnread !== 0) {
       setPulse(true);
-      setTimeout(() => setPulse(false), 2000);
+      pulseTimer = setTimeout(() => setPulse(false), 2000);
     }
     setPrevUnread(unreadCount);
+    return () => { if (pulseTimer) clearTimeout(pulseTimer); };
   }, [unreadCount, prevUnread]);
 
   useEffect(() => {

@@ -1,5 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
-import { api } from '@/api/supabaseClient';
+import { useState, useEffect } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
@@ -66,37 +65,21 @@ function ActivityItem({ activity }) {
 }
 
 export default function EnhancedActivityStream({ maxItems = 20, compact = false }) {
-  const [liveItems, setLiveItems] = useState([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
 
-  // Load initial activities
+  // Load initial activities — useEntityList already subscribes to real-time
+  // updates through the shared ensureSubscription() in useEntityData, so new
+  // CREATE/UPDATE/DELETE events automatically update `initialActivities`.
+  //
+  // EFFICIENCY FIX: Removed redundant direct api.entities.ProjectActivity.subscribe()
+  // that created a SECOND Supabase Realtime channel for the same table. The separate
+  // liveItems state + merge logic was unnecessary since useEntityList already receives
+  // real-time updates and re-renders the component with fresh data.
   const { data: initialActivities = [], loading } = useEntityList('ProjectActivity', '-created_date', maxItems);
 
   useEffect(() => {
     if (!loading) setLoadingInitial(false);
   }, [loading]);
-
-  // Subscribe for live updates
-  useEffect(() => {
-    const unsub = api.entities.ProjectActivity.subscribe((event) => {
-      if (event.type === 'create' && event.data) {
-        setLiveItems(prev => [event.data, ...prev].slice(0, 10));
-      }
-    });
-    return unsub;
-  }, []);
-
-  // Merge: live items first (newest), then initial, deduplicated
-  const merged = useMemo(() => {
-    const seenIds = new Set();
-    const all = [];
-    [...liveItems, ...initialActivities].forEach(item => {
-      if (seenIds.has(item.id)) return;
-      seenIds.add(item.id);
-      all.push(item);
-    });
-    return all.slice(0, maxItems);
-  }, [liveItems, initialActivities, maxItems]);
 
   if (loadingInitial) {
     return (
@@ -107,7 +90,7 @@ export default function EnhancedActivityStream({ maxItems = 20, compact = false 
     );
   }
 
-  if (merged.length === 0) {
+  if (initialActivities.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
         <Clock className="h-6 w-6 mx-auto mb-2 opacity-30" />
@@ -118,7 +101,7 @@ export default function EnhancedActivityStream({ maxItems = 20, compact = false 
 
   return (
     <div className={cn('space-y-0.5', compact ? 'max-h-[300px]' : 'max-h-[500px]', 'overflow-y-auto')}>
-      {merged.map(activity => (
+      {initialActivities.map(activity => (
         <ActivityItem key={activity.id} activity={activity} />
       ))}
     </div>

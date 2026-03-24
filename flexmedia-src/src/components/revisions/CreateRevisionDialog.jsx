@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { isTransientError } from "@/lib/networkResilience";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -75,6 +76,8 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
   });
 
   const createMutation = useMutation({
+    retry: (failureCount, error) => failureCount < 2 && isTransientError(error),
+    retryDelay: (attempt) => Math.min(1000 * Math.pow(2, attempt), 4000),
     mutationFn: async (data) => {
       const allRevisions = await api.entities.ProjectRevision.filter(
         { project_id: project.id },
@@ -285,7 +288,10 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
 
       onClose(true); // pass true to indicate a revision was created
     },
-    onError: (e) => toast.error(e.message || "Failed to create request"),
+    onError: (e) => {
+      const hint = isTransientError(e) ? ' — check your connection and try again' : '';
+      toast.error((e.message || "Failed to create request") + hint);
+    },
   });
 
   const handleSubmit = () => {

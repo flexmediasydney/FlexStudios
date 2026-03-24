@@ -104,12 +104,17 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
         auditAction = "update";
 
         // Cascade team name change to denormalized fields on agents
+        // Fix: use allSettled so one agent failure doesn't abort the rest
         if (payload.name && payload.name !== team.name) {
           try {
             const teamAgents = await api.entities.Agent.filter({ current_team_id: team.id });
-            await Promise.all(teamAgents.map(a =>
+            const results = await Promise.allSettled(teamAgents.map(a =>
               api.entities.Agent.update(a.id, { current_team_name: payload.name })
             ));
+            const failed = results.filter(r => r.status === 'rejected');
+            if (failed.length > 0) {
+              console.warn(`Team name cascade: ${failed.length}/${results.length} agent updates failed`);
+            }
           } catch { /* non-fatal */ }
         }
       } else {

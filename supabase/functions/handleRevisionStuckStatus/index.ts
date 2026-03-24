@@ -1,10 +1,15 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
+
+    // Auth check — callable by service-role (from other functions) or authenticated users
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Unauthorized', 401);
+
     const { revision_id, is_stuck } = await req.json();
 
     if (!revision_id) return errorResponse('Missing revision_id', 400);

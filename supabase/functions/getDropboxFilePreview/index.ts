@@ -1,5 +1,7 @@
 import { getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
+const DROPBOX_TIMEOUT_MS = 15_000; // 15s timeout for Dropbox API calls
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
@@ -23,6 +25,7 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ path: filePath }),
+      signal: AbortSignal.timeout(DROPBOX_TIMEOUT_MS),
     });
 
     if (!response.ok) {

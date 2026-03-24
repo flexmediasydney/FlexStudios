@@ -75,6 +75,24 @@ export default function NotificationsPage() {
       });
   }, [notifications, tab, readFilter, search]);
 
+  // Bug fix: memoize per-tab unread counts to avoid O(tabs * notifications) on every render.
+  // Previously, each of the 8 category tabs called notifications.filter() inline in JSX,
+  // re-scanning the full notifications array 8 times on every render (including when
+  // just typing in the search box or toggling a checkbox).
+  const tabUnreadCounts = useMemo(() => {
+    const counts = {};
+    let allCount = 0;
+    for (const n of notifications) {
+      if (n.is_dismissed || n.is_read) continue;
+      allCount++;
+      if (n.category) {
+        counts[n.category] = (counts[n.category] || 0) + 1;
+      }
+    }
+    counts.all = allCount;
+    return counts;
+  }, [notifications]);
+
   const grouped = useMemo(() => {
     // Use Sydney date boundaries so "today" matches the business day, not browser locale
     const sydneyDate = (d) => d.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' }); // YYYY-MM-DD
@@ -272,9 +290,7 @@ export default function NotificationsPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex-wrap h-auto gap-1 bg-muted/60 p-1.5">
           {CATEGORY_TABS.map(t => {
-            const count = notifications.filter(
-              n => !n.is_dismissed && !n.is_read && (t.value === "all" || n.category === t.value)
-            ).length;
+            const count = tabUnreadCounts[t.value] || 0;
             return (
               <TabsTrigger key={t.value} value={t.value} className="gap-1.5 text-xs shadow-sm data-[state=active]:shadow-md">
                 {t.icon && <span className="text-sm">{t.icon}</span>}

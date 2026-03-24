@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
+import { isTransientError } from "@/lib/networkResilience";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,8 @@ export default function DeliverySettings() {
   }, [savedSettings?.id, savedSettings?.updated_date]);
 
   const saveMutation = useMutation({
+    retry: (failureCount, error) => failureCount < 2 && isTransientError(error),
+    retryDelay: (attempt) => Math.min(1000 * Math.pow(2, attempt), 4000),
     mutationFn: async (data) => {
       if (savedSettings?.id) {
         return api.entities.DeliverySettings.update(savedSettings.id, data);
@@ -63,7 +66,10 @@ export default function DeliverySettings() {
       setHasChanges(false);
       toast.success("Settings saved");
     },
-    onError: () => toast.error("Failed to save settings")
+    onError: (err) => {
+      const hint = isTransientError(err) ? ' — check your connection and try again' : '';
+      toast.error(`Failed to save settings${hint}`);
+    },
   });
 
   const updateWorkingHours = (day, field, value) => {

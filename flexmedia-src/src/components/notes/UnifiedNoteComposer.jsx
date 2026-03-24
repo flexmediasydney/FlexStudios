@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
+import { retryWithBackoff, isTransientError } from '@/lib/networkResilience';
 import { refetchEntityList } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import {
@@ -161,25 +162,31 @@ export default function UnifiedNoteComposer({
     setSaving(true);
     try {
       if (noteId) {
-        await api.entities.OrgNote.update(noteId, { content: plainText, content_html: sanitized });
+        await retryWithBackoff(
+          () => api.entities.OrgNote.update(noteId, { content: plainText, content_html: sanitized }),
+          { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying save (${attempt}/2)...`) }
+        );
       } else {
-        await api.entities.OrgNote.create({
-          agency_id: agencyId,
-          ...(projectId && { project_id: projectId }),
-          ...(agentId && { agent_id: agentId }),
-          ...(teamId && { team_id: teamId }),
-          context_type: contextType,
-          context_label: contextLabel,
-          content: plainText,
-          content_html: sanitized,
-          author_name: currentUser?.full_name || 'Unknown',
-          author_email: currentUser?.email || '',
-          mentions,
-          attachments,
-          focus_tags: [],
-          is_pinned: false,
-          ...(parentNoteId && { parent_note_id: parentNoteId }),
-        });
+        await retryWithBackoff(
+          () => api.entities.OrgNote.create({
+            agency_id: agencyId,
+            ...(projectId && { project_id: projectId }),
+            ...(agentId && { agent_id: agentId }),
+            ...(teamId && { team_id: teamId }),
+            context_type: contextType,
+            context_label: contextLabel,
+            content: plainText,
+            content_html: sanitized,
+            author_name: currentUser?.full_name || 'Unknown',
+            author_email: currentUser?.email || '',
+            mentions,
+            attachments,
+            focus_tags: [],
+            is_pinned: false,
+            ...(parentNoteId && { parent_note_id: parentNoteId }),
+          }),
+          { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying save (${attempt}/2)...`) }
+        );
         // Auto-update agent's last_contacted_at
         if (agentId) {
           api.entities.Agent.update(agentId, {
@@ -201,8 +208,9 @@ export default function UnifiedNoteComposer({
         setEditorEmpty(true);
         onSave?.();
       }
-    } catch {
-      toast.error('Failed to save note');
+    } catch (err) {
+      const hint = isTransientError(err) ? ' — check your connection and try again' : '';
+      toast.error(`Failed to save note${hint}`);
     } finally {
       setSaving(false);
     }

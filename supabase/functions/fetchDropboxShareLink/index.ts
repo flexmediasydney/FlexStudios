@@ -1,5 +1,7 @@
 import { getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
+const DROPBOX_TIMEOUT_MS = 15_000; // 15s timeout for Dropbox API calls
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
@@ -39,6 +41,7 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ url: shareLink }),
+      signal: AbortSignal.timeout(DROPBOX_TIMEOUT_MS),
     });
 
     if (!metaRes.ok) {
@@ -80,6 +83,7 @@ Deno.serve(async (req) => {
             include_deleted: false,
             limit: 500,
           }),
+          signal: AbortSignal.timeout(DROPBOX_TIMEOUT_MS),
         });
       } else {
         listRes = await fetch('https://api.dropboxapi.com/2/files/list_folder/continue', {
@@ -89,6 +93,7 @@ Deno.serve(async (req) => {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ cursor }),
+          signal: AbortSignal.timeout(DROPBOX_TIMEOUT_MS),
         });
       }
 

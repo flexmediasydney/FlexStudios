@@ -33,6 +33,9 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 const BATCH_SIZE = 10;
 const GMAIL_RATE_LIMIT_DELAY = 100;
+// Wall-clock budget: stop processing before the 30s Supabase Edge Function timeout.
+// Leave headroom for token refresh, conversation upsert, and account metadata update.
+const WALL_CLOCK_BUDGET_MS = 24_000; // 24 seconds
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -321,7 +324,8 @@ async function fullSync(
   admin: any,
   options?: { historyExpiredFallback?: boolean },
   agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
-): Promise<{ synced: number; latestHistoryId: string | null }> {
+  wallClockStart?: number,
+): Promise<{ synced: number; latestHistoryId: string | null; hitTimeBudget?: boolean }> {
   let synced = 0;
   let latestHistoryId: string | null = null;
 
@@ -408,7 +412,15 @@ async function fullSync(
 
   // Process in batches, collecting failed message IDs for retry
   const failedIds: string[] = [];
+  let hitTimeBudget = false;
   for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    // Wall-clock guard: stop before Supabase kills us, save progress so far
+    if (wallClockStart && (Date.now() - wallClockStart) > WALL_CLOCK_BUDGET_MS) {
+      console.warn(`Wall-clock budget exhausted after syncing ${synced} messages (${messageIds.length - i} remaining). Saving progress for next run.`);
+      hitTimeBudget = true;
+      break;
+    }
+
     const batch = messageIds.slice(i, i + BATCH_SIZE);
 
     for (const msg of batch) {
@@ -424,13 +436,13 @@ async function fullSync(
     }
   }
 
-  // Retry pass for transiently failed messages
-  if (failedIds.length > 0) {
+  // Retry pass for transiently failed messages (skip if we already hit the time budget)
+  if (failedIds.length > 0 && !hitTimeBudget) {
     const retryResult = await retryFailedMessages(failedIds, accessToken, account, entities, admin, agentLookup);
     synced += retryResult.retried;
   }
 
-  return { synced, latestHistoryId };
+  return { synced, latestHistoryId, hitTimeBudget };
 }
 
 // --- Incremental sync via Gmail History API ---
@@ -440,7 +452,8 @@ async function syncViaHistory(
   entities: any,
   admin: any,
   agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
-): Promise<{ synced: number; latestHistoryId: string | null; fallbackToFull: boolean }> {
+  wallClockStart?: number,
+): Promise<{ synced: number; latestHistoryId: string | null; fallbackToFull: boolean; hitTimeBudget?: boolean }> {
   let synced = 0;
   let latestHistoryId: string | null = account.history_id;
 
@@ -521,8 +534,15 @@ async function syncViaHistory(
 
   // Process new messages (messagesAdded), collecting failures for retry
   const failedIds: string[] = [];
+  let hitTimeBudget = false;
   const addedList = [...addedMessageIds];
   for (let i = 0; i < addedList.length; i += BATCH_SIZE) {
+    // Wall-clock guard: stop before Supabase kills us
+    if (wallClockStart && (Date.now() - wallClockStart) > WALL_CLOCK_BUDGET_MS) {
+      console.warn(`Wall-clock budget exhausted during incremental sync after ${synced} messages (${addedList.length - i} remaining)`);
+      hitTimeBudget = true;
+      break;
+    }
     const batch = addedList.slice(i, i + BATCH_SIZE);
     for (const msgId of batch) {
       try {
@@ -678,13 +698,13 @@ async function syncViaHistory(
     nextPageToken = pageData.nextPageToken;
   }
 
-  // Retry pass for transiently failed messages
-  if (failedIds.length > 0) {
+  // Retry pass for transiently failed messages (skip if we already hit the time budget)
+  if (failedIds.length > 0 && !hitTimeBudget) {
     const retryResult = await retryFailedMessages(failedIds, accessToken, account, entities, admin, agentLookup);
     synced += retryResult.retried;
   }
 
-  return { synced, latestHistoryId, fallbackToFull: false };
+  return { synced, latestHistoryId, fallbackToFull: false, hitTimeBudget };
 }
 
 // --- Upsert email_conversations summary table ---
@@ -815,6 +835,8 @@ Deno.serve(async (req) => {
     const account = accounts[0];
     let synced = 0;
     let syncMode = 'full';
+    let hitTimeBudget = false;
+    const wallClockStart = Date.now();
 
     try {
       const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
@@ -845,26 +867,29 @@ Deno.serve(async (req) => {
         syncMode = 'incremental';
         console.log(`Using History API for ${account.email_address} (historyId: ${account.history_id})`);
 
-        const historyResult = await syncViaHistory(accessToken, account, entities, admin, agentLookup);
+        const historyResult = await syncViaHistory(accessToken, account, entities, admin, agentLookup, wallClockStart);
 
         if (historyResult.fallbackToFull) {
           // History expired — clear stale history_id FIRST to prevent infinite 404 loop
           console.log(`Falling back to full sync for ${account.email_address} (history ID expired, using 60-day window)`);
           syncMode = 'full_fallback';
           await entities.EmailAccount.update(account.id, { history_id: null });
-          const fullResult = await fullSync(accessToken, account, entities, admin, { historyExpiredFallback: true }, agentLookup);
+          const fullResult = await fullSync(accessToken, account, entities, admin, { historyExpiredFallback: true }, agentLookup, wallClockStart);
           synced = fullResult.synced;
           latestHistoryId = fullResult.latestHistoryId;
+          hitTimeBudget = fullResult.hitTimeBudget || false;
         } else {
           synced = historyResult.synced;
           latestHistoryId = historyResult.latestHistoryId;
+          hitTimeBudget = historyResult.hitTimeBudget || false;
         }
       } else {
         // No history_id stored — first sync or migration, do full sync
         console.log(`Full sync for ${account.email_address} (no history_id stored)`);
-        const fullResult = await fullSync(accessToken, account, entities, admin, undefined, agentLookup);
+        const fullResult = await fullSync(accessToken, account, entities, admin, undefined, agentLookup, wallClockStart);
         synced = fullResult.synced;
         latestHistoryId = fullResult.latestHistoryId;
+        hitTimeBudget = fullResult.hitTimeBudget || false;
       }
 
       // Upsert email_conversations summary table
@@ -907,7 +932,8 @@ Deno.serve(async (req) => {
     return jsonResponse({
       synced,
       syncMode,
-      accountEmail: account.email_address
+      accountEmail: account.email_address,
+      ...(hitTimeBudget ? { partial: true, reason: 'wall_clock_budget_exceeded' } : {}),
     });
   } catch (error: any) {
     console.error('Account sync error:', error);

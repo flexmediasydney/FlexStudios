@@ -29,6 +29,7 @@ import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import EmailThreadViewer from "./EmailThreadViewer";
 import EmailComposeDialog from "./EmailComposeDialog";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 import EmailAccountSetup from "./EmailAccountSetup";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useUndoRedo } from "@/components/hooks/useUndoRedo";
@@ -1077,27 +1078,29 @@ export default function EmailInboxMain() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0" ref={containerRef}>
         {selectedThread ? (
-          <EmailThreadViewer
-            thread={selectedThread}
-            account={emailAccounts.find(a => a.id === selectedThread.email_account_id) || selectedAccount}
-            onBack={() => setSelectedThread(null)}
-            currentView={filterView}
-            emailAccounts={emailAccounts}
-            onNextThread={(() => {
-              const idx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
-              if (idx >= 0 && idx < filteredThreads.length - 1) {
-                return () => setSelectedThread(filteredThreads[idx + 1]);
-              }
-              return null;
-            })()}
-            onPrevThread={(() => {
-              const idx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
-              if (idx > 0) {
-                return () => setSelectedThread(filteredThreads[idx - 1]);
-              }
-              return null;
-            })()}
-          />
+          <ErrorBoundary fallbackLabel="Email Thread" compact onReset={() => setSelectedThread(null)}>
+            <EmailThreadViewer
+              thread={selectedThread}
+              account={emailAccounts.find(a => a.id === selectedThread.email_account_id) || selectedAccount}
+              onBack={() => setSelectedThread(null)}
+              currentView={filterView}
+              emailAccounts={emailAccounts}
+              onNextThread={(() => {
+                const idx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
+                if (idx >= 0 && idx < filteredThreads.length - 1) {
+                  return () => setSelectedThread(filteredThreads[idx + 1]);
+                }
+                return null;
+              })()}
+              onPrevThread={(() => {
+                const idx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
+                if (idx > 0) {
+                  return () => setSelectedThread(filteredThreads[idx - 1]);
+                }
+                return null;
+              })()}
+            />
+          </ErrorBoundary>
         ) : (
           <>
             {/* Header - Modern compact design */}
@@ -1450,14 +1453,16 @@ export default function EmailInboxMain() {
 
       {/* Compose Dialog */}
        {showCompose && (
-         <EmailComposeDialog
-           account={selectedAccount}
-           onClose={() => setShowCompose(false)}
-           onSent={() => {
-             setShowCompose(false);
-             refetchMessages();
-           }}
-         />
+         <ErrorBoundary fallbackLabel="Email Compose" compact onReset={() => setShowCompose(false)}>
+           <EmailComposeDialog
+             account={selectedAccount}
+             onClose={() => setShowCompose(false)}
+             onSent={() => {
+               setShowCompose(false);
+               refetchMessages();
+             }}
+           />
+         </ErrorBoundary>
        )}
 
        {/* Link Project Dialog */}

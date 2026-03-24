@@ -104,11 +104,19 @@ export default function ProjectPresenceIndicator({ projectId, currentUser, label
   }, [projectId, currentUser, sendHeartbeat]);
 
   // Also send leave signal when page visibility changes
+  // BUG FIX: The previous code created a new setInterval each time the tab became
+  // visible without clearing the one from the prior visibility cycle. If the user
+  // toggled tabs rapidly, each "visible" event stacked another interval — only the
+  // last one was saved in heartbeatRef, leaking all previous ones.
+  // Now we always clearInterval before creating a new one.
   useEffect(() => {
     const handleVisibility = () => {
       if (document.hidden) {
         clearInterval(heartbeatRef.current);
+        heartbeatRef.current = null;
       } else {
+        // Clear any prior interval before starting a fresh one
+        if (heartbeatRef.current) clearInterval(heartbeatRef.current);
         sendHeartbeat("heartbeat");
         heartbeatRef.current = setInterval(() => sendHeartbeat("heartbeat"), HEARTBEAT_INTERVAL);
       }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "@/api/supabaseClient";
+import { retryWithBackoff, isTransientError } from "@/lib/networkResilience";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Button } from "@/components/ui/button";
@@ -41,19 +42,22 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
     if (!selectedType || !summary.trim()) return;
     setLoading(true);
     try {
-      await api.entities.InteractionLog.create({
-        entity_type: "Agent",
-        entity_id: agent.id,
-        entity_name: agent.name || "Unknown",
-        interaction_type: selectedType,
-        date_time: new Date().toISOString(),
-        summary: summary.trim(),
-        details: "",
-        user_id: user?.id,
-        user_name: user?.full_name,
-        sentiment: "Neutral",
-        relationship_state_at_time: agent.relationship_state || "Active",
-      });
+      await retryWithBackoff(
+        () => api.entities.InteractionLog.create({
+          entity_type: "Agent",
+          entity_id: agent.id,
+          entity_name: agent.name || "Unknown",
+          interaction_type: selectedType,
+          date_time: new Date().toISOString(),
+          summary: summary.trim(),
+          details: "",
+          user_id: user?.id,
+          user_name: user?.full_name,
+          sentiment: "Neutral",
+          relationship_state_at_time: agent.relationship_state || "Active",
+        }),
+        { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying (${attempt}/2)...`) }
+      );
 
       // Update last_contacted_at
       api.entities.Agent.update(agent.id, {
@@ -69,7 +73,8 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
       setOpen(false);
       if (onLogged) onLogged();
     } catch (err) {
-      toast.error(err.message || "Failed to log interaction");
+      const hint = isTransientError(err) ? ' — check your connection and try again' : '';
+      toast.error((err.message || "Failed to log interaction") + hint);
     } finally {
       setLoading(false);
     }

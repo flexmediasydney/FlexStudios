@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
+import { isTransientError } from "@/lib/networkResilience";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
 import {
@@ -78,6 +79,8 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
   }, [formData.email, formData.phone, allAgents, open]);
 
   const saveMutation = useMutation({
+    retry: (failureCount, error) => failureCount < 2 && isTransientError(error),
+    retryDelay: (attempt) => Math.min(1000 * Math.pow(2, attempt), 4000),
     mutationFn: async ({ data, addAnother }) => {
       if (!data.name?.trim()) throw new Error("Name is required");
       if (!data.agency_id) throw new Error("Organisation is required");
@@ -134,7 +137,8 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
       }
     },
     onError: (error) => {
-      toast.error(error.message || "Failed to create contact");
+      const hint = isTransientError(error) ? ' — check your connection and try again' : '';
+      toast.error((error.message || "Failed to create contact") + hint);
     },
   });
 

@@ -1,5 +1,7 @@
 import { getAdminClient, getUserFromReq, getUserClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
+const GOOGLE_API_TIMEOUT_MS = 15_000; // 15s timeout for Google API calls
+
 async function refreshAccessToken(clientId: string, clientSecret: string, refreshToken: string): Promise<string> {
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -9,7 +11,8 @@ async function refreshAccessToken(clientId: string, clientSecret: string, refres
       client_secret: clientSecret,
       refresh_token: refreshToken,
       grant_type: 'refresh_token'
-    })
+    }),
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
   });
   const data = await res.json();
   if (!data.access_token) throw new Error(`Token refresh failed: ${data.error || 'unknown'}`);
@@ -113,6 +116,7 @@ Deno.serve(async (req) => {
       {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
       }
     );
 

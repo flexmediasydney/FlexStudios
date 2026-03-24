@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -367,12 +367,17 @@ export default function ProjectPricingTable({
     setError(null);
   };
 
-  // Debounce qty changes to avoid excessive re-renders
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Fix: proper debounce using a ref to track the timer — the previous
+  // useCallback-based approach returned a cleanup fn that was never called,
+  // so every invocation fired after 200ms instead of debouncing.
+  const qtyTimerRef = useRef(null);
   const debouncedUpdateQty = useCallback((productId, newQty) => {
-    const timer = setTimeout(() => handleUpdateQty(productId, newQty), 200);
-    return () => clearTimeout(timer);
-  }, [allProducts]);
+    if (qtyTimerRef.current) clearTimeout(qtyTimerRef.current);
+    qtyTimerRef.current = setTimeout(() => {
+      qtyTimerRef.current = null;
+      handleUpdateQty(productId, newQty);
+    }, 200);
+  }, [allProducts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Change detection
   const hasChanges = useMemo(() => {

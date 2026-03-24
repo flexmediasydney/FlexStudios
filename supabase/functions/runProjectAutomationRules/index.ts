@@ -257,14 +257,33 @@ async function safeList(entities: any, entity: string, limit = 100) {
   catch { return []; }
 }
 
-async function hasRecentLog(entities: any, idempotencyKey: string, cooldownMinutes?: number, ruleId?: string, projectId?: string): Promise<boolean> {
+// Pre-loaded log cache to avoid re-fetching 500 rows on every rule×project combination (N+1 fix).
+// Call preloadRecentLogs() once, then pass the result into hasRecentLogCached().
+async function preloadRecentLogs(entities: any): Promise<{
+  idempotencyKeys: Set<string>;
+  logs: any[];
+}> {
   const recent = await safeList(entities, 'AutomationRuleLog', 500);
+  const idempotencyKeys = new Set<string>();
+  for (const l of recent) {
+    if (l.idempotency_key) idempotencyKeys.add(l.idempotency_key);
+  }
+  return { idempotencyKeys, logs: recent };
+}
+
+function hasRecentLogCached(
+  cache: { idempotencyKeys: Set<string>; logs: any[] },
+  idempotencyKey: string,
+  cooldownMinutes?: number,
+  ruleId?: string,
+  projectId?: string,
+): boolean {
   // Exact idempotency key match (daily rules, etc.)
-  if (recent.some((l: any) => l.idempotency_key === idempotencyKey)) return true;
+  if (cache.idempotencyKeys.has(idempotencyKey)) return true;
   // Cooldown window check: prevent re-firing same rule+project within cooldown period
   if (cooldownMinutes && cooldownMinutes > 0 && ruleId && projectId) {
     const cutoff = Date.now() - cooldownMinutes * 60 * 1000;
-    return recent.some((l: any) => {
+    return cache.logs.some((l: any) => {
       if (l.rule_id !== ruleId || l.project_id !== projectId || l.result !== 'executed') return false;
       const ts = fixTS(l.fired_at);
       return ts && ts.getTime() > cutoff;
@@ -450,6 +469,13 @@ Deno.serve(async (req) => {
     const allProjects = await safeList(entities, 'Project', 2000);
     const projects = allProjects.filter((p: any) => !p.is_deleted && !p.archived);
 
+    // Pre-load automation rule logs ONCE to avoid N+1 queries (was fetching 500 rows per rule×project)
+    const logCache = await preloadRecentLogs(entities);
+
+    // Wall-clock timeout guard: stop processing before the 30s Supabase limit
+    const WALL_CLOCK_LIMIT_MS = 25_000; // 25s safety margin
+    const startTime = Date.now();
+
     // Pre-load notification preferences and recent notifications ONCE
     let prefsCache: Map<string, any[]> = new Map();
     let notifKeySet: Set<string> = new Set();
@@ -495,6 +521,12 @@ Deno.serve(async (req) => {
       }
 
       for (const project of projects) {
+        // Wall-clock timeout guard: return partial results instead of timing out
+        if (Date.now() - startTime > WALL_CLOCK_LIMIT_MS) {
+          console.warn(`Wall-clock limit reached (${WALL_CLOCK_LIMIT_MS}ms) — returning partial results`);
+          return jsonResponse({ ...stats, processor_version: PROCESSOR_VERSION, partial: true, reason: 'wall_clock_limit' });
+        }
+
         const INACTIVE_STAGES = ['cancelled', 'delivered'];
         const isInactive = INACTIVE_STAGES.includes(project.status);
         const isFinancialRule = rule.rule_group === 'financial' || (rule.action_type === 'send_notification' &&
@@ -515,7 +547,7 @@ Deno.serve(async (req) => {
           idemKey = `${rule.id}:${project.id}:${(updatedAt || "").slice(0, 16)}`;
         }
 
-        const alreadyRan = await hasRecentLog(entities, idemKey, rule.cooldown_minutes, rule.id, project.id);
+        const alreadyRan = hasRecentLogCached(logCache, idemKey, rule.cooldown_minutes, rule.id, project.id);
         if (alreadyRan) { stats.skipped++; continue; }
 
         const conditionsMet = evaluateConditions(project, conditions, conditionLogic);

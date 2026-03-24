@@ -422,20 +422,24 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
       // Fire-and-forget task sync — don't await, prevents form timeout
       if (projectId) {
-      // If shoot_date or shoot_time changed on an existing project, update linked CalendarEvents
+      // If shoot_date or shoot_time changed on an existing project, update ALL linked CalendarEvents
       if (project?.id) {
       const shootDateChanged = formData.shoot_date !== (initialFormData.shoot_date || '');
       const shootTimeChanged = formData.shoot_time !== (initialFormData.shoot_time || '');
       if (shootDateChanged || shootTimeChanged) {
         api.entities.CalendarEvent.filter({ project_id: project.id }, null, 50)
           .then(events => {
+            // FIX: Update ALL linked events, not just tonomo-sourced ones.
+            // FlexMedia-created events linked to this project also need start/end time updates.
             const tonomoEvents = events.filter(ev =>
               ev.event_source === 'tonomo' || ev.tonomo_appointment_id
             );
             if (tonomoEvents.length > 0) {
-              toast.info('Calendar events updated locally. Update in Tonomo for permanent changes.', { duration: 5000 });
+              toast.info('Tonomo calendar events updated locally. Update in Tonomo for permanent changes.', { duration: 5000 });
             }
-            tonomoEvents.forEach(ev => {
+            // Google-sourced events are read-only in FlexStudios — skip them
+            const updatableEvents = events.filter(ev => ev.event_source !== 'google');
+            updatableEvents.forEach(ev => {
               if (!formData.shoot_date) return;
               const timeStr = formData.shoot_time || '09:00';
               const hhmm = timeStr.length <= 5 ? timeStr : timeStr.slice(0, 5);
@@ -444,9 +448,17 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               // Use sydneyInputToUtc to correctly convert Sydney wall-clock to UTC.
               const utcIso = sydneyInputToUtc(`${formData.shoot_date}T${hhmm}`);
               if (!utcIso) return;
-              api.entities.CalendarEvent.update(ev.id, {
-                start_time: utcIso,
-              }).catch(() => {});
+              // FIX: Also update end_time to maintain original event duration.
+              // Without this, changing shoot_date leaves end_time on the old date,
+              // creating an event that spans incorrectly.
+              const updatePayload = { start_time: utcIso };
+              if (ev.start_time && ev.end_time) {
+                const durationMs = new Date(ev.end_time).getTime() - new Date(ev.start_time).getTime();
+                if (durationMs > 0) {
+                  updatePayload.end_time = new Date(new Date(utcIso).getTime() + durationMs).toISOString();
+                }
+              }
+              api.entities.CalendarEvent.update(ev.id, updatePayload).catch(() => {});
             });
           })
           .catch(() => {});
@@ -457,8 +469,11 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
       if (addressChanged && formData.property_address) {
         api.entities.CalendarEvent.filter({ project_id: project.id }, null, 50)
           .then(events => {
+            // FIX: Update ALL linked events, not just tonomo-sourced ones.
+            // FlexMedia-created events also carry location and should stay in sync.
+            // Google-sourced events are read-only — skip them.
             events
-              .filter(ev => ev.event_source === 'tonomo' || ev.tonomo_appointment_id)
+              .filter(ev => ev.event_source !== 'google')
               .forEach(ev => {
                 api.entities.CalendarEvent.update(ev.id, {
                   location: formData.property_address,

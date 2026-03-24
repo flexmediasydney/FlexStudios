@@ -40,6 +40,11 @@ const supabase = createSupabaseClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 // the adminAuthActions edge function which holds the service role key server-side.
 const supabaseAdmin = null;
 
+// Monotonic counter for unique Supabase Realtime channel names.
+// Each subscribe() call gets a unique channel so unsubscribing one
+// doesn't tear down another subscriber's channel for the same table.
+let subscribeCounter = 0;
+
 // ─── Entity name → table name mapping ────────────────────────────────────────
 
 /**
@@ -307,10 +312,18 @@ function createEntityApi(entityName, client) {
      * Base44 signature: Entity.subscribe(callback) → unsubscribeFn
      *
      * Callback receives: { id, type: 'create'|'update'|'delete', data }
+     *
+     * EFFICIENCY FIX: Each call creates a unique channel name so that multiple
+     * concurrent subscribers to the same table get independent channels.
+     * Previously all used `realtime:${table}` — in Supabase JS v2, calling
+     * .channel() with an already-joined name returns the SAME Channel object,
+     * so when ONE subscriber unsubscribed it tore down the channel for ALL
+     * subscribers, causing missed events and stale UI across the app.
      */
     subscribe(callback) {
+      const channelId = `realtime:${table}:${++subscribeCounter}`;
       const channel = client
-        .channel(`realtime:${table}`)
+        .channel(channelId)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table },
@@ -340,8 +353,13 @@ function createEntityApi(entityName, client) {
         .subscribe();
 
       // Return unsubscribe function (same interface as Base44)
+      // EFFICIENCY FIX: use removeChannel() instead of channel.unsubscribe().
+      // unsubscribe() sends LEAVE to the server but leaves the Channel object
+      // in the client's internal channel list, leaking memory over time.
+      // removeChannel() fully cleans up both the server subscription and the
+      // client-side Channel object.
       return () => {
-        channel.unsubscribe();
+        client.removeChannel(channel);
       };
     },
   };

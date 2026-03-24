@@ -34,7 +34,7 @@ Deno.serve(async (req) => {
         // Bias to Australia
         const address = encodeURIComponent(project.property_address + ', Australia');
         const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${address}&region=au&key=${apiKey}`;
-        const res = await fetch(url);
+        const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
         const data = await res.json();
 
         if (data.status === 'OK' && data.results?.[0]?.geometry?.location) {

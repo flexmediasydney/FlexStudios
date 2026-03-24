@@ -8,6 +8,7 @@ export default function NotificationToast() {
   const { notifications, markRead } = useNotifications();
   const [toasts, setToasts] = useState([]);
   const seenRef = useRef(new Set());
+  const dismissTimersRef = useRef(new Set());
   const navigate = useNavigate();
 
   // Clear seen set when notifications are fully replaced (e.g. user switch / logout)
@@ -19,6 +20,17 @@ export default function NotificationToast() {
     }
   }, [notifications]);
 
+  // BUG FIX: Auto-dismiss timeouts were not cleaned up on unmount.
+  // If the component unmounted before the 7s timeout fired, setToasts
+  // would be called on an unmounted component (memory leak + React warning).
+  // Now all dismiss timers are tracked in a ref and cleared on unmount.
+  useEffect(() => {
+    return () => {
+      dismissTimersRef.current.forEach(clearTimeout);
+      dismissTimersRef.current.clear();
+    };
+  }, []);
+
   useEffect(() => {
     const critical = notifications.filter(
       n => n.severity === "critical" && !n.is_read && !n.is_dismissed
@@ -29,11 +41,13 @@ export default function NotificationToast() {
       newOnes.forEach(n => seenRef.current.add(n.id));
       setToasts(prev => [...newOnes.slice(0, 3), ...prev].slice(0, 5));
 
-      // Auto-dismiss each after 7 seconds
+      // Auto-dismiss each after 7 seconds (tracked for cleanup)
       newOnes.forEach(n => {
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+          dismissTimersRef.current.delete(timer);
           setToasts(prev => prev.filter(t => t.id !== n.id));
         }, 7000);
+        dismissTimersRef.current.add(timer);
       });
     }
   }, [notifications]);

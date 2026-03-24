@@ -1,3 +1,4 @@
+import React, { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Paperclip, Lock, Users, Link2, Archive, Trash2, Copy, Eye, EyeOff } from "lucide-react";
@@ -27,7 +28,117 @@ import { PRIORITY_LIST_STYLES, HOVER_CARD_DELAY_MS } from "./emailConstants";
 // Distinct colors for multi-account indicator (left border + badge)
 const ACCOUNT_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#14b8a6'];
 
-export default function EmailListRow({
+// Bug fix: moved stripHtml outside component to avoid re-creating the function on every render.
+// This function applies ~30 regex replacements and is expensive — was previously defined inside
+// the component body, causing a new closure allocation per row per render.
+function stripHtml(html) {
+  if (!html) return '';
+  let text = html
+    // Remove entire <style>...</style> blocks (dotAll via [\s\S])
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    // Remove entire <script>...</script> blocks
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    // Remove HTML comments (including conditional IE comments)
+    .replace(/<!--[\s\S]*?-->/g, '')
+    // Remove <head>...</head> blocks (contains meta, title, style)
+    .replace(/<head[\s\S]*?<\/head>/gi, '')
+    // Remove all remaining HTML tags
+    .replace(/<[^>]*>/g, ' ')
+    // Decode common HTML entities
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x[0-9a-fA-F]+;/g, ' ')
+    .replace(/&#\d+;/g, ' ')
+    // Remove CSS class/id selectors (.class-name, #id-name)
+    .replace(/[.#][\w-]+(?:\s*[{,>+~])/g, ' ')
+    .replace(/\.[\w-]{2,}/g, ' ')
+    // Remove CSS property: value pairs (background-image: none, color: #fff, etc.)
+    .replace(/[\w-]+\s*:\s*[^;]{1,80};/g, ' ')
+    // Remove CSS values without semicolons (standalone property patterns)
+    .replace(/\b(background|background-image|color|font|border|margin|padding|display|position|width|height|overflow|text-decoration|vertical-align|line-height|opacity|z-index|float|clear|visibility|content|cursor|outline|transform|transition|animation|box-shadow|text-align|white-space|word-break|max-width|min-width|min-height|max-height|flex|grid|align-items|justify-content)\s*:\s*[^.!?]{1,100}/gi, ' ')
+    // Remove !important
+    .replace(/!important/gi, '')
+    // Remove CSS block remnants: braces, brackets
+    .replace(/[{}\[\]]/g, ' ')
+    // Remove CSS comment markers
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\*\//g, ' ')
+    .replace(/\/\*/g, ' ')
+    // Remove CSS media queries and @rules
+    .replace(/@(media|import|charset|font-face|keyframes|supports|page)[^;{]*/gi, ' ')
+    // Remove CSS units and values patterns (0px, 100%, #hex, rgb(), etc.)
+    .replace(/\b\d+(px|em|rem|pt|%|vh|vw)\b/g, ' ')
+    .replace(/#[0-9a-fA-F]{3,8}\b/g, ' ')
+    .replace(/rgb\([^)]*\)/g, ' ')
+    .replace(/rgba\([^)]*\)/g, ' ')
+    .replace(/url\([^)]*\)/g, ' ')
+    // Remove "none" as standalone word (CSS value remnant)
+    .replace(/\bnone\b/g, ' ')
+    // Fix mojibake: UTF-8 smart quotes/dashes decoded as Latin-1
+    .replace(/\u00e2\u0080\u0099/g, "'")   // right single quote
+    .replace(/\u00e2\u0080\u0098/g, "'")   // left single quote
+    .replace(/\u00e2\u0080\u009c/g, '"')   // left double quote
+    .replace(/\u00e2\u0080\u009d/g, '"')   // right double quote
+    .replace(/\u00e2\u0080\u0093/g, '\u2013') // en dash
+    .replace(/\u00e2\u0080\u0094/g, '\u2014') // em dash
+    .replace(/\u00e2\u0080\u00a6/g, '...')  // ellipsis
+    .replace(/\u00c2\u00a0/g, ' ')          // non-breaking space
+    .replace(/\u00e2\u0080\u0099/g, "'")
+    .replace(/\u00e2\u0080\u0098/g, "'")
+    .replace(/\u00e2\u0080\u009c/g, '"')
+    .replace(/\u00e2\u0080\u009d/g, '"')
+    .replace(/\u00e2\u0080\u0093/g, '\u2013')
+    .replace(/\u00e2\u0080\u0094/g, '\u2014')
+    .replace(/\u00e2\u0080\u00a6/g, '...')
+    .replace(/\u00c2\u00a9/g, '\u00a9')
+    .replace(/\u00c2\u00a0/g, ' ')
+    // Remove any remaining mojibake clusters
+    .replace(/[\u00C0-\u00FF]{3,}/g, ' ')
+    // Remove "Email Truncated" markers
+    .replace(/Email\s*Truncat(ed|ion)[^.]*\.?/gi, ' ')
+    // Collapse whitespace
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // If after all stripping the text is mostly garbage (very short or mostly non-alpha), return empty
+  const alphaRatio = (text.match(/[a-zA-Z]/g) || []).length / (text.length || 1);
+  if (text.length < 5 || alphaRatio < 0.4) return '';
+
+  return text;
+}
+
+// Smart attachment filtering: exclude system junk but keep real files
+function isGarbageAttachment(att) {
+  if (!att || !att.filename) return true;
+  const name = (att.filename || '').toLowerCase();
+  const size = att.size || 0;
+
+  // Common junk: signature images, tracking pixels, smime
+  if (name.match(/^(image|icon|logo|flag|pixel|spacer|blank)/i)) return true;
+  if (name.includes('signature') || name.includes('smime')) return true;
+
+  // Only filter by size if size is actually known (>0) and tiny
+  if (size > 0 && size < 5120) {
+    // Still keep PDFs, docs, spreadsheets, calendars regardless of size
+    if (name.match(/\.(pdf|doc|docx|xls|xlsx|csv|ics|zip|rar)$/)) return false;
+    return true;
+  }
+
+  // Tiny known-size images (tracking pixels etc)
+  if (size > 0 && size < 50000 && name.match(/\.(gif|png|jpg|jpeg|webp)$/)) return true;
+
+  return false;
+}
+
+// Bug fix: wrap in React.memo to prevent re-rendering every row when one row's selection
+// changes. The parent EmailListContainer re-renders on selection state change, which
+// previously caused ALL visible rows to re-render (each running stripHtml's 30 regexes).
+// With React.memo, only the row whose props actually changed will re-render.
+const EmailListRow = React.memo(function EmailListRow({
   thread,
   columns,
   isSelected,
@@ -39,86 +150,6 @@ export default function EmailListRow({
   onToggleVisibility,
   onContextMenu,
 }) {
-  const stripHtml = (html) => {
-    if (!html) return '';
-    let text = html
-      // Remove entire <style>...</style> blocks (dotAll via [\s\S])
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      // Remove entire <script>...</script> blocks
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      // Remove HTML comments (including conditional IE comments)
-      .replace(/<!--[\s\S]*?-->/g, '')
-      // Remove <head>...</head> blocks (contains meta, title, style)
-      .replace(/<head[\s\S]*?<\/head>/gi, '')
-      // Remove all remaining HTML tags
-      .replace(/<[^>]*>/g, ' ')
-      // Decode common HTML entities
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&#x[0-9a-fA-F]+;/g, ' ')
-      .replace(/&#\d+;/g, ' ')
-      // Remove CSS class/id selectors (.class-name, #id-name)
-      .replace(/[.#][\w-]+(?:\s*[{,>+~])/g, ' ')
-      .replace(/\.[\w-]{2,}/g, ' ')
-      // Remove CSS property: value pairs (background-image: none, color: #fff, etc.)
-      .replace(/[\w-]+\s*:\s*[^;]{1,80};/g, ' ')
-      // Remove CSS values without semicolons (standalone property patterns)
-      .replace(/\b(background|background-image|color|font|border|margin|padding|display|position|width|height|overflow|text-decoration|vertical-align|line-height|opacity|z-index|float|clear|visibility|content|cursor|outline|transform|transition|animation|box-shadow|text-align|white-space|word-break|max-width|min-width|min-height|max-height|flex|grid|align-items|justify-content)\s*:\s*[^.!?]{1,100}/gi, ' ')
-      // Remove !important
-      .replace(/!important/gi, '')
-      // Remove CSS block remnants: braces, brackets
-      .replace(/[{}\[\]]/g, ' ')
-      // Remove CSS comment markers
-      .replace(/\/\*[\s\S]*?\*\//g, ' ')
-      .replace(/\*\//g, ' ')
-      .replace(/\/\*/g, ' ')
-      // Remove CSS media queries and @rules
-      .replace(/@(media|import|charset|font-face|keyframes|supports|page)[^;{]*/gi, ' ')
-      // Remove CSS units and values patterns (0px, 100%, #hex, rgb(), etc.)
-      .replace(/\b\d+(px|em|rem|pt|%|vh|vw)\b/g, ' ')
-      .replace(/#[0-9a-fA-F]{3,8}\b/g, ' ')
-      .replace(/rgb\([^)]*\)/g, ' ')
-      .replace(/rgba\([^)]*\)/g, ' ')
-      .replace(/url\([^)]*\)/g, ' ')
-      // Remove "none" as standalone word (CSS value remnant)
-      .replace(/\bnone\b/g, ' ')
-      // Fix mojibake: UTF-8 smart quotes/dashes decoded as Latin-1
-      .replace(/\u00e2\u0080\u0099/g, "'")   // â€™ → '
-      .replace(/\u00e2\u0080\u0098/g, "'")   // â€˜ → '
-      .replace(/\u00e2\u0080\u009c/g, '"')   // â€œ → "
-      .replace(/\u00e2\u0080\u009d/g, '"')   // â€ → "
-      .replace(/\u00e2\u0080\u0093/g, '–')   // â€" → –
-      .replace(/\u00e2\u0080\u0094/g, '—')   // â€" → —
-      .replace(/\u00e2\u0080\u00a6/g, '...')  // â€¦ → ...
-      .replace(/\u00c2\u00a0/g, ' ')          // Â  → space (non-breaking space)
-      .replace(/â€™/g, "'")
-      .replace(/â€˜/g, "'")
-      .replace(/â€œ/g, '"')
-      .replace(/â€\u009d/g, '"')
-      .replace(/â€"/g, '–')
-      .replace(/â€"/g, '—')
-      .replace(/â€¦/g, '...')
-      .replace(/Â©/g, '©')
-      .replace(/Â /g, ' ')
-      // Remove any remaining mojibake clusters
-      .replace(/[\u00C0-\u00FF]{3,}/g, ' ')
-      // Remove "Email Truncated" markers
-      .replace(/Email\s*Truncat(ed|ion)[^.]*\.?/gi, ' ')
-      // Collapse whitespace
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    // If after all stripping the text is mostly garbage (very short or mostly non-alpha), return empty
-    const alphaRatio = (text.match(/[a-zA-Z]/g) || []).length / (text.length || 1);
-    if (text.length < 5 || alphaRatio < 0.4) return '';
-
-    return text;
-  };
-
   const priorityConfig = PRIORITY_LIST_STYLES;
 
   // Early guard: if thread has no messages, don't render
@@ -134,33 +165,7 @@ export default function EmailListRow({
   // Collect all real attachments across ALL messages in the thread
   const allAttachments = thread.messages.flatMap(m => m.attachments || []);
 
-  // Smart attachment filtering: exclude system junk but keep real files
-  const isGarbage = (att) => {
-    if (!att || !att.filename) return true;
-    const name = (att.filename || '').toLowerCase();
-    const size = att.size || 0;
-
-    // Always keep files with attachment_id (Gmail reference — downloadable)
-    // Size 0 is normal for Gmail attachments (size unknown until fetched)
-
-    // Common junk: signature images, tracking pixels, smime
-    if (name.match(/^(image|icon|logo|flag|pixel|spacer|blank)/i)) return true;
-    if (name.includes('signature') || name.includes('smime')) return true;
-
-    // Only filter by size if size is actually known (>0) and tiny
-    if (size > 0 && size < 5120) {
-      // Still keep PDFs, docs, spreadsheets, calendars regardless of size
-      if (name.match(/\.(pdf|doc|docx|xls|xlsx|csv|ics|zip|rar)$/)) return false;
-      return true;
-    }
-
-    // Tiny known-size images (tracking pixels etc)
-    if (size > 0 && size < 50000 && name.match(/\.(gif|png|jpg|jpeg|webp)$/)) return true;
-
-    return false;
-  };
-
-  const realAttachments = allAttachments.filter(att => !isGarbage(att));
+  const realAttachments = allAttachments.filter(att => !isGarbageAttachment(att));
 
   const totalRowWidth = columns.reduce((sum, c) => sum + (c.width ?? 0), 0);
   const isShared = thread.messages[0]?.visibility === 'shared';
@@ -532,4 +537,6 @@ export default function EmailListRow({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
+});
+
+export default EmailListRow;

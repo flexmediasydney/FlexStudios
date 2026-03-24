@@ -2,6 +2,8 @@ import { getAdminClient, getUserFromReq, getUserClient, createEntities, handleCo
 
 const APP_TIMEZONE = 'Australia/Sydney';
 
+const GOOGLE_API_TIMEOUT_MS = 15_000; // 15s timeout for Google API calls
+
 async function refreshAccessToken(clientId: string, clientSecret: string, refreshToken: string): Promise<string> {
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -11,7 +13,8 @@ async function refreshAccessToken(clientId: string, clientSecret: string, refres
       client_secret: clientSecret,
       refresh_token: refreshToken,
       grant_type: 'refresh_token'
-    })
+    }),
+    signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
   });
   const data = await res.json();
   if (!data.access_token) throw new Error(`Token refresh failed: ${data.error || 'unknown'}`);
@@ -165,6 +168,7 @@ Deno.serve(async (req) => {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(gEventPayload),
+          signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
         }
       );
 
@@ -191,6 +195,7 @@ Deno.serve(async (req) => {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(gEventPayload),
+          signal: AbortSignal.timeout(GOOGLE_API_TIMEOUT_MS),
         }
       );
 

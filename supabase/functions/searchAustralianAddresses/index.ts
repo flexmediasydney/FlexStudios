@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
       `components=country:au&` +
       `key=${apiKey}`;
 
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     const data = await response.json();
 
     if (data.status === 'ZERO_RESULTS' || !data.predictions) {

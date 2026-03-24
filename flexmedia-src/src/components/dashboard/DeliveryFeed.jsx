@@ -344,14 +344,26 @@ export default function DeliveryFeed() {
     return () => clearTimeout(timer);
   }, []);
 
+  // BUG FIX: setTimeout inside subscribe callback was not cleaned up on unmount.
+  // Each delivery event scheduled a 60-second timeout. If the component unmounted
+  // before those 60s elapsed, setNewDeliveryIds would fire on an unmounted component.
+  // Now all highlight timers are tracked and cleared alongside the subscription.
   useEffect(() => {
+    const highlightTimers = new Set();
     const unsub = api.entities.Project.subscribe((event) => {
       if (event.type === 'update' && event.data?.tonomo_delivered_at && event.data?.status === 'delivered') {
         setNewDeliveryIds(prev => new Set([...prev, event.id]));
-        setTimeout(() => setNewDeliveryIds(prev => { const next = new Set(prev); next.delete(event.id); return next; }), 60000);
+        const timer = setTimeout(() => {
+          highlightTimers.delete(timer);
+          setNewDeliveryIds(prev => { const next = new Set(prev); next.delete(event.id); return next; });
+        }, 60000);
+        highlightTimers.add(timer);
       }
     });
-    return unsub;
+    return () => {
+      unsub();
+      highlightTimers.forEach(clearTimeout);
+    };
   }, []);
 
   const deliveries = useMemo(() => {

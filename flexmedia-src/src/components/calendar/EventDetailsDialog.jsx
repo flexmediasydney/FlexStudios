@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { retryWithBackoff, isTransientError } from "@/lib/networkResilience";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,6 +56,7 @@ export default function EventDetailsDialog({
   const [saving, setSaving] = useState(false);
   const [markingDone, setMarkingDone] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [rescheduling, setRescheduling] = useState(false);
 
   // Bug fix: Move useCurrentUser to top of component so currentUserId is
   // available in handleSubmit (was defined after handleSubmit, causing undefined)
@@ -143,8 +145,12 @@ export default function EventDetailsDialog({
 
   const set = (key, value) => setFormData(f => ({ ...f, [key]: value }));
 
+  // Mutex: prevent concurrent save + reschedule on the same event
+  const isBusy = saving || rescheduling || markingDone || deleting;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isBusy) return;
     // Gap fix: Validate end_time >= start_time
     const start = sydneyInputToUtc(formData.start_time);
     const end = formData.end_time ? sydneyInputToUtc(formData.end_time) : null;
@@ -152,7 +158,7 @@ export default function EventDetailsDialog({
       toast.error('End time must be after start time');
       return;
     }
-    
+
     setSaving(true);
     try {
       const source = event?.event_source || 'flexmedia';
@@ -175,14 +181,20 @@ export default function EventDetailsDialog({
       let savedId = event?.id;
       try {
         if (event?.id) {
-          await api.entities.CalendarEvent.update(event.id, payload);
+          await retryWithBackoff(
+            () => api.entities.CalendarEvent.update(event.id, payload),
+            { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying save (${attempt}/2)...`) }
+          );
         } else {
-          const created = await api.entities.CalendarEvent.create(payload);
+          const created = await retryWithBackoff(
+            () => api.entities.CalendarEvent.create(payload),
+            { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying save (${attempt}/2)...`) }
+          );
           savedId = created?.id;
         }
       } catch (saveErr) {
-        // Bug fix: show error toast and keep dialog open on save failure
-        toast.error('Failed to save event: ' + (saveErr?.message || 'Unknown error'));
+        const hint = isTransientError(saveErr) ? ' — check your connection and try again' : '';
+        toast.error('Failed to save event: ' + (saveErr?.message || 'Unknown error') + hint);
         return;
       }
 
@@ -239,14 +251,17 @@ export default function EventDetailsDialog({
   };
 
   const handleMarkDone = async () => {
-    if (!event?.id) return;
+    if (!event?.id || isBusy) return;
     setMarkingDone(true);
     try {
-      await api.entities.CalendarEvent.update(event.id, {
-        is_done: true,
-        done_at: new Date().toISOString(),
-        outcome_note: formData.outcome_note,
-      });
+      await retryWithBackoff(
+        () => api.entities.CalendarEvent.update(event.id, {
+          is_done: true,
+          done_at: new Date().toISOString(),
+          outcome_note: formData.outcome_note,
+        }),
+        { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying (${attempt}/2)...`) }
+      );
 
       // Remove from Google Calendar if this is a FlexStudios event that was pushed
       if (event.google_event_id && getEventSource(event) === 'flexmedia') {
@@ -263,13 +278,16 @@ export default function EventDetailsDialog({
       invalidateAll();
       onSave?.();
       onClose();
+    } catch (err) {
+      const hint = isTransientError(err) ? ' — check your connection and try again' : '';
+      toast.error('Failed to mark event as done: ' + (err?.message || 'Unknown error') + hint);
     } finally {
       setMarkingDone(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!event?.id || deleting || !confirm("Delete this activity?")) return;
+    if (!event?.id || isBusy || !confirm("Delete this activity?")) return;
 
     setDeleting(true);
     try {
@@ -301,10 +319,8 @@ export default function EventDetailsDialog({
     queryClient.invalidateQueries({ queryKey: ["entity-activities"] });
   };
 
-  const [rescheduling, setRescheduling] = useState(false);
-
   const handleReschedule = async (option) => {
-    if (!event?.id) return;
+    if (!event?.id || isBusy) return;
     setRescheduling(true);
     try {
       // BUG FIX: use fixTimestamp to ensure timestamps parse as UTC, not local time
@@ -805,7 +821,7 @@ export default function EventDetailsDialog({
                 {editable ? "Cancel" : "Close"}
               </Button>
               {editable && (
-                <Button type="submit" disabled={saving} className="shadow-sm hover:shadow-md transition-all">
+                <Button type="submit" disabled={isBusy} className="shadow-sm hover:shadow-md transition-all">
                   {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                   {event ? "Save Changes" : "Create Activity"}
                 </Button>

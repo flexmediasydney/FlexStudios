@@ -6,7 +6,7 @@ import { AlertTriangle, RefreshCw } from "lucide-react";
 class EmailErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, resetKey: 0 };
   }
 
   static getDerivedStateFromError(error) {
@@ -16,6 +16,10 @@ class EmailErrorBoundary extends React.Component {
   componentDidCatch(error, errorInfo) {
     console.error("Email inbox error:", error, errorInfo);
   }
+
+  handleReset = () => {
+    this.setState(s => ({ hasError: false, error: null, resetKey: s.resetKey + 1 }));
+  };
 
   render() {
     if (this.state.hasError) {
@@ -38,20 +42,29 @@ class EmailErrorBoundary extends React.Component {
                   <pre className="mt-2 whitespace-pre-wrap">{this.state.error.toString()}</pre>
                 </details>
               )}
-              <Button
-                onClick={() => window.location.reload()}
-                className="w-full gap-2"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Reload page
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  onClick={this.handleReset}
+                  className="flex-1 gap-2"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Try Again
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => window.location.reload()}
+                  className="gap-2"
+                >
+                  Reload Page
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </div>
       );
     }
 
-    return this.props.children;
+    return <div key={this.state.resetKey}>{this.props.children}</div>;
   }
 }
 
