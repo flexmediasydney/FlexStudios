@@ -2,6 +2,12 @@
 
 import { PROCESSOR_VERSION } from './types.ts';
 
+// Safe JSON parse with fallback — prevents crashes on corrupt stored JSON
+export function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) return fallback;
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
 // Multi-appointment & lifecycle helpers
 export function trackAppointment(existingIdsJson: string | null, newEventId: string | null) {
   if (!newEventId) return { isNew: false, updatedIds: [] as string[] };
@@ -536,7 +542,12 @@ export async function writeAudit(entities: any, params: any) {
   } catch (e: any) { console.error('Audit log write failed:', e.message); }
 }
 
-export async function releaseLock(entities: any, settings: any) {
+export async function releaseLock(entities: any, settings: any, adminClient?: any) {
+  // Release Postgres advisory lock if we have an admin client
+  if (adminClient) {
+    try { await adminClient.rpc('pg_advisory_unlock', { lock_id: 424242 }); }
+    catch { /* advisory lock may not have been acquired */ }
+  }
   if (settings?.id) {
     try { await entities.TonomoIntegrationSettings.update(settings.id, { processing_lock_at: null }); }
     catch { /* self-expires after TTL */ }

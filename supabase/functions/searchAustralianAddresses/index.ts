@@ -20,7 +20,7 @@ Deno.serve(async (req) => {
     const apiKey = Deno.env.get('GOOGLE_PLACES_API_KEY');
     if (!apiKey) {
       console.error('GOOGLE_PLACES_API_KEY not configured');
-      return jsonResponse({ error: 'API key not configured', predictions: [] });
+      return errorResponse('Address search API not configured', 500);
     }
 
     const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?` +
@@ -37,10 +37,7 @@ Deno.serve(async (req) => {
 
     if (data.status && data.status !== 'OK') {
       console.error(`Google Places API error: ${data.status}`, data.error_message);
-      return jsonResponse({
-        error: `Address search unavailable: ${data.error_message || data.status}`,
-        predictions: [],
-      });
+      return errorResponse(`Address search unavailable: ${data.error_message || data.status}`, 502);
     }
 
     const predictions = data.predictions.map((p: any) => ({

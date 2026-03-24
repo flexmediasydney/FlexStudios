@@ -1,24 +1,27 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
-// --- Agent lookup cache (per sync cycle, scoped per request to avoid leaking between concurrent requests) ---
-let agentCache = new Map<string, any>();
-
-async function findAgentByEmail(adminClient: any, email: string) {
-  const key = email.toLowerCase();
-  if (agentCache.has(key)) return agentCache.get(key);
-  try {
-    const { data } = await adminClient
-      .from('agents')
-      .select('id, name, current_agency_id, current_agency_name')
-      .ilike('email', key)
-      .limit(1)
-      .single();
-    agentCache.set(key, data || null);
-    return data || null;
-  } catch {
-    agentCache.set(key, null);
-    return null;
-  }
+// --- Agent lookup cache factory (returns a request-scoped cache to avoid leaking between concurrent requests) ---
+function createAgentCache() {
+  const cache = new Map<string, any>();
+  return {
+    async findByEmail(adminClient: any, email: string) {
+      const key = email.toLowerCase();
+      if (cache.has(key)) return cache.get(key);
+      try {
+        const { data } = await adminClient
+          .from('agents')
+          .select('id, name, current_agency_id, current_agency_name')
+          .ilike('email', key)
+          .limit(1)
+          .single();
+        cache.set(key, data || null);
+        return data || null;
+      } catch {
+        cache.set(key, null);
+        return null;
+      }
+    }
+  };
 }
 
 function extractEmailAddress(fromHeader: string): string {
@@ -38,10 +41,10 @@ const retryFetch = async (url: string, options: any, retries = MAX_RETRIES): Pro
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetch(url, options);
-      if (response.status === 429) {
+      if (response.status === 429 || response.status === 503) {
         lastResponse = response;
         const retryAfter = parseInt(response.headers.get('retry-after') || '5') * 1000;
-        await sleep(retryAfter);
+        await sleep(Math.min(retryAfter, 60000)); // cap at 60s to avoid unbounded waits
         continue;
       }
       return response;
@@ -103,24 +106,53 @@ const extractAttachments = (payload: any) => {
 };
 
 const parseHeaders = (headers: any[]) => {
-  const parsed: Record<string, string> = {};
-  if (!Array.isArray(headers)) return parsed;
+  const raw: Record<string, string> = {};
+  if (!Array.isArray(headers)) return raw;
   for (const header of headers) {
-    if (header?.name) parsed[header.name] = header.value ?? '';
+    if (header?.name) raw[header.name] = header.value ?? '';
   }
-  return parsed;
+  // Return a proxy that does case-insensitive lookups (RFC 2822: header names are case-insensitive)
+  // Build a lowercase-key map for fast lookup, but preserve original casing in entries
+  const lowerMap = new Map<string, string>();
+  for (const [k, v] of Object.entries(raw)) lowerMap.set(k.toLowerCase(), v);
+  return new Proxy(raw, {
+    get(target, prop: string) {
+      if (typeof prop === 'string') return lowerMap.get(prop.toLowerCase()) ?? target[prop];
+      return target[prop as any];
+    }
+  });
 };
 
 const refreshAccessToken = async (clientId: string, clientSecret: string, refreshToken: string): Promise<{ access_token: string; refresh_token?: string }> => {
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' })
-  });
-  const data = await response.json();
-  if (!data.access_token) throw new Error(`Token refresh failed: ${data.error || 'unknown error'}`);
-  // Google may rotate the refresh token — if a new one is returned, we must store it
-  return { access_token: data.access_token, refresh_token: data.refresh_token || undefined };
+  // Retry once on transient network/server errors
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' })
+      });
+      if (response.status >= 500 && attempt === 0) {
+        await sleep(2000);
+        continue;
+      }
+      const data = await response.json();
+      if (!data.access_token) {
+        // Distinguish permanent auth errors from transient ones
+        const isRevoked = data.error === 'invalid_grant';
+        throw new Error(`Token refresh failed: ${data.error || 'unknown error'}${isRevoked ? ' (refresh token revoked — user must reconnect Gmail)' : ''}`);
+      }
+      // Google may rotate the refresh token — if a new one is returned, we must store it
+      return { access_token: data.access_token, refresh_token: data.refresh_token || undefined };
+    } catch (err: any) {
+      if (attempt === 0 && !err.message?.includes('Token refresh failed')) {
+        await sleep(2000);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Token refresh failed after retries');
 };
 
 // --- Fetch and save a single Gmail message (shared by full sync and history sync) ---
@@ -131,6 +163,7 @@ async function fetchAndSaveMessage(
   account: any,
   entities: any,
   admin: any,
+  agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
 ): Promise<'saved' | 'skipped' | 'failed'> {
   // Check if already exists
   const existing = await entities.EmailMessage.filter({
@@ -165,7 +198,7 @@ async function fetchAndSaveMessage(
 
   // Agent/agency auto-linking
   const fromEmail = extractEmailAddress(headers['From'] || '');
-  const agentMatch = fromEmail ? await findAgentByEmail(admin, fromEmail) : null;
+  const agentMatch = (fromEmail && agentLookup) ? await agentLookup.findByEmail(admin, fromEmail) : null;
 
   // Truncate oversized bodies to prevent DB insert failures
   const MAX_BODY_SIZE = 10000;
@@ -194,7 +227,10 @@ async function fetchAndSaveMessage(
     is_draft: fullMsg.labelIds?.includes('DRAFT') || false,
     is_sent: fullMsg.labelIds?.includes('SENT') || false,
     attachments: extractAttachments(fullMsg.payload),
-    received_at: new Date(parseInt(fullMsg.internalDate)).toISOString(),
+    received_at: (() => {
+      const ts = parseInt(fullMsg.internalDate);
+      return isNaN(ts) ? new Date().toISOString() : new Date(ts).toISOString();
+    })(),
     visibility: 'private',
     ...(threadProjectLink ? {
       project_id: threadProjectLink.project_id,
@@ -255,13 +291,14 @@ async function retryFailedMessages(
   account: any,
   entities: any,
   admin: any,
+  agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
 ): Promise<{ retried: number; stillFailed: number }> {
   let retried = 0;
   let stillFailed = 0;
   console.log(`Retrying ${failedIds.length} failed messages for ${account.email_address}`);
   for (const msgId of failedIds) {
     try {
-      const result = await fetchAndSaveMessage(accessToken, msgId, account, entities, admin);
+      const result = await fetchAndSaveMessage(accessToken, msgId, account, entities, admin, agentLookup);
       if (result === 'saved') retried++;
       else if (result === 'failed') stillFailed++;
       await sleep(GMAIL_RATE_LIMIT_DELAY);
@@ -283,6 +320,7 @@ async function fullSync(
   entities: any,
   admin: any,
   options?: { historyExpiredFallback?: boolean },
+  agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
 ): Promise<{ synced: number; latestHistoryId: string | null }> {
   let synced = 0;
   let latestHistoryId: string | null = null;
@@ -375,7 +413,7 @@ async function fullSync(
 
     for (const msg of batch) {
       try {
-        const result = await fetchAndSaveMessage(accessToken, msg.id, account, entities, admin);
+        const result = await fetchAndSaveMessage(accessToken, msg.id, account, entities, admin, agentLookup);
         if (result === 'saved') synced++;
         else if (result === 'failed') failedIds.push(msg.id);
         await sleep(GMAIL_RATE_LIMIT_DELAY);
@@ -388,7 +426,7 @@ async function fullSync(
 
   // Retry pass for transiently failed messages
   if (failedIds.length > 0) {
-    const retryResult = await retryFailedMessages(failedIds, accessToken, account, entities, admin);
+    const retryResult = await retryFailedMessages(failedIds, accessToken, account, entities, admin, agentLookup);
     synced += retryResult.retried;
   }
 
@@ -401,6 +439,7 @@ async function syncViaHistory(
   account: any,
   entities: any,
   admin: any,
+  agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
 ): Promise<{ synced: number; latestHistoryId: string | null; fallbackToFull: boolean }> {
   let synced = 0;
   let latestHistoryId: string | null = account.history_id;
@@ -487,7 +526,7 @@ async function syncViaHistory(
     const batch = addedList.slice(i, i + BATCH_SIZE);
     for (const msgId of batch) {
       try {
-        const result = await fetchAndSaveMessage(accessToken, msgId, account, entities, admin);
+        const result = await fetchAndSaveMessage(accessToken, msgId, account, entities, admin, agentLookup);
         if (result === 'saved') synced++;
         else if (result === 'failed') failedIds.push(msgId);
         await sleep(GMAIL_RATE_LIMIT_DELAY);
@@ -577,7 +616,7 @@ async function syncViaHistory(
       if (record.messagesAdded) {
         for (const added of record.messagesAdded) {
           try {
-            const result = await fetchAndSaveMessage(accessToken, added.message.id, account, entities, admin);
+            const result = await fetchAndSaveMessage(accessToken, added.message.id, account, entities, admin, agentLookup);
             if (result === 'saved') synced++;
             else if (result === 'failed') failedIds.push(added.message.id);
             await sleep(GMAIL_RATE_LIMIT_DELAY);
@@ -641,7 +680,7 @@ async function syncViaHistory(
 
   // Retry pass for transiently failed messages
   if (failedIds.length > 0) {
-    const retryResult = await retryFailedMessages(failedIds, accessToken, account, entities, admin);
+    const retryResult = await retryFailedMessages(failedIds, accessToken, account, entities, admin, agentLookup);
     synced += retryResult.retried;
   }
 
@@ -738,9 +777,8 @@ Deno.serve(async (req) => {
     const entities = createEntities(admin);
     const { accountId, userId } = await req.json();
 
-    // Create a fresh agent lookup cache for this sync cycle
-    // (avoids cross-request contamination if Deno reuses the isolate for concurrent requests)
-    agentCache = new Map<string, any>();
+    // Create a request-scoped agent lookup cache (avoids cross-request contamination)
+    const agentLookup = createAgentCache();
 
     if (!accountId || !userId) {
       return errorResponse('Missing accountId or userId', 400);
@@ -807,14 +845,14 @@ Deno.serve(async (req) => {
         syncMode = 'incremental';
         console.log(`Using History API for ${account.email_address} (historyId: ${account.history_id})`);
 
-        const historyResult = await syncViaHistory(accessToken, account, entities, admin);
+        const historyResult = await syncViaHistory(accessToken, account, entities, admin, agentLookup);
 
         if (historyResult.fallbackToFull) {
           // History expired — clear stale history_id FIRST to prevent infinite 404 loop
           console.log(`Falling back to full sync for ${account.email_address} (history ID expired, using 60-day window)`);
           syncMode = 'full_fallback';
           await entities.EmailAccount.update(account.id, { history_id: null });
-          const fullResult = await fullSync(accessToken, account, entities, admin, { historyExpiredFallback: true });
+          const fullResult = await fullSync(accessToken, account, entities, admin, { historyExpiredFallback: true }, agentLookup);
           synced = fullResult.synced;
           latestHistoryId = fullResult.latestHistoryId;
         } else {
@@ -824,7 +862,7 @@ Deno.serve(async (req) => {
       } else {
         // No history_id stored — first sync or migration, do full sync
         console.log(`Full sync for ${account.email_address} (no history_id stored)`);
-        const fullResult = await fullSync(accessToken, account, entities, admin);
+        const fullResult = await fullSync(accessToken, account, entities, admin, undefined, agentLookup);
         synced = fullResult.synced;
         latestHistoryId = fullResult.latestHistoryId;
       }

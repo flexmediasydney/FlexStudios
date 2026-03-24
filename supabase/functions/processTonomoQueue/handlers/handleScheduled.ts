@@ -16,6 +16,7 @@ import {
   findProjectByOrderId,
   buildReviewReason,
   filterOverriddenFields,
+  safeJsonParse,
   writeAudit,
   writeProjectActivity,
   fireAdminNotif,
@@ -69,7 +70,7 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   );
   // Only flag as additional appointment when the project ALREADY EXISTS and already has appointments
   // For brand new projects, isNewAppointment is always true (empty array → new ID), which is NOT additional
-  const existingAppointmentIds = existing?.tonomo_appointment_ids ? JSON.parse(existing.tonomo_appointment_ids) : [];
+  const existingAppointmentIds = safeJsonParse(existing?.tonomo_appointment_ids, [] as string[]);
   const isAdditionalAppointment = !!existing && isNewAppointment && existingAppointmentIds.length > 0;
 
   const lifecycleReversalDetected =
@@ -266,7 +267,7 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
       const reFetched = await findProjectByOrderId(entities, orderId);
       if (!reFetched) throw new Error(`Unique constraint hit for ${orderId} but re-fetch returned null`);
 
-      const overriddenFields = JSON.parse(reFetched.manually_overridden_fields || '[]');
+      const overriddenFields = safeJsonParse(reFetched.manually_overridden_fields, [] as string[]);
       const safeData = filterOverriddenFields(sharedData, overriddenFields);
       if (reFetched.status !== 'pending_review') {
         delete safeData.status;
@@ -284,7 +285,7 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
       ? `Booking restored in Tonomo — new appointment scheduled after cancellation. Previous status: cancelled. Please review and re-approve to re-enter workflow.`
       : `New appointment added to a delivered booking. Previous status: delivered. Please review — this may indicate a re-shoot or correction booking.`;
 
-    const overriddenFields = JSON.parse(existing.manually_overridden_fields || '[]');
+    const overriddenFields = safeJsonParse(existing.manually_overridden_fields, [] as string[]);
     const safeData = filterOverriddenFields(sharedData, overriddenFields);
 
     await entities.Project.update(existing.id, {
@@ -301,7 +302,7 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     operation = 'lifecycle_reversal';
 
   } else if (isAdditionalAppointment) {
-    const overriddenFields = JSON.parse(existing.manually_overridden_fields || '[]');
+    const overriddenFields = safeJsonParse(existing.manually_overridden_fields, [] as string[]);
     const safeData = filterOverriddenFields(sharedData, overriddenFields);
 
     if (ACTIVE_STAGES.includes(existing.status)) {
@@ -318,7 +319,7 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     operation = 'additional_appointment';
 
   } else {
-    const overriddenFields = JSON.parse(existing.manually_overridden_fields || '[]');
+    const overriddenFields = safeJsonParse(existing.manually_overridden_fields, [] as string[]);
     const safeData = filterOverriddenFields(sharedData, overriddenFields);
 
     if (existing.status !== 'pending_review') {

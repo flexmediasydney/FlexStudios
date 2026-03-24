@@ -45,11 +45,20 @@ Deno.serve(async (req) => {
     if (error) return sendMessage('gmail_auth_error', { error });
     if (!code || !state) return sendMessage('gmail_auth_error', { error: 'Missing code or state' });
 
-    const stateData = JSON.parse(state);
+    let stateData: any;
+    try {
+      stateData = JSON.parse(state);
+    } catch {
+      return sendMessage('gmail_auth_error', { error: 'Invalid state parameter' });
+    }
     const { userId, displayName, teamId, reconnectAccountId } = stateData;
+    if (!userId) return sendMessage('gmail_auth_error', { error: 'Missing userId in state' });
 
     const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
     const clientSecret = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      return sendMessage('gmail_auth_error', { error: 'Google OAuth not configured on server' });
+    }
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const redirectUri = `${supabaseUrl}/functions/v1/handleGmailOAuthCallback`;
 
@@ -61,7 +70,12 @@ Deno.serve(async (req) => {
 
     const tokens = await tokenResponse.json();
     if (!tokens.access_token) {
-      return sendMessage('gmail_auth_error', { error: 'Failed to get access token' });
+      const detail = tokens.error_description || tokens.error || 'unknown';
+      return sendMessage('gmail_auth_error', { error: `Failed to get access token: ${detail}` });
+    }
+    if (!tokens.refresh_token && !reconnectAccountId) {
+      // First-time connection MUST get a refresh_token (requires prompt=consent)
+      console.warn('No refresh_token received for new account — consent may not have been granted');
     }
 
     const profileResponse = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {

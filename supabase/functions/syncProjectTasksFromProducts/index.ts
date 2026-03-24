@@ -243,7 +243,7 @@ Deno.serve(async (req) => {
     const currentProductIds = new Set(productSources.keys());
     const currentPackageIds = packageIdSet;
     const orphanedTasks = existingTasks.filter((task: any) => {
-      if (!task.auto_generated) return false;
+      if (!task.auto_generated || task.is_deleted) return false;
       if (task.product_id && !currentProductIds.has(task.product_id)) return true;
       if (task.package_id && !currentPackageIds.has(task.package_id)) return true;
       return false;
@@ -390,7 +390,7 @@ Deno.serve(async (req) => {
       await entities.ProjectActivity.create({
         project_id, project_title: project.title || project.property_address || '',
         action: 'system_tasks_generated',
-        description: `Tasks generated: ${createdCount + tasksToCreate.filter((t: any) => t.type === 'create').length} created, ${skippedCount} already existed.`,
+        description: `Tasks generated: ${createdCount} created, ${tasksToReactivate.length} reactivated, ${skippedCount} already existed, ${orphanedTasks.length} orphaned removed.`,
         actor_type: 'system', actor_source: 'syncProjectTasksFromProducts',
         user_name: 'System', user_email: 'system@flexstudios.app',
       });
@@ -458,9 +458,10 @@ Deno.serve(async (req) => {
 
     return jsonResponse({
       success: true,
-      created_count: createdCount + tasksToCreate.filter((t: any) => t.type === 'create').length,
+      created_count: createdCount,
       reactivated_count: tasksToReactivate.length,
       skipped_count: skippedCount,
+      orphaned_count: orphanedTasks.length,
       message: `Synced project tasks successfully`
     });
   } catch (error: any) {

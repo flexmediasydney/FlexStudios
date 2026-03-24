@@ -12,6 +12,7 @@ import {
   resolveMappingsMulti,
   loadMappingTable,
   findProjectByOrderId,
+  safeJsonParse,
   writeAudit,
   writeProjectActivity,
   fireRoleNotif,
@@ -37,7 +38,7 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     return { summary: `Skipped changed for cancelled project ${orderId}`, skipped: true };
   }
 
-  const overriddenFields = JSON.parse(project.manually_overridden_fields || '[]');
+  const overriddenFields = safeJsonParse(project.manually_overridden_fields, [] as string[]);
   const updates: Record<string, any> = {};
   const reviewReasons: string[] = [];
   const allMappings = await loadMappingTable(entities);
@@ -83,7 +84,7 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
 
   if (services.length > 0 && !overriddenFields.includes('tonomo_raw_services')) {
     if (ACTIVE_STAGES.includes(project.status)) {
-      const prev = JSON.parse(project.tonomo_raw_services || '[]');
+      const prev = safeJsonParse(project.tonomo_raw_services, [] as string[]);
       const added = services.filter((s: string) => !prev.includes(s));
       const removed = prev.filter((s: string) => !services.includes(s));
       if (added.length > 0 || removed.length > 0) {
@@ -155,9 +156,9 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
 
   const rawTiersChanged = p.order?.service_custom_tiers || p.service_custom_tiers || [];
   if (rawTiersChanged.length > 0 && !overriddenFields.includes('products')) {
-    const allMappingsForProducts = await loadMappingTable(entities);
+    // Reuse allMappings loaded above instead of calling loadMappingTable again
     const { autoProducts: newProducts, autoPackages: newPackages, mappingGaps: newGaps } =
-      await resolveProductsFromTiers(entities, rawTiersChanged, allMappingsForProducts);
+      await resolveProductsFromTiers(entities, rawTiersChanged, allMappings);
 
     if (newProducts.length > 0 || newPackages.length > 0) {
       const dedupedChanged = deduplicateProjectItems(newProducts, newPackages,

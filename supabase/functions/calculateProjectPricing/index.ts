@@ -38,7 +38,7 @@ Deno.serve(async (req) => {
 
     // Role guard (only for user-context calls; service-role calls are already authorized)
     if (user && !['master_admin', 'employee'].includes(user.role)) {
-      return jsonResponse({ error: 'Forbidden' }, 403);
+      return errorResponse('Forbidden: insufficient role', 403);
     }
 
     // Rate limit: only applies to user calls
@@ -46,7 +46,7 @@ Deno.serve(async (req) => {
       const now = Date.now();
       if (req.headers.get('x-calc-count') && parseInt(req.headers.get('x-calc-count')!) > 100) {
         console.warn(`Rate limit suspected for user ${user.email}`);
-        return jsonResponse({ error: 'Rate limit exceeded' }, 429);
+        return errorResponse('Rate limit exceeded', 429);
       }
     }
 
@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
 
     // Input validation
     if (!Array.isArray(products) || !Array.isArray(packages)) {
-      return jsonResponse({ error: 'products and packages must be arrays' }, 400);
+      return errorResponse('products and packages must be arrays', 400);
     }
 
     if (products.length === 0 && packages.length === 0) {
@@ -123,28 +123,28 @@ Deno.serve(async (req) => {
         const override = agentM.product_pricing.find((p: any) => p.product_id === id && p.override_enabled);
         if (override) {
           const tierPrice = pricing_tier === 'premium' ? override.premium_base : override.standard_base;
-          if (tierPrice != null) return tierPrice;
+          if (tierPrice != null && !isNaN(parseFloat(tierPrice))) return Math.max(0, parseFloat(tierPrice));
         }
       }
       if (type === 'product' && agencyM?.product_pricing) {
         const override = agencyM.product_pricing.find((p: any) => p.product_id === id && p.override_enabled);
         if (override) {
           const tierPrice = pricing_tier === 'premium' ? override.premium_base : override.standard_base;
-          if (tierPrice != null) return tierPrice;
+          if (tierPrice != null && !isNaN(parseFloat(tierPrice))) return Math.max(0, parseFloat(tierPrice));
         }
       }
       if (type === 'package' && agentM?.package_pricing) {
         const override = agentM.package_pricing.find((p: any) => p.package_id === id && p.override_enabled);
         if (override) {
           const tierPrice = pricing_tier === 'premium' ? override.premium_price : override.standard_price;
-          if (tierPrice != null) return tierPrice;
+          if (tierPrice != null && !isNaN(parseFloat(tierPrice))) return Math.max(0, parseFloat(tierPrice));
         }
       }
       if (type === 'package' && agencyM?.package_pricing) {
         const override = agencyM.package_pricing.find((p: any) => p.package_id === id && p.override_enabled);
         if (override) {
           const tierPrice = pricing_tier === 'premium' ? override.premium_price : override.standard_price;
-          if (tierPrice != null) return tierPrice;
+          if (tierPrice != null && !isNaN(parseFloat(tierPrice))) return Math.max(0, parseFloat(tierPrice));
         }
       }
       return basePrice;
@@ -298,10 +298,10 @@ Deno.serve(async (req) => {
         .reduce((sum: number, li: any) => sum + (li.final_price || 0), 0);
 
       const productDiscount = productDiscountPct > 0
-        ? Math.ceil((productSubtotal * productDiscountPct) / 100 / 5) * 5
+        ? Math.min(productSubtotal, Math.ceil((productSubtotal * productDiscountPct) / 100 / 5) * 5)
         : 0;
       const packageDiscount = packageDiscountPct > 0
-        ? Math.ceil((packageSubtotal * packageDiscountPct) / 100 / 5) * 5
+        ? Math.min(packageSubtotal, Math.ceil((packageSubtotal * packageDiscountPct) / 100 / 5) * 5)
         : 0;
 
       appliedDiscount = productDiscount + packageDiscount;

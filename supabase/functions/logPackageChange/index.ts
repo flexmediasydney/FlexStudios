@@ -8,13 +8,21 @@ Deno.serve(async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
     const user = await getUserFromReq(req).catch(() => null);
-    const payload = await req.json();
+    const payload = await req.json().catch(() => null);
+
+    if (!payload) {
+      return errorResponse('Invalid JSON in request body', 400);
+    }
 
     if (payload?._health_check) {
       return jsonResponse({ _version: 'v1.2', _fn: 'logPackageChange', _ts: '2026-03-22' });
     }
 
     const { event, data, old_data } = payload;
+
+    if (!event || !event.type) {
+      return errorResponse('event.type is required', 400);
+    }
 
     const changedFields: any[] = [];
     if (event.type === 'update' && old_data && data) {
@@ -79,7 +87,7 @@ Deno.serve(async (req) => {
       } catch { /* non-fatal */ }
     }
 
-    // ─── CASCADE: Package delete → remove from all price matrices ───────────
+    // ─── CASCADE: Package delete → remove from all price matrices & recalculate affected projects ──
     if (event.type === 'delete' && event.entity_id) {
       try {
         const allMatrices = await entities.PriceMatrix.filter({}, null, 1000);
@@ -89,6 +97,21 @@ Deno.serve(async (req) => {
           if (filtered.length !== pp.length) {
             await entities.PriceMatrix.update(matrix.id, { package_pricing: filtered });
           }
+        }
+      } catch { /* non-fatal */ }
+
+      // Recalculate pricing for projects that referenced the deleted package
+      try {
+        const packageId = event.entity_id;
+        const allProjects = await entities.Project.filter({}, null, 2000);
+        const affectedProjects = allProjects.filter((p: any) => {
+          if (['delivered', 'cancelled'].includes(p.status)) return false;
+          return (p.packages || []).some((pkg: any) => pkg.package_id === packageId);
+        });
+        for (const project of affectedProjects.slice(0, 100)) {
+          invokeFunction('recalculateProjectPricingServerSide', {
+            project_id: project.id,
+          }).catch(() => {});
         }
       } catch { /* non-fatal */ }
     }

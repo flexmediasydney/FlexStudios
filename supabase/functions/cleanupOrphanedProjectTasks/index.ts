@@ -28,13 +28,15 @@ Deno.serve(async (req) => {
       return errorResponse('Forbidden: insufficient permissions', 403);
     }
 
-    const body = await req.json();
-    const { project_id } = body;
+    const body = await req.json().catch(() => null);
+
+    if (!body) return errorResponse('Invalid JSON in request body', 400);
 
     if (body?._health_check) {
       return jsonResponse({ _version: 'v1.1', _fn: 'cleanupOrphanedProjectTasks', _ts: '2026-03-17' });
     }
 
+    const { project_id } = body;
     if (!project_id) return errorResponse('project_id is required', 400);
 
     const [project, allTasks] = await Promise.all([

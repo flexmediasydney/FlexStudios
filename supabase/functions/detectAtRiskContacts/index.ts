@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -19,6 +19,10 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
+
+    // Auth check — callable by service-role (cron) or admin users
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Unauthorized', 401);
 
     const agents = await entities.Agent.list('-created_at', 1000);
     const watchedAgents = agents.filter((a: any) =>

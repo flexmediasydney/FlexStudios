@@ -5,6 +5,7 @@ import {
   resolveMappingsMulti,
   loadMappingTable,
   findProjectByOrderId,
+  safeJsonParse,
   writeAudit,
   writeProjectActivity,
   fireRoleNotif,
@@ -25,7 +26,7 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
     return { summary: `Skipped reschedule for unknown order ${orderId} — no project exists`, skipped: true };
   }
 
-  const overriddenFields = JSON.parse(project.manually_overridden_fields || '[]');
+  const overriddenFields = safeJsonParse(project.manually_overridden_fields, [] as string[]);
   const updates: Record<string, any> = {};
   const previousShootDate = project.shoot_date;
 
@@ -49,7 +50,7 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
     const reschServices = [...new Set([...servicesA, ...servicesB])].filter(Boolean);
     const { resolvedPhotographers, unresolvedPhotographers } = await resolveMappingsMulti(entities, { photographers: rescheduledPhotographers }, allMappings);
     if (resolvedPhotographers.length > 0) {
-      const bookingTypes = detectBookingTypes(reschServices.length > 0 ? reschServices : JSON.parse(project.tonomo_raw_services || '[]'));
+      const bookingTypes = detectBookingTypes(reschServices.length > 0 ? reschServices : safeJsonParse(project.tonomo_raw_services, [] as string[]));
       const staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes);
       for (const [field, userId] of Object.entries(staffAssignment)) {
         if (userId && !overriddenFields.includes(field)) updates[field] = userId;

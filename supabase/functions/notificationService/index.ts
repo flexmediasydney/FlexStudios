@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NOTIFICATION TYPE REGISTRY
@@ -318,6 +318,10 @@ Deno.serve(async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
 
+    // Auth check — callable by service-role (cross-function calls) or authenticated users
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Unauthorized', 401);
+
     const body = await req.json();
     const { action, ...params } = body;
 
@@ -338,6 +342,7 @@ Deno.serve(async (req) => {
     return errorResponse(`Unknown action: ${action}`, 400);
 
   } catch (err: any) {
-    return errorResponse(err.message);
+    console.error('notificationService error:', err);
+    return errorResponse(err.message || 'Internal error', 500);
   }
 });

@@ -24,10 +24,10 @@ Deno.serve(async (req) => {
     }
 
     const { project_id } = body;
-    if (!project_id) return jsonResponse({ error: 'project_id required' }, 400);
+    if (!project_id) return errorResponse('project_id required', 400);
 
     const project = await entities.Project.get(project_id);
-    if (!project) return jsonResponse({ error: 'Project not found' }, 404);
+    if (!project) return errorResponse('Project not found', 404);
 
     const products = project.products || [];
     const packages = project.packages || [];
@@ -54,7 +54,7 @@ Deno.serve(async (req) => {
       return errorResponse('Pricing calculation returned invalid result', 500);
     }
 
-    const newPrice = calcResult.calculated_price;
+    const newPrice = Math.max(0, parseFloat(calcResult.calculated_price) || 0);
     const tier = calcResult.pricing_tier || project.pricing_tier || 'standard';
 
     await entities.Project.update(project_id, {

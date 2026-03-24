@@ -1,6 +1,7 @@
 import { invokeFunction } from '../../_shared/supabase.ts';
 import {
   findProjectByOrderId,
+  safeJsonParse,
   writeAudit,
   writeProjectActivity,
   fireRoleNotif,
@@ -10,7 +11,7 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
   const project = await findProjectByOrderId(entities, orderId);
   if (!project) return { summary: `No project found for delivery ${orderId}`, skipped: true };
 
-  const overriddenFields = JSON.parse(project.manually_overridden_fields || '[]');
+  const overriddenFields = safeJsonParse(project.manually_overridden_fields, [] as string[]);
   const hasDeliverables = p.deliverable_link || (p.deliverablesLinks?.length > 0);
 
   const updates: Record<string, any> = {

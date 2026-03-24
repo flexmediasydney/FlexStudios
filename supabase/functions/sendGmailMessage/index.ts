@@ -10,7 +10,7 @@ const retryFetch = async (url: string, options: any, retries = 3): Promise<Respo
       if (response.status === 429 || response.status === 503) {
         lastResponse = response;
         const retryAfter = parseInt(response.headers.get('retry-after') || '5') * 1000;
-        await sleep(retryAfter);
+        await sleep(Math.min(retryAfter, 60000)); // cap at 60s
         continue;
       }
       return response;
@@ -92,21 +92,35 @@ Deno.serve(async (req) => {
       return errorResponse('Gmail account has no refresh token — user must reconnect their Gmail account in Inbox settings', 401);
     }
 
-    // Refresh the access token
-    const refreshResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: account.refresh_token,
-        grant_type: 'refresh_token'
-      })
-    });
-    const tokenData = await refreshResponse.json();
-    if (!tokenData.access_token) {
-      console.error('Gmail token refresh failed:', tokenData.error, tokenData.error_description);
-      return errorResponse('Failed to refresh Gmail token. User may need to reconnect their Gmail account.', 401);
+    // Refresh the access token (retry once on transient failures)
+    let tokenData: any = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const refreshResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: account.refresh_token,
+          grant_type: 'refresh_token'
+        })
+      });
+      if (refreshResponse.status >= 500 && attempt === 0) {
+        await sleep(2000);
+        continue;
+      }
+      tokenData = await refreshResponse.json();
+      break;
+    }
+    if (!tokenData?.access_token) {
+      const isRevoked = tokenData?.error === 'invalid_grant';
+      console.error('Gmail token refresh failed:', tokenData?.error, tokenData?.error_description);
+      return errorResponse(
+        isRevoked
+          ? 'Gmail refresh token has been revoked. User must reconnect their Gmail account in Inbox settings.'
+          : 'Failed to refresh Gmail token. User may need to reconnect their Gmail account.',
+        401
+      );
     }
     const accessToken = tokenData.access_token;
 
@@ -278,7 +292,7 @@ Deno.serve(async (req) => {
     const payload: Record<string, string> = { raw: encodedEmail };
     if (threadId) payload.threadId = threadId;
 
-    const response = await fetch(
+    const response = await retryFetch(
       'https://www.googleapis.com/gmail/v1/users/me/messages/send',
       {
         method: 'POST',

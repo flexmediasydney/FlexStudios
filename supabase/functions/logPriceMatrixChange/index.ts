@@ -8,10 +8,14 @@ Deno.serve(async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
     const user = await getUserFromReq(req);
-    const payload = await req.json();
+    const payload = await req.json().catch(() => null);
 
     if (!user) {
       return errorResponse('Unauthorized', 401);
+    }
+
+    if (!payload) {
+      return errorResponse('Invalid JSON in request body', 400);
     }
 
     // Support both calling conventions:
@@ -160,12 +164,16 @@ Deno.serve(async (req) => {
       affected_projects_count: affectedProjectsCount
     });
 
-    // ─── Cascade recalculation to affected projects ─────────────────────────
+    // ─── Cascade recalculation to affected projects (batched to avoid overwhelming) ──
     try {
-      for (const project of affectedProjects.slice(0, 100)) {
-        invokeFunction('recalculateProjectPricingServerSide', {
-          project_id: project.id,
-        }).catch(() => {});
+      const batchSize = 5;
+      for (let i = 0; i < Math.min(affectedProjects.length, 100); i += batchSize) {
+        const batch = affectedProjects.slice(i, i + batchSize);
+        await Promise.all(batch.map((project: any) =>
+          invokeFunction('recalculateProjectPricingServerSide', {
+            project_id: project.id,
+          }).catch(() => {})
+        ));
       }
     } catch { /* non-fatal */ }
 

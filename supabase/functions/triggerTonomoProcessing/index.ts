@@ -9,6 +9,7 @@ Deno.serve(async (req) => {
     const data = await invokeFunction('processTonomoQueue', { triggered_by: 'manual' });
     return jsonResponse(data);
   } catch (err: any) {
-    return jsonResponse({ error: err.message }, 200);
+    console.error('triggerTonomoProcessing error:', err.message);
+    return errorResponse(err.message || 'Internal error', 500);
   }
 });

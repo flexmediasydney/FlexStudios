@@ -292,6 +292,6 @@ Deno.serve(async (req) => {
     });
   } catch (err: any) {
     console.error('applyProjectRoleDefaults error:', err.message);
-    return jsonResponse({ error: err.message }, 200);
+    return jsonResponse({ error: err.message }, 500);
   }
 });

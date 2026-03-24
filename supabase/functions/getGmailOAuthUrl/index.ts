@@ -18,8 +18,9 @@ Deno.serve(async (req) => {
     const { displayName, teamId, reconnectAccountId } = await req.json().catch(() => ({}));
 
     const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
-    if (!clientId) {
-      return errorResponse('Google OAuth not configured', 500);
+    const clientSecret = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      return errorResponse('Google OAuth not configured (missing GOOGLE_OAUTH_CLIENT_ID or GOOGLE_OAUTH_CLIENT_SECRET)', 500);
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -37,9 +38,11 @@ Deno.serve(async (req) => {
     authUrl.searchParams.set('scope', scopes.join(' '));
     authUrl.searchParams.set('access_type', 'offline');
     authUrl.searchParams.set('prompt', 'consent select_account');
+    // Sanitize displayName to prevent excessively large state parameter
+    const safeDisplayName = (displayName || '').substring(0, 200);
     authUrl.searchParams.set('state', JSON.stringify({
       userId: user.id,
-      displayName: displayName || '',
+      displayName: safeDisplayName,
       teamId: teamId || null,
       reconnectAccountId: reconnectAccountId || null
     }));

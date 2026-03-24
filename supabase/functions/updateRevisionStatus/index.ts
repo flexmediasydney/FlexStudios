@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -16,6 +16,11 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
+
+    // Auth check — callable by service-role (from other functions) or authenticated users
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Unauthorized', 401);
+
     const body = await req.json();
     const { event, data, function_args } = body;
 
@@ -93,7 +98,7 @@ Deno.serve(async (req) => {
           for (const userId of notifyUsers) {
             const allowed = await _canNotify(entities, userId, 'revision_approved', 'revision');
             if (!allowed) continue;
-            entities.Notification.create({
+            await entities.Notification.create({
               user_id: userId,
               type: 'revision_approved',
               category: 'revision',
@@ -107,7 +112,7 @@ Deno.serve(async (req) => {
               is_dismissed: false,
               source: 'revision',
               idempotency_key: `revision_approved:${rev.id}`,
-            }).catch(() => {});
+            }).catch((err: any) => console.error('Failed to notify user of revision approval:', err?.message));
           }
         }
       }

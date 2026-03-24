@@ -526,6 +526,6 @@ Deno.serve(async (req) => {
 
   } catch (err: any) {
     console.error('AutomationRuleEngine fatal:', err.message);
-    return jsonResponse({ error: err.message });
+    return errorResponse(err.message || 'Internal error', 500);
   }
 });

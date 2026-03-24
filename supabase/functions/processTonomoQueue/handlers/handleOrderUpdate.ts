@@ -5,6 +5,7 @@ import {
   resolveProductsFromTiers,
   loadMappingTable,
   findProjectByOrderId,
+  safeJsonParse,
   writeAudit,
   writeProjectActivity,
 } from '../utils.ts';
@@ -69,7 +70,7 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
     return { summary: `Project ${orderId} moved to pending_review (restoration from handleOrderUpdate)` };
   }
 
-  const overriddenFields = JSON.parse(project.manually_overridden_fields || '[]');
+  const overriddenFields = safeJsonParse(project.manually_overridden_fields, [] as string[]);
   const updates: Record<string, any> = {};
   const reviewReasons: string[] = [];
 
@@ -80,7 +81,7 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
 
   if (!overriddenFields.includes('tonomo_raw_services')) {
     if (ACTIVE_STAGES.includes(project.status) && services.length > 0) {
-      const prev = JSON.parse(project.tonomo_raw_services || '[]');
+      const prev = safeJsonParse(project.tonomo_raw_services, [] as string[]);
       const added = services.filter((s: string) => !prev.includes(s));
       const removed = prev.filter((s: string) => !services.includes(s));
       if (added.length > 0 || removed.length > 0) reviewReasons.push(`Services changed during active production${added.length ? ` — added: ${added.join(', ')}` : ''}${removed.length ? ` — removed: ${removed.join(', ')}` : ''} — please confirm billing`);
