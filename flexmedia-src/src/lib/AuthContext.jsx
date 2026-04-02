@@ -212,7 +212,9 @@ export const AuthProvider = ({ children }) => {
   };
 
   const navigateToLogin = () => {
-    window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`;
+    // Only encode the pathname (no query/hash) to prevent injection
+    const safePath = window.location.pathname.replace(/[^a-zA-Z0-9/_\-?.=&]/g, '');
+    window.location.href = `/login?redirect=${encodeURIComponent(safePath)}`;
   };
 
   return (

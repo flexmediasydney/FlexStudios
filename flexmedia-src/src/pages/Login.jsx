@@ -33,7 +33,22 @@ export default function Login() {
   const [lockedUntil, setLockedUntil] = useState(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const redirect = searchParams.get('redirect') || '/';
+
+  // Validate redirect parameter — prevent open redirect attacks
+  const rawRedirect = searchParams.get('redirect') || '/';
+  const redirect = (() => {
+    try {
+      // Must start with / and not be protocol-relative (//)
+      if (!rawRedirect.startsWith('/') || rawRedirect.startsWith('//')) return '/';
+      // Parse against our origin to catch encoded attacks (%2F%2F, /\, etc.)
+      const parsed = new URL(rawRedirect, window.location.origin);
+      if (parsed.hostname !== window.location.hostname) return '/';
+      // Only allow the pathname + search (strip any hash that could contain scripts)
+      return parsed.pathname + parsed.search;
+    } catch {
+      return '/';
+    }
+  })();
 
   // Client-side brute force protection
   const isLocked = lockedUntil && Date.now() < lockedUntil;
@@ -105,6 +120,9 @@ export default function Login() {
         return;
       }
       setAttempts(0); // Reset on success
+      // Wait briefly for AuthContext.onAuthStateChange to fire and fetchAppUser to complete
+      // This prevents navigating to a protected page before the user record is loaded
+      await new Promise(r => setTimeout(r, 500));
       navigate(redirect, { replace: true });
     } catch (err) {
       setError(err.message || 'Sign in failed');
