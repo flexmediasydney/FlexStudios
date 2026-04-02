@@ -29,8 +29,19 @@ export default function Login() {
   const [phone, setPhone] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [attempts, setAttempts] = useState(0);
-  const [lockedUntil, setLockedUntil] = useState(null);
+
+  // Persistent brute force protection — survives page refresh
+  const getLoginState = () => {
+    try {
+      const raw = localStorage.getItem('_login_protection');
+      if (!raw) return { attempts: 0, lockedUntil: 0, lockCount: 0 };
+      return JSON.parse(raw);
+    } catch { return { attempts: 0, lockedUntil: 0, lockCount: 0 }; }
+  };
+  const saveLoginState = (state) => {
+    try { localStorage.setItem('_login_protection', JSON.stringify(state)); } catch {}
+  };
+  const [loginState, setLoginState] = useState(getLoginState);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -50,23 +61,45 @@ export default function Login() {
     }
   })();
 
-  // Client-side brute force protection
-  const isLocked = lockedUntil && Date.now() < lockedUntil;
+  // Escalating brute force protection — persists across page refreshes via localStorage
+  const MAX_ATTEMPTS = 5;
+  const LOCKOUT_DURATIONS = [30_000, 60_000, 120_000, 300_000, 600_000]; // 30s, 1m, 2m, 5m, 10m
+  const isLocked = loginState.lockedUntil && Date.now() < loginState.lockedUntil;
+
   const checkRateLimit = () => {
-    if (isLocked) {
-      const secs = Math.ceil((lockedUntil - Date.now()) / 1000);
-      setError(`Too many attempts. Try again in ${secs} seconds.`);
+    const fresh = getLoginState(); // Read latest from localStorage (cross-tab sync)
+    if (fresh.lockedUntil && Date.now() < fresh.lockedUntil) {
+      const secs = Math.ceil((fresh.lockedUntil - Date.now()) / 1000);
+      const mins = Math.floor(secs / 60);
+      setError(mins > 0
+        ? `Too many attempts. Try again in ${mins}m ${secs % 60}s.`
+        : `Too many attempts. Try again in ${secs} seconds.`);
+      setLoginState(fresh);
       return false;
     }
     return true;
   };
+
   const recordFailedAttempt = () => {
-    const next = attempts + 1;
-    setAttempts(next);
-    if (next >= 5) {
-      setLockedUntil(Date.now() + 30000); // 30 second lockout
-      setAttempts(0);
+    const fresh = getLoginState();
+    const next = fresh.attempts + 1;
+    if (next >= MAX_ATTEMPTS) {
+      const lockIdx = Math.min(fresh.lockCount, LOCKOUT_DURATIONS.length - 1);
+      const duration = LOCKOUT_DURATIONS[lockIdx];
+      const newState = { attempts: 0, lockedUntil: Date.now() + duration, lockCount: fresh.lockCount + 1 };
+      saveLoginState(newState);
+      setLoginState(newState);
+    } else {
+      const newState = { ...fresh, attempts: next };
+      saveLoginState(newState);
+      setLoginState(newState);
     }
+  };
+
+  const clearLoginProtection = () => {
+    const newState = { attempts: 0, lockedUntil: 0, lockCount: 0 };
+    saveLoginState(newState);
+    setLoginState(newState);
   };
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
@@ -83,6 +116,7 @@ export default function Login() {
   const handleSendMagicLink = async (e) => {
     e?.preventDefault();
     if (!email.trim()) return;
+    if (!checkRateLimit()) return;
     setError(null);
     setLoading(true);
     try {
@@ -119,7 +153,7 @@ export default function Login() {
         setLoading(false);
         return;
       }
-      setAttempts(0); // Reset on success
+      clearLoginProtection(); // Reset on success
       // Wait briefly for AuthContext.onAuthStateChange to fire and fetchAppUser to complete
       // This prevents navigating to a protected page before the user record is loaded
       await new Promise(r => setTimeout(r, 500));
@@ -133,6 +167,7 @@ export default function Login() {
 
   const handleSendPhoneOTP = async (e) => {
     e?.preventDefault();
+    if (!checkRateLimit()) return;
     if (!phone || phone.length < 8) {
       setError('Please enter a valid phone number');
       return;
@@ -232,7 +267,7 @@ export default function Login() {
               Enter your email and we'll send you a reset link
             </p>
           </div>
-          {error && <ErrorBanner message={error} />}
+          {error && <ErrorBanner message={error} attemptsRemaining={MAX_ATTEMPTS - loginState.attempts} />}
           <form onSubmit={handleForgotPassword} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="forgot-email">Email</Label>
@@ -333,7 +368,7 @@ export default function Login() {
           </button>
         </div>
 
-        {error && <ErrorBanner message={error} />}
+        {error && <ErrorBanner message={error} attemptsRemaining={MAX_ATTEMPTS - loginState.attempts} />}
 
         {/* Email Tab */}
         {tab === 'email' && (
@@ -467,11 +502,18 @@ function Shell({ children }) {
   );
 }
 
-function ErrorBanner({ message }) {
+function ErrorBanner({ message, attemptsRemaining }) {
   return (
-    <div role="alert" aria-live="assertive" className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+    <div role="alert" aria-live="assertive" className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
       <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" aria-hidden="true" />
-      <span>{message}</span>
+      <div>
+        <span>{message}</span>
+        {attemptsRemaining != null && attemptsRemaining > 0 && attemptsRemaining <= 3 && (
+          <div className="text-xs mt-1 opacity-75">
+            {attemptsRemaining} attempt{attemptsRemaining !== 1 ? 's' : ''} remaining before lockout
+          </div>
+        )}
+      </div>
     </div>
   );
 }
