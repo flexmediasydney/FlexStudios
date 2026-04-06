@@ -15,13 +15,15 @@ import {
   Building2, Play, Pause, Layers, BarChart3, Eye, Clock,
   Loader2, Crosshair, List, Calendar, AlertTriangle, Filter,
   ChevronDown, Check, Search, RotateCcw, User, Briefcase,
-  Sun, Moon, Zap
+  Sun, Moon, Zap, Flame, ArrowUp, ArrowDown, Minus, Activity,
+  Radio, Truck, PieChart, Users, Shield,
+  Maximize, Minimize, GitCompare, ArrowRight
 } from 'lucide-react';
-import { MapContainer, TileLayer, useMap, CircleMarker, Tooltip as LTooltip, ZoomControl } from 'react-leaflet';
+import { MapContainer, TileLayer, useMap, CircleMarker, Circle, Tooltip as LTooltip, ZoomControl } from 'react-leaflet';
 import { fixTimestamp, fmtDate, todaySydney, parseDate } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import MarkerClusterLayer from './MarkerClusterLayer';
-import { format, subMonths, differenceInDays, startOfMonth, endOfMonth, eachMonthOfInterval, isToday, isFuture, isPast } from 'date-fns';
+import { format, subMonths, differenceInDays, startOfMonth, endOfMonth, eachMonthOfInterval, isToday, isFuture, isPast, getDay } from 'date-fns';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -61,6 +63,26 @@ function getBubbleGradientColor(projects) {
   projects.forEach(p => { counts[p.status] = (counts[p.status] || 0) + 1; });
   const dominant = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
   return getStageColor(dominant);
+}
+
+// ─── Agency color palette (hash-based, like calendar) ────────────────
+const AGENCY_COLORS = [
+  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
+  '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
+  '#e11d48', '#84cc16', '#a855f7', '#0ea5e9', '#d946ef',
+  '#22c55e', '#eab308', '#64748b', '#fb923c', '#2dd4bf',
+];
+function getAgencyColor(agencyName) {
+  if (!agencyName) return '#94a3b8';
+  let hash = 0;
+  for (let i = 0; i < agencyName.length; i++) hash = ((hash << 5) - hash) + agencyName.charCodeAt(i);
+  return AGENCY_COLORS[Math.abs(hash) % AGENCY_COLORS.length];
+}
+function getDominantAgency(projects) {
+  const counts = {};
+  projects.forEach(p => { if (p.agency_name) counts[p.agency_name] = (counts[p.agency_name] || 0) + 1; });
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return sorted[0] ? { name: sorted[0][0], count: sorted[0][1] } : null;
 }
 
 // ─── Time filter definitions ──────────────────────────────────────────
@@ -213,7 +235,7 @@ function FilterDropdown({ label, icon: Icon, options, selected, onChange, search
 }
 
 // ─── Suburb detail panel ──────────────────────────────────────────────
-function SuburbPanel({ cluster, onClose }) {
+function SuburbPanel({ cluster, onClose, allProjects }) {
   if (!cluster) return null;
   const projects = cluster.projects;
   const totalRevenue = projects.reduce((s, p) => s + projectValue(p), 0);
@@ -229,6 +251,53 @@ function SuburbPanel({ cluster, onClose }) {
   const recent = projects.filter(p => p.created_date && new Date(fixTimestamp(p.created_date)) >= sixMonthsAgo).length;
   const prior = projects.filter(p => { if (!p.created_date) return false; const d = new Date(fixTimestamp(p.created_date)); return d >= twelveMonthsAgo && d < sixMonthsAgo; }).length;
   const growth = prior > 0 ? Math.round(((recent - prior) / prior) * 100) : recent > 0 ? 100 : 0;
+
+  // ── Client Intelligence: new vs repeat agent ratio ──
+  const agentProjectCounts = useMemo(() => {
+    const globalAgentCounts = {};
+    (allProjects || []).forEach(p => {
+      if (p.agent_id) globalAgentCounts[p.agent_id] = (globalAgentCounts[p.agent_id] || 0) + 1;
+    });
+    const agentIds = new Set();
+    let firstTime = 0, repeat = 0;
+    projects.forEach(p => {
+      if (!p.agent_id || agentIds.has(p.agent_id)) return;
+      agentIds.add(p.agent_id);
+      const agentProjs = projects.filter(pp => pp.agent_id === p.agent_id);
+      const hasFirstOrder = agentProjs.some(pp => pp.is_first_order);
+      const globalCount = globalAgentCounts[p.agent_id] || 0;
+      if (hasFirstOrder && globalCount <= 1) firstTime++;
+      else repeat++;
+    });
+    return { firstTime, repeat, total: firstTime + repeat };
+  }, [projects, allProjects]);
+
+  const repeatPct = agentProjectCounts.total > 0 ? Math.round((agentProjectCounts.repeat / agentProjectCounts.total) * 100) : 0;
+  const newPct = 100 - repeatPct;
+
+  // ── Client Intelligence: concentration risk ──
+  const concentrationRisk = useMemo(() => {
+    if (projects.length < 3) return null;
+    const sorted = Object.entries(agencies).sort((a, b) => b[1] - a[1]);
+    if (sorted.length === 0) return null;
+    const [topName, topCount] = sorted[0];
+    const pct = Math.round((topCount / projects.length) * 100);
+    if (pct >= 70) return { name: topName, count: topCount, total: projects.length, pct, level: 'high' };
+    if (pct >= 50) return { name: topName, count: topCount, total: projects.length, pct, level: 'medium' };
+    return null;
+  }, [projects, agencies]);
+
+  // ── Client Intelligence: top agents by project count ──
+  const topAgentsData = useMemo(() => {
+    const agentMap = {};
+    projects.forEach(p => {
+      if (!p.agent_id || !p.agent_name) return;
+      if (!agentMap[p.agent_id]) agentMap[p.agent_id] = { name: p.agent_name, id: p.agent_id, count: 0, value: 0 };
+      agentMap[p.agent_id].count++;
+      agentMap[p.agent_id].value += projectValue(p);
+    });
+    return Object.values(agentMap).sort((a, b) => b.count - a.count).slice(0, 3);
+  }, [projects]);
 
   return (
     <div className="absolute top-0 right-0 h-full w-80 bg-background border-l shadow-xl z-20 flex flex-col">
@@ -329,6 +398,62 @@ function MonthlySparkline({ projects }) {
   );
 }
 
+// ─── Heatmap overlay (revenue density) ─────────────────────────────────
+function HeatmapOverlay({ projects }) {
+  // Color from blue (low) to green to orange to red (high)
+  function revenueColor(value, max) {
+    const ratio = Math.min(value / Math.max(max, 1), 1);
+    if (ratio < 0.25) return { fill: '#3b82f6', opacity: 0.35 };       // blue
+    if (ratio < 0.5)  return { fill: '#22c55e', opacity: 0.45 };       // green
+    if (ratio < 0.75) return { fill: '#f97316', opacity: 0.55 };       // orange
+    return { fill: '#ef4444', opacity: 0.65 };                          // red
+  }
+
+  const clusters = clusterByProximity(projects, 0.5);
+  const values = clusters.map(c => c.projects.reduce((s, p) => s + projectValue(p), 0));
+  const maxVal = Math.max(...values, 1);
+
+  return clusters.map((cluster, i) => {
+    const revenue = values[i];
+    const { fill, opacity } = revenueColor(revenue, maxVal);
+    const radius = Math.max(20, Math.min(70, (revenue / maxVal) * 70));
+    return (
+      <CircleMarker
+        key={`heat-${i}`}
+        center={[cluster.lat, cluster.lng]}
+        radius={radius}
+        pathOptions={{ fillColor: fill, fillOpacity: opacity, color: fill, weight: 0.5, opacity: 0.3 }}
+      >
+        <LTooltip direction="top" offset={[0, -10]}>
+          <div className="text-center px-1">
+            <div className="font-bold text-xs">{cluster.suburb || 'Area'}</div>
+            <div className="text-[10px] text-muted-foreground">
+              ${revenue.toLocaleString()} revenue &middot; {cluster.projects.length} projects
+            </div>
+          </div>
+        </LTooltip>
+      </CircleMarker>
+    );
+  });
+}
+
+// ─── Revenue trend calculation (6mo vs prior 6mo) ─────────────────────
+function getRevenueTrend(projects) {
+  const now = new Date();
+  const sixMonthsAgo = subMonths(now, 6);
+  const twelveMonthsAgo = subMonths(now, 12);
+  let recentRev = 0, priorRev = 0;
+  projects.forEach(p => {
+    if (!p.created_date) return;
+    const d = new Date(fixTimestamp(p.created_date));
+    const val = projectValue(p);
+    if (d >= sixMonthsAgo) recentRev += val;
+    else if (d >= twelveMonthsAgo) priorRev += val;
+  });
+  const pctChange = priorRev > 0 ? ((recentRev - priorRev) / priorRev) * 100 : (recentRev > 0 ? 100 : 0);
+  return { recentRev, priorRev, pctChange };
+}
+
 // ─── Territory bubbles (with suburb labels and status-based color) ────
 function TerritoryBubbles({ clusters, metric, onSelect, selectedSuburb }) {
   return clusters.map((cluster, i) => {
@@ -339,6 +464,9 @@ function TerritoryBubbles({ clusters, metric, onSelect, selectedSuburb }) {
     const radius = Math.max(14, Math.min(55, (value / maxVal) * 55));
     const isSelected = selectedSuburb === cluster.suburb;
     const bubbleColor = getBubbleGradientColor(cluster.projects);
+    const trend = getRevenueTrend(cluster.projects);
+    const trendArrow = trend.pctChange > 10 ? '\u2191' : trend.pctChange < -10 ? '\u2193' : '\u2192';
+    const trendColor = trend.pctChange > 10 ? '#16a34a' : trend.pctChange < -10 ? '#dc2626' : '#6b7280';
     return (
       <CircleMarker
         key={`${cluster.suburb}-${i}`}
@@ -355,7 +483,10 @@ function TerritoryBubbles({ clusters, metric, onSelect, selectedSuburb }) {
       >
         <LTooltip direction="top" offset={[0, -radius]} permanent={radius >= 22}>
           <div className="text-center px-1">
-            <div className="font-bold text-xs leading-tight">{cluster.suburb}</div>
+            <div className="font-bold text-xs leading-tight" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
+              {cluster.suburb}
+              <span style={{ color: trendColor, fontSize: '11px', fontWeight: 700, lineHeight: 1 }}>{trendArrow}</span>
+            </div>
             <div className="text-[10px] text-muted-foreground">
               {cluster.projects.length} projects &middot; ${cluster.projects.reduce((s, p) => s + projectValue(p), 0).toLocaleString()}
             </div>
@@ -574,16 +705,25 @@ export default function TerritoryMap() {
   const clusters = useMemo(() => clusterByProximity(filtered), [filtered]);
 
   // Top suburbs leaderboard
-  const topSuburbs = useMemo(() =>
-    [...clusters]
-      .sort((a, b) => {
-        if (metric === 'revenue')
-          return b.projects.reduce((s, p) => s + projectValue(p), 0) - a.projects.reduce((s, p) => s + projectValue(p), 0);
-        return b.projects.length - a.projects.length;
-      })
-      .slice(0, 10),
-    [clusters, metric]
-  );
+  const topSuburbs = useMemo(() => {
+    const getClusterMetric = (c) => {
+      if (metric === 'revenue') return c.projects.reduce((s, p) => s + projectValue(p), 0);
+      if (metric === 'avg_value') {
+        const total = c.projects.reduce((s, p) => s + projectValue(p), 0);
+        return c.projects.length > 0 ? total / c.projects.length : 0;
+      }
+      return c.projects.length;
+    };
+    return [...clusters]
+      .sort((a, b) => getClusterMetric(b) - getClusterMetric(a))
+      .slice(0, 10);
+  }, [clusters, metric]);
+
+  // Overall average project value (for avg_value comparison)
+  const overallAvgValue = useMemo(() => {
+    if (filtered.length === 0) return 0;
+    return filtered.reduce((s, p) => s + projectValue(p), 0) / filtered.length;
+  }, [filtered]);
 
   // Timeline months array
   const timelineMonths = useMemo(() => {
@@ -648,6 +788,32 @@ export default function TerritoryMap() {
   const totalRevenue = filtered.reduce((s, p) => s + projectValue(p), 0);
   const geocodedPct = allProjects.length > 0 ? Math.round((mappable.length / allProjects.length) * 100) : 0;
 
+  // Revenue intelligence summary stats
+  const revenueIntelStats = useMemo(() => {
+    const avgProjectValue = filtered.length > 0 ? totalRevenue / filtered.length : 0;
+    // Top suburb by revenue
+    const suburbRevenues = {};
+    filtered.forEach(p => {
+      const suburb = p.property_suburb || 'Unknown';
+      suburbRevenues[suburb] = (suburbRevenues[suburb] || 0) + projectValue(p);
+    });
+    const topSuburbEntry = Object.entries(suburbRevenues).sort((a, b) => b[1] - a[1])[0];
+    const topSuburbName = topSuburbEntry ? topSuburbEntry[0] : '-';
+
+    // Revenue growth 6mo vs prior 6mo
+    const trend = getRevenueTrend(filtered);
+
+    // Most active organisation
+    const orgCounts = {};
+    filtered.forEach(p => {
+      if (p.agency_name) orgCounts[p.agency_name] = (orgCounts[p.agency_name] || 0) + 1;
+    });
+    const topOrgEntry = Object.entries(orgCounts).sort((a, b) => b[1] - a[1])[0];
+    const mostActiveOrg = topOrgEntry ? topOrgEntry[0] : '-';
+
+    return { avgProjectValue, topSuburbName, growthPct: trend.pctChange, mostActiveOrg };
+  }, [filtered, totalRevenue]);
+
   // Handle pin click -> navigate to project
   const handleProjectClick = useCallback((project) => {
     navigate(createPageUrl('ProjectDetails') + `?id=${project.id}`);
@@ -662,6 +828,7 @@ export default function TerritoryMap() {
           {[
             { v: 'territory', l: 'Territory', icon: Layers },
             { v: 'pins', l: 'All Pins', icon: MapPin },
+            { v: 'heatmap', l: 'Heatmap', icon: Flame },
             { v: 'timeline', l: 'Timeline', icon: Clock },
           ].map(({ v, l, icon: Icon }) => (
             <button
@@ -677,9 +844,9 @@ export default function TerritoryMap() {
           ))}
         </div>
 
-        {mode === 'territory' && (
+        {(mode === 'territory' || mode === 'heatmap') && (
           <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
-            {[{ v: 'count', l: 'Volume' }, { v: 'revenue', l: 'Revenue' }].map(({ v, l }) => (
+            {[{ v: 'count', l: 'Volume' }, { v: 'revenue', l: 'Revenue' }, { v: 'avg_value', l: 'Avg Value' }].map(({ v, l }) => (
               <button key={v} onClick={() => setMetric(v)} className={cn('text-xs px-2.5 py-1 rounded-md font-medium transition-all', metric === v ? 'bg-background shadow-sm' : 'text-muted-foreground')}>{l}</button>
             ))}
           </div>
@@ -854,6 +1021,10 @@ export default function TerritoryMap() {
               />
             )}
 
+            {mode === 'heatmap' && (
+              <HeatmapOverlay projects={filtered} />
+            )}
+
             {mode === 'pins' && (
               <MarkerClusterLayer
                 projects={filtered}
@@ -865,13 +1036,13 @@ export default function TerritoryMap() {
           </MapContainer>
         )}
 
-        {/* Top suburbs leaderboard (territory & timeline modes) */}
-        {(mode === 'territory' || mode === 'timeline') && topSuburbs.length > 0 && (
+        {/* Top suburbs leaderboard (territory, heatmap & timeline modes) */}
+        {(mode === 'territory' || mode === 'timeline' || mode === 'heatmap') && topSuburbs.length > 0 && (
           <div className="absolute top-3 left-3 w-56 bg-background/95 backdrop-blur-sm border rounded-xl shadow-lg z-20 overflow-hidden">
             <div className="px-3 py-2 border-b bg-muted/30">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                  {metric === 'revenue' ? 'Revenue by area' : 'Project volume'}
+                  {metric === 'avg_value' ? 'Avg value by area' : metric === 'revenue' ? 'Revenue by area' : 'Project volume'}
                 </span>
                 <BarChart3 className="h-3 w-3 text-muted-foreground" />
               </div>
@@ -880,10 +1051,18 @@ export default function TerritoryMap() {
               {topSuburbs.map((cluster, i) => {
                 const val = metric === 'revenue'
                   ? cluster.projects.reduce((s, p) => s + projectValue(p), 0)
-                  : cluster.projects.length;
-                const maxVal = metric === 'revenue'
-                  ? topSuburbs[0].projects.reduce((s, p) => s + projectValue(p), 0)
-                  : topSuburbs[0].projects.length;
+                  : metric === 'avg_value'
+                    ? (cluster.projects.length > 0 ? cluster.projects.reduce((s, p) => s + projectValue(p), 0) / cluster.projects.length : 0)
+                    : cluster.projects.length;
+                const maxVal = (() => {
+                  const first = topSuburbs[0];
+                  if (metric === 'revenue') return first.projects.reduce((s, p) => s + projectValue(p), 0);
+                  if (metric === 'avg_value') return first.projects.length > 0 ? first.projects.reduce((s, p) => s + projectValue(p), 0) / first.projects.length : 1;
+                  return first.projects.length;
+                })();
+                const avgVal = metric === 'avg_value' ? val : null;
+                const isAboveAvg = avgVal !== null && avgVal >= overallAvgValue;
+                const isBelowAvg = avgVal !== null && avgVal < overallAvgValue;
                 return (
                   <button
                     key={`${cluster.suburb}-${i}`}
@@ -897,15 +1076,22 @@ export default function TerritoryMap() {
                       <span className="text-xs font-semibold flex items-center gap-1.5">
                         <span className="text-muted-foreground w-4 text-right font-mono text-[10px]">{i + 1}</span>
                         {cluster.suburb}
+                        {metric === 'avg_value' && (
+                          <span className={cn('text-[9px] font-bold', isAboveAvg ? 'text-green-600' : 'text-red-500')}>
+                            {isAboveAvg ? '\u2191' : '\u2193'}
+                          </span>
+                        )}
                       </span>
-                      <span className="text-xs font-bold tabular-nums">{metric === 'revenue' ? `$${Math.round(val / 1000)}k` : val}</span>
+                      <span className={cn('text-xs font-bold tabular-nums', metric === 'avg_value' && (isAboveAvg ? 'text-green-600' : isBelowAvg ? 'text-red-500' : ''))}>
+                        {metric === 'revenue' ? `$${Math.round(val / 1000)}k` : metric === 'avg_value' ? `$${Math.round(val).toLocaleString()}` : val}
+                      </span>
                     </div>
                     <div className="h-1 bg-muted rounded-full overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all"
                         style={{
-                          width: `${(val / maxVal) * 100}%`,
-                          backgroundColor: getBubbleGradientColor(cluster.projects),
+                          width: `${Math.min((val / Math.max(maxVal, 1)) * 100, 100)}%`,
+                          backgroundColor: metric === 'avg_value' ? (isAboveAvg ? '#16a34a' : '#ef4444') : getBubbleGradientColor(cluster.projects),
                         }}
                       />
                     </div>
@@ -913,6 +1099,11 @@ export default function TerritoryMap() {
                 );
               })}
             </div>
+            {metric === 'avg_value' && (
+              <div className="px-3 py-1.5 border-t bg-muted/20 text-[9px] text-muted-foreground text-center">
+                Overall avg: <span className="font-bold">${Math.round(overallAvgValue).toLocaleString()}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -935,6 +1126,55 @@ export default function TerritoryMap() {
 
         {/* Suburb detail panel */}
         {selectedCluster && <SuburbPanel cluster={selectedCluster} onClose={() => setSelectedCluster(null)} />}
+
+        {/* Revenue intelligence summary bar */}
+        {mode !== 'timeline' && filtered.length > 0 && (
+          <div className="absolute bottom-3 left-3 right-3 z-20">
+            <div className="bg-background/95 backdrop-blur-sm border rounded-xl shadow-lg px-4 py-2.5 flex items-center justify-between gap-4 overflow-x-auto">
+              <div className="flex items-center gap-2 shrink-0">
+                <DollarSign className="h-3.5 w-3.5 text-green-600" />
+                <div>
+                  <div className="text-[9px] text-muted-foreground uppercase font-medium">Total Revenue</div>
+                  <div className="text-sm font-bold tabular-nums">${totalRevenue.toLocaleString()}</div>
+                </div>
+              </div>
+              <div className="w-px h-8 bg-border shrink-0" />
+              <div className="flex items-center gap-2 shrink-0">
+                <BarChart3 className="h-3.5 w-3.5 text-blue-600" />
+                <div>
+                  <div className="text-[9px] text-muted-foreground uppercase font-medium">Avg Project Value</div>
+                  <div className="text-sm font-bold tabular-nums">${Math.round(revenueIntelStats.avgProjectValue).toLocaleString()}</div>
+                </div>
+              </div>
+              <div className="w-px h-8 bg-border shrink-0" />
+              <div className="flex items-center gap-2 shrink-0">
+                <MapPin className="h-3.5 w-3.5 text-purple-600" />
+                <div>
+                  <div className="text-[9px] text-muted-foreground uppercase font-medium">Top Suburb</div>
+                  <div className="text-sm font-bold truncate max-w-32">{revenueIntelStats.topSuburbName}</div>
+                </div>
+              </div>
+              <div className="w-px h-8 bg-border shrink-0" />
+              <div className="flex items-center gap-2 shrink-0">
+                <Activity className="h-3.5 w-3.5" style={{ color: revenueIntelStats.growthPct > 0 ? '#16a34a' : revenueIntelStats.growthPct < 0 ? '#dc2626' : '#6b7280' }} />
+                <div>
+                  <div className="text-[9px] text-muted-foreground uppercase font-medium">6mo Growth</div>
+                  <div className={cn('text-sm font-bold tabular-nums', revenueIntelStats.growthPct > 0 ? 'text-green-600' : revenueIntelStats.growthPct < 0 ? 'text-red-600' : 'text-muted-foreground')}>
+                    {revenueIntelStats.growthPct > 0 ? '+' : ''}{Math.round(revenueIntelStats.growthPct)}%
+                  </div>
+                </div>
+              </div>
+              <div className="w-px h-8 bg-border shrink-0" />
+              <div className="flex items-center gap-2 shrink-0">
+                <Building2 className="h-3.5 w-3.5 text-orange-600" />
+                <div>
+                  <div className="text-[9px] text-muted-foreground uppercase font-medium">Most Active Org</div>
+                  <div className="text-sm font-bold truncate max-w-36">{revenueIntelStats.mostActiveOrg}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
