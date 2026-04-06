@@ -381,7 +381,7 @@ export default function TerritoryMap() {
             </div>
           </div>
         ) : (
-          <MapContainer key={mapKey} center={SYDNEY} zoom={11} style={{ height: '100%', width: '100%' }} zoomControl={false} className="z-0">
+          <MapContainer key={mapKey} center={SYDNEY} zoom={11} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} zoomControl={false} className="z-0">
             <TileLayer attribution={TILE_ATTR} url={mapTheme === 'dark' ? TILE_DARK : TILE_LIGHT} key={mapTheme} />
             <ZoomControl position="bottomright" />
             {(mode === 'territory' || mode === 'timeline') && <TerritoryBubbles clusters={activeClusters} metric={metric} onSelect={(c) => setSelectedCluster(c)} selectedSuburb={selectedCluster?.suburb} />}
