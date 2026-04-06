@@ -25,7 +25,7 @@ export default function EffortLoggingTab({ projectId, project }) {
   const [selectedLog, setSelectedLog] = useState(null);
 
   const { data: user } = useQuery({ queryKey: ["current-user"], queryFn: () => api.auth.me() });
-  const { data: currentUser } = useQuery({ queryKey: ["user", user?.email], queryFn: () => api.entities.User.filter({ email: user.email }, null, 1).then(users => users[0] || null), enabled: !!user?.email });
+  const { data: currentUser } = useQuery({ queryKey: ["user", user?.email], queryFn: () => api.entities.User.filter({ email: user?.email }, null, 1).then(users => users[0] || null), enabled: !!user?.email });
   const isMasterAdmin = currentUser?.role === "master_admin";
 
   const isClosed = ['delivered', 'cancelled'].includes(project?.status);

@@ -45,12 +45,14 @@ export default function ChatPanel({
   const { data: users = [] } = useQuery({
     queryKey: ['projectUsers', projectId],
     queryFn: () => api.entities.User.list(),
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
-    queryFn: () => api.entities.Project.list().then(p => p.find(x => x.id === projectId)),
-    enabled: !!projectId
+    queryFn: () => api.entities.Project.filter({ id: projectId }).then(r => r[0]),
+    enabled: !!projectId,
+    staleTime: 5 * 60 * 1000,
   });
 
   // Real-time subscription

@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -49,12 +49,25 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
    const [expanded, setExpanded] = useState(false);
    const [showCancelDialog, setShowCancelDialog] = useState(false);
    const [showStatusSelect, setShowStatusSelect] = useState(false);
+   const statusDropdownRef = useRef(null);
    const [showDeleteDialog, setShowDeleteDialog] = useState(false);
    const [showEditDialog, setShowEditDialog] = useState(false);
    const [showRevertConfirm, setShowRevertConfirm] = useState(false);
    const [revertConfirmStep, setRevertConfirmStep] = useState(0);
    const [pricingImpact, setPricingImpact] = useState(revision.pricing_impact || {});
    const [revisionTasksLocal, setRevisionTasksLocal] = useState([]);
+
+  // Close status dropdown on click outside
+  useEffect(() => {
+    if (!showStatusSelect) return;
+    const handleClickOutside = (e) => {
+      if (statusDropdownRef.current && !statusDropdownRef.current.contains(e.target)) {
+        setShowStatusSelect(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showStatusSelect]);
 
   const typeConfig = REVISION_TYPES[revision.revision_type] || {};
   const kindConfig = REQUEST_KIND_CONFIG[revision.request_kind] || REQUEST_KIND_CONFIG.revision;
@@ -74,15 +87,21 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
   const hasPricingImpact = !!revision.pricing_impact?.has_impact;
   const pricingApplied = !!revision.pricing_impact?.applied;
   const nonDeletedTasks = revisionTasks.filter(t => !t.is_deleted);
+  const completedTaskCount = nonDeletedTasks.filter(t => t.is_completed).length;
 
   const updateMutation = useMutation({
      mutationFn: (data) => api.entities.ProjectRevision.update(revision.id, data),
-     onSuccess: () => {
+     onSuccess: (responseData) => {
        toast.success("Request updated");
-       setPricingImpact(revision.pricing_impact || {});
+       refetchEntityList("ProjectRevision");
+       // Use response data if available, otherwise keep current local state
+       if (responseData?.pricing_impact) {
+         setPricingImpact(responseData.pricing_impact);
+       }
      },
      onError: (e) => {
        toast.error(e.message || "Failed to update");
+       // Revert to prop value on error
        setPricingImpact(revision.pricing_impact || {});
      },
    });
@@ -93,19 +112,30 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
       await api.functions.invoke('handleRevisionCancellation', { revision_id: revision.id }).catch(() => {});
       await api.entities.ProjectRevision.delete(revision.id);
     },
-    onSuccess: () => toast.success('Request deleted'),
+    onSuccess: () => {
+      toast.success('Request deleted');
+      setShowDeleteDialog(false);
+      refetchEntityList("ProjectRevision");
+      refetchEntityList("ProjectTask");
+    },
     onError: (e) => toast.error(e.message || 'Failed to delete'),
   });
 
+  const [applyingPricing, setApplyingPricing] = useState(false);
   const markPricingUpdated = async () => {
+    if (applyingPricing) return;
+    setApplyingPricing(true);
     try {
       await api.functions.invoke('applyRevisionPricingImpact', {
         revision_id: revision.id,
         project_id: project.id,
       });
       toast.success('Pricing impact applied to project');
+      refetchEntityList("ProjectRevision");
     } catch (e) {
       toast.error(e.message || 'Failed to apply pricing impact');
+    } finally {
+      setApplyingPricing(false);
     }
   };
 
@@ -219,21 +249,25 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
     }
   };
 
+  const [revertingPricing, setRevertingPricing] = useState(false);
   const handleRevertPricing = async () => {
+    if (revertingPricing) return;
+    setRevertingPricing(true);
     try {
       await api.functions.invoke('revertRevisionPricingImpact', {
         revision_id: revision.id,
         project_id: project.id,
       });
       toast.success('Pricing impact reverted');
+      refetchEntityList("ProjectRevision");
     } catch (e) {
       toast.error(e.message || 'Failed to revert pricing impact');
+    } finally {
+      setRevertingPricing(false);
     }
     setShowRevertConfirm(false);
     setRevertConfirmStep(0);
   };
-
-  const completedTaskCount = revisionTasks.filter(t => t.is_completed).length;
 
   // Get kind-specific styling for card border
   const kindBorderStyle = revision.request_kind === 'change_request' 
@@ -259,14 +293,14 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
             {statusConfig.icon && (
               <Badge variant="outline" className={`text-xs ${statusConfig.color} flex items-center gap-1`}>
                 <StatusIcon className="h-3 w-3" />
-                {revision.status === "in_progress" && revisionTasks.length > 0 
-                  ? `In Progress (${completedTaskCount}/${revisionTasks.length})`
+                {revision.status === "in_progress" && nonDeletedTasks.length > 0
+                  ? `In Progress (${completedTaskCount}/${nonDeletedTasks.length})`
                   : statusConfig.label}
               </Badge>
             )}
             {revision.priority !== "normal" && (
               <span className={`text-xs font-medium ${PRIORITY_COLORS[revision.priority]}`}>
-                {revision.priority.charAt(0).toUpperCase() + revision.priority.slice(1)}
+                {(revision.priority || 'normal').charAt(0).toUpperCase() + (revision.priority || 'normal').slice(1)}
               </span>
             )}
           </div>
@@ -276,8 +310,8 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
             {revision.requested_date && <span>{fmtDate(revision.requested_date, 'd MMM yyyy')}</span>}
             {revision.due_date && <span>Due: {fmtDate(revision.due_date, 'd MMM yyyy')}</span>}
             {revision.template_name && <span className="italic">Template: {revision.template_name}</span>}
-            {revisionTasks.length > 0 && (
-              <span className="font-medium text-primary">{completedTaskCount}/{revisionTasks.length} tasks done</span>
+            {nonDeletedTasks.length > 0 && (
+              <span className="font-medium text-primary">{completedTaskCount}/{nonDeletedTasks.length} tasks done</span>
             )}
             {hasPricingImpact && (
               <span className={`flex items-center gap-0.5 font-medium ${pricingApplied ? "text-green-600" : "text-orange-600"}`}>
@@ -296,7 +330,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
         <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
           {/* Status select — manual progression */}
           {canEdit && !['cancelled', 'stuck'].includes(revision.status) && (
-            <div className="relative">
+            <div className="relative" ref={statusDropdownRef}>
               <Button
                 variant="outline"
                 size="sm"
@@ -306,7 +340,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
                 Status ▾
               </Button>
               {showStatusSelect && (
-                <div className="absolute right-0 top-8 z-50 bg-white border rounded-lg shadow-lg py-1 min-w-[140px]">
+                <div className="absolute right-0 top-8 z-50 bg-popover border rounded-lg shadow-lg py-1 min-w-[140px]">
                   {MANUAL_STATUS_OPTIONS.map(opt => (
                     <button
                       key={opt.value}
@@ -436,7 +470,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
                   return (
                     <div key={task.id} className={cn(
                       "flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm group",
-                      task.is_completed ? "bg-green-50 border-green-200" : task.is_blocked ? "bg-amber-50 border-amber-200" : "bg-white border-border"
+                      task.is_completed ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800" : task.is_blocked ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800" : "bg-background border-border"
                     )} title={cleanTitle}>
                       {task.is_completed
                         ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
@@ -501,9 +535,10 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
             <AlertDialogCancel>Keep Request</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={updateMutation.isPending}
               onClick={() => handleCancel()}
             >
-              Cancel Request & Delete Tasks
+              {updateMutation.isPending ? "Cancelling..." : "Cancel Request & Delete Tasks"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -545,8 +580,8 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
                 Yes, Revert
               </Button>
             ) : (
-              <Button variant="destructive" onClick={() => handleRevertPricing()}>
-                Confirm Revert
+              <Button variant="destructive" disabled={revertingPricing} onClick={() => handleRevertPricing()}>
+                {revertingPricing ? "Reverting..." : "Confirm Revert"}
               </Button>
             )}
           </AlertDialogFooter>

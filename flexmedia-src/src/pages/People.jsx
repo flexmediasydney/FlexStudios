@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 const STATE_STYLES = {
   'Active':         'bg-green-50 text-green-700 border-green-200',
   'Prospecting':    'bg-orange-50 text-orange-700 border-orange-200',
-  'Dormant':        'bg-gray-100 text-gray-500 border-gray-200',
+  'Dormant':        'bg-muted text-muted-foreground border-border',
   'Do Not Contact': 'bg-red-50 text-red-700 border-red-200',
 };
 
@@ -28,7 +28,7 @@ const STATUS_STYLES = {
   'Qualified': 'bg-green-50 text-green-700',
   'Unqualified': 'bg-red-50 text-red-600',
   'Converted to Client': 'bg-emerald-50 text-emerald-700',
-  'Lost': 'bg-gray-100 text-gray-500',
+  'Lost': 'bg-muted text-muted-foreground',
 };
 
 const FILTER_STATES = ['All', 'Active', 'Prospecting', 'Dormant', 'Do Not Contact'];
@@ -47,6 +47,8 @@ export default function People() {
   const [view, setView] = useState('table');
   const [showForm, setShowForm] = useState(false);
   const [editingAgent, setEditingAgent] = useState(null);
+  const CARD_PAGE_SIZE = 60;
+  const [cardLimit, setCardLimit] = useState(CARD_PAGE_SIZE);
 
   // Open new contact form when ?new=true is in URL
   useEffect(() => {
@@ -62,7 +64,7 @@ export default function People() {
   }, []);
 
   const { data: agents = [], loading } = useEntityList('Agent', 'name');
-  const { data: projects = [] } = useEntityList('Project', null, 5000);
+  const { data: projects = [] } = useEntityList('Project', '-created_date', 1000);
 
   const projectsByAgent = useMemo(() => {
     const m = {};
@@ -178,7 +180,7 @@ export default function People() {
             <span className="font-semibold text-foreground">{stats.total}</span> total ·
             <span className="text-green-600 font-medium ml-1">{stats.active}</span> active ·
             <span className="text-orange-500 font-medium ml-1">{stats.prospecting}</span> prospecting ·
-            <span className="text-gray-400 font-medium ml-1">{stats.dormant}</span> dormant
+            <span className="text-muted-foreground font-medium ml-1">{stats.dormant}</span> dormant
             {stats.dnc > 0 && <><span className="text-red-500 font-medium ml-1">{stats.dnc}</span> DNC</>}
           </div>
         </div>
@@ -245,19 +247,28 @@ export default function People() {
                )}
               </div>
             )}
-            {!loading && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {filtered.map(row => (
-                  <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
-                    onClick={() => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}>
-                    <AgentHoverContent row={row} projects={projectsByAgent[row.id] || []} revenue={revenueByAgent[row.id] || 0} />
-                    <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
-                      <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => { setEditingAgent(row); setShowForm(true); }}>Edit</Button>
-                      <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}>View</Button>
+            {!loading && filtered.length > 0 && (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {filtered.slice(0, cardLimit).map(row => (
+                    <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer"
+                      onClick={() => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}>
+                      <AgentHoverContent row={row} projects={projectsByAgent[row.id] || []} revenue={revenueByAgent[row.id] || 0} />
+                      <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
+                        <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => { setEditingAgent(row); setShowForm(true); }}>Edit</Button>
+                        <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}>View</Button>
+                      </div>
                     </div>
+                  ))}
+                </div>
+                {filtered.length > cardLimit && (
+                  <div className="flex justify-center pt-4">
+                    <Button variant="outline" size="sm" onClick={() => setCardLimit(prev => prev + CARD_PAGE_SIZE)}>
+                      Load more ({filtered.length - cardLimit} remaining)
+                    </Button>
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </>
         )}

@@ -37,7 +37,7 @@ const ROLE_COLORS = {
 
 function getInitials(name) {
   if (!name) return "?";
-  return name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+  return name.split(" ").filter(Boolean).map(w => w[0]).join("").toUpperCase().slice(0, 2) || "?";
 }
 
 // Re-export from the shared hook for backward compatibility
@@ -209,7 +209,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-2" align="start">
-        <div className="space-y-1">
+        <div className="space-y-1 max-h-72 overflow-y-auto">
           {currentId && !isNotRequired && (
             <button
               className="w-full text-left px-3 py-2 text-sm text-destructive hover:bg-destructive/10 rounded-md"

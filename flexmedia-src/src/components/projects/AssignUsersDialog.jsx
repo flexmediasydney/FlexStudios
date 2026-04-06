@@ -21,7 +21,7 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
 
   const { data: internalTeams = [] } = useEntityList("InternalTeam");
 
-  const contractors = users.filter(u => u.role === "contractor");
+  const allUsers = users.filter(u => u.is_active !== false);
   const activeTeams = internalTeams.filter(t => t.is_active !== false);
 
   useEffect(() => {
@@ -91,20 +91,20 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Assign Contractors</DialogTitle>
+          <DialogTitle>Assign Users</DialogTitle>
         </DialogHeader>
-        
+
         <div className="space-y-4 max-h-96 overflow-y-auto">
-           {/* Contractors Section */}
+           {/* Users Section */}
            <div>
-             <h3 className="font-semibold text-sm mb-3">Contractors</h3>
-             {contractors.length === 0 ? (
+             <h3 className="font-semibold text-sm mb-3">Users</h3>
+             {allUsers.length === 0 ? (
                <p className="text-muted-foreground text-sm text-center py-4">
-                 No contractors available
+                 No users available
                </p>
              ) : (
                <div className="space-y-2">
-                 {contractors.map(user => (
+                 {allUsers.map(user => (
                    <div key={user.id} className="flex items-center justify-between p-3 border rounded-lg">
                      <div className="flex items-center gap-3">
                        <Checkbox

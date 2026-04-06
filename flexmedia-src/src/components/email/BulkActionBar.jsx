@@ -301,14 +301,21 @@ export default function BulkActionBar({
                     allMessages.push({ id: m.id, labels: updatedLabels });
                   });
                 });
-                Promise.all(
-                  allMessages.map(({ id, labels }) => api.entities.EmailMessage.update(id, { labels }))
-                ).then(() => {
-                  toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
-                  onRefetch();
-                }).catch(() => {
-                  toast.error("Failed to update labels");
-                });
+                // Chunk updates to avoid overwhelming the API at scale
+                (async () => {
+                  try {
+                    const CHUNK = 25;
+                    for (let i = 0; i < allMessages.length; i += CHUNK) {
+                      await Promise.all(
+                        allMessages.slice(i, i + CHUNK).map(({ id, labels }) => api.entities.EmailMessage.update(id, { labels }))
+                      );
+                    }
+                    toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
+                    onRefetch();
+                  } catch {
+                    toast.error("Failed to update labels");
+                  }
+                })();
               }}
               isAdmin={user?.role === "master_admin"}
               compact={false}

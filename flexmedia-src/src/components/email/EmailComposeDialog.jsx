@@ -257,8 +257,13 @@ export default function EmailComposeDialog({
   useEffect(() => {
     if (defaultBodyPrefix && defaultBodyPrefix !== prevPrefixRef.current) {
       // Prepend template body before the quoted reply
-      const quotedStart = body.indexOf('<div class="gmail_quote">') || body.indexOf('<blockquote');
-      if (quotedStart > 0) {
+      const gmailQuoteIdx = body.indexOf('<div class="gmail_quote">');
+      const blockquoteIdx = body.indexOf('<blockquote');
+      // Find the earliest valid index (indexOf returns -1 when not found)
+      const quotedStart = gmailQuoteIdx >= 0 && blockquoteIdx >= 0
+        ? Math.min(gmailQuoteIdx, blockquoteIdx)
+        : gmailQuoteIdx >= 0 ? gmailQuoteIdx : blockquoteIdx;
+      if (quotedStart >= 0) {
         setBody(`<p>${defaultBodyPrefix}</p><br/>` + body.slice(quotedStart));
       } else {
         setBody(`<p>${defaultBodyPrefix}</p><br/>` + body);
@@ -296,8 +301,14 @@ export default function EmailComposeDialog({
   const [uploadProgress, setUploadProgress] = useState(null); // null | 'uploading'
   const [uploadingFiles, setUploadingFiles] = useState([]); // [{name, status: 'uploading'|'done'|'error'}]
   const fileInputRef = React.useRef(null);
+  const uploadStatusTimerRef = useRef(null);
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
   const [templateName, setTemplateName] = useState("");
+
+  // Clean up pending timers on unmount
+  useEffect(() => () => {
+    if (uploadStatusTimerRef.current) clearTimeout(uploadStatusTimerRef.current);
+  }, []);
 
   // Draft autosave — persists to sessionStorage so it survives accidental closes
   // Use a stable instance ID for new composes to avoid collisions between multiple open dialogs
@@ -342,12 +353,14 @@ export default function EmailComposeDialog({
   const { data: templates = [] } = useQuery({
     queryKey: ["email-templates"],
     queryFn: () => api.entities.EmailTemplate.filter({}),
+    staleTime: 5 * 60 * 1000,
   });
 
-  // Fetch projects for linking
+  // Fetch projects for linking (recent 200, not all)
   const { data: projects = [] } = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api.entities.Project.list(),
+    queryKey: ["projects-for-compose"],
+    queryFn: () => api.entities.Project.list("-created_date", 200),
+    staleTime: 2 * 60 * 1000,
   });
 
   // Load agent + agency for the linked project to enable template substitution
@@ -432,6 +445,8 @@ export default function EmailComposeDialog({
       clearDraft();
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       queryClient.invalidateQueries({ queryKey: ["project-emails"] });
+      // Also invalidate thread-specific queries so the thread viewer picks up the new reply
+      queryClient.invalidateQueries({ queryKey: ["email-thread"] });
       // Feed event for email sent
       writeFeedEvent({
         eventType: type === "forward" ? 'email_forwarded' : 'email_sent',
@@ -442,6 +457,17 @@ export default function EmailComposeDialog({
         projectId: linkedProject || null,
         entityType: 'email',
       }).catch(() => {});
+      // Log to project activity if email is linked to a project
+      if (linkedProject) {
+        api.entities.ProjectActivity.create({
+          project_id: linkedProject,
+          action: 'email_sent',
+          description: `Email ${type === "forward" ? "forwarded" : "sent"}: "${subject}" to ${recipients}`,
+          actor_id: user?.id,
+          actor_name: user?.full_name || user?.email || 'Unknown',
+          metadata: { subject, recipients, type },
+        }).catch(() => {});
+      }
       setRecipients("");
       setSubject("");
       setBody("");
@@ -453,7 +479,8 @@ export default function EmailComposeDialog({
       onClose();
     },
     onError: (error) => {
-      toast.error(error.message || "Failed to send email");
+      console.error("Send email error:", error);
+      toast.error("Failed to send email. Please check your connection and try again.");
       setIsLoading(false);
     },
   });
@@ -528,7 +555,8 @@ export default function EmailComposeDialog({
         setUploadingFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: 'done' } : f));
       } catch (error) {
         console.error(`Attachment upload error for "${file.name}":`, error);
-        toast.error(`Failed to upload "${file.name}": ${error?.message || 'Unknown error'}`);
+        console.error(`Attachment upload error for "${file.name}":`, error);
+        toast.error(`Failed to upload "${file.name}". Please try again.`);
         // Mark this file as failed but continue with remaining files
         setUploadingFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: 'error' } : f));
       }
@@ -546,13 +574,21 @@ export default function EmailComposeDialog({
 
     setUploadProgress(null);
     // Clear per-file statuses after a brief delay so user sees final state
-    setTimeout(() => setUploadingFiles([]), 1500);
+    if (uploadStatusTimerRef.current) clearTimeout(uploadStatusTimerRef.current);
+    uploadStatusTimerRef.current = setTimeout(() => {
+      setUploadingFiles([]);
+      uploadStatusTimerRef.current = null;
+    }, 1500);
   };
 
   const handleAttachFile = (e) => {
-    addFiles(e.target.files);
+    // Capture files synchronously before React recycles the event object (event pooling).
+    // Reading e.target.files after the async addFiles() could return null.
+    const files = e.target.files;
+    const inputEl = e.target;
+    addFiles(files);
     // Reset input so the same file can be re-selected
-    if (e.target) e.target.value = '';
+    if (inputEl) inputEl.value = '';
   };
 
   const removeAttachment = (idx) => {
@@ -693,7 +729,7 @@ export default function EmailComposeDialog({
     <>
       <Dialog open onOpenChange={onClose}>
         <DialogContent
-          className="max-w-5xl w-[95vw] h-[88vh] flex flex-col p-0 bg-white !fixed"
+          className="max-w-5xl w-[95vw] h-[88vh] max-h-[calc(88vh-env(safe-area-inset-bottom,0px))] flex flex-col p-0 bg-white !fixed"
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -722,7 +758,7 @@ export default function EmailComposeDialog({
                 className="h-9 w-9 hover:bg-slate-100"
                 title="Close (Esc)"
               >
-                <ArrowLeft className="h-5 w-5 text-slate-600" />
+                <ArrowLeft className="h-5 w-5 text-muted-foreground" />
               </Button>
               <div>
                 <h2 className="font-bold text-base text-foreground">{getTitle()}</h2>
@@ -1069,7 +1105,8 @@ export default function EmailComposeDialog({
                             toast.success(`Scheduled for ${sendAt.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`);
                             onClose?.();
                           } catch (err) {
-                            toast.error('Failed to schedule: ' + (err?.message || 'Unknown error'));
+                            console.error('Schedule send error:', err);
+                            toast.error('Failed to schedule email. Please try again.');
                           }
                         }}>
                           <Clock className="h-4 w-4 mr-2" />

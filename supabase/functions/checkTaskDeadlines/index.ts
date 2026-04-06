@@ -1,4 +1,5 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { MS_PER_DAY, MS_PER_HOUR, MAX_USERS_FETCH, MAX_PROJECTS_FETCH } from '../_shared/constants.ts';
 
 // ─── NOTIFICATION HELPERS ─────────────────────────────────────────────
 const _NOTIF_ROLES: Record<string, string[]> = {
@@ -14,7 +15,7 @@ async function _resolveUserIds(entities: any, roles: string[], projectId: string
   const ids = new Set<string>();
   if (roles.includes('master_admin')) {
     try {
-      const users = await entities.User.list('-created_date', 200);
+      const users = await entities.User.list('-created_date', MAX_USERS_FETCH);
       users.filter((u: any) => u.role === 'master_admin' || u.role === 'admin')
            .forEach((u: any) => ids.add(u.id));
     } catch { /* ignore */ }
@@ -44,11 +45,10 @@ async function _resolveUserIds(entities: any, roles: string[], projectId: string
 
 async function _checkNotifPref(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
-    const prefs = await entities.NotificationPreference.list('-created_date', 500);
-    const up = prefs.filter((p: any) => p.user_id === userId);
-    const tp = up.find((p: any) => p.notification_type === type);
+    const prefs = await entities.NotificationPreference.filter({ user_id: userId }, null, 100);
+    const tp = prefs.find((p: any) => p.notification_type === type);
     if (tp !== undefined) return tp.in_app_enabled !== false;
-    const cp = up.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
+    const cp = prefs.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
     if (cp !== undefined) return cp.in_app_enabled !== false;
     return true;
   } catch { return true; }
@@ -56,31 +56,39 @@ async function _checkNotifPref(entities: any, userId: string, type: string, cate
 
 async function _isDupNotif(entities: any, key: string, userId: string): Promise<boolean> {
   try {
-    const recent = await entities.Notification.list('-created_date', 500);
-    return recent.some((n: any) => n.idempotency_key === key && n.user_id === userId);
+    const recent = await entities.Notification.filter(
+      { idempotency_key: key, user_id: userId }, null, 1
+    );
+    return recent.length > 0;
   } catch { return false; }
 }
 
 async function _createNotif(entities: any, p: any): Promise<boolean> {
-  const allowed = await _checkNotifPref(entities, p.userId, p.type, p.category);
-  if (!allowed) return false;
-  if (p.idempotencyKey && await _isDupNotif(entities, p.idempotencyKey, p.userId)) return false;
-  await entities.Notification.create({
-    user_id: p.userId, type: p.type, category: p.category, severity: p.severity,
-    title: p.title, message: p.message, project_id: p.projectId || null,
-    project_name: p.projectName || null, entity_type: p.entityType || null,
-    entity_id: p.entityId || null, cta_url: p.ctaUrl || null,
-    cta_label: p.ctaLabel || 'View', cta_params: p.ctaParams ? JSON.stringify(p.ctaParams) : null,
-    is_read: false, is_dismissed: false, source: p.source || 'system',
-    source_rule_id: p.sourceRuleId || null, idempotency_key: p.idempotencyKey || null,
-    created_date: new Date().toISOString(),
-  });
-  return true;
+  try {
+    const allowed = await _checkNotifPref(entities, p.userId, p.type, p.category);
+    if (!allowed) return false;
+    if (p.idempotencyKey && await _isDupNotif(entities, p.idempotencyKey, p.userId)) return false;
+    await entities.Notification.create({
+      user_id: p.userId, type: p.type, category: p.category, severity: p.severity,
+      title: p.title, message: p.message, project_id: p.projectId || null,
+      project_name: p.projectName || null, entity_type: p.entityType || null,
+      entity_id: p.entityId || null, cta_url: p.ctaUrl || null,
+      cta_label: p.ctaLabel || 'View', cta_params: p.ctaParams ? JSON.stringify(p.ctaParams) : null,
+      is_read: false, is_dismissed: false, source: p.source || 'system',
+      source_rule_id: p.sourceRuleId || null, idempotency_key: p.idempotencyKey || null,
+      created_date: new Date().toISOString(),
+    });
+    return true;
+  } catch (err: any) {
+    console.error(`Failed to create notification (type=${p.type}, user=${p.userId}):`, err?.message);
+    return false;
+  }
 }
 // ─── END NOTIFICATION HELPERS ─────────────────────────────────────────
 
 function toSydney(date: Date): Date {
-  return new Date(date.toLocaleString("en-AU", { timeZone: "Australia/Sydney" }));
+  // Use en-US format which is reliably parseable by Date constructor
+  return new Date(date.toLocaleString("en-US", { timeZone: "Australia/Sydney" }));
 }
 
 Deno.serve(async (req) => {
@@ -97,7 +105,7 @@ Deno.serve(async (req) => {
     // Check task deadlines
     const tasks = await entities.ProjectTask.list('-created_date', 2000);
     activeTasks = tasks.filter((t: any) =>
-      t.assigned_to && !t.is_completed && t.due_date
+      t.assigned_to && !t.is_completed && !t.is_archived && t.due_date && t.project_id
     );
 
     for (const task of activeTasks) {
@@ -151,7 +159,7 @@ Deno.serve(async (req) => {
     }
 
     // Check long-running timers
-    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const twoHoursAgo = new Date(now.getTime() - 2 * MS_PER_HOUR);
 
     try {
       const timeLogs = await entities.TaskTimeLog.list('-created_date', 1000);
@@ -208,7 +216,7 @@ Deno.serve(async (req) => {
           !['delivered', 'cancelled', 'pending_review'].includes(project.status)
         ) {
           const overdueDays = Math.floor(
-            (now.getTime() - new Date(project.shoot_date).getTime()) / (1000 * 60 * 60 * 24)
+            (now.getTime() - new Date(project.shoot_date).getTime()) / MS_PER_DAY
           );
           if (overdueDays >= 1) {
             const adminIds = await _resolveUserIds(entities, ['master_admin'], null);
@@ -303,7 +311,7 @@ Deno.serve(async (req) => {
         if (!deliveredDate) continue;
 
         const daysSinceDelivery = Math.floor(
-          (now.getTime() - deliveredDate.getTime()) / (1000 * 60 * 60 * 24)
+          (now.getTime() - deliveredDate.getTime()) / MS_PER_DAY
         );
 
         const adminIds = await _resolveUserIds(entities, ['master_admin'], null);
@@ -350,6 +358,7 @@ Deno.serve(async (req) => {
       timestamp: now.toISOString(),
     });
   } catch (err: any) {
-    return jsonResponse({ error: err.message }, 200);
+    console.error('checkTaskDeadlines error:', err);
+    return errorResponse(err.message);
   }
 });

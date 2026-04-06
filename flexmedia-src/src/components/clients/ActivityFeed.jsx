@@ -36,14 +36,14 @@ export default function ActivityFeed() {
   // Real-time subscription replaces polling + manual subscribe
   const { data: logs = [], loading: isLoading } = useEntityList("AuditLog", "-created_date", 500);
 
-  const threeDaysAgo = subDays(new Date(), 3);
-  
-  const recentLogs = useMemo(() => 
+  const threeDaysAgo = useMemo(() => subDays(new Date(), 3), []);
+
+  const recentLogs = useMemo(() =>
     logs.filter(log => isAfter(new Date(log.created_date), threeDaysAgo)),
     [logs, threeDaysAgo]
   );
 
-  const archivedLogs = useMemo(() => 
+  const archivedLogs = useMemo(() =>
     logs.filter(log => !isAfter(new Date(log.created_date), threeDaysAgo)),
     [logs, threeDaysAgo]
   );
@@ -95,7 +95,8 @@ export default function ActivityFeed() {
       toast.success("Successfully restored previous state");
       setRestoreItem(null);
     } catch (error) {
-      toast.error("Failed to restore: " + (error.message || "Unknown error"));
+      console.error("Restore error:", error);
+      toast.error("Failed to restore previous state. Please try again.");
     }
   };
 

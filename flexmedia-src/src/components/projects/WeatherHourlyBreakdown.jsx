@@ -1,6 +1,7 @@
 import React from "react";
 import { Cloud, Sun, CloudRain, CloudSnow, Wind, AlertCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { OPEN_METEO_FORECAST_URL } from "@/lib/constants";
 
 // WMO weather code to description + icon (same as parent)
 function getWeatherInfo(code) {
@@ -34,7 +35,7 @@ export default function WeatherHourlyBreakdown({ latitude, longitude, shootDate 
       setError(null);
       try {
         const res = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+          `${OPEN_METEO_FORECAST_URL}?latitude=${latitude}&longitude=${longitude}` +
           `&hourly=temperature_2m,weather_code,precipitation,precipitation_probability` +
           `&timezone=Australia%2FSydney&start_date=${shootDate}&end_date=${shootDate}`
         );

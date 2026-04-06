@@ -15,6 +15,7 @@ import { fmtTimestampCustom, fixTimestamp } from '@/components/utils/dateUtils';
 import { toast } from 'sonner';
 import ActivityLogItem from './ActivityLogItem';
 import EmailComposeDialog from '@/components/email/EmailComposeDialog';
+import UnifiedNoteComposer from '@/components/notes/UnifiedNoteComposer';
 
 // Sanitize HTML email bodies to prevent XSS
 const sanitizeEmailHtml = (html) => {
@@ -63,15 +64,24 @@ const TYPE_CONFIG = {
 export default function ProjectActivityFeedItem({
   item,
   projectId,
+  project,
   isLast = false,
   // For notes
   onNoteRefresh,
   currentUser,
+  noteReplies = [],
   // For emails
   isEmailOwner = false,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [replyType, setReplyType] = useState(null);
+  const [isReplying, setIsReplying] = useState(false);
+  const [repliesExpanded, setRepliesExpanded] = useState(true);
+
+  // Sort note replies oldest-first for natural conversation flow
+  const sortedReplies = noteReplies.length > 0
+    ? [...noteReplies].sort((a, b) => new Date(fixTimestamp(a.created_date)) - new Date(fixTimestamp(b.created_date)))
+    : [];
   const queryClient = useQueryClient();
   const config = TYPE_CONFIG[item.type] || TYPE_CONFIG.activity;
   const IconComponent = config.icon;
@@ -191,7 +201,7 @@ export default function ProjectActivityFeedItem({
               {item.type === 'email' && isEmailOwner && item._raw && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="p-1 rounded text-muted-foreground hover:bg-muted/60 transition-colors">
+                    <button className="p-1 rounded text-muted-foreground hover:bg-muted/60 transition-colors" aria-label="Email actions">
                       <MoreVertical className="h-3.5 w-3.5" />
                     </button>
                   </DropdownMenuTrigger>
@@ -253,6 +263,71 @@ export default function ProjectActivityFeedItem({
                       {att.file_name || 'Attachment'}
                     </a>
                   ))}
+                </div>
+              )}
+
+              {/* Reply button + thread count */}
+              <div className="flex items-center gap-3 mt-2 pt-1.5 border-t border-blue-100">
+                <button
+                  onClick={() => { setIsReplying(true); setRepliesExpanded(true); }}
+                  className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  {isReplying ? 'Commenting...' : 'Add comment'}
+                </button>
+                {sortedReplies.length > 0 && (
+                  <button
+                    onClick={() => setRepliesExpanded(e => !e)}
+                    className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors ml-auto"
+                  >
+                    {repliesExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    {sortedReplies.length} {sortedReplies.length === 1 ? 'comment' : 'comments'}
+                  </button>
+                )}
+              </div>
+
+              {/* Reply thread */}
+              {(sortedReplies.length > 0 || isReplying) && (
+                <div className="mt-2 border-t border-blue-100 pt-2">
+                  {repliesExpanded && sortedReplies.map(reply => (
+                    <div key={reply.id} className="flex gap-2 py-1.5">
+                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[9px] font-bold shrink-0">
+                        {(reply.author_name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="text-xs font-semibold text-foreground">{reply.author_name || 'Unknown'}</span>
+                          <span className="text-[10px] text-muted-foreground">
+                            {fmtTimestampCustom(reply.created_date, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
+                          </span>
+                        </div>
+                        {reply.content_html ? (
+                          <div
+                            className="text-xs text-foreground/80 mt-0.5 prose prose-xs max-w-none"
+                            dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(reply.content_html) }}
+                          />
+                        ) : (
+                          <p className="text-xs text-foreground/80 mt-0.5 whitespace-pre-wrap">{reply.content}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {isReplying && (
+                    <div className={sortedReplies.length > 0 && repliesExpanded ? 'pt-2 border-t border-blue-50 mt-1' : ''}>
+                      <UnifiedNoteComposer
+                        agencyId={item._raw.agency_id || project?.agency_id}
+                        projectId={projectId}
+                        contextType="project"
+                        contextLabel={project?.title || project?.property_address || 'Project'}
+                        currentUser={currentUser}
+                        isReply
+                        parentNoteId={item._raw.id}
+                        replyToAuthor={item._raw.author_name}
+                        onSave={() => { setIsReplying(false); onNoteRefresh?.(); }}
+                        onCancel={() => setIsReplying(false)}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -323,7 +398,10 @@ export default function ProjectActivityFeedItem({
           account={{ id: item._raw.email_account_id, email_address: item._raw.from }}
           type={replyType}
           onClose={() => setReplyType(null)}
-          onSent={() => queryClient.invalidateQueries({ queryKey: ['project-emails'] })}
+          onSent={() => {
+            queryClient.invalidateQueries({ queryKey: ['project-emails'] });
+            setReplyType(null);
+          }}
           projectId={projectId}
         />
       )}

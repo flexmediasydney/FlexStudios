@@ -415,13 +415,11 @@ const authApi = {
       .single();
 
     if (appError || !appUser) {
-      // Fall back to auth metadata if no users table record yet
-      return {
-        id: user.id,
-        email: user.email,
-        full_name: user.user_metadata?.full_name || user.email,
-        role: user.user_metadata?.role || 'contractor',
-      };
+      throw new Error('User not registered for this application');
+    }
+
+    if (appUser.is_active === false) {
+      throw new Error('Your account has been deactivated. Please contact your administrator.');
     }
 
     return appUser;

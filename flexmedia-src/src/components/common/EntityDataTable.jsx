@@ -75,10 +75,10 @@ export default function EntityDataTable({
   return (
     <div className="flex flex-col">
       <div className="border rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-240px)] overflow-y-auto">
           <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b bg-muted/40">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b bg-muted/40 bg-card">
                 {columns.map(col => (
                   <th
                     key={col.key}

@@ -29,7 +29,9 @@ const statusLabels = {
 export default function ProjectHoverCard({ projectId, children }) {
   const { data: project, isLoading } = useQuery({
     queryKey: ['project', projectId],
-    queryFn: () => api.entities.Project.filter({ id: projectId }).then(results => results[0])
+    queryFn: () => api.entities.Project.filter({ id: projectId }).then(results => results[0]),
+    enabled: !!projectId,
+    staleTime: 5 * 60 * 1000,
   });
 
   if (!project && !isLoading) {
@@ -66,7 +68,7 @@ export default function ProjectHoverCard({ projectId, children }) {
         <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
           {/* Header */}
           <div className="px-4 py-2 bg-slate-50 border-b border-slate-200">
-            <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">LINKED PROJECT</p>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">LINKED PROJECT</p>
           </div>
 
           {/* Content */}

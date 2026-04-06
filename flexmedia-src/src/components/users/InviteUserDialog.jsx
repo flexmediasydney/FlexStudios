@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { api } from "@/api/supabaseClient";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -14,17 +14,36 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
   const [role, setRole] = useState("employee");
   const [loading, setLoading] = useState(false);
 
+  // Reset form when dialog opens so stale data from previous invite is cleared
+  React.useEffect(() => {
+    if (open) {
+      setEmail("");
+      setFullName("");
+      setRole("employee");
+      setLoading(false);
+    }
+  }, [open]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    // Client-side email format validation
+    const emailTrimmed = email.trim().toLowerCase();
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!EMAIL_RE.test(emailTrimmed)) {
+      toast.error("Please enter a valid email address");
+      return;
+    }
+
     setLoading(true);
 
     try {
-      await api.users.inviteUser(email, role, fullName || undefined);
+      await api.users.inviteUser(emailTrimmed, role, fullName || undefined);
       toast.success("Invitation sent successfully!");
       setEmail("");
       setFullName("");
       setRole("employee");
-      onSuccess();
+      onSuccess?.();
       onClose();
     } catch (error) {
       toast.error(error.message || "Failed to send invitation");

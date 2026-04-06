@@ -184,27 +184,41 @@ export default function EmployeeUtilization() {
     const results = [];
     const seen = new Set();
 
+    // Pre-index to avoid O(N*M) lookups inside loops
+    const usersById = {};
+    allUsers.forEach(u => { usersById[u.id] = u; });
+    const utilsByUser = {};
+    allUtilizations.forEach(u => {
+      if (u.period === period) {
+        if (!utilsByUser[u.user_id]) utilsByUser[u.user_id] = [];
+        utilsByUser[u.user_id].push(u);
+      }
+    });
+    const logsByUser = {};
+    periodLogs.forEach(l => {
+      if (!logsByUser[l.user_id]) logsByUser[l.user_id] = [];
+      logsByUser[l.user_id].push(l);
+    });
+
     allEmployeeRoles.forEach(empRole => {
-      const user = allUsers.find(u => u.id === empRole.user_id);
+      const user = usersById[empRole.user_id];
       if (!user) return;
       seen.add(user.id);
-      const utilRecord = allUtilizations
-        .filter(u => u.user_id === user.id && u.period === period)
+      const utilRecord = (utilsByUser[user.id] || [])
         .sort((a, b) => new Date(b.period_date) - new Date(a.period_date))[0] || null;
-      const userLogs = periodLogs.filter(l => l.user_id === user.id);
+      const userLogs = logsByUser[user.id] || [];
       const rec = buildEmployeeUtilization({ user, empRole, utilRecord, userLogs, period });
       if (rec) results.push(rec);
     });
 
     [...new Set(periodLogs.map(l => l.user_id))].forEach(uid => {
       if (seen.has(uid)) return;
-      const user = allUsers.find(u => u.id === uid);
+      const user = usersById[uid];
       if (!user) return;
       seen.add(uid);
-      const utilRecord = allUtilizations
-        .filter(u => u.user_id === user.id && u.period === period)
+      const utilRecord = (utilsByUser[user.id] || [])
         .sort((a, b) => new Date(b.period_date) - new Date(a.period_date))[0] || null;
-      const userLogs = periodLogs.filter(l => l.user_id === user.id);
+      const userLogs = logsByUser[user.id] || [];
       const rec = buildEmployeeUtilization({ user, empRole: null, utilRecord, userLogs, period });
       if (rec) results.push(rec);
     });

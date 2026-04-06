@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -84,10 +84,12 @@ export default function PriceMatrixEditor({ priceMatrix }) {
     },
     onSuccess: () => {
       toast.success("Pricing saved");
-      queryClient.invalidateQueries({ queryKey: ["price-matrix"] });
+      // PriceMatrix data is loaded via useEntityList (custom cache), not react-query,
+      // so we must use refetchEntityList to actually refresh the UI.
+      refetchEntityList("PriceMatrix");
       queryClient.invalidateQueries({ queryKey: ["price-matrix-audit", priceMatrix.id] });
     },
-    onError: (error) => toast.error("Failed to save: " + (error?.message || "Unknown error"))
+    onError: (error) => { console.error("Price matrix save error:", error); toast.error("Failed to save pricing. Please try again."); }
   });
 
   const setField = (path, value) => {

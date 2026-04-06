@@ -70,7 +70,8 @@ export default function ProspectEditPanel({ prospect }) {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
-      setError(err.message || 'Failed to update agent');
+      console.error('Update agent error:', err);
+      setError('Failed to save changes. Please try again.');
     } finally {
       setLoading(false);
     }

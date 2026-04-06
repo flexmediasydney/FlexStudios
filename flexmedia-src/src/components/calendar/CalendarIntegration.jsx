@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { TONOMO_MASTER_CALENDAR_EMAIL } from "@/lib/constants";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -222,11 +223,11 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
     return (
       <div className="flex items-center gap-2">
         {connections.map(c => (
-          <Badge key={c.id} variant={c.account_email === 'info@flexmedia.sydney' ? 'default' : 'outline'} className={`text-xs gap-1 ${c.account_email === 'info@flexmedia.sydney' ? 'bg-blue-600 text-white' : ''}`}>
-            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.account_email === 'info@flexmedia.sydney' ? '#fff' : (c.color || '#3b82f6') }} />
-            {c.account_email === 'info@flexmedia.sydney' ? 'Tonomo Master' : c.account_email}
+          <Badge key={c.id} variant={c.account_email === TONOMO_MASTER_CALENDAR_EMAIL ? 'default' : 'outline'} className={`text-xs gap-1 ${c.account_email === TONOMO_MASTER_CALENDAR_EMAIL ? 'bg-blue-600 text-white' : ''}`}>
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.account_email === TONOMO_MASTER_CALENDAR_EMAIL ? '#fff' : (c.color || '#3b82f6') }} />
+            {c.account_email === TONOMO_MASTER_CALENDAR_EMAIL ? 'Tonomo Master' : c.account_email}
             {c.last_synced && (
-              <span className={c.account_email === 'info@flexmedia.sydney' ? 'text-white/70' : 'text-muted-foreground'}>
+              <span className={c.account_email === TONOMO_MASTER_CALENDAR_EMAIL ? 'text-white/70' : 'text-muted-foreground'}>
                 · {formatLastSync(c.last_synced)}
               </span>
             )}
@@ -299,7 +300,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
           <div className="space-y-3">
             {connections.map(connection => {
               // Detect Tonomo master calendar (the business calendar linked to Tonomo scheduling)
-              const isMasterCalendar = connection.account_email === 'info@flexmedia.sydney';
+              const isMasterCalendar = connection.account_email === TONOMO_MASTER_CALENDAR_EMAIL;
               return (
               <div key={connection.id} className={`flex items-center justify-between p-3 border rounded-lg ${isMasterCalendar ? 'border-blue-300 bg-blue-50/30' : ''}`}>
                 <div className="flex items-center gap-3">

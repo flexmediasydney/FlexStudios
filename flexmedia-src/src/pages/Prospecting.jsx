@@ -55,8 +55,8 @@ export default function Prospecting() {
       }))
       .filter(a => {
         if (!searchTerm) return true;
-        return a.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          a.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        return (a.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (a.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
           (a.current_agency_name || '').toLowerCase().includes(searchTerm.toLowerCase());
       });
   }, [agents, searchTerm, interactionsByEntity]);
@@ -72,7 +72,7 @@ export default function Prospecting() {
       }))
       .filter(agency => {
         if (!searchTerm) return true;
-        return agency.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        return (agency.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
           (agency.email || '').toLowerCase().includes(searchTerm.toLowerCase());
       });
   }, [agencies, searchTerm, interactionsByEntity]);

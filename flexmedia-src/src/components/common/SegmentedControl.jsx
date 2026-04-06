@@ -11,7 +11,7 @@ export default function SegmentedControl({ options = [], value, onChange, label 
             onClick={() => onChange(opt.value)}
             className={cn(
               "px-4 py-2 rounded text-sm font-medium transition-colors",
-              value === opt.value ? "bg-white text-primary shadow-sm" : "text-gray-600 hover:text-gray-900"
+              value === opt.value ? "bg-white text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
             )}
           >
             {opt.label}

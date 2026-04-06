@@ -50,7 +50,7 @@ export default function AgentSearchField({ agents, value, onChange, placeholder 
         {selectedAgent && !open && (
           <div className="absolute right-3 top-1/2 -translate-y-1/2">
             <Badge variant="secondary" className="text-xs bg-primary/10 text-primary">
-              ✓ {selectedAgent.name.split(" ")[0]}
+              ✓ {(selectedAgent.name || 'Agent').split(" ")[0]}
             </Badge>
           </div>
         )}

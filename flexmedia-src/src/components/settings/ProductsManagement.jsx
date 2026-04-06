@@ -94,7 +94,7 @@ export default function ProductsManagement() {
       .filter(pm => pm.product_pricing?.some(pp => pp.product_id === product.id))
       .map(pm => pm.entity_name);
     const impactedProjects = projects
-      .filter(proj => proj.status !== "completed" && proj.products?.some(p => p.product_id === product.id))
+      .filter(proj => proj?.status !== "delivered" && proj?.products?.some(p => p?.product_id === product.id))
       .map(proj => proj.title);
     const impactedTasks = projectTasks
       .filter(task => task.product_id === product.id)

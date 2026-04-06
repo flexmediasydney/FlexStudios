@@ -128,7 +128,18 @@ export default function Dashboard() {
       .reduce((sum, p) => sum + projectValue(p), 0);
 
     const revenueGrowth = lastWeekRevenue > 0 ? ((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue * 100).toFixed(1) : 0;
-    
+
+    // Projects growth (was duplicated in executiveMetrics, now computed once here)
+    const thisWeekProjects = projects.filter(p => {
+      if (!p?.created_date) return false;
+      try { return new Date(fixTimestamp(p.created_date)) >= last7Days; } catch { return false; }
+    });
+    const lastWeekProjects = projects.filter(p => {
+      if (!p?.created_date) return false;
+      try { const d = new Date(fixTimestamp(p.created_date)); return d >= last14Days && d < last7Days; } catch { return false; }
+    });
+    const projectsGrowth = lastWeekProjects.length > 0 ? ((thisWeekProjects.length - lastWeekProjects.length) / lastWeekProjects.length * 100).toFixed(1) : 0;
+
     const totalRevenue = projects.reduce((sum, p) => sum + projectValue(p), 0);
     const averageValue = projects.length > 0 ? totalRevenue / projects.length : 0;
     
@@ -156,7 +167,7 @@ export default function Dashboard() {
       totalRevenue,
       revenueGrowth: parseFloat(revenueGrowth),
       activeProjectCount: activeProjects.length,
-      projectsGrowth: 0,
+      projectsGrowth: parseFloat(projectsGrowth),
       completionRate: parseFloat(completionRate),
       completionTrend: parseFloat(completionTrend),
       averageValue,
@@ -184,64 +195,26 @@ export default function Dashboard() {
     setShowProjectForm(false);
   }, []);
 
-  // Executive-level analytics - using the existing analytics data
-  const executiveMetrics = useMemo(() => {
-    const now = new Date();
-    const last7Days = subDays(now, 7);
-    const last14Days = subDays(now, 14);
-
-    // Prefer invoiced_amount when set (actual billed), fall back to calculated/quoted price
-    const projectValue = (p) => p.invoiced_amount ?? p.calculated_price ?? p.price ?? 0;
-
-    const thisWeekProjects = projects.filter(p => p.created_date && new Date(fixTimestamp(p.created_date)) >= last7Days);
-    const lastWeekProjects = projects.filter(p => p.created_date && new Date(fixTimestamp(p.created_date)) >= last14Days && new Date(fixTimestamp(p.created_date)) < last7Days);
-    
-    const thisWeekRevenue = thisWeekProjects.reduce((sum, p) => sum + projectValue(p), 0);
-    const lastWeekRevenue = lastWeekProjects.reduce((sum, p) => sum + projectValue(p), 0);
-    const totalRevenue = projects.reduce((sum, p) => sum + projectValue(p), 0);
-    
-    const revenueGrowth = lastWeekRevenue > 0 ? ((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue * 100).toFixed(1) : 0;
-    const projectsGrowth = lastWeekProjects.length > 0 ? ((thisWeekProjects.length - lastWeekProjects.length) / lastWeekProjects.length * 100).toFixed(1) : 0;
-    
-    const activeProjects = projects.filter(p => !["delivered"].includes(p.status));
-    const completedProjects = projects.filter(p => p.status === "delivered");
-    const completionRate = projects.length > 0 ? (completedProjects.length / projects.length * 100).toFixed(0) : 0;
-    
-    const completedThisWeek = completedProjects.filter(p => p.updated_date && new Date(fixTimestamp(p.updated_date)) >= last7Days).length;
-    const completedLastWeek = completedProjects.filter(p => p.updated_date && new Date(fixTimestamp(p.updated_date)) >= last14Days && new Date(fixTimestamp(p.updated_date)) < last7Days).length;
-    const completionTrend = completedLastWeek > 0 ? ((completedThisWeek - completedLastWeek) / completedLastWeek * 100).toFixed(1) : 0;
-
-    const averageValue = projects.length > 0 ? totalRevenue / projects.length : 0;
-    const deliveredWithDates = completedProjects.filter(p => p.created_date && p.updated_date);
-    const deliverySpeed = deliveredWithDates.length > 0
-      ? Math.round(deliveredWithDates.reduce((sum, p) => sum + differenceInDays(new Date(fixTimestamp(p.updated_date)), new Date(fixTimestamp(p.created_date))), 0) / deliveredWithDates.length)
-      : 0;
-
-    const totalSeconds = allTimeLogs.filter(l => l.created_date && new Date(fixTimestamp(l.created_date)) >= last7Days).reduce((sum, log) => sum + (log.total_seconds || 0), 0);
-    const estimatedSeconds = allTasks.reduce((sum, t) => sum + ((t.estimated_minutes || 0) * 60), 0);
-    const teamUtilization = estimatedSeconds > 0 ? Math.round((totalSeconds / estimatedSeconds) * 100) : 75;
-    
-    const overdueItems = allTasks.filter(t => !t.is_completed && t.due_date && new Date(fixTimestamp(t.due_date)) < now).length;
-
-    return {
-      totalRevenue,
-      revenueGrowth: parseFloat(revenueGrowth),
-      activeProjects: activeProjects.length,
-      projectsGrowth: parseFloat(projectsGrowth),
-      completionRate: parseFloat(completionRate),
-      completionTrend: parseFloat(completionTrend),
-      averageValue,
-      valueGrowth: 5.2,
-      deliverySpeed,
-      speedTrend: -1,
-      clientSatisfaction: 92,
-      satisfactionTrend: 3,
-      teamUtilization,
-      utilizationTrend: 2,
-      overdueItems,
-      overdueTrend: -2
-    };
-  }, [projects, allTasks, allTimeLogs]);
+  // Executive-level analytics - derives from `analytics` to avoid duplicating
+  // the same heavy filtering/reducing over projects, tasks, and time logs.
+  const executiveMetrics = useMemo(() => ({
+    totalRevenue: analytics.totalRevenue,
+    revenueGrowth: analytics.revenueGrowth,
+    activeProjects: analytics.activeProjectCount,
+    projectsGrowth: analytics.projectsGrowth,
+    completionRate: analytics.completionRate,
+    completionTrend: analytics.completionTrend,
+    averageValue: analytics.averageValue,
+    valueGrowth: 5.2,
+    deliverySpeed: analytics.deliverySpeed,
+    speedTrend: -1,
+    clientSatisfaction: analytics.clientSatisfaction,
+    satisfactionTrend: analytics.satisfactionTrend,
+    teamUtilization: analytics.teamUtilization,
+    utilizationTrend: analytics.utilizationTrend,
+    overdueItems: analytics.overdueItems,
+    overdueTrend: -2,
+  }), [analytics]);
 
   // Revenue breakdown by status
   const revenueBreakdown = useMemo(() => {
@@ -307,8 +280,16 @@ export default function Dashboard() {
       }
     });
 
+    // Pre-index tasks by assignee to avoid O(N*M) per-user filter
+    const tasksByAssignee = {};
+    allTasks.forEach(t => {
+      if (t.assigned_to) {
+        if (!tasksByAssignee[t.assigned_to]) tasksByAssignee[t.assigned_to] = [];
+        tasksByAssignee[t.assigned_to].push(t);
+      }
+    });
     Object.values(userStats).forEach(u => {
-      const userTasks = allTasks.filter(t => t.assigned_to === u.id);
+      const userTasks = tasksByAssignee[u.id] || [];
       const estimated = userTasks.reduce((sum, t) => sum + ((t.estimated_minutes || 0) * 60), 0);
       u.utilization = estimated > 0 ? Math.round((u.hoursLogged / estimated) * 100) : 0;
     });
@@ -466,7 +447,7 @@ export default function Dashboard() {
 
       {/* Dashboard Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">
-       <div className="sticky top-0 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
+       <div className="sticky top-14 lg:top-16 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
          <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap">
            <TabsTrigger 
              value="overview" 
@@ -767,7 +748,7 @@ function DashboardSkeleton() {
         </Card>
       </div>
       {/* Skeleton: Stats grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
         {Array(8).fill(0).map((_, i) => (
           <Card key={i} className="p-4">
             <div className="flex items-center justify-between mb-3">

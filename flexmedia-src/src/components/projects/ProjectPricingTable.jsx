@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { DollarSign, Plus, AlertCircle, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import Price from '@/components/common/Price';
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,6 +15,7 @@ import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
 import { writeFeedEvent } from "@/components/notifications/createNotification";
+import { toast } from "sonner";
 
 export default function ProjectPricingTable({ 
   project, 
@@ -41,7 +43,17 @@ export default function ProjectPricingTable({
   const [pendingCalcResult, setPendingCalcResult] = useState(null);
   // ^ holds the full backend calc result between step 1 (verify) and step 2 (confirm)
   const [currentPage, setCurrentPage] = useState(0);
+  const refreshTimerRef = useRef(null);
+  const debouncedTimerRef = useRef(null);
   const ITEMS_PER_PAGE = 10; // Pagination to reduce large renders
+
+  // Clean up pending timers on unmount to prevent setState-after-unmount
+  useEffect(() => {
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      if (debouncedTimerRef.current) clearTimeout(debouncedTimerRef.current);
+    };
+  }, []);
 
   const tierKey = pricingTier === "premium" ? "premium_tier" : "standard_tier";
 
@@ -132,6 +144,7 @@ export default function ProjectPricingTable({
       )
     }));
     setPendingTotal(null);
+    setCurrentPage(0);
   };
 
   const handleAddItem = (type, id) => {
@@ -172,6 +185,7 @@ export default function ProjectPricingTable({
     }
     setShowAddDialog(false);
     setPendingTotal(null);
+    setCurrentPage(0);
   };
 
   // Step 1 of save: verify with backend, show total in confirm dialog
@@ -229,7 +243,8 @@ export default function ProjectPricingTable({
         setError("Pricing verification failed. Please try again.");
       }
     } catch (err) {
-      setError(err.message || "Failed to verify pricing");
+      console.error("Pricing verification error:", err);
+      setError("Failed to verify pricing. Please try again.");
     } finally {
       setIsVerifying(false);
     }
@@ -341,15 +356,19 @@ export default function ProjectPricingTable({
 
       // Force entity cache refresh for tasks after backend sync completes
       // The sync is fire-and-forget so we delay to give it time to finish
-      setTimeout(() => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(() => {
         refetchEntityList('ProjectTask');
         refetchEntityList('Project');
+        refreshTimerRef.current = null;
       }, 2500);
-      
+
       setPendingTotal(null);
       setPendingCalcResult(null);
+      toast.success("Pricing saved successfully");
     } catch (err) {
-      setError(err.message || "Failed to save changes");
+      console.error("Pricing save error:", err);
+      setError("Failed to save pricing changes. Please try again.");
     } finally {
       setIsSaving(false);
     }
@@ -365,11 +384,16 @@ export default function ProjectPricingTable({
     setError(null);
   };
 
-  // Debounce qty changes to avoid excessive re-renders
+  // Debounce qty changes to avoid excessive re-renders.
+  // Uses a ref to hold the timer so it's properly cleaned up between calls
+  // and avoids capturing a stale handleUpdateQty in the closure.
   const debouncedUpdateQty = useCallback((productId, newQty) => {
-    const timer = setTimeout(() => handleUpdateQty(productId, newQty), 200);
-    return () => clearTimeout(timer);
-  }, []);
+    if (debouncedTimerRef.current) clearTimeout(debouncedTimerRef.current);
+    debouncedTimerRef.current = setTimeout(() => {
+      handleUpdateQty(productId, newQty);
+      debouncedTimerRef.current = null;
+    }, 200);
+  }, [allProducts, formState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Change detection
   const hasChanges = useMemo(() => {
@@ -557,7 +581,7 @@ export default function ProjectPricingTable({
                   </div>
                   <div className="text-right">
                     <p className="text-3xl font-bold text-primary font-mono">
-                      ${displayTotal.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      <Price value={displayTotal} />
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
                       {pricingTier === "premium" ? "Premium" : "Standard"} tier · Matrix-adjusted
@@ -598,7 +622,7 @@ export default function ProjectPricingTable({
                 <div className="rounded-lg border bg-primary/5 p-4 text-center">
                   <p className="text-xs text-muted-foreground mb-1">{pricingTier === "premium" ? "Premium" : "Standard"} tier · Matrix-adjusted</p>
                   <p className="text-3xl font-bold text-primary font-mono">
-                    ${(pendingTotal ?? 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <Price value={pendingTotal ?? 0} />
                   </p>
                 </div>
                 <p className="text-xs text-destructive/80 font-medium">

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,13 +24,14 @@ const REQUEST_KINDS = {
 };
 
 export default function RevisionTemplatesManagement() {
+  const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [deletingTemplate, setDeletingTemplate] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedIds, setExpandedIds] = useState({});
 
-  const { data: templates = [], loading: isLoading } = useEntityList("RevisionTemplate", "revision_type");
+  const { data: templates = [], loading } = useEntityList("RevisionTemplate", "revision_type");
 
   const saveMutation = useMutation({
     mutationFn: async (data) => {
@@ -40,6 +41,7 @@ export default function RevisionTemplatesManagement() {
       return api.entities.RevisionTemplate.create(data);
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['RevisionTemplate'] });
       toast.success(editingTemplate ? "Template updated" : "Template created");
       setShowDialog(false);
       setEditingTemplate(null);
@@ -50,6 +52,7 @@ export default function RevisionTemplatesManagement() {
   const deleteMutation = useMutation({
     mutationFn: (id) => api.entities.RevisionTemplate.delete(id),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['RevisionTemplate'] });
       toast.success("Template deleted");
       setDeletingTemplate(null);
     },
@@ -112,13 +115,13 @@ export default function RevisionTemplatesManagement() {
         </Button>
       </div>
 
-      {isLoading && (
+      {loading && (
         <div className="flex items-center justify-center py-12">
           <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-primary" />
         </div>
       )}
 
-      {!isLoading && filtered.length === 0 && (
+      {!loading && filtered.length === 0 && (
         <div className="text-center py-16 text-muted-foreground border rounded-xl border-dashed">
           <p className="font-medium">No {REQUEST_KINDS[activeKind]?.label} templates yet</p>
           <p className="text-sm mt-1">Create templates to standardize your request workflows.</p>

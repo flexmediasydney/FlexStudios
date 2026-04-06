@@ -27,16 +27,25 @@ export default function Login() {
       });
 
       if (authError) {
-        setError(authError.message);
+        console.error('Login auth error:', authError.message);
+        setError(authError.message === 'Invalid login credentials'
+          ? 'Incorrect email or password. Please try again.'
+          : 'Unable to sign in. Please check your credentials and try again.');
         setLoading(false);
         return;
       }
 
       // Redirect to the page they were trying to access, or dashboard
-      const redirect = searchParams.get('redirect') || '/';
+      // Validate redirect is a safe relative path (prevent open redirects)
+      setLoading(false);
+      let redirect = searchParams.get('redirect') || '/';
+      if (!redirect.startsWith('/') || redirect.startsWith('//')) {
+        redirect = '/';
+      }
       navigate(redirect, { replace: true });
     } catch (err) {
-      setError(err.message || 'An unexpected error occurred');
+      console.error('Login error:', err);
+      setError('Something went wrong. Please try again or contact support if the issue persists.');
       setLoading(false);
     }
   };

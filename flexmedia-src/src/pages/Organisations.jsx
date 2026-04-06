@@ -34,11 +34,13 @@ export default function Organisations() {
   const [view, setView] = useState('table');
   const [showForm, setShowForm] = useState(false);
   const [editingAgency, setEditingAgency] = useState(null);
+  const CARD_PAGE_SIZE = 60;
+  const [cardLimit, setCardLimit] = useState(CARD_PAGE_SIZE);
 
   const { data: agencies = [], loading } = useEntityList('Agency', 'name');
   const { data: teams = [] } = useEntityList('Team', 'name');
   const { data: agents = [] } = useEntityList('Agent', 'name');
-  const { data: projects = [] } = useEntityList('Project', null, 5000);
+  const { data: projects = [] } = useEntityList('Project', '-created_date', 1000);
 
   const teamsByAgency = useMemo(() => {
     const m = {};
@@ -207,26 +209,40 @@ export default function Organisations() {
               <div className="text-center py-16 text-muted-foreground">
                 <Building2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
                 <p className="font-medium">{search ? `No results for "${search}"` : 'No organisations found'}</p>
+                {search && (
+                  <Button variant="outline" size="sm" onClick={() => setSearch('')} className="mt-3">
+                    Clear search
+                  </Button>
+                )}
               </div>
             )}
-            {!loading && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {filtered.map(row => (
-                  <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
-                    onClick={() => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}>
-                    <AgencyHoverContent
-                      row={row}
-                      teams={teamsByAgency[row.id] || []}
-                      agentCount={(agentsByAgency[row.id] || []).length}
-                      revenue={revenueByAgency[row.id] || 0}
-                    />
-                    <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
-                      <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => { setEditingAgency(row); setShowForm(true); }}>Edit</Button>
-                      <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}>View</Button>
+            {!loading && filtered.length > 0 && (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {filtered.slice(0, cardLimit).map(row => (
+                    <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                      onClick={() => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}>
+                      <AgencyHoverContent
+                        row={row}
+                        teams={teamsByAgency[row.id] || []}
+                        agentCount={(agentsByAgency[row.id] || []).length}
+                        revenue={revenueByAgency[row.id] || 0}
+                      />
+                      <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
+                        <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => { setEditingAgency(row); setShowForm(true); }}>Edit</Button>
+                        <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}>View</Button>
+                      </div>
                     </div>
+                  ))}
+                </div>
+                {filtered.length > cardLimit && (
+                  <div className="flex justify-center pt-4">
+                    <Button variant="outline" size="sm" onClick={() => setCardLimit(prev => prev + CARD_PAGE_SIZE)}>
+                      Load more ({filtered.length - cardLimit} remaining)
+                    </Button>
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </>
         )}

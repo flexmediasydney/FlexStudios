@@ -1,7 +1,8 @@
 import { useState, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Edit, Trash2, Users, Search } from "lucide-react";
+import { Plus, Edit, Trash2, Users, Search, Star } from "lucide-react";
+import { useTeamRoleAssignments } from "@/components/hooks/useTeamRoleAssignments";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,6 +27,7 @@ export default function InternalTeamsManagement() {
     is_active: true
   });
   const [searchQuery, setSearchQuery] = useState("");
+  const { rolesByTeam } = useTeamRoleAssignments();
 
   const { data: teams = [] } = useQuery({
     queryKey: ["internal_teams"],
@@ -180,6 +182,7 @@ export default function InternalTeamsManagement() {
             <TableRow className="bg-muted/50">
               <TableHead className="font-semibold">Team Name</TableHead>
               <TableHead className="font-semibold">Description</TableHead>
+              <TableHead className="font-semibold">Roles</TableHead>
               <TableHead className="font-semibold">Members</TableHead>
               <TableHead className="font-semibold">Status</TableHead>
               <TableHead className="text-right font-semibold">Actions</TableHead>
@@ -188,7 +191,7 @@ export default function InternalTeamsManagement() {
           <TableBody>
             {filteredTeams.length === 0 ? (
               <TableRow>
-                <TableCell colSpan="5" className="text-center py-6 text-muted-foreground">
+                <TableCell colSpan="6" className="text-center py-6 text-muted-foreground">
                   {searchQuery ? "No teams match your search" : "No teams yet"}
                 </TableCell>
               </TableRow>
@@ -223,12 +226,28 @@ export default function InternalTeamsManagement() {
                       {team.description || "—"}
                     </TableCell>
                     <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {(rolesByTeam[team.id] || []).map(a => (
+                          <span
+                            key={a.role}
+                            className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-muted text-muted-foreground"
+                          >
+                            {(a.role || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                            {a.is_primary_fallback && <Star className="h-2.5 w-2.5 text-amber-500 fill-amber-500" />}
+                          </span>
+                        ))}
+                        {!(rolesByTeam[team.id]?.length) && (
+                          <span className="text-xs text-muted-foreground italic">None</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
                       <div className="flex items-center gap-2">
                         <Users className="h-4 w-4 text-muted-foreground" />
                         <span className="text-sm font-medium">{members.length}</span>
                         {members.length > 0 && (
                           <span className="text-xs text-muted-foreground">
-                            ({members.slice(0, 2).map(m => m.full_name.split(' ')[0]).join(", ")}{members.length > 2 ? "..." : ""})
+                            ({members.slice(0, 2).map(m => (m.full_name || '?').split(' ')[0]).join(", ")}{members.length > 2 ? "..." : ""})
                           </span>
                         )}
                       </div>

@@ -1,4 +1,5 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { MS_PER_DAY, MS_PER_MINUTE, GMAIL_DEFAULT_LOOKBACK_DAYS, GMAIL_HISTORY_FALLBACK_LOOKBACK_DAYS, GMAIL_LOOKBACK_MINUTES, MAX_MESSAGES_PER_SYNC } from '../_shared/constants.ts';
 
 // --- Agent lookup cache (per sync cycle, scoped per request to avoid leaking between concurrent requests) ---
 let agentCache = new Map<string, any>();
@@ -287,8 +288,8 @@ async function fullSync(
     const lastSyncDate = new Date(account.last_sync);
     // Normal: 30 min lookback. History fallback: 60 days lookback to catch missed messages
     const lookbackMs = isHistoryFallback
-      ? 60 * 24 * 60 * 60 * 1000
-      : 30 * 60 * 1000;
+      ? GMAIL_HISTORY_FALLBACK_LOOKBACK_DAYS * MS_PER_DAY
+      : GMAIL_LOOKBACK_MINUTES * MS_PER_MINUTE;
     const syncFromDate = new Date(lastSyncDate.getTime() - lookbackMs);
     const timestamp = Math.floor(syncFromDate.getTime() / 1000);
     query = `after:${timestamp}`;
@@ -300,12 +301,12 @@ async function fullSync(
     const timestamp = Math.floor(date.getTime() / 1000);
     query = `after:${timestamp}`;
   } else {
-    const defaultDays = isHistoryFallback ? 60 : 30;
-    const lookbackDate = new Date(Date.now() - defaultDays * 24 * 60 * 60 * 1000);
+    const defaultDays = isHistoryFallback ? GMAIL_HISTORY_FALLBACK_LOOKBACK_DAYS : GMAIL_DEFAULT_LOOKBACK_DAYS;
+    const lookbackDate = new Date(Date.now() - defaultDays * MS_PER_DAY);
     query = `after:${Math.floor(lookbackDate.getTime() / 1000)}`;
   }
 
-  const MAX_MESSAGES_PER_SYNC = 2000;
+  // MAX_MESSAGES_PER_SYNC imported from _shared/constants.ts
   let messageIds: any[] = [];
   let pageToken: string | null = null;
 

@@ -137,12 +137,15 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
     onSuccess: () => {
       refetchEntityList("Agent");
       refetchEntityList("AuditLog");
+      // Invalidate Client cache so ProjectForm sees the new agent when auto-creating client records
+      refetchEntityList("Client");
       toast.success(agent ? "Person updated" : "Person created");
       setFormData(INITIAL_STATE);
       onClose();
     },
     onError: (error) => {
-      toast.error(error.message || "Failed to save agent");
+      console.error("Save agent error:", error);
+      toast.error("Failed to save contact details. Please try again.");
     }
   });
 
@@ -311,10 +314,17 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
               min={7}
               max={365}
               value={formData.contact_frequency_days}
-              onChange={e => setFormData(prev => ({
-                ...prev,
-                contact_frequency_days: e.target.value ? parseInt(e.target.value) : ""
-              }))}
+              onChange={e => {
+                const raw = e.target.value;
+                if (raw === "" || raw === undefined) {
+                  setFormData(prev => ({ ...prev, contact_frequency_days: "" }));
+                  return;
+                }
+                const num = parseInt(raw);
+                if (isNaN(num)) return;
+                const clamped = Math.min(365, Math.max(7, num));
+                setFormData(prev => ({ ...prev, contact_frequency_days: clamped }));
+              }}
               placeholder="e.g. 30 for monthly, 90 for quarterly"
               className="h-8 text-sm mt-1"
             />

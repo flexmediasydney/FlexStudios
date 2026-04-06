@@ -108,6 +108,9 @@ const AuthenticatedApp = () => {
     if (authError.type === 'user_not_registered') {
       return <UserNotRegisteredError />;
     }
+    if (authError.type === 'user_deactivated') {
+      return <UserNotRegisteredError message="Your account has been deactivated. Please contact your administrator to restore access." />;
+    }
   }
 
   // Not authenticated — show login page

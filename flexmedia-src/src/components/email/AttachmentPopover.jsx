@@ -1,16 +1,16 @@
-import { 
-  FileIcon, 
-  Download, 
-  FileText, 
-  Image as ImageIcon, 
-  FileArchive, 
-  File 
+import {
+  FileIcon,
+  Download,
+  FileText,
+  Image as ImageIcon,
+  FileArchive,
+  File
 } from "lucide-react";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 export default function AttachmentPopover({ attachments }) {
   if (!attachments || attachments.length === 0) return null;
@@ -58,15 +58,15 @@ export default function AttachmentPopover({ attachments }) {
   };
 
   return (
-    <HoverCard>
-      <HoverCardTrigger asChild>
-        <button className="flex items-center gap-1 text-primary hover:opacity-75 transition-opacity cursor-pointer">
+    <Popover>
+      <PopoverTrigger asChild>
+        <button className="flex items-center gap-1 text-primary hover:opacity-75 transition-opacity cursor-pointer" aria-label={`${attachments.length} attachment${attachments.length !== 1 ? 's' : ''}`}>
           <FileIcon className="h-4 w-4" />
           <span className="text-xs font-medium">{attachments.length}</span>
         </button>
-      </HoverCardTrigger>
-      <HoverCardContent className="w-64 p-2">
-        <div className="space-y-1">
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-2">
+        <div className="space-y-1 max-h-64 overflow-y-auto">
           {attachments.map((att, idx) => {
             const { icon: Icon, color } = getFileIcon(att.filename, att.mime_type);
             return (
@@ -87,7 +87,7 @@ export default function AttachmentPopover({ attachments }) {
             );
           })}
         </div>
-      </HoverCardContent>
-    </HoverCard>
+      </PopoverContent>
+    </Popover>
   );
 }

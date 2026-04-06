@@ -27,7 +27,7 @@ Deno.serve(async (req) => {
 
     // 3. All tasks must be completed or deleted
     const tasks = await entities.ProjectTask.filter({ project_id }, null, 500).catch(() => [] as any[]);
-    const incompleteTasks = tasks.filter((t: any) => !t.is_completed && !t.is_deleted);
+    const incompleteTasks = tasks.filter((t: any) => !t.is_completed && !t.is_deleted && !t.is_archived);
     if (incompleteTasks.length > 0) {
       return jsonResponse({
         archived: false, reason: 'incomplete_tasks',
@@ -98,6 +98,8 @@ Deno.serve(async (req) => {
         await entities.Notification.create({
           user_id: ownerId,
           type: 'project_archived',
+          category: 'project',
+          severity: 'info',
           title: `Project archived: ${project.title || project.property_address}`,
           message: `All deliverables complete, payment received. Project has been automatically archived.`,
           project_id,
@@ -105,10 +107,14 @@ Deno.serve(async (req) => {
           entity_type: 'project',
           entity_id: project_id,
           cta_url: 'ProjectDetails',
+          cta_label: 'View Project',
           cta_params: JSON.stringify({ id: project_id }),
+          source: 'system',
           source_user_id: null,
           is_read: false,
+          is_dismissed: false,
           idempotency_key: `archived:${project_id}`,
+          created_date: new Date().toISOString(),
         });
       }
     } catch { /* non-fatal */ }

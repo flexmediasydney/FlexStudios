@@ -215,7 +215,7 @@ export default function UnifiedNoteComposer({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const bg = isReply ? 'bg-white border border-gray-200' : 'bg-yellow-50 border border-yellow-200';
+  const bg = isReply ? 'bg-background border border-border' : 'bg-yellow-50 border border-yellow-200 dark:bg-yellow-950/30 dark:border-yellow-800';
   const minH = isReply ? 'min-h-[60px]' : 'min-h-[100px]';
   const dividerCls = isReply ? 'border-gray-100' : 'border-yellow-100';
 
@@ -262,7 +262,7 @@ export default function UnifiedNoteComposer({
         {mentionQuery && filteredUsers.length > 0 && (
           <div
             ref={mentionDropRef}
-            className="absolute z-50 bg-white border rounded-lg shadow-lg min-w-[200px] py-1"
+            className="absolute z-50 bg-popover border rounded-lg shadow-lg min-w-[200px] py-1"
             style={{ top: mentionPos.top, left: mentionPos.left }}
           >
             {filteredUsers.map(u => (
@@ -335,7 +335,7 @@ export default function UnifiedNoteComposer({
         >
           <Paperclip className="h-3.5 w-3.5" />
         </button>
-        <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileInput} />
+        <input ref={fileInputRef} type="file" multiple className="hidden" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip" onChange={handleFileInput} />
 
         <div className="flex-1" />
         <Button variant="ghost" size="sm" onClick={handleCancel} className="h-7 text-xs text-muted-foreground">

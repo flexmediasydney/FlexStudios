@@ -266,10 +266,10 @@ export default function HierarchyTableView({
 
       {/* Table */}
       <div className="border rounded-xl overflow-hidden bg-card shadow-sm">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/30">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b bg-muted/30 bg-card">
                 {/* Checkbox column */}
                 {toggleSelectAgent && (
                   <th className="w-10 px-3 py-2.5">

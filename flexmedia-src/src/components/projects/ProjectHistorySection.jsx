@@ -96,11 +96,11 @@ export default function ProjectHistorySection({ projectId }) {
                 <div className="w-0.5 h-12 bg-gray-200 mt-2" />
               </div>
               <div className="pt-1 flex-1">
-                <p className="text-sm font-medium text-gray-900">
+                <p className="text-sm font-medium text-foreground">
                   {fmtTimestampCustom(item.timestamp, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })} • {item.author}
                 </p>
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-2">
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{item.content}</p>
+                  <p className="text-sm text-foreground/80 whitespace-pre-wrap">{item.content}</p>
                 </div>
               </div>
             </div>

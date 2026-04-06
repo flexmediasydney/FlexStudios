@@ -39,11 +39,11 @@ export default function QuickStatsBar({ projects = [], tasks = [] }) {
 
       <div className={`bg-gradient-to-br ${overdueTasks > 0 ? 'from-red-50 to-red-100/50 border-red-200/50' : 'from-gray-50 to-gray-100/50 border-gray-200/50'} border rounded-lg p-4 shadow-xs`}>
       <div className="flex items-center gap-2 mb-1">
-        <AlertCircle className={`h-4 w-4 ${overdueTasks > 0 ? 'text-red-600' : 'text-gray-600'}`} />
-        <span className={`text-xs font-semibold ${overdueTasks > 0 ? 'text-red-600' : 'text-gray-600'} uppercase tracking-wide`}>Overdue</span>
+        <AlertCircle className={`h-4 w-4 ${overdueTasks > 0 ? 'text-red-600' : 'text-muted-foreground'}`} />
+        <span className={`text-xs font-semibold ${overdueTasks > 0 ? 'text-red-600' : 'text-muted-foreground'} uppercase tracking-wide`}>Overdue</span>
       </div>
-      <div className={`text-2xl font-bold ${overdueTasks > 0 ? 'text-red-900' : 'text-gray-900'}`}>{overdueTasks}</div>
-      <p className={`text-xs ${overdueTasks > 0 ? 'text-red-600/70' : 'text-gray-600/70'} mt-1`}>{overdueTasks === 1 ? 'task' : 'tasks'} overdue</p>
+      <div className={`text-2xl font-bold ${overdueTasks > 0 ? 'text-red-900' : 'text-foreground'}`}>{overdueTasks}</div>
+      <p className={`text-xs ${overdueTasks > 0 ? 'text-red-600/70' : 'text-muted-foreground/70'} mt-1`}>{overdueTasks === 1 ? 'task' : 'tasks'} overdue</p>
       </div>
     </div>
   );

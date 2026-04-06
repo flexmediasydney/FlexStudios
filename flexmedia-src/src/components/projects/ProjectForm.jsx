@@ -43,7 +43,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
     agent_id: "",
     agency_id: "",
     property_address: "",
-    status: "inquiry",
+    status: "to_be_scheduled",
     products: [],
     packages: [],
     shoot_date: "",
@@ -60,6 +60,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
   useEffect(() => {
     latestAgentRef.current = { agent_id: formData.agent_id, agency_id: formData.agency_id };
   }, [formData.agent_id, formData.agency_id]);
+  const refreshTimerRef = useRef(null);
   const [titleOverride, setTitleOverride] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
@@ -67,6 +68,11 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
   const [initialFormData, setInitialFormData] = useState(project || {});
   const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(null);
   const [saveError, setSaveError] = useState(null);
+
+  // Clean up pending timers on unmount to prevent setState-after-unmount
+  useEffect(() => () => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+  }, []);
 
   // Monitor escape key for unsaved changes warning
   useEscapeKeyWarning(unsavedChanges);
@@ -259,13 +265,19 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         client_id: clientId || "",
         client_name: agent?.name || "",
       };
-      // Recalculate with fresh agent/agency using current products/packages
+      // Recalculate with fresh agent/agency using current products/packages.
+      // Catch to prevent unhandled promise rejection from async recalculate.
       if (agentId && (prev.products.length > 0 || prev.packages.length > 0)) {
-        recalculatePricing(agentId, agent?.current_agency_id, prev.products, prev.packages, prev.pricing_tier);
+        recalculatePricing(agentId, agent?.current_agency_id, prev.products, prev.packages, prev.pricing_tier)
+          .catch(err => console.error('Pricing recalculation failed:', err));
       }
       return updated;
     });
   };
+
+  // Ref to always have the latest project_type_id for async pricing calls
+  const latestProjectTypeRef = useRef(formData.project_type_id);
+  useEffect(() => { latestProjectTypeRef.current = formData.project_type_id; }, [formData.project_type_id]);
 
   const recalculatePricing = async (agentId, agencyId, prodList, pkgList, tier) => {
     if (prodList.length === 0 && pkgList.length === 0) {
@@ -281,7 +293,8 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         products: prodList.map(p => ({ product_id: p.product_id || p, quantity: p.quantity || 1 })),
         packages: pkgList.map(p => ({ package_id: p.package_id || p, quantity: p.quantity || 1, products: p.products || [] })),
         pricing_tier: tier,
-        project_type_id: formData.project_type_id || null
+        // Use ref to avoid stale closure — formData.project_type_id may be outdated
+        project_type_id: latestProjectTypeRef.current || null
       });
 
       if (response.data.success) {
@@ -571,10 +584,13 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         }
       }
 
-        // Force entity cache refresh for tasks after backend sync completes
-        setTimeout(() => {
+        // Force entity cache refresh for tasks after backend sync completes.
+        // Use a ref so the timer is cleaned up if the component unmounts.
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => {
           refetchEntityList('ProjectTask');
           refetchEntityList('Project');
+          refreshTimerRef.current = null;
         }, 2500);
       }
 
@@ -585,7 +601,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
       setUnsavedChanges(false);
        toast.success(project ? 'Project saved successfully' : 'Project created successfully');
        announceToScreenReader(project ? 'Project saved successfully' : 'Project created successfully');
-       onSave();
+       onSave({ id: projectId, isNew: !project?.id });
       } catch (err) {
        console.error('Failed to save project:', err);
        setSaving(false);
@@ -597,11 +613,11 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-4" onKeyDown={(e) => {
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0" onKeyDown={(e) => {
         if (e.key === 'Escape') onClose();
         if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSubmit(e); }
       }}>
-        <DialogHeader className="pb-3 border-b">
+        <DialogHeader className="pb-3 border-b flex-shrink-0 px-4 pt-4">
           <DialogTitle className="text-xl font-bold flex items-center justify-between">
             <span className="flex items-center gap-2">
               {project ? (
@@ -623,7 +639,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
           </p>
         </DialogHeader>
         
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4 flex-1 overflow-y-auto px-4 pb-4">
            {/* Address */}
                <div>
                  <Label className="text-sm font-medium flex items-center gap-1.5">
@@ -1175,7 +1191,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
             />
           )}
           
-          <DialogFooter className="pt-4 border-t gap-2 flex-col sm:flex-row">
+          <DialogFooter className="pt-4 border-t gap-2 flex-col sm:flex-row sticky bottom-0 bg-background pb-1">
             <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={saving}>
               Cancel
             </Button>

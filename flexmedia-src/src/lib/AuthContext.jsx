@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback, useRef, useMemo } from 'react';
 import { supabase, supabaseAdmin } from '@/api/supabaseClient';
 
 const AuthContext = createContext();
@@ -27,6 +27,9 @@ export const AuthProvider = ({ children }) => {
 
       if (error || !appUser) {
         setAuthError({ type: 'user_not_registered', message: 'User not registered for this app' });
+        setIsAuthenticated(false);
+      } else if (appUser.is_active === false) {
+        setAuthError({ type: 'user_deactivated', message: 'Your account has been deactivated. Please contact your administrator.' });
         setIsAuthenticated(false);
       } else {
         setUser(appUser);
@@ -87,31 +90,55 @@ export const AuthProvider = ({ children }) => {
     };
   }, [fetchAppUser]);
 
-  const logout = async (shouldRedirect = true) => {
+  const logout = useCallback(async (shouldRedirect = true) => {
     setUser(null);
     setIsAuthenticated(false);
     await supabase.auth.signOut();
     if (shouldRedirect) {
       window.location.href = '/login';
     }
-  };
+  }, []);
 
-  const navigateToLogin = () => {
+  const navigateToLogin = useCallback(() => {
     window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`;
-  };
+  }, []);
+
+  // Allow manual retry of user fetch — clears the error state and re-fetches
+  const retryFetchUser = useCallback(async () => {
+    setAuthError(null);
+    setIsLoadingAuth(true);
+    fetchingRef.current = false; // Reset guard so fetchAppUser can run again
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        await fetchAppUser(session.user);
+      } else {
+        setIsLoadingAuth(false);
+        setAuthError({ type: 'no_session', message: 'No active session. Please log in.' });
+      }
+    } catch (err) {
+      setIsLoadingAuth(false);
+      setAuthError({ type: 'unknown', message: err.message || 'Retry failed' });
+    }
+  }, [fetchAppUser]);
+
+  // Memoize context value to prevent unnecessary re-renders of all consumers
+  // when AuthProvider re-renders but none of the auth state actually changed.
+  const contextValue = useMemo(() => ({
+    user,
+    isAuthenticated,
+    isLoadingAuth,
+    isLoadingPublicSettings: false,
+    authError,
+    appPublicSettings: null,
+    logout,
+    navigateToLogin,
+    retryFetchUser,
+    checkAppState: () => window.location.reload(),
+  }), [user, isAuthenticated, isLoadingAuth, authError, logout, navigateToLogin, retryFetchUser]);
 
   return (
-    <AuthContext.Provider value={{
-      user,
-      isAuthenticated,
-      isLoadingAuth,
-      isLoadingPublicSettings: false,
-      authError,
-      appPublicSettings: null,
-      logout,
-      navigateToLogin,
-      checkAppState: () => window.location.reload(),
-    }}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

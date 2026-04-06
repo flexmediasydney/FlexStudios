@@ -104,11 +104,13 @@ export default function ChatMessage({ message, currentUserEmail, onPin, onDelete
               <div key={idx}>
                 {isImage ? (
                   <div className="rounded-lg overflow-hidden max-w-xs bg-muted">
-                    <img 
-                      src={attachment.file_url} 
-                      alt={attachment.file_name}
+                    <img
+                      src={attachment.file_url}
+                      alt={attachment.file_name || 'Attached image'}
+                      loading="lazy"
                       className="w-full h-auto max-h-64 object-cover cursor-pointer hover:opacity-90"
                       onClick={() => window.open(attachment.file_url, '_blank')}
+                      onError={(e) => { e.target.style.display = 'none'; }}
                     />
                   </div>
                 ) : (

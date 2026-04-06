@@ -36,7 +36,7 @@ const STATE_BADGE = {
 };
 
 const STAGES = [
-  { key: 'to_be_scheduled', color: 'bg-gray-300' },
+  { key: 'to_be_scheduled', color: 'bg-muted-foreground/40' },
   { key: 'scheduled',       color: 'bg-blue-400' },
   { key: 'onsite',          color: 'bg-orange-400' },
   { key: 'uploaded',        color: 'bg-yellow-400' },
@@ -48,7 +48,7 @@ const STAGES = [
 ];
 
 const STATUS_BORDER = {
-  to_be_scheduled: 'border-l-gray-300',
+  to_be_scheduled: 'border-l-muted-foreground/30',
   scheduled: 'border-l-blue-400',
   onsite: 'border-l-orange-400',
   uploaded: 'border-l-yellow-400',
@@ -174,11 +174,6 @@ function PipelineBar({ status }) {
 }
 
 function MiniProjectCard({ project }) {
-  const wonProjects = [project].filter(p => p.outcome === 'won');
-  const lostProjects = [project].filter(p => p.outcome === 'lost');
-  const totalClosed = wonProjects.length + lostProjects.length;
-  const winRate = totalClosed > 0 ? Math.round((wonProjects.length / totalClosed) * 100) : null;
-
   return (
     <Link
       to={createPageUrl(`ProjectDetails?id=${project.id}`)}
@@ -189,6 +184,11 @@ function MiniProjectCard({ project }) {
           <ProjectStatusBadge status={project.status} />
           <p className="text-xs font-medium text-foreground mt-1 truncate">{project.title}</p>
         </div>
+        {project.outcome && (
+          <Badge className={`text-[9px] shrink-0 ${project.outcome === 'won' ? 'bg-green-100 text-green-700 border-green-200' : project.outcome === 'lost' ? 'bg-red-100 text-red-700 border-red-200' : 'bg-muted text-muted-foreground'}`}>
+            {project.outcome}
+          </Badge>
+        )}
       </div>
       <PipelineBar status={project.status} />
       <div className="flex justify-between text-[10px] text-muted-foreground mt-1.5">
@@ -202,24 +202,6 @@ function MiniProjectCard({ project }) {
           </span>
         ) : null}
       </div>
-      {winRate !== null && (
-        <div className="mt-2 pt-2 border-t border-border/30">
-          <div className="flex items-center justify-between text-[10px] mb-1">
-            <span className="text-muted-foreground">
-              {wonProjects.length}W / {lostProjects.length}L
-            </span>
-            <span className="font-medium text-green-600">{winRate}%</span>
-          </div>
-          <div className="w-full bg-muted rounded-full h-1">
-            {wonProjects.length > 0 && (
-              <div
-                className="h-1 bg-green-500 rounded-full"
-                style={{ width: `${winRate}%` }}
-              />
-            )}
-          </div>
-        </div>
-      )}
     </Link>
   );
 }
@@ -275,7 +257,7 @@ function ActivityFeed({ interactions, projects }) {
               <div className="flex-1 min-w-0">
                 <p className="text-foreground font-medium">{proj.title}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Status changed to <span className="font-medium capitalize">{proj.status.replace(/_/g, ' ')}</span>
+                  Status changed to <span className="font-medium capitalize">{(proj.status || '').replace(/_/g, ' ')}</span>
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {formatRelative(fixTimestamp(proj.last_status_change))}
@@ -284,6 +266,7 @@ function ActivityFeed({ interactions, projects }) {
             </div>
           );
         }
+        return null;
       })}
     </div>
   );
@@ -419,7 +402,7 @@ export default function PersonDetails() {
     return (
       <div className="flex flex-col h-[calc(100vh-4rem)] lg:h-screen overflow-hidden bg-background">
         <div className="flex items-center gap-3 px-5 py-3 border-b bg-card shrink-0 shadow-sm">
-          <div className="h-8 w-8 rounded-md bg-muted animate-pulse" />
+          <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
           <div className="w-px h-5 bg-border" />
           <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
           <div className="h-5 w-48 rounded bg-muted animate-pulse" />
@@ -480,7 +463,7 @@ export default function PersonDetails() {
         </div>
 
         {agent.relationship_state && (
-          <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+          <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-muted text-muted-foreground'}`}>
             {agent.relationship_state}
           </Badge>
         )}
@@ -588,7 +571,7 @@ export default function PersonDetails() {
                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">
                      State
                    </p>
-                   <Badge className={`text-[10px] border ${STATE_BADGE[agent.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+                   <Badge className={`text-[10px] border ${STATE_BADGE[agent.relationship_state] || 'bg-muted text-muted-foreground'}`}>
                      {agent.relationship_state || 'Unknown'}
                    </Badge>
                  </div>
@@ -684,7 +667,7 @@ export default function PersonDetails() {
                   {projects.slice(0, 10).map(proj => {
                     const price = proj.calculated_price || proj.price;
                     return (
-                      <div key={proj.id} className={`rounded-lg border-l-4 border border-l-current bg-background p-2.5 hover:shadow-md hover:bg-muted/20 transition-all duration-200 group ${STATUS_BORDER[proj.status] || 'border-l-gray-300'}`}>
+                      <div key={proj.id} className={`rounded-lg border-l-4 border border-l-current bg-background p-2.5 hover:shadow-md hover:bg-muted/20 transition-all duration-200 group ${STATUS_BORDER[proj.status] || 'border-l-muted-foreground/30'}`}>
                         <Link
                           to={createPageUrl("ProjectDetails") + `?id=${proj.id}`}
                           className="text-xs font-semibold hover:text-primary line-clamp-2 leading-tight block group-hover:text-primary transition-colors"
@@ -700,7 +683,7 @@ export default function PersonDetails() {
                           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
                             {proj.status?.replace(/_/g, ' ').toUpperCase()}
                           </span>
-                          {price && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
+                          {price > 0 && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
                         </div>
                         {(proj.shoot_date || proj.delivery_date) && (
                           <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">

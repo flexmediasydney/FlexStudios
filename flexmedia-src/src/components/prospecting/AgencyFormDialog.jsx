@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -40,6 +40,38 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
   });
 
   const [errors, setErrors] = useState({});
+
+  // Reset form state when dialog opens or agency changes
+  useEffect(() => {
+    if (open) {
+      setFormData({
+        name: agency?.name || '',
+        relationship_state: agency?.relationship_state || 'Prospecting',
+        email: agency?.email || '',
+        phone: agency?.phone || '',
+        address: agency?.address || '',
+        notes: agency?.notes || '',
+        onboarding_date: agency?.onboarding_date || '',
+        became_active_date: agency?.became_active_date || '',
+        became_dormant_date: agency?.became_dormant_date || '',
+        pricing_agreement: agency?.pricing_agreement || '',
+        pricing_notes: agency?.pricing_notes || '',
+        floorplan_template: agency?.floorplan_template || '',
+        branding_notes: agency?.branding_notes || '',
+        drone_template: agency?.drone_template || '',
+        drone_branding_notes: agency?.drone_branding_notes || '',
+        video_branding: agency?.video_branding || '',
+        video_music_preference: agency?.video_music_preference || '',
+        video_branding_notes: agency?.video_branding_notes || '',
+        primary_marketing_contact: agency?.primary_marketing_contact || '',
+        primary_accounts_contact: agency?.primary_accounts_contact || '',
+        primary_partner: agency?.primary_partner || '',
+        whatsapp_group_chat: agency?.whatsapp_group_chat || ''
+      });
+      setErrors({});
+      setError(null);
+    }
+  }, [open, agency?.id]);
 
   const validate = () => {
     const newErrors = {};
@@ -84,7 +116,8 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
       onOpenChange(false);
       if (onSuccess) onSuccess();
     } catch (err) {
-      setError(err.message || 'Failed to save agency');
+      console.error('Save agency error:', err);
+      setError('Failed to save agency. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -118,6 +151,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                     setFormData(prev => ({ ...prev, name: e.target.value }));
                     if (errors.name) setErrors(prev => ({ ...prev, name: null }));
                   }}
+                  maxLength={120}
                   className={errors.name ? 'border-red-500' : ''}
                   placeholder="Agency name"
                 />
@@ -132,6 +166,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                     type="email"
                     value={formData.email}
                     onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                    maxLength={100}
                     placeholder="contact@agency.com"
                   />
                 </div>
@@ -142,6 +177,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                     type="tel"
                     value={formData.phone}
                     onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                    maxLength={30}
                     placeholder="+61 2 1234 5678"
                   />
                 </div>
@@ -153,6 +189,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                   id="address"
                   value={formData.address}
                   onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
+                  maxLength={255}
                   placeholder="Street address"
                 />
               </div>
@@ -307,6 +344,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                   value={formData.video_branding_notes}
                   onChange={(e) => setFormData(prev => ({ ...prev, video_branding_notes: e.target.value }))}
                   placeholder="Video requirements and preferences"
+                  maxLength={2000}
                   rows={2}
                 />
               </div>
@@ -334,6 +372,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                   value={formData.pricing_notes}
                   onChange={(e) => setFormData(prev => ({ ...prev, pricing_notes: e.target.value }))}
                   placeholder="Special pricing terms, volume discounts, etc."
+                  maxLength={2000}
                   rows={2}
                 />
               </div>
@@ -348,6 +387,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
               value={formData.notes}
               onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
               placeholder="Add any additional notes about this agency..."
+              maxLength={2000}
               rows={3}
             />
           </div>
@@ -364,7 +404,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
             </Button>
             <Button
               type="submit"
-              disabled={loading}
+              disabled={loading || !formData.name?.trim()}
               className="gap-2"
             >
               {loading ? (

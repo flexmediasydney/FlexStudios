@@ -106,8 +106,10 @@ export function CountdownTimer({ dueDate, compact = false, thresholds }) {
 }
 
 export function CompletionTimer({ dueDate, completedDate }) {
+  if (!dueDate || !completedDate) return <span className="text-xs text-muted-foreground">—</span>;
   const due = new Date(dueDate);
   const completed = new Date(completedDate);
+  if (isNaN(due.getTime()) || isNaN(completed.getTime())) return <span className="text-xs text-muted-foreground">—</span>;
   const absSeconds = Math.abs(differenceInSeconds(completed, due));
   const days = Math.floor(absSeconds / 86400);
   const hours = Math.floor((absSeconds % 86400) / 3600);
@@ -277,10 +279,19 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   const UPLOADED_STAGES_FOR_CREATE = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
 
   const createMutation = useMutation({
-    mutationFn: (data) => api.entities.ProjectTask.create({ ...data, project_id: projectId, order: Date.now() }),
+    mutationFn: (data) => {
+      const cleaned = { ...data, project_id: projectId, order: Date.now() };
+      // Remove empty string fields that would fail as UUIDs in PostgREST
+      if (!cleaned.assigned_to) delete cleaned.assigned_to;
+      if (!cleaned.assigned_to_name) delete cleaned.assigned_to_name;
+      if (!cleaned.due_date) delete cleaned.due_date;
+      return api.entities.ProjectTask.create(cleaned);
+    },
     onSuccess: (created, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       setShowAddDialog(false);
-      setNewTask({ title: "", description: "" });
+      setNewTask({ title: "", description: "", task_type: "back_office", assigned_to: "", assigned_to_name: "", due_date: null });
       logActivity('task_added', `Task added: "${variables.title}"`);
 
       // Notify the assignee if it's a specific user (not the person creating the task)
@@ -353,6 +364,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       return api.entities.ProjectTask.update(id, data);
     },
     onSuccess: async (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       scheduleDeadlineSync(projectId, 'task_update');
       setEditingTask(null);
       toast.success("Task saved");
@@ -383,10 +396,11 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       }
     },
     onError: (err) => {
+      console.error("Task update error:", err);
       if (err?.message?.includes('ircular') || err?.message?.includes('loop')) {
-        toast.error(err.message);
+        toast.error("This change would create a circular dependency. Please review the task relationships.");
       } else {
-        toast.error(err?.message || "Failed to update task");
+        toast.error("Failed to update task. Please try again.");
       }
     },
   });
@@ -403,6 +417,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       await api.entities.ProjectTask.update(id, { is_deleted: true });
     },
     onSuccess: async (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
       logActivity('task_deleted', `Task deleted: "${deleteConfirm?.title || ''}"`);
 
       // Clean up dependency references: remove deleted task ID from all dependents
@@ -489,7 +505,9 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     }
 
     try {
-      await api.entities.ProjectTask.update(task.id, { is_completed: !task.is_completed });
+      await api.entities.ProjectTask.update(task.id, { is_completed: !task.is_completed, completed_at: !task.is_completed ? new Date().toISOString() : null });
+      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+      toast.success(task.is_completed ? 'Task re-opened' : 'Task completed');
       logActivity(
         task.is_completed ? 'task_added' : 'task_completed',
         task.is_completed
@@ -535,7 +553,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
       scheduleDeadlineSync(projectId, 'task_completed');
     } catch (err) {
-      toast.error(err.message || "Failed to update task");
+      console.error("Task update error:", err);
+      toast.error("Failed to update task. Please try again.");
     }
   };
 
@@ -624,15 +643,18 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       )}
 
       {/* Add Task Dialog */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+      <Dialog open={showAddDialog} onOpenChange={(open) => {
+        setShowAddDialog(open);
+        if (!open) setNewTask({ title: "", description: "", task_type: "back_office", assigned_to: "", assigned_to_name: "", due_date: null });
+      }}>
         <DialogContent className="max-w-md" onKeyDown={(e) => {
           if (e.key === 'Escape') setShowAddDialog(false);
           if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (newTask.title?.trim()) createMutation.mutate({ ...newTask, task_type: newTask.task_type || "back_office" }); }
         }}>
           <DialogHeader><DialogTitle>Add Task</DialogTitle></DialogHeader>
           <div className="space-y-3">
-             <Input placeholder="Task title *" value={newTask.title} onChange={e => setNewTask(p => ({ ...p, title: e.target.value }))} autoFocus />
-             <Textarea placeholder="Description (optional)" value={newTask.description || ""} onChange={e => setNewTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} />
+             <Input placeholder="Task title *" value={newTask.title} onChange={e => setNewTask(p => ({ ...p, title: e.target.value }))} autoFocus aria-label="Task title" disabled={createMutation.isPending} />
+             <Textarea placeholder="Description (optional)" value={newTask.description || ""} onChange={e => setNewTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} aria-label="Task description" disabled={createMutation.isPending} />
              <p className="text-xs text-muted-foreground text-right">{(newTask.description || "").length}/500</p>
              <div>
                <label className="text-xs font-medium block mb-1.5">Task Type</label>
@@ -688,8 +710,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
           <DialogContent className="max-w-md">
             <DialogHeader><DialogTitle>Edit Task</DialogTitle></DialogHeader>
             <div className="space-y-3">
-               <Input value={editingTask.title || ""} onChange={e => setEditingTask(p => ({ ...p, title: e.target.value }))} />
-               <Textarea value={editingTask.description || ""} onChange={e => setEditingTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} />
+               <Input value={editingTask.title || ""} onChange={e => setEditingTask(p => ({ ...p, title: e.target.value }))} disabled={updateMutation.isPending} aria-label="Task title" />
+               <Textarea value={editingTask.description || ""} onChange={e => setEditingTask(p => ({ ...p, description: e.target.value }))} rows={2} maxLength={500} disabled={updateMutation.isPending} aria-label="Task description" />
                <p className="text-xs text-muted-foreground text-right">{(editingTask.description || "").length}/500</p>
                <div>
                  <label className="text-xs font-medium block mb-1.5">Task Type</label>
@@ -776,7 +798,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
               </Popover>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setEditingTask(null)}>Cancel</Button>
+              <Button variant="outline" onClick={() => setEditingTask(null)} disabled={updateMutation.isPending}>Cancel</Button>
               <Button 
                 disabled={!editingTask?.title?.trim() || updateMutation.isPending} 
                 onClick={() => editingTask && updateMutation.mutate({ id: editingTask.id, data: { title: editingTask.title, description: editingTask.description, task_type: editingTask.task_type || "back_office", assigned_to: editingTask.assigned_to, assigned_to_name: editingTask.assigned_to_name, assigned_to_team_id: editingTask.assigned_to_team_id, assigned_to_team_name: editingTask.assigned_to_team_name, due_date: editingTask.due_date, depends_on_task_ids: editingTask.depends_on_task_ids || [], is_manually_set_due_date: !!editingTask.due_date } })}
@@ -799,8 +821,9 @@ export default function TaskManagement({ projectId, project, canEdit }) {
             : "This task will be permanently deleted."
         }
         confirmText={deleteMutation.isPending ? "Deleting…" : "Delete"}
-        onConfirm={() => deleteConfirm && deleteMutation.mutate(deleteConfirm.id)}
-        onCancel={() => setDeleteConfirm(null)}
+        confirmDisabled={deleteMutation.isPending}
+        onConfirm={() => deleteConfirm && !deleteMutation.isPending && deleteMutation.mutate(deleteConfirm.id)}
+        onCancel={() => { if (!deleteMutation.isPending) setDeleteConfirm(null); }}
       />
     </div>
   );

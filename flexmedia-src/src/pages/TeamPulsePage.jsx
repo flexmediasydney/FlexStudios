@@ -303,7 +303,7 @@ function LiveFeedView({ events, loading, paused, onTogglePause, newCount }) {
                     {event.actor_name && (
                       <div className="flex items-center gap-1.5 ml-auto bg-muted/40 px-2 py-0.5 rounded-full">
                         <div className="w-5 h-5 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 flex items-center justify-center
-                          text-[9px] font-bold text-slate-700 shrink-0 shadow-sm">
+                          text-[9px] font-bold text-foreground/80 shrink-0 shadow-sm">
                           {getInitials(event.actor_name)}
                         </div>
                         <span className="text-[10px] text-muted-foreground font-medium">{event.actor_name.split(" ")[0]}</span>
@@ -695,7 +695,7 @@ function StatsView({ events, users }) {
               : byActor.map(([name, count]) => (
                   <div key={name} className="flex items-center gap-2 text-xs">
                     <div className="w-5 h-5 rounded-full bg-slate-200 flex items-center justify-center
-                      text-[9px] font-bold text-slate-600 shrink-0">
+                      text-[9px] font-bold text-muted-foreground shrink-0">
                       {getInitials(name)}
                     </div>
                     <span className="flex-1 text-muted-foreground truncate">{name.split(" ")[0]}</span>

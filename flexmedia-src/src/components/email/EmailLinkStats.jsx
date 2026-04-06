@@ -66,6 +66,7 @@ export default function EmailLinkStats({ messageBody, messageId }) {
                       <Badge
                         variant="secondary"
                         className="absolute -top-2 -right-2 h-5 w-5 p-0 flex items-center justify-center text-xs cursor-help"
+                        aria-label={`${link.count} click${link.count !== 1 ? 's' : ''} on this link`}
                       >
                         {link.count}
                       </Badge>

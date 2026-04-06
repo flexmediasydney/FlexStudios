@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { format } from "date-fns";
 import { Camera, Calendar, Database, ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { useState } from "react";
@@ -18,7 +18,8 @@ export default function PriceMatrixSnapshots() {
     mutationFn: () => api.functions.invoke("generateMonthlyPriceMatrixSnapshots", {}),
     onSuccess: () => {
       toast.success("Snapshot created successfully");
-      queryClient.invalidateQueries({ queryKey: ["price-matrix-snapshots"] });
+      // PriceMatrixSnapshot data is loaded via useEntityList (custom cache), not react-query
+      refetchEntityList("PriceMatrixSnapshot");
     },
     onError: () => toast.error("Failed to create snapshot")
   });

@@ -171,8 +171,9 @@ function MyPreferencesTab({ userId }) {
               <Switch
                 checked={digestSettings.sound_enabled}
                 onCheckedChange={v => {
-                  setDigestSettings(p => ({ ...p, sound_enabled: v }));
-                  saveDigestMutation.mutate({ ...digestSettings, sound_enabled: v });
+                  const updated = { ...digestSettings, sound_enabled: v };
+                  setDigestSettings(updated);
+                  saveDigestMutation.mutate(updated);
                 }}
               />
             </div>
@@ -184,8 +185,9 @@ function MyPreferencesTab({ userId }) {
               <Switch
                 checked={digestSettings.show_previews}
                 onCheckedChange={v => {
-                  setDigestSettings(p => ({ ...p, show_previews: v }));
-                  saveDigestMutation.mutate({ ...digestSettings, show_previews: v });
+                  const updated = { ...digestSettings, show_previews: v };
+                  setDigestSettings(updated);
+                  saveDigestMutation.mutate(updated);
                 }}
               />
             </div>
@@ -199,8 +201,9 @@ function MyPreferencesTab({ userId }) {
               <Switch
                 checked={digestSettings.quiet_hours_enabled}
                 onCheckedChange={v => {
-                  setDigestSettings(p => ({ ...p, quiet_hours_enabled: v }));
-                  saveDigestMutation.mutate({ ...digestSettings, quiet_hours_enabled: v });
+                  const updated = { ...digestSettings, quiet_hours_enabled: v };
+                  setDigestSettings(updated);
+                  saveDigestMutation.mutate(updated);
                 }}
               />
             </div>

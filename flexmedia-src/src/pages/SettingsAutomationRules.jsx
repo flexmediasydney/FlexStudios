@@ -680,7 +680,7 @@ export default function SettingsAutomationRules() {
                             Project: <span className="font-medium">{log.project_name || log.project_id}</span>
                           </p>
                           {log.action_taken && (
-                            <p className="text-xs mt-0.5 text-slate-700">{log.action_taken}</p>
+                            <p className="text-xs mt-0.5 text-foreground/80">{log.action_taken}</p>
                           )}
                           {log.result_detail && (
                             <p className="text-xs mt-0.5 text-red-600">{log.result_detail}</p>
@@ -698,6 +698,7 @@ export default function SettingsAutomationRules() {
 
         {builderOpen && (
           <RuleBuilderModal
+            key={editingRule?.id || "new"}
             open={builderOpen}
             onClose={() => { setBuilderOpen(false); setEditingRule(null); }}
             initialRule={editingRule}

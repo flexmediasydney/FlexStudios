@@ -70,7 +70,7 @@ export default function NotificationsPage() {
       .filter(n => {
         if (!search.trim()) return true;
         const q = search.toLowerCase();
-        return (n.title + n.message + n.project_name).toLowerCase().includes(q);
+        return ((n.title || '') + (n.message || '') + (n.project_name || '')).toLowerCase().includes(q);
       });
   }, [notifications, tab, readFilter, search]);
 
@@ -91,12 +91,14 @@ export default function NotificationsPage() {
   }, [filtered]);
 
   function handleNavigate(n) {
+    if (!n.is_read) markRead(n.id);
     if (!n.cta_url) return;
     try {
-      const params = n.cta_params ? JSON.parse(n.cta_params) : {};
+      const params = n.cta_params
+        ? (typeof n.cta_params === 'string' ? JSON.parse(n.cta_params) : n.cta_params)
+        : {};
       navigate(createPageUrl(n.cta_url) + (params.id ? `?id=${params.id}` : ""));
     } catch { /* ignore */ }
-    if (!n.is_read) markRead(n.id);
   }
 
   function toggleSelect(id) {

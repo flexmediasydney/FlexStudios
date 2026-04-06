@@ -20,7 +20,7 @@ import CardFieldsCustomizer, { CardFieldsCustomizerButton } from "@/components/p
 import ProjectFiltersSort from "@/components/projects/ProjectFiltersSort";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import { fixTimestamp } from "@/components/utils/dateUtils";
@@ -33,6 +33,7 @@ import KeyboardShortcutsModal from "@/components/common/KeyboardShortcutsModal";
 
 
 export default function Projects() {
+  const navigate = useNavigate();
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -138,6 +139,38 @@ export default function Projects() {
     [isContractor, allProjects, canAccessProject]
   );
 
+  // Pre-compute maps so table cells don't need O(n) filter per row.
+  // Declared before filteredProjects because it uses tasksByProject in its sort.
+  const tasksByProject = useMemo(() => {
+    const map = {};
+    allTasks.forEach(t => {
+      if (!t.parent_task_id) {
+        if (!map[t.project_id]) map[t.project_id] = [];
+        map[t.project_id].push(t);
+      }
+    });
+    return map;
+  }, [allTasks]);
+
+  // All tasks (including subtasks) indexed by project — used for assignment filters
+  const allTasksByProject = useMemo(() => {
+    const map = {};
+    allTasks.forEach(t => {
+      if (!map[t.project_id]) map[t.project_id] = [];
+      map[t.project_id].push(t);
+    });
+    return map;
+  }, [allTasks]);
+
+  const timeLogsByProject = useMemo(() => {
+    const map = {};
+    allTimeLogs.forEach(l => {
+      if (!map[l.project_id]) map[l.project_id] = [];
+      map[l.project_id].push(l);
+    });
+    return map;
+  }, [allTimeLogs]);
+
   // Memoize filtered projects to prevent excessive recalculation (Fix #10)
   const filteredProjects = useMemo(() => {
     return projects
@@ -171,8 +204,8 @@ export default function Projects() {
         project.video_editor_type === 'team' ? project.video_editor_id : null,
       ].filter(Boolean));
 
-      // Task-level assignments for this project
-      const projectTasksForProject = allTasks.filter(t => t.project_id === project.id);
+      // Task-level assignments for this project (use pre-computed map to avoid O(N*M))
+      const projectTasksForProject = allTasksByProject[project.id] || [];
 
       // "My Projects": current user is assigned at project-role level OR has a task assigned
       if (filters.assigned_to_me && currentUser) {
@@ -263,8 +296,8 @@ export default function Projects() {
     })
     .sort((a, b) => {
       if (sortBy === "task_deadline") {
-        const aTask = allTasks.filter(t => t.project_id === a.id).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
-        const bTask = allTasks.filter(t => t.project_id === b.id).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
+        const aTask = (tasksByProject[a.id] || []).filter(t => t.due_date).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
+        const bTask = (tasksByProject[b.id] || []).filter(t => t.due_date).sort((x, y) => new Date(fixTimestamp(x.due_date)) - new Date(fixTimestamp(y.due_date)))[0];
         if (!aTask && !bTask) return 0;
         if (!aTask) return 1;
         if (!bTask) return -1;
@@ -280,28 +313,7 @@ export default function Projects() {
       }
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
-  }, [projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
-
-  // Pre-compute maps so table cells don't need O(n) filter per row
-  const tasksByProject = useMemo(() => {
-    const map = {};
-    allTasks.forEach(t => {
-      if (!t.parent_task_id) {
-        if (!map[t.project_id]) map[t.project_id] = [];
-        map[t.project_id].push(t);
-      }
-    });
-    return map;
-  }, [allTasks]);
-
-  const timeLogsByProject = useMemo(() => {
-    const map = {};
-    allTimeLogs.forEach(l => {
-      if (!map[l.project_id]) map[l.project_id] = [];
-      map[l.project_id].push(l);
-    });
-    return map;
-  }, [allTimeLogs]);
+  }, [projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasksByProject, allEmployeeRoles, tasksByProject, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
 
   // Column definitions for EntityDataTable (list view)
   const tableColumns = useMemo(() => {
@@ -628,7 +640,7 @@ export default function Projects() {
               variant={fitToScreen ? "default" : "outline"}
               size="sm"
               onClick={() => setFitToScreen(!fitToScreen)}
-              className="hidden sm:flex shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9"
+              className="hidden sm:flex shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9"
               title={fitToScreen ? "Fitted to screen - click to disable" : "Click to fit columns to screen width (Shift+F)"}
               aria-label={fitToScreen ? "Disable fit to screen" : "Enable fit to screen - Shift+F"}
             >
@@ -710,7 +722,7 @@ export default function Projects() {
                   <p className="text-muted-foreground mb-4 text-sm">
                     Try adjusting your search or filters to see more results
                   </p>
-                  <Button variant="outline" size="sm" onClick={() => { setSearchQuery(""); setFilters({}); }} className="shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9">
+                  <Button variant="outline" size="sm" onClick={() => { setSearchQuery(""); setFilters({}); }} className="shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9">
                     <X className="h-4 w-4 mr-1.5" />
                     Clear All Filters
                   </Button>
@@ -766,9 +778,13 @@ export default function Projects() {
           setShowProjectForm(false);
           setEditingProject(null);
         }}
-        onSave={() => {
+        onSave={(result) => {
           setShowProjectForm(false);
           setEditingProject(null);
+          // Navigate to the newly created project so the user sees it immediately
+          if (result?.isNew && result?.id) {
+            navigate(createPageUrl("ProjectDetails") + `?id=${result.id}`);
+          }
         }}
       />
 

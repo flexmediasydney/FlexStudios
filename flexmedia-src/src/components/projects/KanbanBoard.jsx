@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from "react";
 import React from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -49,10 +49,10 @@ const animationStyles = `
     box-shadow: 0 20px 40px rgba(0,0,0,0.15), 0 0 0 3px rgba(59,130,246,0.4);
     transform: rotate(2deg) scale(1.04);
   }
-  .urgency-border-overdue  { border-left: 4px solid #ef4444 !important; }
-  .urgency-border-today    { border-left: 4px solid #f97316 !important; }
-  .urgency-border-ontrack  { border-left: 4px solid #22c55e !important; }
-  .urgency-border-none     { border-left: 4px solid transparent !important; }
+  .urgency-border-overdue  { border-left: 4px solid #ef4444; }
+  .urgency-border-today    { border-left: 4px solid #f97316; }
+  .urgency-border-ontrack  { border-left: 4px solid #22c55e; }
+  .urgency-border-none     { border-left: 4px solid transparent; }
 `;
 
 /* ─────────────────────────── Urgency helpers ─────────────────────────── */
@@ -148,12 +148,12 @@ function ProjectEmailIndicator({ emails = [] }) {
           className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
             hasUnread
               ? "bg-purple-100 text-purple-700 hover:bg-purple-200"
-              : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+              : "bg-gray-100 text-muted-foreground hover:bg-gray-200"
           }`}
           onClick={(e) => e.stopPropagation()}
           title={hasUnread ? `${unreadCount} unread email${unreadCount > 1 ? "s" : ""}` : `${emails.length} linked email${emails.length > 1 ? "s" : ""}`}
         >
-          <Mail className={`h-2.5 w-2.5 ${hasUnread ? "text-purple-600" : "text-gray-400"}`} />
+          <Mail className={`h-2.5 w-2.5 ${hasUnread ? "text-purple-600" : "text-muted-foreground/70"}`} />
           <span>{emails.length}</span>
         </button>
       </HoverCardTrigger>
@@ -179,7 +179,7 @@ function ProjectEmailIndicator({ emails = [] }) {
               className={`px-3 py-2 text-xs ${email.is_unread ? "bg-purple-50/40" : ""}`}
             >
               <div className="flex items-start justify-between gap-2">
-                <p className={`truncate flex-1 ${email.is_unread ? "font-semibold text-gray-900" : "font-medium text-gray-700"}`}>
+                <p className={`truncate flex-1 ${email.is_unread ? "font-semibold text-foreground" : "font-medium text-foreground/80"}`}>
                   {email.subject || "(no subject)"}
                 </p>
                 <span className="text-[10px] text-muted-foreground shrink-0">
@@ -386,15 +386,28 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
 }
 
 /* ═══════════════════════════ Main KanbanBoard ═══════════════════════════ */
-export default function KanbanBoard({ projects, products, packages, fitToScreen = false }) {
+export default function KanbanBoard({ projects = [], products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs }) {
   const navigate = useNavigate();
   const { enabledFields } = useCardFields();
-  const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 500);
-  const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog");
+  // Bug fix: use tasks/timeLogs from parent when available to avoid duplicate entity subscriptions
+  const { data: fallbackTasks = [] } = useEntityList(!parentTasks ? "ProjectTask" : null, "-due_date", 500);
+  const { data: fallbackTimeLogs = [] } = useEntityList(!parentTimeLogs ? "TaskTimeLog" : null);
+  const allTasks = parentTasks || fallbackTasks;
+  const allTimeLogs = parentTimeLogs || fallbackTimeLogs;
   const { prefetch: prefetchProject } = usePrefetchProjectDetails();
 
-  // Filter out archived projects
-  const activeProjects = projects.filter(p => !p.is_archived);
+  // Stable callbacks for card interactions — avoids creating new function refs
+  // on every render for potentially hundreds of project cards.
+  const handleCardClick = useCallback((projectId) => {
+    navigate(createPageUrl("ProjectDetails") + "?id=" + projectId);
+  }, [navigate]);
+
+  const handleCardHover = useCallback((projectId) => {
+    prefetchProject(projectId);
+  }, [prefetchProject]);
+
+  // Filter out archived projects (memoized to avoid recomputing on every render)
+  const activeProjects = useMemo(() => projects.filter(p => !p.is_archived), [projects]);
 
   // ── View mode: 'full' (normal kanban) or 'collapsed' (counts overview) ──
   const [viewMode, setViewMode] = useState('full');
@@ -507,7 +520,11 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
         }).catch(err => console.warn('logOnsiteEffortOnUpload failed:', err?.message));
       }
     },
-    onSuccess: () => toast.success('Project status updated'),
+    onSuccess: () => {
+      toast.success('Project status updated');
+      // Bug fix: invalidate project cache so the parent list and kanban reflect the new status
+      refetchEntityList('Project');
+    },
     onError: (err) => toast.error(err?.message || "Failed to update project status"),
   });
 
@@ -608,7 +625,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
       {/* ── Full kanban view ── */}
       {viewMode === 'full' && (
         <DragDropContext onDragEnd={onDragEnd}>
-          <div className={`flex gap-2 pb-2 ${fitToScreen ? "overflow-x-hidden" : "overflow-x-auto"}`}>
+          <div className={`flex gap-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))] ${fitToScreen ? "overflow-x-hidden" : "overflow-x-auto"}`}>
             {statusColumns.map(column => {
               const columnProjects = filteredProjects.filter(p => p.status === column.id);
 
@@ -824,7 +841,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                       <div
                         ref={provided.innerRef}
                         {...provided.droppableProps}
-                        className={`kanban-drop-target min-h-[400px] p-2 space-y-2 ${
+                        className={`kanban-drop-target min-h-[400px] max-h-[calc(100vh-280px)] overflow-y-auto p-2 space-y-2 ${
                           snapshot.isDraggingOver
                             ? "bg-primary/10 ring-2 ring-primary/20 scale-[1.01]"
                             : "bg-muted/15"
@@ -853,15 +870,18 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                   ref={provided.innerRef}
                                   {...provided.draggableProps}
                                   {...provided.dragHandleProps}
-                                  className={`kanban-card-animated cursor-pointer hover:shadow-lg transition-all duration-200 border-0 group/card active:scale-[0.98] ${urgencyClass} ${
+                                  className={`kanban-card-animated cursor-pointer hover:shadow-lg transition-all duration-200 border-y-0 border-r-0 group/card active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 ${urgencyClass} ${
                                     snapshot.isDragging ? "kanban-dragging opacity-90" : ""
                                   }`}
                                   style={{
                                     ...provided.draggableProps.style,
                                     animationDelay: `${index * 30}ms`,
                                   }}
-                                  onMouseEnter={() => prefetchProject(project.id)}
-                                  onClick={() => navigate(createPageUrl("ProjectDetails") + "?id=" + project.id)}
+                                  role="button"
+                                  aria-label={`${project.title}${project.property_address ? ', ' + project.property_address : ''}`}
+                                  onMouseEnter={() => handleCardHover(project.id)}
+                                  onClick={() => handleCardClick(project.id)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardClick(project.id); } }}
                                 >
                                   {/* Card Header */}
                                   <div className="px-3 py-2 border-b border-border/50">
@@ -991,8 +1011,8 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
               Stage timer history is preserved.
             </p>
             <div className="flex gap-2 justify-end">
-              <button className="px-3 py-1.5 text-sm border rounded hover:bg-muted" onClick={() => setPendingDrag(null)}>Cancel</button>
-              <button className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700" onClick={confirmBackwardDrag}>Move Backward</button>
+              <button className="px-3 py-1.5 text-sm border rounded hover:bg-muted disabled:opacity-50" disabled={updateStatusMutation.isPending} onClick={() => setPendingDrag(null)}>Cancel</button>
+              <button className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50" disabled={updateStatusMutation.isPending} onClick={confirmBackwardDrag}>{updateStatusMutation.isPending ? 'Moving...' : 'Move Backward'}</button>
             </div>
           </div>
         </div>

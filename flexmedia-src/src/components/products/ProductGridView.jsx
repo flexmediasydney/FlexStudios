@@ -21,7 +21,7 @@ export default function ProductGridView({ products, onEdit, onDelete, projectTyp
           <div key={product.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
             <div className="space-y-3">
               {product.thumbnail_url && (
-                <img src={product.thumbnail_url} alt={product.name} className="w-full h-40 object-cover rounded" />
+                <img src={product.thumbnail_url} alt={product.name || 'Product thumbnail'} loading="lazy" className="w-full h-40 object-cover rounded" onError={(e) => { e.target.style.display = 'none'; }} />
               )}
               <div>
                 <h3 className="font-semibold text-lg truncate">{product.name}</h3>

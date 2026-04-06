@@ -113,6 +113,7 @@ export default function ClientForm({ client, open, onClose, onSave }) {
                 <Label htmlFor="agent_phone">Agent Phone</Label>
                 <Input
                   id="agent_phone"
+                  type="tel"
                   value={formData.agent_phone}
                   onChange={(e) => handleChange("agent_phone", e.target.value)}
                   placeholder="(555) 123-4567"

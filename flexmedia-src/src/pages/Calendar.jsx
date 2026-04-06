@@ -74,7 +74,7 @@ const PERSON_COLORS = [
 ];
 
 function getInitials(name = '') {
-  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
+  return name.split(' ').filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -119,34 +119,18 @@ export default function CalendarPage() {
   const [defaultStart, setDefaultStart] = useState(null);
   const queryClient = useQueryClient();
 
-  // Countdown to next DB refresh (60s) and next Google sync (5min)
+  // Countdown to next DB refresh (60s) and next Google sync (5min).
+  // Combined into a single interval to halve the per-second state updates.
   const [dbCountdown, setDbCountdown] = useState(60);
   const [syncCountdown, setSyncCountdown] = useState(300);
-  const dbCountdownRef = useRef(null);
-  const syncCountdownRef = useRef(null);
+  const countdownRef = useRef(null);
 
   useEffect(() => {
-    // DB countdown — resets every 60s
-    setDbCountdown(60);
-    dbCountdownRef.current = setInterval(() => {
-      setDbCountdown(s => {
-        if (s <= 1) { return 60; }
-        return s - 1;
-      });
+    countdownRef.current = setInterval(() => {
+      setDbCountdown(s => s <= 1 ? 60 : s - 1);
+      setSyncCountdown(s => s <= 1 ? 300 : s - 1);
     }, 1000);
-    return () => clearInterval(dbCountdownRef.current);
-  }, []);
-
-  useEffect(() => {
-    // Google sync countdown — resets every 5 min
-    setSyncCountdown(300);
-    syncCountdownRef.current = setInterval(() => {
-      setSyncCountdown(s => {
-        if (s <= 1) { return 300; }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(syncCountdownRef.current);
+    return () => clearInterval(countdownRef.current);
   }, []);
 
   const formatCountdown = (s) => s >= 60
@@ -908,13 +892,17 @@ function MonthEventPill({ event, owners, userColorMap, users, onClick, title, ha
 
    return (
      <div
-       className="rounded text-[11px] leading-tight px-1.5 py-0.5 cursor-pointer hover:opacity-80 hover:scale-[1.02] transition-all duration-150 flex items-center gap-1 min-w-0"
+       className="rounded text-[11px] leading-tight px-1.5 py-0.5 cursor-pointer hover:opacity-80 hover:scale-[1.02] transition-all duration-150 flex items-center gap-1 min-w-0 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
        style={{
          backgroundColor: isOverdue ? '#fef2f2' : typeColor.light,
          color: isOverdue ? '#dc2626' : typeColor.text,
          borderLeft: `3px solid ${isOverdue ? '#dc2626' : typeColor.border}`
        }}
        onClick={onClick}
+       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(e); } }}
+       tabIndex={0}
+       role="button"
+       aria-label={[event.title, startTime ? `at ${startTime}` : null, isOverdue ? 'Overdue' : null].filter(Boolean).join(' - ')}
        title={title || [event.title, startTime ? `at ${startTime}` : null, isOverdue ? 'Overdue' : null, sourceConfig?.tooltip].filter(Boolean).join(' - ')}
      >
       {owners.length > 1 && (
@@ -1093,7 +1081,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   return (
                     <div
                       key={event.id}
-                      className="absolute rounded-md px-1.5 py-0.5 cursor-pointer hover:brightness-110 hover:shadow-lg overflow-hidden z-10 flex flex-col transition-all duration-150"
+                      className="absolute rounded-md px-1.5 py-0.5 cursor-pointer hover:brightness-110 hover:shadow-lg overflow-hidden z-10 flex flex-col transition-all duration-150 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
                       style={{
                         top: topPx,
                         height: heightPx,
@@ -1104,6 +1092,10 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                         color: isExternal ? userColor?.text : '#fff',
                       }}
                       onClick={(e) => onEventClick(e, event)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEventClick(e, event); } }}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`${event.title || 'Untitled'}, ${format(start, 'h:mm a')} to ${format(end, 'h:mm a')}${event.location ? ', at ' + event.location : ''}`}
                       title={`${event.title}\n${format(start, 'h:mm a')} - ${format(end, 'h:mm a')}${event.location ? '\n' + event.location : ''}`}
                     >
                       <p className="text-[11px] font-bold leading-tight truncate">{event.title || 'Untitled'}</p>
@@ -1312,7 +1304,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
               return (
                 <div key={u.id} className="flex-1 border-r last:border-r-0 relative min-w-[140px]">
                   {/* Tonomo-style lane header: colored top bar + name + avatar */}
-                  <div className="sticky top-0 z-10" style={{ height: HEADER_H }}>
+                  <div className="sticky top-0 z-20" style={{ height: HEADER_H }}>
                     <div className="h-1" style={{ backgroundColor: color?.bg }} />
                     <div className="bg-background border-b flex items-center justify-center gap-2 py-2">
                       <span className="w-7 h-7 rounded-full text-white text-xs font-bold flex items-center justify-center shadow-sm"
@@ -1447,9 +1439,13 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
   if (isAllDay) {
     return (
       <div
-        className="rounded px-2 py-0.5 text-xs cursor-pointer hover:opacity-80 truncate"
+        className="rounded px-2 py-0.5 text-xs cursor-pointer hover:opacity-80 truncate focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
         style={{ backgroundColor: typeColor.light, color: typeColor.text, borderLeft: `3px solid ${typeColor.border}` }}
         onClick={onClick}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(e); } }}
+        tabIndex={0}
+        role="button"
+        aria-label={`${event.title} (all day)`}
       >{event.title}</div>
     );
   }
@@ -1469,7 +1465,7 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
 
   return (
     <div
-      className="absolute left-1 right-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:opacity-90 hover:shadow-lg overflow-hidden z-10 flex flex-col transition-all duration-150 border"
+      className="absolute left-1 right-1 rounded-md px-1.5 py-0.5 cursor-pointer hover:opacity-90 hover:shadow-lg overflow-hidden z-10 flex flex-col transition-all duration-150 border focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
       style={{
         top: topPx,
         height: heightPx,
@@ -1480,6 +1476,10 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
         color: typeColor.text,
       }}
       onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(e); } }}
+      tabIndex={0}
+      role="button"
+      aria-label={`${event.title}, ${format(start, 'h:mm a')} to ${format(end, 'h:mm a')}${event.location ? ', at ' + event.location : ''}`}
       title={`${event.title} (${format(start, 'h:mm a')} - ${format(end, 'h:mm a')})`}
     >
       <div className="flex items-center gap-1">
@@ -1583,7 +1583,7 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
 
   return (
     <div
-      className="absolute rounded-lg px-2 py-1 cursor-pointer hover:brightness-110 hover:shadow-xl overflow-hidden z-10 flex flex-col transition-all duration-150"
+      className="absolute rounded-lg px-2 py-1 cursor-pointer hover:brightness-110 hover:shadow-xl overflow-hidden z-10 flex flex-col transition-all duration-150 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-1"
       style={{
         top: topPx,
         height: heightPx,
@@ -1594,6 +1594,10 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
         color: textColor,
       }}
       onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(e); } }}
+      tabIndex={0}
+      role="button"
+      aria-label={`${displayTitle}, ${format(start, 'h:mm a')} to ${format(end, 'h:mm a')}${event.location ? ', at ' + event.location : ''}`}
       title={`${event.title || 'Untitled'}\n${format(start, 'h:mm a')} - ${format(end, 'h:mm a')}${event.location ? '\n' + event.location : ''}`}
     >
       <div className="flex items-center gap-1 min-w-0">

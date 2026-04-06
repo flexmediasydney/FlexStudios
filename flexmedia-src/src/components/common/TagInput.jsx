@@ -14,6 +14,9 @@ export default function TagInput({ tags = [], onTagsChange, placeholder = "Add t
         setInput("");
       }
     }
+    if (e.key === "Backspace" && !input && tags.length > 0) {
+      onTagsChange(tags.slice(0, -1));
+    }
   };
 
   const removeTag = (idx) => {
@@ -28,7 +31,7 @@ export default function TagInput({ tags = [], onTagsChange, placeholder = "Add t
           {tags.map((tag, idx) => (
             <div key={idx} className="bg-primary/10 text-primary px-3 py-1 rounded-full text-sm flex items-center gap-2">
               {tag}
-              <button onClick={() => removeTag(idx)} className="hover:opacity-70">
+              <button onClick={() => removeTag(idx)} className="hover:opacity-70" aria-label={`Remove tag ${tag}`}>
                 <X className="h-3 w-3" />
               </button>
             </div>

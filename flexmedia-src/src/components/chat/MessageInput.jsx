@@ -4,6 +4,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Send, Paperclip, User as UserIcon, Loader2 } from 'lucide-react';
 import { api } from '@/api/supabaseClient';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 export default function MessageInput({ 
   onSend, 
@@ -57,9 +58,15 @@ export default function MessageInput({
     textareaRef.current?.focus();
   };
 
+  const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+
   const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files || []);
     for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error(`${file.name} exceeds 50MB limit`);
+        continue;
+      }
       try {
         const fileContent = await file.arrayBuffer();
         const base64 = btoa(String.fromCharCode.apply(null, new Uint8Array(fileContent)));
@@ -171,7 +178,7 @@ export default function MessageInput({
           multiple
           onChange={handleFileSelect}
           className="hidden"
-          accept="*/*"
+          accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
         />
         <Button
           variant="outline"

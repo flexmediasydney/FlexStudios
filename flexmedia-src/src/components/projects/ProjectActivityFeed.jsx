@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Search } from "lucide-react";
 import { api } from "@/api/supabaseClient";
 import ActivityLogItem from "./ActivityLogItem";
 
+const ITEMS_PER_PAGE = 30;
+
 export default function ProjectActivityFeed({ projectId }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activities, setActivities] = useState([]);
+  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
 
   useEffect(() => {
     if (!projectId) return;
@@ -75,9 +79,16 @@ export default function ProjectActivityFeed({ projectId }) {
         </div>
       ) : (
         <div className="pt-2 relative">
-          {filtered.map(activity => (
+          {filtered.slice(0, visibleCount).map(activity => (
             <ActivityLogItem key={activity.id} activity={activity} />
           ))}
+          {filtered.length > visibleCount && (
+            <div className="flex justify-center pt-3 pb-1">
+              <Button variant="ghost" size="sm" className="text-xs" onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)}>
+                Show more ({filtered.length - visibleCount} remaining)
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { MAX_USERS_FETCH } from '../_shared/constants.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NOTIFICATION TYPE REGISTRY
@@ -105,7 +106,7 @@ async function resolveUserIds(
 
   if (roles.includes('master_admin')) {
     try {
-      const users = await entities.User.list('-created_date', 200);
+      const users = await entities.User.list('-created_date', MAX_USERS_FETCH);
       users
         .filter((u: any) => u.role === 'master_admin' || u.role === 'admin')
         .forEach((u: any) => userIds.add(u.id));
@@ -226,28 +227,33 @@ async function createNotificationForUser(
     if (dup) return { skipped: true, reason: 'duplicate' };
   }
 
-  await entities.Notification.create({
-    user_id:          params.userId,
-    type:             params.type,
-    category,
-    severity,
-    title:            params.title,
-    message:          params.message,
-    project_id:       params.projectId   || null,
-    project_name:     params.projectName || null,
-    entity_type:      params.entityType  || null,
-    entity_id:        params.entityId    || null,
-    cta_url:          params.ctaUrl      || null,
-    cta_label:        params.ctaLabel    || typeConfig.cta_label,
-    cta_params:       params.ctaParams   ? JSON.stringify(params.ctaParams) : null,
-    is_read:          false,
-    is_dismissed:     false,
-    source:           params.source      || 'system',
-    source_rule_id:   params.sourceRuleId || null,
-    source_user_id:   params.sourceUserId || null,
-    idempotency_key:  params.idempotencyKey || null,
-    created_date:     new Date().toISOString(),
-  });
+  try {
+    await entities.Notification.create({
+      user_id:          params.userId,
+      type:             params.type,
+      category,
+      severity,
+      title:            params.title,
+      message:          params.message,
+      project_id:       params.projectId   || null,
+      project_name:     params.projectName || null,
+      entity_type:      params.entityType  || null,
+      entity_id:        params.entityId    || null,
+      cta_url:          params.ctaUrl      || null,
+      cta_label:        params.ctaLabel    || typeConfig.cta_label,
+      cta_params:       params.ctaParams   ? JSON.stringify(params.ctaParams) : null,
+      is_read:          false,
+      is_dismissed:     false,
+      source:           params.source      || 'system',
+      source_rule_id:   params.sourceRuleId || null,
+      source_user_id:   params.sourceUserId || null,
+      idempotency_key:  params.idempotencyKey || null,
+      created_date:     new Date().toISOString(),
+    });
+  } catch (createErr: any) {
+    console.error(`Notification.create failed (type=${params.type}, user=${params.userId}):`, createErr?.message);
+    return { skipped: true, reason: 'create_failed', error: createErr?.message };
+  }
 
   return { created: true };
 }

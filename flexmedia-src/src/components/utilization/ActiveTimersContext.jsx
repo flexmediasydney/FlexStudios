@@ -48,12 +48,21 @@ export function ActiveTimersProvider({ children, currentUser }) {
         if (event.type === 'create') {
           // Only add genuinely running timers — not completed manual entries or paused logs
           if (event.data.is_active && event.data.status === 'running') {
+            // Deduplicate: skip if this timer is already tracked (e.g. initial fetch raced with subscription)
+            if (prev.some(t => t.id === event.data.id)) return prev;
             return [...prev, event.data];
           }
           return prev;
         } else if (event.type === 'update') {
           if (event.data.is_active && event.data.status === 'running') {
-            return prev.map(t => t.id === event.id ? event.data : t);
+            // Upsert: update if already tracked, otherwise add (handles resume from paused
+            // state — initial load only fetches status=running, so a paused-then-resumed
+            // timer would be missing from the array without the add path)
+            const exists = prev.some(t => t.id === event.id);
+            if (exists) {
+              return prev.map(t => t.id === event.id ? event.data : t);
+            }
+            return [...prev, event.data];
           } else {
             return prev.filter(t => t.id !== event.id);
           }

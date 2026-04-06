@@ -26,7 +26,12 @@ export default function FileUpload({ onFileSelect, accept, multiple = false, max
 
   const processFiles = (files) => {
     if (maxSize) {
+      const oversized = files.filter(f => f.size > maxSize);
+      if (oversized.length > 0) {
+        console.warn(`${oversized.length} file(s) exceeded the ${(maxSize / 1024 / 1024).toFixed(1)}MB size limit and were removed.`);
+      }
       files = files.filter(f => f.size <= maxSize);
+      if (files.length === 0) return;
     }
     setSelectedFiles(multiple ? files : [files[0]]);
     onFileSelect(multiple ? files : files[0]);

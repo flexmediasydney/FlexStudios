@@ -32,7 +32,7 @@ export default function EmailHeaderActions({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" disabled={loading}>
+          <Button variant="ghost" size="sm" disabled={loading} aria-label="Snooze email">
             <Clock className="h-4 w-4 mr-1" />
             Snooze
           </Button>
@@ -46,7 +46,7 @@ export default function EmailHeaderActions({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" disabled={loading}>
+          <Button variant="ghost" size="sm" disabled={loading} aria-label="More actions">
             <MoreVertical className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>

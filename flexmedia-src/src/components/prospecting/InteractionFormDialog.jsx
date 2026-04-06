@@ -21,6 +21,12 @@ const INTERACTION_TYPES = [
 
 const SENTIMENT_OPTIONS = ['Positive', 'Neutral', 'Negative'];
 
+// Convert a Date to a local datetime-local input value (YYYY-MM-DDTHH:MM)
+function toLocalDatetimeString(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export default function InteractionFormDialog({
   open,
   onOpenChange,
@@ -38,7 +44,7 @@ export default function InteractionFormDialog({
     summary: '',
     details: '',
     sentiment: 'Neutral',
-    date_time: new Date().toISOString()
+    date_time: toLocalDatetimeString(new Date())
   });
 
   const [errors, setErrors] = useState({});
@@ -51,7 +57,7 @@ export default function InteractionFormDialog({
         summary: '',
         details: '',
         sentiment: 'Neutral',
-        date_time: new Date().toISOString()
+        date_time: toLocalDatetimeString(new Date())
       });
       setErrors({});
       setError(null);
@@ -76,12 +82,15 @@ export default function InteractionFormDialog({
     setError(null);
 
     try {
+      // Convert local datetime-local value to ISO string for storage
+      const interactionDateTime = new Date(formData.date_time).toISOString();
+
       await api.entities.InteractionLog.create({
         entity_type: entityType || 'Agent',
         entity_id: entityId || prospect?.id,
         entity_name: prospect?.name || 'Unknown',
         interaction_type: formData.interaction_type,
-        date_time: formData.date_time,
+        date_time: interactionDateTime,
         summary: formData.summary,
         details: formData.details,
         user_id: user?.id,
@@ -90,10 +99,10 @@ export default function InteractionFormDialog({
         relationship_state_at_time: prospect?.relationship_state || 'Prospecting'
       });
 
-      // Auto-update agent's last_contacted_at
+      // Auto-update agent's last_contacted_at using the interaction's actual time
       if (entityType === 'Agent' && (entityId || prospect?.id)) {
         api.entities.Agent.update(entityId || prospect?.id, {
-          last_contacted_at: new Date().toISOString(),
+          last_contacted_at: interactionDateTime,
         }).catch(() => {});
       }
 
@@ -103,12 +112,13 @@ export default function InteractionFormDialog({
         summary: '',
         details: '',
         sentiment: 'Neutral',
-        date_time: new Date().toISOString()
+        date_time: toLocalDatetimeString(new Date())
       });
 
       if (onSuccess) onSuccess();
     } catch (err) {
-      setError(err.message || 'Failed to log interaction');
+      console.error('Log interaction error:', err);
+      setError('Failed to log interaction. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -157,10 +167,10 @@ export default function InteractionFormDialog({
               <Input
                 id="datetime"
                 type="datetime-local"
-                value={formData.date_time.slice(0, 16)}
+                value={formData.date_time}
                 onChange={(e) => {
-                  const date = new Date(e.target.value);
-                  setFormData(prev => ({ ...prev, date_time: date.toISOString() }));
+                  if (!e.target.value) return; // guard against clearing
+                  setFormData(prev => ({ ...prev, date_time: e.target.value }));
                 }}
               />
             </div>

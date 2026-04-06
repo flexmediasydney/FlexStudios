@@ -113,6 +113,19 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
     return () => { mounted = false; unsub(); };
   }, [project.id]);
 
+  // Fix orphaned timers (open timers for non-current stages) outside render path
+  useEffect(() => {
+    if (!stageTimers.length) return;
+    const currentStageValue = project.status;
+    stageTimers.forEach(t => {
+      if (!t.exit_time && t.stage !== currentStageValue) {
+        api.entities.ProjectStageTimer.update(t.id, {
+          exit_time: t.updated_date || new Date().toISOString(),
+        }).catch(() => {});
+      }
+    });
+  }, [stageTimers, project.status]);
+
   // ── Optimistic session state ──────────────────────────────────────────────
   const sessionRef = useRef({
     status: project.status,
@@ -182,9 +195,9 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
 
     // Safety: for non-current stages, enforce all timers have exit_time
     // Any open timer for a non-current stage is a bug — treat it as if it ended now
+    // Note: DB fix is deferred to useEffect below to avoid side effects during render
     const safeDbTimers = dbTimers.map(t => {
       if (!t.exit_time && !isCurrent) {
-        // Orphaned open timer for a non-current stage — treat as closed
         return {
           ...t,
           exit_time: t.updated_date || new Date().toISOString(),
@@ -278,7 +291,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
                   "relative flex flex-col items-center justify-center h-12 transition-all duration-200 select-none outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary active:scale-95",
                   isFirst ? "pl-4 pr-6 min-w-[90px]" : isLast ? "pl-6 pr-4 min-w-[90px]" : "px-5 min-w-[90px]",
                   bgClass, hoverClass,
-                  canEdit ? "cursor-pointer" : "cursor-default",
+                  canEdit ? "cursor-pointer" : "cursor-default opacity-90",
                   isCurrent && "ring-2 ring-[#1a73e8]/30"
                 )}
                 style={{ clipPath, marginLeft: index === 0 ? 0 : "-2px" }}

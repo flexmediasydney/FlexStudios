@@ -141,7 +141,7 @@ function renderDeltaRows(changedFields) {
   for (const change of changedFields) {
     if (IGNORED_FIELDS.has(change.field)) continue;
 
-    const label = FIELD_LABELS[change.field] || change.field.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const label = FIELD_LABELS[change.field] || (change.field || '').replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
     if (change.field === "products") {
       const delta = parseProductDelta(change.old_value, change.new_value);

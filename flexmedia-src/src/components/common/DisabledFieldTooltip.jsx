@@ -14,7 +14,7 @@ export default function DisabledFieldTooltip({ reason, children }) {
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="relative">
+          <div className="relative" tabIndex={0} role="group" aria-label={reason}>
             {children}
             <div className="absolute top-2 right-2 p-1 bg-muted rounded">
               <Lock className="h-3 w-3 text-muted-foreground" />

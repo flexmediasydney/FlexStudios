@@ -348,7 +348,8 @@ export default function ProjectProductsPackages({ project }) {
         project_id: project.id,
       }).catch(() => {});
     } catch (err) {
-      setError(err.message || 'Failed to save changes');
+      console.error('Products/packages save error:', err);
+      setError('Failed to save changes. Please try again.');
     }
   };
 

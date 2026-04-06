@@ -155,7 +155,7 @@ export default function OrgDetails() {
       <div className="flex flex-col h-[calc(100vh-4rem)] lg:h-screen overflow-hidden bg-background">
         {/* Header skeleton */}
         <div className="flex items-center gap-3 px-5 py-3 border-b bg-card shrink-0 shadow-sm">
-          <div className="h-8 w-8 rounded-md bg-muted animate-pulse" />
+          <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
           <div className="w-px h-5 bg-border" />
           <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
           <div className="h-5 w-48 rounded bg-muted animate-pulse" />
@@ -218,7 +218,7 @@ export default function OrgDetails() {
           {agency.address && <p className="text-[11px] text-muted-foreground truncate leading-tight">{agency.address}</p>}
         </div>
 
-        <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agency.relationship_state] || 'bg-gray-100 text-gray-700'}`}>
+        <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agency.relationship_state] || 'bg-muted text-muted-foreground'}`}>
           {agency.relationship_state || 'Unknown'}
         </Badge>
 

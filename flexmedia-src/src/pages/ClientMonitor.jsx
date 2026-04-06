@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink, Search, Plus, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import AgentSearch from "@/components/clientMonitor/AgentSearch";
+import { DOMAIN_AGENT_URL, REA_AGENT_URL } from "@/lib/constants";
 import ExternalListingsForm from "@/components/clientMonitor/ExternalListingsForm";
 import ListingComparison from "@/components/clientMonitor/ListingComparison";
 
@@ -45,12 +46,12 @@ export default function ClientMonitor() {
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
         <div className="max-w-2xl mx-auto">
           <div className="mb-8">
-            <h1 className="text-4xl font-bold text-slate-900 mb-2">Client Monitor</h1>
-            <p className="text-slate-600">Cross-reference external listings with your internal projects</p>
+            <h1 className="text-4xl font-bold text-foreground mb-2">Client Monitor</h1>
+            <p className="text-muted-foreground">Cross-reference external listings with your internal projects</p>
           </div>
 
           <Card className="p-8 shadow-lg">
-            <h2 className="text-xl font-semibold text-slate-900 mb-6">Select an Agent</h2>
+            <h2 className="text-xl font-semibold text-foreground mb-6">Select an Agent</h2>
             <AgentSearch onSelect={setSelectedAgent} />
           </Card>
         </div>
@@ -65,8 +66,8 @@ export default function ClientMonitor() {
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h1 className="text-3xl font-bold text-slate-900">{selectedAgent.name}</h1>
-              <p className="text-slate-600 text-sm">{selectedAgent.current_agency_name}</p>
+              <h1 className="text-3xl font-bold text-foreground">{selectedAgent.name}</h1>
+              <p className="text-muted-foreground text-sm">{selectedAgent.current_agency_name}</p>
             </div>
             <Button variant="outline" onClick={() => setSelectedAgent(null)}>
               Change Agent
@@ -76,7 +77,7 @@ export default function ClientMonitor() {
           {/* Portal Links */}
           <div className="flex gap-3 flex-wrap">
             <a
-              href={`https://www.domain.com.au/agent/${selectedAgent.id}`}
+              href={`${DOMAIN_AGENT_URL}/${selectedAgent.id}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
@@ -85,7 +86,7 @@ export default function ClientMonitor() {
               View on Domain
             </a>
             <a
-              href={`https://www.realestate.com.au/agent/${selectedAgent.id}`}
+              href={`${REA_AGENT_URL}/${selectedAgent.id}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
@@ -99,16 +100,16 @@ export default function ClientMonitor() {
         {/* Stats Bar */}
         <div className="grid grid-cols-3 gap-4 mb-8">
           <Card className="p-4">
-            <div className="text-sm text-slate-600 mb-1">Internal Projects</div>
-            <div className="text-3xl font-bold text-slate-900">{agentProjects.length}</div>
+            <div className="text-sm text-muted-foreground mb-1">Internal Projects</div>
+            <div className="text-3xl font-bold text-foreground">{agentProjects.length}</div>
           </Card>
           <Card className="p-4">
-            <div className="text-sm text-slate-600 mb-1">External Listings</div>
-            <div className="text-3xl font-bold text-slate-900">{externalListings.length}</div>
+            <div className="text-sm text-muted-foreground mb-1">External Listings</div>
+            <div className="text-3xl font-bold text-foreground">{externalListings.length}</div>
           </Card>
           <Card className="p-4">
-            <div className="text-sm text-slate-600 mb-1">Matched</div>
-            <div className="text-3xl font-bold text-slate-900">
+            <div className="text-sm text-muted-foreground mb-1">Matched</div>
+            <div className="text-3xl font-bold text-foreground">
               {externalListings.filter(e => e.matched_project_id).length}
             </div>
           </Card>
@@ -139,7 +140,7 @@ export default function ClientMonitor() {
         {/* Comparison */}
         {projectsLoading ? (
           <div className="flex items-center justify-center p-12">
-            <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/70" />
           </div>
         ) : (
           <ListingComparison

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
-import { usePermissions } from "@/components/auth/PermissionGuard";
+import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -49,13 +49,14 @@ import ProjectWeatherCard from "@/components/projects/ProjectWeatherCard";
 import ActiveTimersPanel from "@/components/projects/ActiveTimersPanel";
 import { scheduleDeadlineSync } from "@/components/projects/taskDeadlineSync";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useQuery } from "@tanstack/react-query";
+// useQuery import removed — current-user now via useCurrentUser
 import TonomoTab from "@/components/tonomo/TonomoTab";
 import { createNotification, createNotificationsForUsers, writeFeedEvent } from "@/components/notifications/createNotification";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 
 const statuses = PROJECT_STAGES;
+const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'tonomo']);
 
 const serviceLabels = {
   photography: "📷 Photography",
@@ -73,6 +74,24 @@ const propertyTypeLabels = {
   luxury: "Luxury",
   rental: "Rental",
   land: "Land/Lot"
+};
+
+// Valid forward transitions — defines allowed next stages from each stage.
+// Not enforced yet (backward confirmation is sufficient for now), but
+// available for future gating / UI filtering of the stage pipeline.
+const VALID_FORWARD_TRANSITIONS = {
+  pending_review: ['to_be_scheduled', 'scheduled', 'cancelled'],
+  to_be_scheduled: ['scheduled', 'cancelled'],
+  scheduled: ['onsite', 'cancelled'],
+  onsite: ['uploaded', 'cancelled'],
+  uploaded: ['submitted', 'cancelled'],
+  submitted: ['in_progress', 'cancelled'],
+  in_progress: ['in_production', 'cancelled'],
+  in_production: ['ready_for_partial', 'in_revision', 'delivered', 'cancelled'],
+  ready_for_partial: ['in_revision', 'delivered', 'cancelled'],
+  in_revision: ['delivered', 'cancelled'],
+  delivered: [],
+  cancelled: ['pending_review'], // allow reactivation
 };
 
 function InvoicedAmountInput({ value, onSave, isPending }) {
@@ -146,7 +165,6 @@ export default function ProjectDetails() {
    const [pendingBackwardStage, setPendingBackwardStage] = useState(null);
 
    // Tab state — persisted in URL ?tab= param so reload preserves active tab
-   const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'tonomo']);
    const [activeTab, setActiveTab] = useState(() => {
      const params = new URLSearchParams(window.location.search);
      const tab = params.get('tab');
@@ -196,10 +214,7 @@ export default function ProjectDetails() {
    const { data: allAgents = [] } = useSmartEntityList('Agent');
    const { data: productsData = [] } = useSmartEntityList('Product');
    const { data: packagesData = [] } = useSmartEntityList('Package');
-   const { data: user = null } = useQuery({
-     queryKey: ["current-user"],
-     queryFn: () => api.auth.me()
-   });
+   const { data: user = null } = useCurrentUser();
 
    const filterProjectTasks = useCallback((t) => t.project_id === projectId, [projectId]);
    const filterProjectActivities = useCallback((a) => !!(projectId && a.project_id === projectId), [projectId]);
@@ -460,6 +475,14 @@ export default function ProjectDetails() {
        }).catch(err => console.warn('logOnsiteEffortOnUpload failed:', err?.message));
      }
 
+     // Mark all active tasks as cancelled when project is cancelled
+     if (newStatus === 'cancelled') {
+       const activeTasks = (projectTasks || []).filter(t => !t.is_deleted && !t.is_completed);
+       for (const task of activeTasks) {
+         api.entities.ProjectTask.update(task.id, { is_completed: true, completed_at: new Date().toISOString() }).catch(() => {});
+       }
+     }
+
      // Check if project qualifies for auto-archive when delivered
      if (newStatus === 'delivered') {
        setTimeout(() => {
@@ -470,6 +493,9 @@ export default function ProjectDetails() {
      }
 
      return result;
+   },
+   onSuccess: () => {
+     toast.success('Project stage updated');
    },
    onError: (err) => {
      setErrorMessage(err?.message || "Failed to update project status");
@@ -521,6 +547,9 @@ export default function ProjectDetails() {
       }).catch(() => {});
 
       return result;
+    },
+    onSuccess: (_, outcome) => {
+      toast.success(`Outcome set to ${outcome}`);
     },
     onError: (err) => {
       setErrorMessage(err?.message || "Failed to update outcome");
@@ -576,6 +605,9 @@ export default function ProjectDetails() {
 
       return result;
       },
+      onSuccess: (_, payment_status) => {
+        toast.success(`Payment status: ${payment_status}`);
+      },
       onError: (err) => {
       setErrorMessage(err?.message || "Failed to update payment status");
       }
@@ -591,6 +623,7 @@ export default function ProjectDetails() {
       logActivity('invoiced_amount_changed',
         `Invoiced amount set to ${amount ? `$${parseFloat(amount).toLocaleString('en-AU')}` : 'cleared'}`
       );
+      toast.success(amount ? `Invoiced amount set to $${parseFloat(amount).toLocaleString('en-AU')}` : 'Invoiced amount cleared');
     },
     onError: (err) => setErrorMessage(err.message || 'Failed to update invoiced amount'),
   });
@@ -750,12 +783,12 @@ export default function ProjectDetails() {
     <div className="p-4 lg:p-8 space-y-4 lg:space-y-6">
       <ErrorBoundary>
       {isArchived && (
-        <div className="bg-slate-100 border border-slate-300 rounded-xl p-4 mb-6 flex items-center justify-between">
+        <div className="bg-muted/50 border border-border rounded-xl p-4 mb-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-slate-200 flex items-center justify-center text-slate-500 text-lg">📦</div>
+            <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center text-muted-foreground text-lg">📦</div>
             <div>
-              <p className="text-sm font-semibold text-slate-700">This project is archived</p>
-              <p className="text-xs text-slate-500">Delivered, paid, and all work completed · Archived {project.archived_at ? fmtDate(project.archived_at, 'd MMM yyyy') : ''}</p>
+              <p className="text-sm font-semibold text-foreground">This project is archived</p>
+              <p className="text-xs text-muted-foreground">Delivered, paid, and all work completed · Archived {project.archived_at ? fmtDate(project.archived_at, 'd MMM yyyy') : ''}</p>
             </div>
           </div>
           {isMasterAdmin && (
@@ -763,6 +796,13 @@ export default function ProjectDetails() {
               onClick={async () => {
                 try {
                   await api.entities.Project.update(projectId, { is_archived: false, archived_at: null });
+                  api.entities.ProjectActivity.create({
+                    project_id: projectId,
+                    action: 'unarchived',
+                    description: 'Project unarchived',
+                    user_name: user?.full_name,
+                    user_email: user?.email,
+                  }).catch(() => {});
                   toast.success('Project unarchived');
                 } catch (err) {
                   toast.error(err?.message || 'Failed to unarchive');
@@ -922,7 +962,7 @@ export default function ProjectDetails() {
             {project.outcome === "lost" ? "✓ Lost" : "◯ Lost"}
           </button>
           {memoizedCanEdit && (
-           <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-shadow h-9" aria-label="Edit project">
+           <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-all h-9" aria-label="Edit project">
              <Edit className="h-4 w-4" />
              <span className="hidden sm:inline ml-1.5">Edit</span>
            </Button>
@@ -969,13 +1009,14 @@ export default function ProjectDetails() {
             size="sm"
             className="h-8 text-xs bg-green-600 hover:bg-green-700 text-white"
             aria-label="Mark project as delivered"
+            disabled={updateStatusMutation.isPending}
             onClick={() => {
-              if (memoizedCanEdit) {
+              if (memoizedCanEdit && !updateStatusMutation.isPending) {
                 updateStatusMutation.mutate('delivered');
               }
             }}
           >
-            Mark as Delivered
+            {updateStatusMutation.isPending ? 'Updating...' : 'Mark as Delivered'}
           </Button>
           <button
             className="text-xs text-green-600 hover:text-green-800"
@@ -1064,7 +1105,17 @@ export default function ProjectDetails() {
                 <AlertDialogAction
                   className="bg-orange-600 hover:bg-orange-700"
                   onClick={() => {
-                    if (pendingBackwardStage) updateStatusMutation.mutate(pendingBackwardStage);
+                    if (pendingBackwardStage) {
+                      // Log a distinct activity for backward status regressions
+                      api.entities.ProjectActivity.create({
+                        project_id: project.id,
+                        action: 'status_regressed',
+                        description: `Status moved backward from ${stageLabel(project.status)} to ${stageLabel(pendingBackwardStage)}`,
+                        user_name: user?.full_name,
+                        user_email: user?.email,
+                      }).catch(() => {});
+                      updateStatusMutation.mutate(pendingBackwardStage);
+                    }
                     setPendingBackwardStage(null);
                   }}
                 >
@@ -1328,8 +1379,8 @@ export default function ProjectDetails() {
           <ErrorBoundary><ProjectActivityHub projectId={projectId} project={project} /></ErrorBoundary>
         </div>
 
-        {/* Sidebar */}
-        <div className="space-y-4 lg:space-y-6">
+        {/* Sidebar — sticky on desktop so it scrolls independently of main content */}
+        <div className="space-y-4 lg:space-y-6 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:scrollbar-thin">
           {/* Time Tracking Summary */}
           <ErrorBoundary><TimeTrackingSummaryCard projectId={projectId} project={project} /></ErrorBoundary>
 
@@ -1422,7 +1473,7 @@ export default function ProjectDetails() {
               {user && (
                 <Button
                   onClick={() => setShowProjectChat(true)}
-                  className="w-full hover:shadow-md transition-shadow"
+                  className="w-full hover:shadow-md transition-all"
                   title="Open chat for this project"
                 >
                   💬 Chat
@@ -1463,9 +1514,9 @@ export default function ProjectDetails() {
 
       {/* Agent Selector Dialog */}
        {showAgentSelector && (
-         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowAgentSelector(false)}>
-           <Card 
-             className="w-full max-w-md animate-in scale-in-95 duration-200"
+         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200" onClick={() => setShowAgentSelector(false)}>
+           <Card
+             className="w-full max-w-md max-h-[85vh] flex flex-col animate-in scale-in-95 duration-200"
              onClick={(e) => e.stopPropagation()}
            >
              <CardHeader className="flex flex-row items-center justify-between">

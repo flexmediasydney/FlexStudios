@@ -168,11 +168,6 @@ function PipelineBar({ status }) {
 }
 
 function MiniProjectCard({ project }) {
-  const wonProjects = [project].filter(p => p.outcome === 'won');
-  const lostProjects = [project].filter(p => p.outcome === 'lost');
-  const totalClosed = wonProjects.length + lostProjects.length;
-  const winRate = totalClosed > 0 ? Math.round((wonProjects.length / totalClosed) * 100) : null;
-
   return (
     <Link
       to={createPageUrl(`ProjectDetails?id=${project.id}`)}
@@ -183,6 +178,11 @@ function MiniProjectCard({ project }) {
           <ProjectStatusBadge status={project.status} />
           <p className="text-xs font-medium text-foreground mt-1 truncate">{project.title}</p>
         </div>
+        {project.outcome && (
+          <Badge className={`text-[9px] shrink-0 ${project.outcome === 'won' ? 'bg-green-100 text-green-700 border-green-200' : project.outcome === 'lost' ? 'bg-red-100 text-red-700 border-red-200' : 'bg-muted text-muted-foreground'}`}>
+            {project.outcome}
+          </Badge>
+        )}
       </div>
       <PipelineBar status={project.status} />
       <div className="flex justify-between text-[10px] text-muted-foreground mt-1.5">
@@ -196,24 +196,6 @@ function MiniProjectCard({ project }) {
           </span>
         ) : null}
       </div>
-      {winRate !== null && (
-        <div className="mt-2 pt-2 border-t border-border/30">
-          <div className="flex items-center justify-between text-[10px] mb-1">
-            <span className="text-muted-foreground">
-              {wonProjects.length}W / {lostProjects.length}L
-            </span>
-            <span className="font-medium text-green-600">{winRate}%</span>
-          </div>
-          <div className="w-full bg-muted rounded-full h-1">
-            {wonProjects.length > 0 && (
-              <div
-                className="h-1 bg-green-500 rounded-full"
-                style={{ width: `${winRate}%` }}
-              />
-            )}
-          </div>
-        </div>
-      )}
     </Link>
   );
 }
@@ -269,7 +251,7 @@ function ActivityFeed({ interactions, projects }) {
               <div className="flex-1 min-w-0">
                 <p className="text-foreground font-medium">{proj.title}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Status changed to <span className="font-medium capitalize">{proj.status.replace(/_/g, ' ')}</span>
+                  Status changed to <span className="font-medium capitalize">{(proj.status || '').replace(/_/g, ' ')}</span>
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {formatRelative(fixTimestamp(proj.last_status_change))}
@@ -278,6 +260,7 @@ function ActivityFeed({ interactions, projects }) {
             </div>
           );
         }
+        return null;
       })}
     </div>
   );
@@ -351,22 +334,21 @@ export default function TeamDetails() {
   const { data: agency } = useSmartEntityData('Agency', team?.agency_id);
 
   const memberFilter = useCallback(a => a.current_team_id === teamId, [teamId]);
-  const projectFilter = useCallback(
-    p =>
-      p.project_owner_id === teamId ||
-      p.onsite_staff_1_id === teamId ||
-      p.onsite_staff_2_id === teamId ||
-      p.image_editor_id === teamId ||
-      p.video_editor_id === teamId ||
-      p.floorplan_editor_id === teamId ||
-      p.drone_editor_id === teamId,
-    [teamId]
-  );
   const noteFilter = useCallback(e => e.team_id === teamId, [teamId]);
   const interactionFilter = useCallback(e => e.entity_type === 'Team' && e.entity_id === teamId, [teamId]);
 
   const { data: members = [] } = useEntityList('Agent', 'name', null, memberFilter);
-  const { data: projects = [] } = useEntityList('Project', '-created_date', 200, projectFilter);
+
+  // Filter projects by agent_id matching any team member
+  const projectFilter = useCallback(
+    p => {
+      const memberIds = new Set(members.map(m => m.id));
+      return memberIds.has(p.agent_id);
+    },
+    [members]
+  );
+
+  const { data: projects = [] } = useEntityList('Project', '-created_date', 200, members.length > 0 ? projectFilter : null);
   const { data: orgNotes = [] } = useEntityList('OrgNote', '-created_date', null, noteFilter);
   const { data: interactions = [] } = useEntityList('InteractionLog', '-date_time', 100, interactionFilter);
 
@@ -639,7 +621,7 @@ export default function TeamDetails() {
                           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
                             {proj.status?.replace(/_/g, ' ').toUpperCase()}
                           </span>
-                          {price && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
+                          {price > 0 && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
                         </div>
                         {(proj.shoot_date || proj.delivery_date) && (
                           <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">

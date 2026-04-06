@@ -1,4 +1,5 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { MS_PER_DAY, MAX_AGENTS_FETCH, MAX_PROJECTS_FETCH, MAX_USERS_FETCH } from '../_shared/constants.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -20,16 +21,17 @@ Deno.serve(async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
 
-    const agents = await entities.Agent.list('-created_date', 1000);
+    const agents = await entities.Agent.list('-created_date', MAX_AGENTS_FETCH);
     const watchedAgents = agents.filter((a: any) =>
       a.relationship_state === 'Active' || a.relationship_state === 'Prospecting'
     );
 
-    const projects = await entities.Project.list('-shoot_date', 2000);
+    const projects = await entities.Project.list('-shoot_date', MAX_PROJECTS_FETCH);
     const now = Date.now();
     const newlyAtRisk: Array<{ id: string; name: string }> = [];
 
     for (const agent of watchedAgents) {
+      if (!agent?.id) continue;
       const agentProjects = projects.filter((p: any) => p.agent_id === agent.id);
 
       const latestMs = agentProjects.reduce((latest: number, p: any) => {
@@ -44,11 +46,11 @@ Deno.serve(async (req) => {
         : AT_RISK_DEFAULT_DAYS;
 
       const daysSince = latestMs > 0
-        ? Math.floor((now - latestMs) / (24 * 60 * 60 * 1000))
+        ? Math.floor((now - latestMs) / MS_PER_DAY)
         : null;
 
       const createdDaysAgo = agent.created_date
-        ? Math.floor((now - new Date(agent.created_date).getTime()) / (24 * 60 * 60 * 1000))
+        ? Math.floor((now - new Date(agent.created_date).getTime()) / MS_PER_DAY)
         : 0;
 
       const shouldBeAtRisk =
@@ -65,7 +67,7 @@ Deno.serve(async (req) => {
 
     // Notify admins about newly at-risk contacts
     if (newlyAtRisk.length > 0) {
-      const adminUsers = await entities.User.list('-created_date', 200);
+      const adminUsers = await entities.User.list('-created_date', MAX_USERS_FETCH);
       const admins = adminUsers.filter((u: any) =>
         u.role === 'master_admin' || u.role === 'admin'
       );
@@ -75,20 +77,24 @@ Deno.serve(async (req) => {
       for (const admin of admins) {
         const allowed = await _canNotify(entities, admin.id, 'stale_project', 'system');
         if (!allowed) continue;
-        await entities.Notification.create({
-          user_id: admin.id,
-          type: 'stale_project',
-          category: 'system',
-          severity: 'warning',
-          title: `${newlyAtRisk.length} contact${newlyAtRisk.length > 1 ? 's' : ''} at risk of going dormant`,
-          message: `${nameList}${overflow} — haven't booked in ${AT_RISK_DEFAULT_DAYS}+ days.`,
-          cta_label: 'View Contacts',
-          is_read: false,
-          is_dismissed: false,
-          source: 'at_risk_detection',
-          idempotency_key: `at_risk_daily:${new Date().toISOString().slice(0, 10)}`,
-          created_date: new Date().toISOString(),
-        }).catch(() => {});
+        try {
+          await entities.Notification.create({
+            user_id: admin.id,
+            type: 'stale_project',
+            category: 'system',
+            severity: 'warning',
+            title: `${newlyAtRisk.length} contact${newlyAtRisk.length > 1 ? 's' : ''} at risk of going dormant`,
+            message: `${nameList}${overflow} — no recent bookings detected.`,
+            cta_label: 'View Contacts',
+            is_read: false,
+            is_dismissed: false,
+            source: 'at_risk_detection',
+            idempotency_key: `at_risk_daily:${new Date().toISOString().slice(0, 10)}`,
+            created_date: new Date().toISOString(),
+          });
+        } catch (notifErr: any) {
+          console.error(`Failed to create at-risk notification for admin ${admin.id}:`, notifErr?.message);
+        }
       }
     }
 

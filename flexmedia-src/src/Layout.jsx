@@ -530,7 +530,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
       </aside>
 
         {/* Main Content */}
-        <main id="main-content" role="main" className="lg:ml-64 min-h-screen pt-14 lg:pt-16">
+        <main id="main-content" role="main" className="lg:ml-64 min-h-screen pt-14 lg:pt-16" style={{ scrollbarGutter: 'stable' }}>
           {children}
         </main>
 

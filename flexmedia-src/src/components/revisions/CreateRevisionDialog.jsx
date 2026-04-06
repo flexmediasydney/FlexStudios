@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,6 +69,12 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
   const updateManualTask = (i, field, value) => setManualTasks(p => {
     const next = [...p];
     next[i] = { ...next[i], [field]: value };
+    return next;
+  });
+  // Batch update multiple fields at once to avoid stale-state overwrites
+  const updateManualTaskBatch = (i, fields) => setManualTasks(p => {
+    const next = [...p];
+    next[i] = { ...next[i], ...fields };
     return next;
   });
 
@@ -246,6 +252,8 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
         `${requestKind === 'change_request' ? 'Change request' : 'Revision'} #${revNum} created: "${data.title}"`
       );
       toast.success("Request created");
+      refetchEntityList("ProjectRevision");
+      refetchEntityList("ProjectTask");
 
       // Notify image/video editors and project owner about the new request
       try {
@@ -304,7 +312,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
   };
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={o => { if (!o && !createMutation.isPending) onClose(); }}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>New Request</DialogTitle>
@@ -561,24 +569,24 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
                           value={task.assigned_to_team_id ? `team:${task.assigned_to_team_id}` : task.assigned_to ? `user:${task.assigned_to}` : "none"}
                           onValueChange={v => {
                             if (v === "none") {
-                              updateManualTask(i, "assigned_to", "");
-                              updateManualTask(i, "assigned_to_name", "");
-                              updateManualTask(i, "assigned_to_team_id", "");
-                              updateManualTask(i, "assigned_to_team_name", "");
+                              updateManualTaskBatch(i, {
+                                assigned_to: "", assigned_to_name: "",
+                                assigned_to_team_id: "", assigned_to_team_name: ""
+                              });
                             } else {
                               const [type, id] = v.split(":");
                               if (type === "user") {
                                 const u = users.find(u => u.id === id);
-                                updateManualTask(i, "assigned_to", id);
-                                updateManualTask(i, "assigned_to_name", u?.full_name || "");
-                                updateManualTask(i, "assigned_to_team_id", "");
-                                updateManualTask(i, "assigned_to_team_name", "");
+                                updateManualTaskBatch(i, {
+                                  assigned_to: id, assigned_to_name: u?.full_name || "",
+                                  assigned_to_team_id: "", assigned_to_team_name: ""
+                                });
                               } else {
                                 const t = teams.find(t => t.id === id);
-                                updateManualTask(i, "assigned_to_team_id", id);
-                                updateManualTask(i, "assigned_to_team_name", t?.name || "");
-                                updateManualTask(i, "assigned_to", "");
-                                updateManualTask(i, "assigned_to_name", "");
+                                updateManualTaskBatch(i, {
+                                  assigned_to_team_id: id, assigned_to_team_name: t?.name || "",
+                                  assigned_to: "", assigned_to_name: ""
+                                });
                               }
                             }
                           }}

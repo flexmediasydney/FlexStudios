@@ -22,8 +22,8 @@ const ROLE_SLOTS = [
   { role: 'drone_editor',     idField: 'drone_editor_id',     nameField: 'drone_editor_name',     typeField: null },
 ];
 
-// Map each role to its fallback tier
-const ROLE_FALLBACK_TIER: Record<string, string> = {
+// Legacy tier map — only used as fallback when team_role_assignments table is empty
+const LEGACY_ROLE_FALLBACK_TIER: Record<string, string> = {
   project_owner:    'owner',
   photographer:     'onsite',
   videographer:     'onsite',
@@ -57,35 +57,39 @@ Deno.serve(async (req) => {
       return errorResponse('Project not found', 404);
     }
 
-    // ── Load role defaults
-    const defaultsList = await entities.TonomoRoleDefaults.list('-created_date', 1).catch(() => []);
-    const defaults: any = defaultsList?.[0] || {};
+    // ── Load fallback team mappings from team_role_assignments (new system)
+    const { data: teamRoleRows } = await admin
+      .from('team_role_assignments')
+      .select('role, team_id, is_primary_fallback')
+      .eq('is_active', true)
+      .eq('is_primary_fallback', true);
+
+    // Build role → fallback team map
+    const fallbackTeamByRole = new Map<string, string>();
+    if (teamRoleRows && teamRoleRows.length > 0) {
+      for (const row of teamRoleRows) {
+        fallbackTeamByRole.set(row.role, row.team_id);
+      }
+    } else {
+      // Legacy fallback: read from TonomoRoleDefaults + tier map
+      const defaultsList = await entities.TonomoRoleDefaults.list('-created_date', 1).catch(() => []);
+      const defaults: any = defaultsList?.[0] || {};
+      const getLegacyTeamId = (tier: string) => {
+        if (tier === 'owner')   return defaults.owner_fallback_team_id   || null;
+        if (tier === 'onsite')  return defaults.onsite_fallback_team_id  || null;
+        if (tier === 'editing') return defaults.editing_fallback_team_id || null;
+        return null;
+      };
+      for (const slot of ROLE_SLOTS) {
+        const tier = LEGACY_ROLE_FALLBACK_TIER[slot.role];
+        const teamId = getLegacyTeamId(tier);
+        if (teamId) fallbackTeamByRole.set(slot.role, teamId);
+      }
+    }
 
     // ── Load all users for name denormalization
     const allUsers = await entities.User.list('-created_date', 500).catch(() => []);
     const usersById = new Map(allUsers.map((u: any) => [u.id, u]));
-
-    // Load teams if we have any fallback team configured
-    const hasFallbackTeams = defaults.owner_fallback_team_id ||
-      defaults.onsite_fallback_team_id || defaults.editing_fallback_team_id;
-
-    const usersByTeam = new Map<string, any[]>();
-    if (hasFallbackTeams) {
-      allUsers.forEach((u: any) => {
-        if (!u.internal_team_id) return;
-        const members = usersByTeam.get(u.internal_team_id) || [];
-        members.push(u);
-        usersByTeam.set(u.internal_team_id, members);
-      });
-    }
-
-    // Get fallback team ID for a given tier
-    const getFallbackTeamId = (tier: string) => {
-      if (tier === 'owner')   return defaults.owner_fallback_team_id   || null;
-      if (tier === 'onsite')  return defaults.onsite_fallback_team_id  || null;
-      if (tier === 'editing') return defaults.editing_fallback_team_id || null;
-      return null;
-    };
 
     const updates: Record<string, any> = {};
     const applied: string[] = [];
@@ -105,8 +109,7 @@ Deno.serve(async (req) => {
       }
 
       // Slot is empty — look for a fallback
-      const tier = ROLE_FALLBACK_TIER[slot.role];
-      const fallbackTeamId = getFallbackTeamId(tier);
+      const fallbackTeamId = fallbackTeamByRole.get(slot.role) || null;
 
       if (!fallbackTeamId) {
         skipped.push(slot.role);

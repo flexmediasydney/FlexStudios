@@ -90,10 +90,17 @@ export function NotificationProvider({ children }) {
   }, [currentUser?.id, fetchNotifications]);
 
   const markRead = useCallback(async (notificationId) => {
+    let wasUnread = false;
     setNotifications(prev =>
-      prev.map(n => n.id === notificationId ? { ...n, is_read: true } : n)
+      prev.map(n => {
+        if (n.id === notificationId) {
+          if (!n.is_read) wasUnread = true;
+          return { ...n, is_read: true };
+        }
+        return n;
+      })
     );
-    setUnreadCount(prev => Math.max(0, prev - 1));
+    if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
     try {
       await api.entities.Notification.update(notificationId, {
         is_read: true,
@@ -104,30 +111,39 @@ export function NotificationProvider({ children }) {
 
   const markAllRead = useCallback(async () => {
     const unread = notifications.filter(n => !n.is_read);
+    if (unread.length === 0) return;
     setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
     setUnreadCount(0);
     try {
-      await Promise.all(
-        unread.map(n =>
-          api.entities.Notification.update(n.id, {
-            is_read: true,
-            read_at: new Date().toISOString(),
-          })
-        )
-      );
+      // Batch in chunks of 20 to avoid overwhelming the API
+      const CHUNK_SIZE = 20;
+      const now = new Date().toISOString();
+      for (let i = 0; i < unread.length; i += CHUNK_SIZE) {
+        const chunk = unread.slice(i, i + CHUNK_SIZE);
+        await Promise.all(
+          chunk.map(n =>
+            api.entities.Notification.update(n.id, {
+              is_read: true,
+              read_at: now,
+            })
+          )
+        );
+      }
     } catch { fetchNotifications(true); }
   }, [notifications, fetchNotifications]);
 
   const dismiss = useCallback(async (notificationId) => {
-    setNotifications(prev => prev.filter(n => n.id !== notificationId));
-    setUnreadCount(prev => {
-      const wasUnread = notifications.find(n => n.id === notificationId && !n.is_read);
-      return wasUnread ? Math.max(0, prev - 1) : prev;
+    let wasUnread = false;
+    setNotifications(prev => {
+      const target = prev.find(n => n.id === notificationId);
+      if (target && !target.is_read) wasUnread = true;
+      return prev.filter(n => n.id !== notificationId);
     });
+    if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
     try {
       await api.entities.Notification.update(notificationId, { is_dismissed: true });
     } catch { fetchNotifications(true); }
-  }, [notifications, fetchNotifications]);
+  }, [fetchNotifications]);
 
   const refresh = useCallback(() => fetchNotifications(false), [fetchNotifications]);
 

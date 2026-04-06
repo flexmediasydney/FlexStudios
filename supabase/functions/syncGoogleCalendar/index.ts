@@ -1,4 +1,5 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { MAX_PROJECTS_FETCH, MAX_USERS_FETCH } from '../_shared/constants.ts';
 
 const refreshAccessToken = async (clientId: string, clientSecret: string, refreshToken: string): Promise<string> => {
   const response = await fetch('https://oauth2.googleapis.com/token', {
@@ -89,7 +90,7 @@ Deno.serve(async (req) => {
 
     // ── Load ALL projects for auto-linking ────────────────────────────────────
     const allProjects = autoLinkEnabled
-      ? await entities.Project.list('-created_date', 2000) || []
+      ? await entities.Project.list('-created_date', MAX_PROJECTS_FETCH) || []
       : [];
     const projectByGoogleEventId = new Map();
     if (autoLinkEnabled) {
@@ -102,7 +103,7 @@ Deno.serve(async (req) => {
 
     // ── Load users for attendee → staff matching ──────────────────────────────
     const allUsers = autoLinkEnabled
-      ? await entities.User.list('-created_date', 500) || []
+      ? await entities.User.list('-created_date', MAX_USERS_FETCH) || []
       : [];
     const usersByEmail = new Map();
     if (autoLinkEnabled) {
@@ -254,6 +255,13 @@ Deno.serve(async (req) => {
 
             const startTime = gEvent.start?.dateTime || gEvent.start?.date || null;
             const endTime = gEvent.end?.dateTime || gEvent.end?.date || null;
+
+            // Skip events with no start/end time (malformed Google data)
+            if (!startTime || !endTime) {
+              accountResult.errors.push(`Event ${gEvent.id}: missing start or end time, skipped`);
+              continue;
+            }
+
             const isAllDay = !gEvent.start?.dateTime;
 
             const attendeeList = gEvent.attendees

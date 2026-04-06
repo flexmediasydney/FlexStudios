@@ -241,7 +241,11 @@ export function useProjectEffortSummary(projectId, project = null) {
     return () => clearInterval(id);
   }, [timeLogs]);
 
-  const metrics = useMemo(() => calculateEffortMetrics(timeLogs, projectTasks, projectRevisions), [timeLogs, projectTasks, projectRevisions]);
+  // Include `tick` in deps so that running-timer live seconds (computed via Date.now()
+  // inside computeLogSeconds) are recalculated every second instead of returning stale
+  // memoized values until the next real subscription event.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const metrics = useMemo(() => calculateEffortMetrics(timeLogs, projectTasks, projectRevisions), [timeLogs, projectTasks, projectRevisions, tick]);
 
   const taskRoleList = useMemo(() => buildRoleList(metrics.task.actualByRole, metrics.task.estimatedByRole), [metrics]);
   const revisionRoleList = useMemo(() => buildRoleList(metrics.revision.actualByRole, metrics.revision.estimatedByRole), [metrics]);
