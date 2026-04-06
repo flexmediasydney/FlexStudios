@@ -263,11 +263,17 @@ export function assignStaffToProjectFields(resolvedPhotographers: any[], booking
   return fields;
 }
 
-// Deduplicate products/packages on a project
-export function deduplicateProjectItems(autoProducts: any[], autoPackages: any[], _allProducts: any[], _allPackages: any[]) {
+// Deduplicate products/packages on a project.
+// 1. Dedup identical product_id / package_id entries.
+// 2. Remove standalone products that are already included inside a resolved package
+//    (package takes precedence as a bundled offering). If the standalone qty is higher
+//    than the package's included qty, keep the higher qty on the package's nested entry.
+export function deduplicateProjectItems(autoProducts: any[], autoPackages: any[], _allProducts: any[], allPackages: any[]) {
+  // --- Dedup identical IDs first ---
   const seenProducts = new Map<string, any>();
   for (const p of autoProducts) {
-    if (!seenProducts.has(p.product_id)) {
+    const existing = seenProducts.get(p.product_id);
+    if (!existing || (p.quantity || 1) > (existing.quantity || 1)) {
       seenProducts.set(p.product_id, p);
     }
   }
@@ -277,6 +283,48 @@ export function deduplicateProjectItems(autoProducts: any[], autoPackages: any[]
       seenPackages.set(p.package_id, p);
     }
   }
+
+  // --- Cross-reference: collect all product IDs included in resolved packages ---
+  // Map of product_id → max included quantity across all packages
+  const packageProductQty = new Map<string, number>();
+  for (const ap of seenPackages.values()) {
+    const pkgDef = allPackages.find((pk: any) => pk.id === ap.package_id);
+    if (!pkgDef?.products || !Array.isArray(pkgDef.products)) continue;
+    for (const nested of pkgDef.products) {
+      const pid = nested.product_id;
+      if (!pid) continue;
+      const inclQty = nested.quantity || 1;
+      packageProductQty.set(pid, Math.max(packageProductQty.get(pid) || 0, inclQty));
+    }
+  }
+
+  // Remove standalone products already covered by a package
+  for (const [productId, standaloneItem] of seenProducts) {
+    if (packageProductQty.has(productId)) {
+      const standaloneQty = standaloneItem.quantity || 1;
+      const packageQty = packageProductQty.get(productId)!;
+      // If standalone has a higher qty, bump the package's nested product qty
+      if (standaloneQty > packageQty) {
+        for (const ap of seenPackages.values()) {
+          const pkgDef = allPackages.find((pk: any) => pk.id === ap.package_id);
+          const nestedMatch = (pkgDef?.products || []).find((n: any) => n.product_id === productId);
+          if (nestedMatch) {
+            // Store the higher qty as an override on the project-level package entry
+            if (!ap.products) ap.products = [];
+            const existingOverride = ap.products.find((p: any) => p.product_id === productId);
+            if (existingOverride) {
+              existingOverride.quantity = Math.max(existingOverride.quantity || 1, standaloneQty);
+            } else {
+              ap.products.push({ product_id: productId, quantity: standaloneQty });
+            }
+            break;
+          }
+        }
+      }
+      seenProducts.delete(productId);
+    }
+  }
+
   return {
     products: Array.from(seenProducts.values()),
     packages: Array.from(seenPackages.values()),
