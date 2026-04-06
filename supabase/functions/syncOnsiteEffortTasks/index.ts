@@ -30,7 +30,8 @@ Deno.serve(async (req) => {
       const qty = item.quantity || 1;
       const base = tier.onsite_time || 0;
       const increment = tier.onsite_time_increment || 0;
-      const mins = base + Math.max(0, qty - 1) * increment;
+      const includedQty = tier.included_qty || product.min_quantity || 1;
+      const mins = base + Math.max(0, qty - includedQty) * increment;
       if (mins > onsiteMaxMins) onsiteMaxMins = mins;
     });
 
@@ -49,7 +50,8 @@ Deno.serve(async (req) => {
           const qty = prodItem.quantity || 1;
           const base = prodTier.onsite_time || 0;
           const increment = prodTier.onsite_time_increment || 0;
-          const mins = base + Math.max(0, qty - 1) * increment;
+          const includedQty = prodTier.included_qty || product.min_quantity || 1;
+          const mins = base + Math.max(0, qty - includedQty) * increment;
           if (mins > onsiteMaxMins) onsiteMaxMins = mins;
         });
       }
