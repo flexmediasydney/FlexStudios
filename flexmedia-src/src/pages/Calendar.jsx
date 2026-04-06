@@ -9,7 +9,7 @@ import {
 import {
   ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon,
   Users, RefreshCw, Search, AlertTriangle, Clock, X,
-  Camera, Coffee, Globe, Building2, MapPin
+  Camera, Coffee, Globe, Building2, MapPin, CheckSquare
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { expandRecurringEvent } from "@/components/calendar/CalendarEventUtils";
@@ -235,6 +235,7 @@ export default function CalendarPage() {
   const EVENT_FILTERS = [
     { id: 'shoots', label: 'Shoots', icon: Camera },
     { id: 'meetings', label: 'Meetings', icon: Users },
+    { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'personal', label: 'Personal', icon: Coffee },
     { id: 'google', label: 'Google', icon: Globe },
   ];
@@ -301,6 +302,34 @@ export default function CalendarPage() {
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
   });
+
+  // ── Tasks with due dates → virtual calendar events ──
+  const { data: tasksWithDueDates = [] } = useQuery({
+    queryKey: ["calendar-tasks", format(currentDate, 'yyyy-MM')],
+    queryFn: async () => {
+      const tasks = await api.entities.ProjectTask.filter({}, null, 1000);
+      return (tasks || []).filter(t => t.due_date && !t.is_deleted);
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const taskEvents = useMemo(() => {
+    return tasksWithDueDates.map(task => ({
+      id: `task:${task.id}`,
+      title: `${task.title}${task.is_completed ? ' ✓' : ''}`,
+      start_time: task.due_date,
+      end_time: task.due_date,
+      activity_type: 'task',
+      event_source: 'flexmedia',
+      _isTask: true,
+      _taskId: task.id,
+      _projectId: task.project_id,
+      _isCompleted: task.is_completed,
+      owner_user_id: task.assigned_to || null,
+      location: null,
+      description: task.description || null,
+    }));
+  }, [tasksWithDueDates]);
 
   // ── User → colour map ── (hash-based for stable colours regardless of user order)
   const userIdKey = users.map(u => u.id).join(',');
@@ -446,8 +475,14 @@ export default function CalendarPage() {
       }
     }
 
+    // Merge task events into the deduplicated list
+    for (const taskEv of taskEvents) {
+      const owners = taskEv.owner_user_id ? [taskEv.owner_user_id] : [];
+      result.push({ event: taskEv, owners });
+    }
+
     return result;
-  }, [expandedEvents, eventsByUser]);
+  }, [expandedEvents, eventsByUser, taskEvents]);
 
   // ── Conflict detection: find overlapping events for the same owner ────────
   const conflictSet = useMemo(() => {
@@ -507,6 +542,7 @@ export default function CalendarPage() {
         const passesFilter = (ev) => {
           if (activeFilters.has('shoots') && (ev.activity_type === 'shoot' || ev.event_source === 'tonomo')) return true;
           if (activeFilters.has('meetings') && ev.activity_type === 'meeting') return true;
+          if (activeFilters.has('tasks') && (ev.activity_type === 'task' || ev.activity_type === 'deadline' || ev._isTask)) return true;
           if (activeFilters.has('personal') && ['lunch', 'personal', 'other'].includes(ev.activity_type)) return true;
           if (activeFilters.has('google') && ev.event_source === 'google') return true;
           return false;
@@ -668,10 +704,11 @@ export default function CalendarPage() {
 
   // Compute event counts per filter chip for badges
   const filterCounts = useMemo(() => {
-    const counts = { shoots: 0, meetings: 0, personal: 0, google: 0 };
+    const counts = { shoots: 0, meetings: 0, tasks: 0, personal: 0, google: 0 };
     for (const { event } of deduplicatedEvents) {
       if (event.activity_type === 'shoot' || event.event_source === 'tonomo') counts.shoots++;
       if (event.activity_type === 'meeting') counts.meetings++;
+      if (event.activity_type === 'task' || event.activity_type === 'deadline' || event._isTask) counts.tasks++;
       if (['lunch', 'personal', 'other'].includes(event.activity_type)) counts.personal++;
       if (event.event_source === 'google') counts.google++;
     }
