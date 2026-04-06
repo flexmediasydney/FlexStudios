@@ -3,27 +3,25 @@ import { useEntityList } from '@/components/hooks/useEntityData';
 import { api } from '@/api/supabaseClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import {
-  X, ChevronRight, MapPin, DollarSign, TrendingUp, TrendingDown,
-  Building2, Play, Pause, Layers, BarChart3, Eye, Clock,
-  Loader2, Crosshair, List, Calendar, AlertTriangle, Filter,
+  X, ChevronRight, MapPin, DollarSign,
+  Building2, Play, Pause, Layers, BarChart3, Clock,
+  Loader2, Crosshair, AlertTriangle,
   ChevronDown, Check, Search, RotateCcw, User, Briefcase,
-  Sun, Moon, Zap, Flame, ArrowUp, ArrowDown, Minus, Activity,
-  Radio, Truck, PieChart, Users, Shield,
+  Sun, Moon, Flame, Activity,
+  Radio, Truck, PieChart, Users,
   Maximize, Minimize, GitCompare, ArrowRight
 } from 'lucide-react';
 import { MapContainer, TileLayer, useMap, CircleMarker, Circle, Tooltip as LTooltip, ZoomControl } from 'react-leaflet';
 import { fixTimestamp, fmtDate, todaySydney, parseDate } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import MarkerClusterLayer from './MarkerClusterLayer';
-import { format, subMonths, differenceInDays, startOfMonth, endOfMonth, eachMonthOfInterval, isToday, isFuture, isPast, getDay } from 'date-fns';
+import { format, subMonths, differenceInDays, startOfMonth, endOfMonth, eachMonthOfInterval, getDay } from 'date-fns';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -80,7 +78,8 @@ function getAgencyColor(agencyName) {
 }
 function getDominantAgency(projects) {
   const counts = {};
-  projects.forEach(p => { if (p.agency_name) counts[p.agency_name] = (counts[p.agency_name] || 0) + 1; });
+  // Prefer agency_name, fallback to agent_name (most projects have agents, few have agencies)
+  projects.forEach(p => { const n = p.agency_name || p.agent_name; if (n) counts[n] = (counts[n] || 0) + 1; });
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   return sorted[0] ? { name: sorted[0][0], count: sorted[0][1] } : null;
 }
@@ -335,7 +334,7 @@ function SuburbPanel({ cluster, onClose, allProjects }) {
   const projects = cluster.projects;
   const totalRevenue = projects.reduce((s, p) => s + projectValue(p), 0);
   const agencies = {};
-  projects.forEach(p => { if (p.agency_name) agencies[p.agency_name] = (agencies[p.agency_name] || 0) + 1; });
+  projects.forEach(p => { const n = p.agency_name || p.agent_name; if (n) agencies[n] = (agencies[n] || 0) + 1; });
   const topAgencies = Object.entries(agencies).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const stages = {};
   projects.forEach(p => { stages[p.status] = (stages[p.status] || 0) + 1; });
@@ -373,14 +372,16 @@ function SuburbPanel({ cluster, onClose, allProjects }) {
   // ── Client Intelligence: concentration risk ──
   const concentrationRisk = useMemo(() => {
     if (projects.length < 3) return null;
-    const sorted = Object.entries(agencies).sort((a, b) => b[1] - a[1]);
+    const agencyCounts = {};
+    projects.forEach(p => { if (p.agency_name) agencyCounts[p.agency_name] = (agencyCounts[p.agency_name] || 0) + 1; });
+    const sorted = Object.entries(agencyCounts).sort((a, b) => b[1] - a[1]);
     if (sorted.length === 0) return null;
     const [topName, topCount] = sorted[0];
     const pct = Math.round((topCount / projects.length) * 100);
     if (pct >= 70) return { name: topName, count: topCount, total: projects.length, pct, level: 'high' };
     if (pct >= 50) return { name: topName, count: topCount, total: projects.length, pct, level: 'medium' };
     return null;
-  }, [projects, agencies]);
+  }, [projects]);
 
   // ── Client Intelligence: top agents by project count ──
   const topAgentsData = useMemo(() => {
@@ -542,7 +543,7 @@ function SuburbPanel({ cluster, onClose, allProjects }) {
         <div>
           <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Projects</div>
           <div className="space-y-1">
-            {projects.sort((a, b) => new Date(fixTimestamp(b.created_date || '')) - new Date(fixTimestamp(a.created_date || ''))).slice(0, 20).map(p => (
+            {[...projects].sort((a, b) => new Date(fixTimestamp(b.created_date || '')) - new Date(fixTimestamp(a.created_date || ''))).slice(0, 20).map(p => (
               <Link key={p.id} to={createPageUrl('ProjectDetails') + `?id=${p.id}`} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted transition-colors text-left w-full">
                 <div className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: getStageColor(p.status) }} />
                 <div className="flex-1 min-w-0">
@@ -751,7 +752,7 @@ function AgencyLegend({ clusters }) {
   const agencyCounts = useMemo(() => {
     const counts = {};
     clusters.forEach(c => c.projects.forEach(p => {
-      if (p.agency_name) counts[p.agency_name] = (counts[p.agency_name] || 0) + 1;
+      const n = p.agency_name || p.agent_name; if (n) counts[n] = (counts[n] || 0) + 1;
     }));
     return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }, [clusters]);
@@ -878,7 +879,7 @@ function ComparePanel({ clusterA, clusterB, onClose }) {
     const totalRev = projects.reduce((s, p) => s + projectValue(p), 0);
     const avgVal = projects.length > 0 ? Math.round(totalRev / projects.length) : 0;
     const agencies = {};
-    projects.forEach(p => { if (p.agency_name) agencies[p.agency_name] = (agencies[p.agency_name] || 0) + 1; });
+    projects.forEach(p => { const n = p.agency_name || p.agent_name; if (n) agencies[n] = (agencies[n] || 0) + 1; });
     const topAgency = Object.entries(agencies).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A';
     const now = new Date();
     const sixAgo = subMonths(now, 6);
@@ -1030,7 +1031,6 @@ export default function TerritoryMap() {
   const [monthsBack, setMonthsBack] = useState(0);
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [mapTheme, setMapTheme] = useState('light');
-  const [mapKey, setMapKey] = useState(0);
 
   // Time-based filter
   const [timeFilter, setTimeFilter] = useState('all');
