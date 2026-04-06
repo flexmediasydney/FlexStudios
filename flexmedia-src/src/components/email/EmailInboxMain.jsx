@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -212,12 +212,121 @@ export default function EmailInboxMain() {
     return filters;
   }, [filterView]);
 
-  const { data: messages = [], loading: messagesLoading, refetch: refetchMessages } = useEntitySubscriptionWithFilter(
-    'EmailMessage',
-    messageFilters,
-    [],
-    { sortBy: '-received_at', limit: 5000 }
-  );
+  // Paginated email loading: fetch 50 at a time instead of all 5000
+  const PAGE_SIZE = 50;
+  const [messages, setMessages] = useState([]);
+  const [messagesLoading, setMessagesLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const messagesOffsetRef = useRef(0);
+  const messageFilterKeyRef = useRef(null);
+
+  // Initial fetch + reset when filters change
+  useEffect(() => {
+    let isMounted = true;
+    const filterKey = JSON.stringify(messageFilters);
+
+    // Reset pagination state when filters change
+    messageFilterKeyRef.current = filterKey;
+    messagesOffsetRef.current = 0;
+    setMessages([]);
+    setMessagesLoading(true);
+    setHasMoreMessages(true);
+
+    const fetchInitial = async () => {
+      try {
+        const result = await api.entities.EmailMessage.filterPaginated(
+          messageFilters, '-received_at', PAGE_SIZE, 0
+        );
+        if (isMounted && messageFilterKeyRef.current === filterKey) {
+          setMessages(result.data);
+          setHasMoreMessages(result.hasMore);
+          messagesOffsetRef.current = result.data.length;
+          setMessagesLoading(false);
+        }
+      } catch (error) {
+        console.error('Failed to fetch emails:', error);
+        if (isMounted) setMessagesLoading(false);
+      }
+    };
+
+    fetchInitial();
+
+    // Real-time subscription: new emails appear at top instantly
+    const unsubscribe = api.entities.EmailMessage.subscribe((event) => {
+      if (!isMounted || messageFilterKeyRef.current !== filterKey) return;
+
+      if (event.type === 'create') {
+        if (matchesMessageFilter(event.data, messageFilters)) {
+          setMessages((prev) => {
+            if (prev.some(item => item.id === event.data?.id)) return prev;
+            return [event.data, ...prev];
+          });
+          messagesOffsetRef.current += 1;
+        }
+      } else if (event.type === 'update') {
+        if (matchesMessageFilter(event.data, messageFilters)) {
+          setMessages((prev) => {
+            const exists = prev.find(item => item.id === event.id);
+            if (exists) {
+              return prev.map(item => item.id === event.id ? event.data : item);
+            }
+            return [event.data, ...prev];
+          });
+          // Offset only increases if it was a new addition (not an in-place update)
+          // — small imprecision is fine, dedup in loadMore handles edge cases
+        } else {
+          // Entity no longer matches filter — remove it
+          setMessages((prev) => prev.filter(item => item.id !== event.id));
+          messagesOffsetRef.current = Math.max(0, messagesOffsetRef.current - 1);
+        }
+      } else if (event.type === 'delete') {
+        setMessages((prev) => prev.filter(item => item.id !== event.id));
+        messagesOffsetRef.current = Math.max(0, messagesOffsetRef.current - 1);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [JSON.stringify(messageFilters)]);
+
+  const loadMoreMessages = useCallback(async () => {
+    if (loadingMore || !hasMoreMessages) return;
+    setLoadingMore(true);
+    try {
+      const result = await api.entities.EmailMessage.filterPaginated(
+        messageFilters, '-received_at', PAGE_SIZE, messagesOffsetRef.current
+      );
+      setMessages(prev => {
+        // Deduplicate: real-time subscription may have already added some
+        const existingIds = new Set(prev.map(m => m.id));
+        const newItems = result.data.filter(m => !existingIds.has(m.id));
+        return [...prev, ...newItems];
+      });
+      setHasMoreMessages(result.hasMore);
+      messagesOffsetRef.current += result.data.length;
+    } catch (error) {
+      console.error('Failed to load more emails:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMoreMessages, messageFilters]);
+
+  const refetchMessages = useCallback(async () => {
+    try {
+      messagesOffsetRef.current = 0;
+      const result = await api.entities.EmailMessage.filterPaginated(
+        messageFilters, '-received_at', PAGE_SIZE, 0
+      );
+      setMessages(result.data);
+      setHasMoreMessages(result.hasMore);
+      messagesOffsetRef.current = result.data.length;
+    } catch (error) {
+      console.error('Failed to refetch emails:', error);
+    }
+  }, [messageFilters]);
 
 
 
@@ -1408,6 +1517,9 @@ export default function EmailInboxMain() {
                 }}
                 onReorderColumns={reorderColumns}
                 onResizeColumn={resizeColumn}
+                onLoadMore={loadMoreMessages}
+                hasMore={hasMoreMessages}
+                loadingMore={loadingMore}
                 onContextMenu={async (thread, action) => {
                   try {
                     if (action === 'archive') {
@@ -1510,3 +1622,20 @@ export default function EmailInboxMain() {
       </div>
       );
       }
+
+/**
+ * Check if a message matches the folder filter criteria.
+ * Treats null/undefined as equivalent to false for boolean filters.
+ */
+function matchesMessageFilter(entity, filter) {
+  if (!entity || typeof entity !== 'object') return false;
+  for (const [key, value] of Object.entries(filter)) {
+    if (typeof value === 'boolean') {
+      const entityVal = entity[key] == null ? false : entity[key];
+      if (entityVal !== value) return false;
+    } else if (entity[key] !== value) {
+      return false;
+    }
+  }
+  return true;
+}

@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { Loader2 } from "lucide-react";
 import EmailListHeader from "./EmailListHeader";
 import EmailListRow from "./EmailListRow";
 import EmailListEmpty from "./EmailListEmpty";
@@ -23,6 +24,9 @@ export default function EmailListContainer({
   onContextMenu,
   onReorderColumns,
   onResizeColumn,
+  onLoadMore,
+  hasMore = false,
+  loadingMore = false,
 }) {
   const allSelected =
     selectedMessages.size === filteredThreads.length && filteredThreads.length > 0;
@@ -42,6 +46,26 @@ export default function EmailListContainer({
       parentRef.current.scrollTop = 0;
     }
   }, [filterView, searchQuery, filterUnread, filteredThreads.length]);
+
+  // Intersection observer: trigger loadMore when user scrolls near the bottom
+  const loadMoreRef = useRef(null);
+  useEffect(() => {
+    if (!onLoadMore || !hasMore) return;
+    const el = loadMoreRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore) {
+          onLoadMore();
+        }
+      },
+      { root: parentRef.current, rootMargin: '200px' }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [onLoadMore, hasMore, loadingMore]);
 
   if (messagesLoading) {
     return (
@@ -137,6 +161,20 @@ export default function EmailListContainer({
             );
           })}
         </div>
+
+        {/* Load-more sentinel — triggers intersection observer */}
+        {hasMore && (
+          <div ref={loadMoreRef} className="flex items-center justify-center py-3">
+            {loadingMore ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Loading more...
+              </div>
+            ) : (
+              <div className="h-1" />
+            )}
+          </div>
+        )}
       </div>
 
       {/* Count footer */}

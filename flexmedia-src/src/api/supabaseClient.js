@@ -253,6 +253,21 @@ function createEntityApi(entityName, client) {
     },
 
     /**
+     * Paginated filter: same as filter() but supports offset for cursor-based pagination.
+     * Returns { data, hasMore } where hasMore indicates if there are more rows to fetch.
+     */
+    async filterPaginated(filterObj = {}, sortBy = null, limit = 50, offset = 0) {
+      let query = client.from(table).select('*');
+      query = applyFilters(query, filterObj);
+      query = applySort(query, sortBy);
+      query = query.range(offset, offset + limit - 1);
+      const { data, error } = await query;
+      if (error) throw new Error(error.message);
+      const rows = mapRows(data || []);
+      return { data: rows, hasMore: rows.length === limit };
+    },
+
+    /**
      * Get a single entity by ID.
      * Base44 signature: Entity.get(id)
      */
