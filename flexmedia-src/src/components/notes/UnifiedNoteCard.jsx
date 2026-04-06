@@ -82,6 +82,7 @@ function relativeTime(utcStr) {
 import { sanitizeDisplayHtml as sanitizeDisplay } from '@/utils/sanitizeHtml';
 
 function ReplyBubble({ reply }) {
+  const replyAttachments = Array.isArray(reply.attachments) ? reply.attachments : [];
   return (
     <div className="flex gap-2.5 py-2">
       <AuthorAvatar name={reply.author_name} size="sm" />
@@ -97,6 +98,23 @@ function ReplyBubble({ reply }) {
           />
         ) : (
           <p className="text-xs text-foreground/80 mt-0.5 whitespace-pre-wrap">{reply.content}</p>
+        )}
+        {replyAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {replyAttachments.map((att, i) => {
+              const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(att.file_name || '');
+              return isImage ? (
+                <a key={i} href={att.file_url} target="_blank" rel="noopener noreferrer" className="block">
+                  <img src={att.file_url} alt={att.file_name} className="h-16 w-auto rounded border hover:opacity-80 transition-opacity" />
+                </a>
+              ) : (
+                <a key={i} href={att.file_url} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-muted hover:bg-muted/80 text-foreground border transition-colors">
+                  📎 {att.file_name || `File ${i + 1}`}
+                </a>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>
