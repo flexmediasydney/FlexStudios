@@ -347,14 +347,31 @@ export default function CalendarPage() {
   });
 
   // ── Tasks with due dates → virtual calendar events ──
+  const queryClient2 = useQueryClient();
   const { data: tasksWithDueDates = [] } = useQuery({
     queryKey: ["calendar-tasks", format(currentDate, 'yyyy-MM')],
     queryFn: async () => {
-      const tasks = await api.entities.ProjectTask.filter({}, null, 1000);
-      return (tasks || []).filter(t => t.due_date && !t.is_deleted);
+      // Scope to visible date range (same as calendar events)
+      const rangeStart = subMonths(startOfDay(currentDate), 1);
+      const rangeEnd = addMonths(startOfDay(currentDate), 2);
+      const tasks = await api.entities.ProjectTask.filter({}, null, 2000);
+      return (tasks || []).filter(t =>
+        t.due_date && !t.is_deleted &&
+        t.due_date >= rangeStart.toISOString() &&
+        t.due_date <= rangeEnd.toISOString()
+      );
     },
-    staleTime: 60 * 1000,
+    staleTime: 15 * 1000, // Refresh every 15s for near-real-time
+    refetchInterval: 30 * 1000, // Auto-refetch every 30s
   });
+
+  // Real-time subscription: refetch when tasks change (create/complete/delete)
+  useEffect(() => {
+    const unsub = api.entities.ProjectTask.subscribe((event) => {
+      queryClient2.invalidateQueries({ queryKey: ["calendar-tasks"] });
+    });
+    return typeof unsub === 'function' ? unsub : undefined;
+  }, [queryClient2]);
 
   // Build project lookup for task enrichment
   const { data: allProjects = [] } = useQuery({
