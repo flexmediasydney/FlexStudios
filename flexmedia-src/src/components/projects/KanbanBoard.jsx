@@ -665,7 +665,21 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
       {/* ── Full kanban view ── */}
       {viewMode === 'full' && (
         <DragDropContext onDragEnd={onDragEnd}>
-          <div className={`flex gap-2 pb-2 ${fitToScreen ? "overflow-x-hidden" : "overflow-x-auto"}`}>
+          <div
+            className={`flex gap-2 pb-2 ${fitToScreen ? "overflow-x-hidden" : "overflow-x-auto scroll-smooth"}`}
+            style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch', scrollSnapType: 'x proximity' }}
+            onMouseDown={(e) => {
+              // Grab-to-scroll: hold and drag horizontally
+              const el = e.currentTarget;
+              if (e.target.closest('button, a, input, [draggable]')) return;
+              let startX = e.pageX, scrollLeft = el.scrollLeft, isDragging = false;
+              const onMove = (ev) => { isDragging = true; el.scrollLeft = scrollLeft - (ev.pageX - startX); };
+              const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); if (isDragging) el.style.cursor = ''; };
+              document.addEventListener('mousemove', onMove);
+              document.addEventListener('mouseup', onUp);
+              el.style.cursor = 'grabbing';
+            }}
+          >
             {statusColumns.map(column => {
               const columnProjects = filteredProjects.filter(p => p.status === column.id);
 
@@ -685,7 +699,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
               }).length;
 
               return (
-                <div key={column.id} className={fitToScreen ? "flex-1 min-w-0" : "flex-shrink-0 w-80"}>
+                <div key={column.id} className={fitToScreen ? "flex-1 min-w-0" : "flex-shrink-0 w-72"} style={{ scrollSnapAlign: 'start' }}>
                   {/* Column Header */}
                   <div className={`${column.color} px-3 py-2.5 rounded-t-md shadow-sm`}>
                     <div className="flex items-center justify-between mb-2">
