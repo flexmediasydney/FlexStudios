@@ -134,7 +134,7 @@ function CalendarSkeleton({ view }) {
 }
 
 export default function CalendarPage() {
-  const { isContractor, user: permUser } = usePermissions();
+  const { user: permUser } = usePermissions();
   
   const [view, setViewRaw] = useState(() => {
     // Persist calendar view across navigation
@@ -474,16 +474,11 @@ export default function CalendarPage() {
         if (!passesFilter(event)) return false;
       }
 
-      // Contractors: hide events they don't own and aren't linked to a project
-      if (isContractor && !event.project_id && event.owner_user_id && event.owner_user_id !== permUser?.id) {
-        return false;
-      }
-
       if (selectedUserIds.includes("all")) return true;
       // Must belong to at least one selected user
       return owners.some(uid => selectedUserIds.includes(uid));
     });
-  }, [deduplicatedEvents, filterType, activeFilters, selectedUserIds, isContractor, permUser, searchQuery]);
+  }, [deduplicatedEvents, filterType, activeFilters, selectedUserIds, searchQuery]);
 
   // ── Person selector handlers ───────────────────────────────────────────────
   const handlePersonClick = useCallback((userId, evt) => {

@@ -66,7 +66,7 @@ export default function Projects() {
   const [shootDateFrom, setShootDateFrom] = useState('');
   const [shootDateTo, setShootDateTo] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
-  const { isContractor, canAccessProject, canSeePricing } = usePermissions();
+  const { canAccessProject, canSeePricing } = usePermissions();
   const { enabledFields } = useCardFields();
   const { data: currentUser } = useCurrentUser();
 

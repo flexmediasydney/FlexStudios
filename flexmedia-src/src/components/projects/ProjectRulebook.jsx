@@ -253,9 +253,9 @@ export default function ProjectRulebook() {
             </p>
           </div>
           <div>
-            <h4 className="font-medium mb-1">Contractor Visibility Rules</h4>
+            <h4 className="font-medium mb-1">Role-Based Access</h4>
             <p className="text-muted-foreground">
-              Contractors only see projects where they are assigned via a staff role (project owner, onsite staff, image editor, video editor). They cannot see pricing (hidden if role != master_admin or employee). Contractor project edits are restricted to assigned projects only, enforced both UI and backend.
+              Two roles exist: master_admin (full access) and employee (operational access). Pricing visibility is controlled by role. Staff role assignments on projects are used for workflow management and notification targeting.
             </p>
           </div>
           <div>

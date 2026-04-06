@@ -22,7 +22,7 @@ export default function AgencyProjectsTab({ projects = [], agencyId }) {
   const [filters, setFilters] = useState({});
   const [sortBy, setSortBy] = useState("last_status_change");
 
-  const { canSeePricing, canAccessProject, isContractor } = usePermissions();
+  const { canSeePricing, canAccessProject } = usePermissions();
   const { enabledFields } = useCardFields();
   const { data: currentUser } = useCurrentUser();
 

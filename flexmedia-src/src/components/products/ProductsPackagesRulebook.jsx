@@ -341,7 +341,7 @@ const sections = [
         type: "constraint",
         icon: Lock,
         label: "Admin & Employee Access Only",
-        desc: "The Products & Packages settings page is restricted to users with the 'master_admin' or 'employee' role. Contractors and other roles do not have access to this module."
+        desc: "The Products & Packages settings page is restricted to users with the 'master_admin' or 'employee' role."
       },
       {
         type: "constraint",

@@ -72,52 +72,11 @@ describe('canAccessRoute', () => {
     expect(canAccessRoute('SomeUnknownRoute', 'employee')).toBe(false);
   });
 
-  // ── contractor access ─────────────────────────────────────────────────────
-  it('contractor can access ALL_ROLES routes', () => {
-    expect(canAccessRoute('Dashboard', 'contractor')).toBe(true);
-    expect(canAccessRoute('Calendar', 'contractor')).toBe(true);
-    expect(canAccessRoute('Projects', 'contractor')).toBe(true);
-    expect(canAccessRoute('ProjectDetails', 'contractor')).toBe(true);
-    expect(canAccessRoute('Inbox', 'contractor')).toBe(true);
-    expect(canAccessRoute('NotificationsPage', 'contractor')).toBe(true);
-    expect(canAccessRoute('UserSettings', 'contractor')).toBe(true);
-  });
-
-  it('contractor is blocked from CRM routes', () => {
-    expect(canAccessRoute('ClientAgents', 'contractor')).toBe(false);
-    expect(canAccessRoute('Organisations', 'contractor')).toBe(false);
-    expect(canAccessRoute('People', 'contractor')).toBe(false);
-    expect(canAccessRoute('Teams', 'contractor')).toBe(false);
-    expect(canAccessRoute('Prospecting', 'contractor')).toBe(false);
-    expect(canAccessRoute('ClientMonitor', 'contractor')).toBe(false);
-  });
-
-  it('contractor is blocked from settings routes', () => {
+  // ── unknown roles are blocked ─────────────────────────────────────────────
+  it('unknown role is blocked from all routes', () => {
+    expect(canAccessRoute('Dashboard', 'contractor')).toBe(false);
     expect(canAccessRoute('Settings', 'contractor')).toBe(false);
-    expect(canAccessRoute('SettingsOrganisation', 'contractor')).toBe(false);
-    expect(canAccessRoute('SettingsIntegrations', 'contractor')).toBe(false);
-  });
-
-  it('contractor is blocked from admin-only routes', () => {
     expect(canAccessRoute('Users', 'contractor')).toBe(false);
-    expect(canAccessRoute('SettingsTeamsUsers', 'contractor')).toBe(false);
-    expect(canAccessRoute('AdminTodoList', 'contractor')).toBe(false);
-  });
-
-  it('contractor is blocked from analytics routes', () => {
-    expect(canAccessRoute('Analytics', 'contractor')).toBe(false);
-    expect(canAccessRoute('Reports', 'contractor')).toBe(false);
-    expect(canAccessRoute('BusinessIntelligence', 'contractor')).toBe(false);
-  });
-
-  it('contractor can access public/gallery routes', () => {
-    expect(canAccessRoute('ClientGallery', 'contractor')).toBe(true);
-    expect(canAccessRoute('MarketingWithFlex', 'contractor')).toBe(true);
-    expect(canAccessRoute('BountyBoard', 'contractor')).toBe(true);
-    expect(canAccessRoute('InternalRoadmap', 'contractor')).toBe(true);
-  });
-
-  it('contractor is blocked from unlisted routes', () => {
     expect(canAccessRoute('SomeUnknownRoute', 'contractor')).toBe(false);
   });
 });
@@ -135,30 +94,17 @@ describe('getAccessLevel', () => {
     expect(getAccessLevel('Settings', 'employee')).toBe('full');
   });
 
-  it('returns "filtered" for contractor on filtered pages', () => {
-    expect(getAccessLevel('Dashboard', 'contractor')).toBe('filtered');
-    expect(getAccessLevel('Projects', 'contractor')).toBe('filtered');
-    expect(getAccessLevel('ProjectDetails', 'contractor')).toBe('filtered');
-    expect(getAccessLevel('Calendar', 'contractor')).toBe('filtered');
-    expect(getAccessLevel('Inbox', 'contractor')).toBe('filtered');
-    expect(getAccessLevel('NotificationsPage', 'contractor')).toBe('filtered');
-  });
-
-  it('returns "full" for contractor on non-filtered ALL_ROLES pages', () => {
-    expect(getAccessLevel('UserSettings', 'contractor')).toBe('full');
-    expect(getAccessLevel('ClientGallery', 'contractor')).toBe('full');
-    expect(getAccessLevel('BountyBoard', 'contractor')).toBe('full');
-  });
-
   it('returns "none" for blocked routes', () => {
-    expect(getAccessLevel('Users', 'contractor')).toBe('none');
     expect(getAccessLevel('Users', 'employee')).toBe('none');
-    expect(getAccessLevel('Settings', 'contractor')).toBe('none');
   });
 
   it('returns "none" for unlisted routes (non-admin)', () => {
     expect(getAccessLevel('UnknownPage', 'employee')).toBe('none');
-    expect(getAccessLevel('UnknownPage', 'contractor')).toBe('none');
+  });
+
+  it('returns "none" for unknown role on any route', () => {
+    expect(getAccessLevel('Dashboard', 'contractor')).toBe('none');
+    expect(getAccessLevel('Users', 'contractor')).toBe('none');
   });
 });
 
@@ -181,20 +127,9 @@ describe('getAccessibleRoutes', () => {
     expect(empRoutes).not.toContain('AdminTodoList');
   });
 
-  it('returns a smaller subset for contractor (only ALL_ROLES routes)', () => {
-    const contractorRoutes = getAccessibleRoutes('contractor');
-    expect(contractorRoutes).toContain('Dashboard');
-    expect(contractorRoutes).toContain('Projects');
-    expect(contractorRoutes).toContain('ClientGallery');
-    expect(contractorRoutes).not.toContain('Settings');
-    expect(contractorRoutes).not.toContain('Users');
-    expect(contractorRoutes).not.toContain('Analytics');
-  });
-
-  it('contractor has fewer routes than employee', () => {
-    const contractorRoutes = getAccessibleRoutes('contractor');
-    const empRoutes = getAccessibleRoutes('employee');
-    expect(contractorRoutes.length).toBeLessThan(empRoutes.length);
+  it('unknown role gets no routes', () => {
+    const unknownRoutes = getAccessibleRoutes('contractor');
+    expect(unknownRoutes.length).toBe(0);
   });
 
   it('employee has fewer routes than master_admin', () => {

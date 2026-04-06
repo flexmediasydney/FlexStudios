@@ -372,9 +372,6 @@ function PeopleMode({ onViewAs }) {
                       <div key={p} className="flex items-center gap-2 py-0.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
                         <span className="text-[11px] flex-1">{prettify(p)}</span>
-                        {FILTERED_PAGES[p] && selected.role === "contractor" && (
-                          <span className="text-[8px] text-amber-600 font-semibold">{FILTERED_PAGES[p]}</span>
-                        )}
                       </div>
                     ))}
                     {blocked.map(p => (
@@ -437,7 +434,7 @@ function PeopleMode({ onViewAs }) {
 // ─── Simulator Mode ──────────────────────────────────────────────────────────
 
 function SimulatorMode() {
-  const [simRole, setSimRole] = useState("contractor");
+  const [simRole, setSimRole] = useState("employee");
   const [compareRole, setCompareRole] = useState(null);
 
   const renderNav = (role) => {
@@ -457,9 +454,6 @@ function SimulatorMode() {
                 <div key={page} className="text-xs text-slate-300 px-2 py-1 flex items-center gap-2">
                   <span className="w-1 h-1 rounded-full bg-slate-600 flex-shrink-0" />
                   <span className="flex-1">{prettify(page)}</span>
-                  {FILTERED_PAGES[page] && role === "contractor" && (
-                    <span className="text-[8px] font-bold text-amber-400">FILTERED</span>
-                  )}
                 </div>
               ))}
             </div>
@@ -501,7 +495,6 @@ function SimulatorMode() {
                     <div key={p} className="flex items-center gap-2 py-0.5">
                       <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
                       <span className="text-xs flex-1">{prettify(p)}</span>
-                      {FILTERED_PAGES[p] && simRole === "contractor" && <span className="text-[9px] text-amber-600 font-semibold">{FILTERED_PAGES[p]}</span>}
                     </div>
                   ))}
                   {blocked.map(p => (
@@ -559,7 +552,7 @@ function MatrixMode() {
         ))}
         {highlight && <button onClick={() => setHighlight(null)} className="text-xs text-muted-foreground underline">Clear</button>}
       </div>
-      <div className="grid grid-cols-[1fr_80px_80px_80px] gap-0 px-3">
+      <div className="grid grid-cols-[1fr_80px_80px] gap-0 px-3">
         <div />
         {Object.entries(ROLES).map(([r, s]) => <div key={r} className={`text-center text-xs font-bold ${s.text}`}>{s.label}</div>)}
       </div>
@@ -570,12 +563,11 @@ function MatrixMode() {
             {section.pages.map((page, i) => {
               const dimmed = highlight && !canAccessRoute(page, highlight);
               return (
-                <div key={page} className={`grid grid-cols-[1fr_80px_80px_80px] items-center px-3 py-2 transition-opacity ${i > 0 ? "border-t" : ""} ${dimmed ? "opacity-20" : ""}`}>
+                <div key={page} className={`grid grid-cols-[1fr_80px_80px] items-center px-3 py-2 transition-opacity ${i > 0 ? "border-t" : ""} ${dimmed ? "opacity-20" : ""}`}>
                   <div>
                     <div className="text-xs font-semibold">{prettify(page)}</div>
-                    {FILTERED_PAGES[page] && <div className="text-[9px] text-muted-foreground">{FILTERED_PAGES[page]} (contractor)</div>}
                   </div>
-                  {["master_admin", "employee", "contractor"].map(role => (
+                  {["master_admin", "employee"].map(role => (
                     <div key={role} className="text-center text-sm">
                       {canAccessRoute(page, role) ? <span className="text-green-500">●</span> : <span className="text-slate-200">○</span>}
                     </div>

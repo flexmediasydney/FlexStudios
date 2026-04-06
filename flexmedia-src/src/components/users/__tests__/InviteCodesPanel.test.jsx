@@ -112,12 +112,12 @@ describe('InviteCodesPanel', () => {
   });
 
   // ── Code validation (tested via handleCreate logic) ──────────────────────
-  it('shows create dialog with role selector defaulting to Contractor', async () => {
+  it('shows create dialog with role selector defaulting to Employee', async () => {
     renderPanel();
     await userEvent.click(screen.getByText('Generate Code'));
 
     await waitFor(() => {
-      expect(screen.getByText('Contractor')).toBeInTheDocument();
+      expect(screen.getByText('Employee')).toBeInTheDocument();
     });
   });
 
@@ -137,7 +137,7 @@ describe('InviteCodesPanel', () => {
       {
         id: '1',
         code: 'FLEX-ABC123',
-        role: 'contractor',
+        role: 'employee',
         max_uses: 5,
         use_count: 2,
         is_active: true,
@@ -152,14 +152,14 @@ describe('InviteCodesPanel', () => {
     await waitFor(() => {
       expect(screen.getByText('FLEX-ABC123')).toBeInTheDocument();
     });
-    expect(screen.getByText('Contractor')).toBeInTheDocument();
+    expect(screen.getByText('Employee')).toBeInTheDocument();
     expect(screen.getByText('2/5')).toBeInTheDocument();
     expect(screen.getByText('For photographers')).toBeInTheDocument();
   });
 
   it('shows active/expired counts in subtitle', async () => {
     mockListInviteCodes.mockResolvedValue([
-      { id: '1', code: 'FLEX-AAA111', role: 'contractor', max_uses: 1, use_count: 0, is_active: true, created_at: '2026-03-01T00:00:00Z' },
+      { id: '1', code: 'FLEX-AAA111', role: 'employee', max_uses: 1, use_count: 0, is_active: true, created_at: '2026-03-01T00:00:00Z' },
       { id: '2', code: 'FLEX-BBB222', role: 'employee', max_uses: 1, use_count: 1, is_active: false, created_at: '2026-02-01T00:00:00Z' },
     ]);
 
@@ -172,7 +172,7 @@ describe('InviteCodesPanel', () => {
 
   it('shows Active badge for active codes', async () => {
     mockListInviteCodes.mockResolvedValue([
-      { id: '1', code: 'FLEX-ACT111', role: 'contractor', max_uses: 5, use_count: 0, is_active: true, created_at: '2026-03-01T00:00:00Z' },
+      { id: '1', code: 'FLEX-ACT111', role: 'employee', max_uses: 5, use_count: 0, is_active: true, created_at: '2026-03-01T00:00:00Z' },
     ]);
 
     renderPanel();

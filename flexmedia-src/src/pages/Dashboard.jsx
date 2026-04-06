@@ -44,7 +44,7 @@ import ErrorBoundary from '@/components/common/ErrorBoundary';
 
 export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);
-  const { isContractor, canAccessProject } = usePermissions();
+  const { canAccessProject } = usePermissions();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 

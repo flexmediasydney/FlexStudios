@@ -28,8 +28,8 @@ CREATE TABLE users (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email           TEXT NOT NULL UNIQUE,
   full_name       TEXT,
-  role            TEXT NOT NULL DEFAULT 'contractor'
-                    CHECK (role IN ('master_admin','admin','employee','contractor')),
+  role            TEXT NOT NULL DEFAULT 'employee'
+                    CHECK (role IN ('master_admin','admin','employee')),
   is_active       BOOLEAN NOT NULL DEFAULT true,
   internal_team_id UUID,           -- FK added after internal_teams exists
   internal_team_name TEXT,         -- denormalized
