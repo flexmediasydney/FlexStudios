@@ -525,6 +525,25 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
       }
       }
 
+      // If notes field has content, create a system note in the notes engine
+      if (formData.notes?.trim()) {
+        const isNew = !project?.id;
+        const notesChanged = isNew || formData.notes !== (initialFormData.notes || '');
+        if (notesChanged) {
+          api.entities.OrgNote.create({
+            project_id: projectId,
+            entity_type: 'project',
+            entity_id: projectId,
+            content: formData.notes.trim(),
+            content_html: `<p>${formData.notes.trim().replace(/\n/g, '</p><p>')}</p>`,
+            author_name: 'System',
+            author_email: 'system@flexstudios.app',
+            context_type: 'project',
+            context_label: formData.property_address || formData.title || 'Project',
+          }).catch(err => console.warn('Note creation skipped:', err?.message));
+        }
+      }
+
       // Await task sync so tasks exist before user navigates away
       try {
         await api.functions.invoke('syncProjectTasksFromProducts', { project_id: projectId });
