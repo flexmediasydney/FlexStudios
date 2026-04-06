@@ -6,7 +6,7 @@
  * If a page is NOT listed here, defaults to master_admin only.
  */
 
-const ALL_ROLES = ['master_admin', 'employee', 'contractor'];
+const ALL_ROLES = ['master_admin', 'employee'];
 const ADMIN_EMPLOYEE = ['master_admin', 'employee'];
 const ADMIN_ONLY = ['master_admin'];
 
@@ -18,7 +18,7 @@ export const ROUTE_ACCESS = {
   NotificationsPage: ALL_ROLES,
   UserSettings: ALL_ROLES,
 
-  // ── PROJECTS (contractors filtered client-side to assigned) ─
+  // ── PROJECTS ──────────────────────────────────────────────────
   Projects: ALL_ROLES,
   ProjectDetails: ALL_ROLES,
 
@@ -103,9 +103,6 @@ export function getAccessLevel(routeName, userRole) {
   if (!userRole) return 'none';
   const allowed = ROUTE_ACCESS[routeName];
   if (!allowed || !allowed.includes(userRole)) return 'none';
-  // Pages where contractors get filtered data, not full access
-  const filteredPages = { Dashboard: true, Projects: true, ProjectDetails: true, Calendar: true, Inbox: true, NotificationsPage: true };
-  if (userRole === 'contractor' && filteredPages[routeName]) return 'filtered';
   return 'full';
 }
 

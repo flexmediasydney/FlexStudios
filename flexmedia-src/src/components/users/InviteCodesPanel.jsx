@@ -26,7 +26,7 @@ export default function InviteCodesPanel() {
   const { data: currentUser } = useCurrentUser();
   const [showCreate, setShowCreate] = useState(false);
   const [deletingCode, setDeletingCode] = useState(null);
-  const [newCode, setNewCode] = useState({ code: generateCode(), role: 'contractor', max_uses: 1, note: '', expires_days: '' });
+  const [newCode, setNewCode] = useState({ code: generateCode(), role: 'employee', max_uses: 1, note: '', expires_days: '' });
 
   const { data: codes = [], isLoading } = useQuery({
     queryKey: ['invite-codes'],
@@ -39,7 +39,7 @@ export default function InviteCodesPanel() {
       queryClient.invalidateQueries({ queryKey: ['invite-codes'] });
       toast.success('Invite code created');
       setShowCreate(false);
-      setNewCode({ code: generateCode(), role: 'contractor', max_uses: 1, note: '', expires_days: '' });
+      setNewCode({ code: generateCode(), role: 'employee', max_uses: 1, note: '', expires_days: '' });
     },
     onError: (err) => toast.error(err?.message || 'Failed to create code'),
   });
@@ -90,8 +90,8 @@ export default function InviteCodesPanel() {
     toast.success('Code copied to clipboard');
   };
 
-  const roleLabel = { master_admin: 'Admin', admin: 'Admin', employee: 'Employee', contractor: 'Contractor' };
-  const roleBadge = { master_admin: 'bg-red-100 text-red-700', admin: 'bg-red-100 text-red-700', employee: 'bg-blue-100 text-blue-700', contractor: 'bg-amber-100 text-amber-700' };
+  const roleLabel = { master_admin: 'Admin', admin: 'Admin', employee: 'Employee' };
+  const roleBadge = { master_admin: 'bg-red-100 text-red-700', admin: 'bg-red-100 text-red-700', employee: 'bg-blue-100 text-blue-700' };
 
   const activeCodes = useMemo(() => codes.filter(c => c.is_active), [codes]);
   const expiredCodes = useMemo(() => codes.filter(c => !c.is_active), [codes]);
@@ -248,7 +248,6 @@ export default function InviteCodesPanel() {
               <Select value={newCode.role} onValueChange={(v) => setNewCode(p => ({ ...p, role: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="contractor">Contractor</SelectItem>
                   <SelectItem value="employee">Employee</SelectItem>
                   <SelectItem value="master_admin">Admin</SelectItem>
                 </SelectContent>

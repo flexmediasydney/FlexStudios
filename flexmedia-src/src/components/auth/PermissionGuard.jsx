@@ -24,13 +24,11 @@ export function useCurrentUser() {
 export function usePermissions() {
   const { data: user } = useCurrentUser();
 
-  // BUG FIX: Never default to 'contractor' — a missing role means no access.
-  // Defaulting to 'contractor' would grant project access to null/deleted users.
+  // A missing role means no access.
   const role = user?.role || null;
   const isMasterAdmin = role === 'master_admin';
   const isAdminOrEmployee = role === 'master_admin' || role === 'employee';
   const isEmployee = role === 'employee';
-  const isContractor = role === 'contractor';
 
   const isAssignedToProject = (project) => {
     if (!project || !user?.id) return false;
@@ -44,7 +42,6 @@ export function usePermissions() {
       project.video_editor_id,
     ];
     if (directRoles.includes(user.id)) return true;
-    if (project.assigned_users?.includes(user.id)) return true;
     return false;
   };
 
@@ -54,13 +51,10 @@ export function usePermissions() {
     isMasterAdmin,
     isAdminOrEmployee,
     isEmployee,
-    isContractor,
 
     // Project access
     canSeeAllProjects: isAdminOrEmployee,
     canAccessProject: (project) => isAdminOrEmployee || isAssignedToProject(project),
-    // BUG FIX: contractors can view assigned projects but should NOT get full edit access.
-    // canEditProject requires admin/employee role; contractors get read-only on assigned projects.
     canEditProject: (project) => isAdminOrEmployee,
     canDeleteProject: isMasterAdmin,
 
@@ -71,7 +65,7 @@ export function usePermissions() {
     canSeeInvoicing: isAdminOrEmployee,
 
     // Price Matrix access levels: "edit" | "view_with_pricing" | "view_without_pricing" | "none"
-    // master_admin → edit, employee → view_with_pricing (default), contractor → none
+    // master_admin → edit, employee → view_with_pricing (default)
     // Can be overridden per-user via user_permissions table
     priceMatrixAccess: isMasterAdmin ? "edit" : isEmployee ? "view_with_pricing" : "none",
     canEditPriceMatrix: isMasterAdmin,

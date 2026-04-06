@@ -332,7 +332,7 @@ function RuleBuilderModal({ open, onClose, initialRule, onSave }) {
                   <div className="col-span-2">
                     <Label>Notify Roles (comma-separated)</Label>
                     <Input value={(actionCfg.roles || []).join(", ")} onChange={e => setActionCfg(p => ({ ...p, roles: e.target.value.split(",").map(s => s.trim()).filter(Boolean) }))} placeholder="e.g. master_admin, project_owner, photographer" />
-                    <p className="text-xs text-muted-foreground mt-1">Available: master_admin, project_owner, photographer, image_editor, video_editor, videographer, assigned_users</p>
+                    <p className="text-xs text-muted-foreground mt-1">Available: master_admin, project_owner, photographer, image_editor, video_editor, videographer</p>
                   </div>
                   <div className="col-span-2">
                     <Label>Message</Label>

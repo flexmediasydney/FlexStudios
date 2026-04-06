@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Timer, StickyNote, ArrowRightLeft, Play, MessageSquare, UserPlus } from "lucide-react";
+import { Timer, StickyNote, ArrowRightLeft, Play, MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import {
@@ -16,7 +16,6 @@ export default function QuickActionBar({
   onAddNote,
   onChangeStatus,
   onOpenChat,
-  onAssign,
   isMasterAdmin,
   isEmployee,
 }) {
@@ -108,18 +107,6 @@ export default function QuickActionBar({
         </Button>
       )}
 
-      {/* Assign */}
-      {(isMasterAdmin || isEmployee) && onAssign && (
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onAssign}
-          className="gap-1.5 h-8 text-xs font-medium border-indigo-200 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-800 transition-all"
-        >
-          <UserPlus className="h-3.5 w-3.5" />
-          Assign
-        </Button>
-      )}
     </div>
   );
 }

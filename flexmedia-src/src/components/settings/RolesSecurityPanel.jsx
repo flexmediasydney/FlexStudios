@@ -17,7 +17,6 @@ import EntityAccessMatrix from "@/components/settings/EntityAccessMatrix";
 const ROLES = {
   master_admin: { label: "Admin", text: "text-red-700", bg: "bg-red-50", border: "border-red-200", fill: "#dc2626", ring: "ring-red-200" },
   employee: { label: "Employee", text: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200", fill: "#2563eb", ring: "ring-blue-200" },
-  contractor: { label: "Contractor", text: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200", fill: "#d97706", ring: "ring-amber-200" },
 };
 
 const PAGE_SECTIONS = [
@@ -30,14 +29,7 @@ const PAGE_SECTIONS = [
   { label: "Settings", pages: ["Settings","SettingsOrganisation","SettingsAutomationRules","SettingsRevisionTemplates","SettingsIntegrations","EmailSyncSettings","SettingsTonomoIntegration","SettingsTonomoMappings","SettingsNotifications","SettingsClients","SettingsProjectRulebook","SettingsTonomoWebhooks","BusinessRequirementsDocument","HierarchyVisualization","SettingsTeamsUsers"] },
 ];
 
-const FILTERED_PAGES = {
-  Dashboard: "Assigned projects only",
-  Projects: "Assigned projects only",
-  ProjectDetails: "If assigned to project",
-  Calendar: "Own events only",
-  Inbox: "Own threads only",
-  NotificationsPage: "Own notifications",
-};
+const FILTERED_PAGES = {};
 
 const ALL_PAGES = PAGE_SECTIONS.flatMap(s => s.pages);
 
@@ -66,7 +58,7 @@ function RolePill({ role, selected, onClick, className = "" }) {
 }
 
 function UserAvatar({ name, role, size = "md" }) {
-  const r = ROLES[role] || ROLES.contractor;
+  const r = ROLES[role] || ROLES.employee;
   const initials = (name || "?").split(" ").map(w => w[0]).join("").slice(0, 2);
   const px = size === "lg" ? "w-10 h-10 text-sm" : size === "sm" ? "w-7 h-7 text-[10px]" : "w-8 h-8 text-xs";
   return (
@@ -205,7 +197,7 @@ function PeopleMode({ onViewAs }) {
           <div className="space-y-1.5">
             {filtered.map(user => {
               const isSel = selectedId === user.id;
-              const role = ROLES[user.role] || ROLES.contractor;
+              const role = ROLES[user.role] || ROLES.employee;
               const overrides = getUserOverrides(user.email);
               return (
                 <div
@@ -231,7 +223,7 @@ function PeopleMode({ onViewAs }) {
                         {user.title || user.email}{user.internal_team_name ? ` · ${user.internal_team_name}` : ""}
                       </div>
                     </div>
-                    <RolePill role={user.role || "contractor"} />
+                    <RolePill role={user.role || "employee"} />
                   </div>
                 </div>
               );

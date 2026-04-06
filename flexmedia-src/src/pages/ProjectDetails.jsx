@@ -22,7 +22,6 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { fmtDate, fixTimestamp } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import ProjectForm from "@/components/projects/ProjectForm";
-import AssignUsersDialog from "@/components/projects/AssignUsersDialog";
 import TaskManagement from "@/components/projects/TaskManagement";
 import ChatPanel from "@/components/chat/ChatPanel";
 import MediaDeliveryManager from "@/components/projects/MediaDeliveryManager";
@@ -157,7 +156,6 @@ export default function ProjectDetails() {
    const queryClient = useQueryClient();
    const { canSeePricing, canEditProject, canAccessProject, isMasterAdmin, isEmployee, user: permUser } = usePermissions();
    const [showEditForm, setShowEditForm] = useState(false);
-   const [showAssignDialog, setShowAssignDialog] = useState(false);
    const [showAgentSelector, setShowAgentSelector] = useState(false);
    const [showEmailCompose, setShowEmailCompose] = useState(false);
    const [showProjectChat, setShowProjectChat] = useState(false);
@@ -307,7 +305,7 @@ export default function ProjectDetails() {
   // Memoize canEditProject to prevent unnecessary child re-renders.
   // Use the full project reference so the memo recomputes if any field
   // checked by canEditProject changes (future-proof against permission
-  // logic that inspects is_archived, assigned_users, etc.).
+  // logic that inspects is_archived, etc.).
   const memoizedCanEdit = useMemo(
     () => canEditProject(project),
     [canEditProject, project]
@@ -403,7 +401,6 @@ export default function ProjectDetails() {
          project.onsite_staff_2_id,
          project.image_editor_id,
          project.video_editor_id,
-         ...(project.assigned_users || []),
        ].filter(Boolean);
 
        const notifParams = {
@@ -1132,7 +1129,6 @@ export default function ProjectDetails() {
             updateStatusMutation.mutate(newStatus);
           }}
           onOpenChat={user ? () => setShowProjectChat(true) : null}
-          onAssign={() => setShowAssignDialog(true)}
           isMasterAdmin={isMasterAdmin}
           isEmployee={isEmployee}
         />
@@ -1576,13 +1572,6 @@ export default function ProjectDetails() {
         open={showEditForm}
         onClose={() => setShowEditForm(false)}
         onSave={() => setShowEditForm(false)}
-      />
-
-      <AssignUsersDialog
-        project={project}
-        open={showAssignDialog}
-        onClose={() => setShowAssignDialog(false)}
-        onSave={() => setShowAssignDialog(false)}
       />
 
       {/* Email Composer */}

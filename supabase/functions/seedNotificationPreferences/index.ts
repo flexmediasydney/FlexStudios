@@ -12,25 +12,10 @@ Deno.serve(async (req) => {
       return jsonResponse({ message: 'Already seeded', count: existing.length });
     }
 
-    const CONTRACTOR_OFF = ['financial', 'system', 'tonomo'];
-
     const users = await entities.User.list('-created_date', 200);
     let created = 0;
 
     for (const user of users) {
-      if (user.role === 'contractor') {
-        for (const category of CONTRACTOR_OFF) {
-          await entities.NotificationPreference.create({
-            user_id: user.id,
-            notification_type: '*',
-            category,
-            in_app_enabled: false,
-            email_enabled: false,
-          });
-          created++;
-        }
-      }
-
       const existingDigest = await entities.NotificationDigestSettings.list('-created_date', 200);
       const hasMine = existingDigest.some((d: any) => d.user_id === user.id);
       if (!hasMine) {

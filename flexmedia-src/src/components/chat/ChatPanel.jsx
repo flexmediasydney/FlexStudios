@@ -190,9 +190,8 @@ export default function ChatPanel({
     ...regularMessages
   ];
 
-  const projectUsers = users.filter(u => 
-    project?.assigned_users?.includes(u.id) || 
-    [project?.project_owner_id, project?.onsite_staff_1_id, project?.onsite_staff_2_id, 
+  const projectUsers = users.filter(u =>
+    [project?.project_owner_id, project?.onsite_staff_1_id, project?.onsite_staff_2_id,
      project?.image_editor_id, project?.video_editor_id].includes(u.id)
   ).filter(Boolean);
 

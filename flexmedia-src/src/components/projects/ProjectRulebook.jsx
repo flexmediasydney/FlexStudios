@@ -255,7 +255,7 @@ export default function ProjectRulebook() {
           <div>
             <h4 className="font-medium mb-1">Contractor Visibility Rules</h4>
             <p className="text-muted-foreground">
-              Contractors only see projects where they are in assigned_users array. They cannot see pricing (hidden if role != master_admin or employee). Contractor project edits are restricted to assigned projects only, enforced both UI and backend.
+              Contractors only see projects where they are assigned via a staff role (project owner, onsite staff, image editor, video editor). They cannot see pricing (hidden if role != master_admin or employee). Contractor project edits are restricted to assigned projects only, enforced both UI and backend.
             </p>
           </div>
           <div>

@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
       if (!email) return error('Email required', 400);
 
       const { data: authData, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
-        data: { role: role || 'contractor', full_name: fullName || email.split('@')[0] },
+        data: { role: role || 'employee', full_name: fullName || email.split('@')[0] },
       });
       if (inviteErr) return error(inviteErr.message, 400);
 
@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
           id: userId,
           email: email.toLowerCase().trim(),
           full_name: fullName || email.split('@')[0],
-          role: role || 'contractor',
+          role: role || 'employee',
           is_active: true,
         }, { onConflict: 'email' });
       }

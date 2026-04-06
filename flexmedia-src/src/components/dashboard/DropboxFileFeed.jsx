@@ -551,7 +551,7 @@ export default function DropboxFileFeed() {
     return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
   }, [allProjects]);
 
-  // ── Staff options (photographers/contractors with delivered projects) ────────
+  // ── Staff options (photographers with delivered projects) ───────────────────
   const staffOptions = useMemo(() => {
     const ids = new Set(
       allProjects

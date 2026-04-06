@@ -8,7 +8,6 @@ const HEARTBEAT_INTERVAL = 15000; // 15s
 const roleColors = {
   master_admin: { bg: "bg-red-500", border: "border-red-600", ring: "ring-red-400" },
   employee:     { bg: "bg-blue-500", border: "border-blue-600", ring: "ring-blue-400" },
-  contractor:   { bg: "bg-amber-500", border: "border-amber-600", ring: "ring-amber-400" },
   default:      { bg: "bg-slate-500", border: "border-slate-600", ring: "ring-slate-400" },
 };
 

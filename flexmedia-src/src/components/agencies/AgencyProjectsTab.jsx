@@ -70,7 +70,6 @@ export default function AgencyProjectsTab({ projects = [], agencyId }) {
           project.onsite_staff_2_id,
           project.image_editor_id,
           project.video_editor_id,
-          ...(project.assigned_users || [])
         ].filter(Boolean));
 
         const projectAssignedTeamIds = new Set([

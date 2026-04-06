@@ -158,13 +158,7 @@ export default function Projects() {
     return ids;
   }, [myTeamIds, allEmployeeRoles]);
 
-  // Filter projects for contractors
-  const projects = useMemo(() => 
-    isContractor 
-      ? allProjects.filter(p => canAccessProject(p))
-      : allProjects,
-    [isContractor, allProjects, canAccessProject]
-  );
+  const projects = allProjects;
 
   // Bug fix: pre-compute task map BEFORE filteredProjects so sort can use it (avoids O(n*m) inside comparator)
   const tasksByProject = useMemo(() => {
@@ -211,7 +205,6 @@ export default function Projects() {
         project.onsite_staff_2_id,
         project.image_editor_id,
         project.video_editor_id,
-        ...(project.assigned_users || [])
       ].filter(Boolean));
 
       // Helper: all internal team IDs assigned to this project at any level
@@ -277,12 +270,6 @@ export default function Projects() {
         return false;
       }
       
-      // Client Team filter
-      if (filters.teams?.length > 0) {
-        const hasTeamMember = (project.assigned_users || []).some(u => filters.teams.includes(u));
-        if (!hasTeamMember) return false;
-      }
-
       // Internal Users filter: user assigned at any project role level OR has a task assigned
       if (filters.internal_users?.length > 0) {
         const matchesRole = filters.internal_users.some(uid => projectAssignedUserIds.has(uid));

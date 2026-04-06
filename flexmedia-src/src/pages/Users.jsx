@@ -26,7 +26,6 @@ const roleConfig = {
   master_admin: { label: "Master Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
   admin: { label: "Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
   employee: { label: "Employee", color: "bg-blue-100 text-blue-700 border-blue-200", icon: UserCheck },
-  contractor: { label: "Contractor", color: "bg-amber-100 text-amber-700 border-amber-200", icon: UserX },
 };
 
 const providerLabel = { email: "Email/Password", google: "Google", phone: "Phone OTP" };
@@ -159,7 +158,6 @@ export default function UsersManagement() {
     active: users.filter(u => u.is_active).length,
     admins: users.filter(u => u.role === "master_admin").length,
     employees: users.filter(u => u.role === "employee").length,
-    contractors: users.filter(u => u.role === "contractor").length,
   }), [users]);
 
   // ─── Render ─────────────────────────────────────────────────────────────
@@ -186,7 +184,6 @@ export default function UsersManagement() {
           { label: "Active", value: stats.active },
           { label: "Admins", value: stats.admins },
           { label: "Employees", value: stats.employees },
-          { label: "Contractors", value: stats.contractors },
         ].map(s => (
           <Card key={s.label}>
             <CardContent className="pt-4 pb-3">
@@ -378,7 +375,6 @@ export default function UsersManagement() {
                   <SelectContent>
                     <SelectItem value="master_admin">Admin</SelectItem>
                     <SelectItem value="employee">Employee</SelectItem>
-                    <SelectItem value="contractor">Contractor</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -121,13 +121,11 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               <SelectContent>
                 <SelectItem value="master_admin">Master Admin</SelectItem>
                 <SelectItem value="employee">Employee</SelectItem>
-                <SelectItem value="contractor">Contractor</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground mt-1">
               {role === "master_admin" && "Full access to everything including user management"}
               {role === "employee" && "Can see all projects and client information"}
-              {role === "contractor" && "Can only see assigned projects, no pricing"}
             </p>
           </div>
 

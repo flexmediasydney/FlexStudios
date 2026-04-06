@@ -138,7 +138,6 @@ export default function Register() {
     master_admin: 'Administrator',
     admin: 'Admin',
     employee: 'Employee',
-    contractor: 'Contractor',
   };
 
   return (

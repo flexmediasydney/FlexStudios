@@ -76,13 +76,7 @@ export default function Dashboard() {
   const { data: agents = [] } = useEntityList("Agent");
   const { data: calendarEvents = [] } = useEntityList("CalendarEvent", "-start_time", 200);
 
-  // Filter projects for contractors
-  const projects = useMemo(() => 
-    isContractor 
-      ? allProjects.filter(p => canAccessProject(p))
-      : allProjects,
-    [isContractor, allProjects, canAccessProject]
-  );
+  const projects = allProjects;
 
   // Dynamic page title
   React.useEffect(() => {

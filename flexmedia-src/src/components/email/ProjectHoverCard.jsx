@@ -1,7 +1,7 @@
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import { MapPin, User, Building2, DollarSign } from "lucide-react";
+import { MapPin, Building2, DollarSign } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 const statusColors = {
@@ -90,16 +90,6 @@ export default function ProjectHoverCard({ projectId, children }) {
               <div className="text-xl font-bold text-foreground">
                 {formattedTotal}
               </div>
-
-              {/* Agent/User */}
-              {project.assigned_users?.[0] && (
-                <div className="flex gap-3">
-                  <User className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-foreground">{project.assigned_users[0]}</p>
-                  </div>
-                </div>
-              )}
 
               {/* Project Title */}
               <div className="flex gap-3">
