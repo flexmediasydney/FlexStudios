@@ -85,10 +85,12 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
     const raw = project?.shoot_date;
     if (!raw) return new Date().toISOString().split("T")[0];
     const d = new Date(raw);
+    if (isNaN(d.getTime())) return new Date().toISOString().split("T")[0];
     const today = new Date();
     const diffDays = (d - today) / 86400000;
+    const dateOnly = d.toISOString().split("T")[0]; // "2026-04-09" — API needs date only, not timestamp
     if (diffDays > 15 || diffDays < -2) return today.toISOString().split("T")[0];
-    return raw;
+    return dateOnly;
   }, [project?.shoot_date]);
 
   useEffect(() => {
