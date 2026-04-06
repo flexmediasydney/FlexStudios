@@ -30,9 +30,9 @@ const HARDCODED_DEFAULTS = [
   {
     role: "image_editor",
     label: "Image Editor",
-    categories: ["photography", "drone", "virtual_staging"],
+    categories: ["photography", "virtual_staging"],
     always_required: false,
-    description: "Required when project includes images, drone, or virtual staging",
+    description: "Required when project includes photography or virtual staging",
     order: 3,
   },
   {
