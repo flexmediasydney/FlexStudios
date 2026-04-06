@@ -6,8 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon,
-  Users, User, RefreshCw, Search, AlertTriangle, Clock, X
+  Users, User, RefreshCw, Search, AlertTriangle, Clock, X,
+  Camera, Coffee, Globe, Building2
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { expandRecurringEvent } from "@/components/calendar/CalendarEventUtils";
 import {
   format, startOfMonth, endOfMonth, startOfWeek, endOfWeek,
@@ -73,6 +75,18 @@ const PERSON_COLORS = [
   { bg: '#f59e0b', light: '#fffbeb', text: '#92400e', border: '#fcd34d' },
 ];
 
+const BUSINESS_CALENDAR_ID = 'business-calendar';
+const BUSINESS_CALENDAR_COLOR = { bg: '#0891b2', light: '#ecfeff', text: '#155e75', border: '#67e8f9' };
+
+function hashStringToIndex(str, max) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash) % max;
+}
+
 function getInitials(name = '') {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
 }
@@ -120,13 +134,29 @@ export default function CalendarPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [filterType, setFilterType] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [calendarMode, setCalendarMode] = useState("flex"); // 'flex' | 'team'
+  const [activeFilters, setActiveFilters] = useState(new Set());
   const [selectedUserIds, setSelectedUserIds] = useState(["all"]);
   const [showConnections, setShowConnections] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState(null);
   const [defaultStart, setDefaultStart] = useState(null);
   const queryClient = useQueryClient();
+
+  const EVENT_FILTERS = [
+    { id: 'shoots', label: 'Shoots', icon: Camera },
+    { id: 'meetings', label: 'Meetings', icon: Users },
+    { id: 'personal', label: 'Personal', icon: Coffee },
+    { id: 'google', label: 'Google', icon: Globe },
+  ];
+
+  const toggleFilter = useCallback((id) => {
+    setActiveFilters(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Countdown to next DB refresh (60s) and next Google sync (5min)
   // Tick every 5s to reduce unnecessary re-renders (was 1s)
@@ -186,6 +216,12 @@ export default function CalendarPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Build user list with synthetic business calendar entry at the top
+  const calendarUsers = useMemo(() => {
+    const businessEntry = { id: BUSINESS_CALENDAR_ID, full_name: 'FlexMedia', email: 'info@flexmedia.sydney', _isBusiness: true };
+    return [businessEntry, ...users];
+  }, [users]);
+
   // Gap fix: Load only visible month range + max 500 events (not 5000). Gap fix: Add debouncing on sync.
   const [lastManualSync, setLastManualSync] = useState(0);
   const syncDebounceMs = 3000;
@@ -208,11 +244,15 @@ export default function CalendarPage() {
     refetchInterval: 60 * 1000,
   });
 
-  // ── User → colour map ── (Gap fix: stable dep array to avoid recalc every render)
+  // ── User → colour map ── (hash-based for stable colours regardless of user order)
   const userIdKey = users.map(u => u.id).join(',');
   const userColorMap = useMemo(() => {
     const map = new Map();
-    users.forEach((u, i) => map.set(u.id, PERSON_COLORS[i % PERSON_COLORS.length]));
+    map.set(BUSINESS_CALENDAR_ID, BUSINESS_CALENDAR_COLOR);
+    for (const user of users) {
+      const idx = hashStringToIndex(user.id, PERSON_COLORS.length);
+      map.set(user.id, PERSON_COLORS[idx]);
+    }
     return map;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userIdKey]);
@@ -231,10 +271,16 @@ export default function CalendarPage() {
   // Returns map of userId -> CalendarEvent[]
   const eventsByUser = useMemo(() => {
     const map = new Map();
+    map.set(BUSINESS_CALENDAR_ID, []);
     users.forEach(u => map.set(u.id, []));
 
     for (const ev of rawEvents) {
       const owners = new Set();
+
+      // Business calendar: info@ account or Tonomo events
+      if (ev.calendar_account === 'info@flexmedia.sydney' || ev.event_source === 'tonomo') {
+        owners.add(BUSINESS_CALENDAR_ID);
+      }
 
       // Primary: owner_user_id
       if (ev.owner_user_id && map.has(ev.owner_user_id)) {
@@ -381,9 +427,9 @@ export default function CalendarPage() {
 
   // ── Active team members (who to show lanes for) ───────────────────────────
   const activeUsers = useMemo(() => {
-    if (selectedUserIds.includes("all")) return users;
-    return users.filter(u => selectedUserIds.includes(u.id));
-  }, [users, selectedUserIds]);
+    if (selectedUserIds.includes("all")) return calendarUsers;
+    return calendarUsers.filter(u => selectedUserIds.includes(u.id));
+  }, [calendarUsers, selectedUserIds]);
 
   // ── Filter events for current view ────────────────────────────────────────
   const filteredEvents = useMemo(() => {
@@ -398,18 +444,16 @@ export default function CalendarPage() {
         if (!inTitle && !inLocation && !inDesc) return false;
       }
 
-      if (calendarMode === "flex") {
-        // Show: Tonomo bookings, project-linked events, shoot-related Google events
-        const isTonomoEvent = event.event_source === 'tonomo' ||
-          event.link_source === 'tonomo_webhook' ||
-          event.tonomo_appointment_id;
-        const isProjectLinked = !!event.project_id || event.auto_linked;
-        // Google events that are clearly shoots (synced from Tonomo via personal calendars)
-        const isShootFromGoogle = event.event_source === 'google' &&
-          (event.title || '').toLowerCase().includes('flex media shoot');
-        if (!isTonomoEvent && !isProjectLinked && !isShootFromGoogle) {
+      // Filter chips: if any active, only show matching events. If none active, show all.
+      if (activeFilters.size > 0) {
+        const passesFilter = (ev) => {
+          if (activeFilters.has('shoots') && (ev.activity_type === 'shoot' || ev.event_source === 'tonomo')) return true;
+          if (activeFilters.has('meetings') && ev.activity_type === 'meeting') return true;
+          if (activeFilters.has('personal') && ['lunch', 'personal', 'other'].includes(ev.activity_type)) return true;
+          if (activeFilters.has('google') && ev.event_source === 'google') return true;
           return false;
-        }
+        };
+        if (!passesFilter(event)) return false;
       }
 
       // Contractors: hide events they don't own and aren't linked to a project
@@ -421,7 +465,7 @@ export default function CalendarPage() {
       // Must belong to at least one selected user
       return owners.some(uid => selectedUserIds.includes(uid));
     });
-  }, [deduplicatedEvents, filterType, calendarMode, selectedUserIds, isContractor, permUser, searchQuery]);
+  }, [deduplicatedEvents, filterType, activeFilters, selectedUserIds, isContractor, permUser, searchQuery]);
 
   // ── Person selector handlers ───────────────────────────────────────────────
   const handlePersonClick = useCallback((userId, evt) => {
@@ -570,31 +614,25 @@ export default function CalendarPage() {
 
           <h1 className="text-sm sm:text-lg font-semibold min-w-0 sm:min-w-[200px] truncate">{headerLabel()}</h1>
 
-          {/* Mode toggle */}
-          <div className="flex gap-1 bg-muted rounded-lg p-0.5">
-            <button
-              onClick={() => setCalendarMode("flex")}
-              className={`px-3 py-2 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 hover:scale-105 active:scale-95 ${
-                calendarMode === "flex"
-                  ? "bg-background shadow-md text-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-background/50"
-              }`}
-              title="Show only project bookings and linked events"
-            >
-              <span className="hidden sm:inline">📅 </span>Flex
-            </button>
-            <button
-              onClick={() => setCalendarMode("team")}
-              className={`px-3 py-2 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 hover:scale-105 active:scale-95 ${
-                calendarMode === "team"
-                  ? "bg-background shadow-md text-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-background/50"
-              }`}
-              title="Show all calendar events for all team members"
-            >
-              <Users className="h-3 w-3 inline mr-1" />
-              Team
-            </button>
+          {/* Filter chips */}
+          <div className="flex items-center gap-1">
+            {EVENT_FILTERS.map(f => {
+              const active = activeFilters.has(f.id);
+              const Icon = f.icon;
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => toggleFilter(f.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all",
+                    active ? "bg-primary text-primary-foreground shadow-sm" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {f.label}
+                </button>
+              );
+            })}
           </div>
 
           {/* Refresh button with rate limiting */}
@@ -720,10 +758,11 @@ export default function CalendarPage() {
             All
           </button>
 
-          {/* Individual members */}
-          {users.map(u => {
+          {/* Individual members (including business calendar) */}
+          {calendarUsers.map(u => {
             const color = userColorMap.get(u.id);
             const isSelected = selectedUserIds.includes(u.id);
+            const isBiz = u._isBusiness;
             return (
               <button
                 key={u.id}
@@ -741,12 +780,21 @@ export default function CalendarPage() {
                   borderColor: color?.bg,
                 } : {}}
               >
-                <span
-                  className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0"
-                  style={{ backgroundColor: color?.bg }}
-                >
-                  {getInitials(u.full_name || u.email)}
-                </span>
+                {isBiz ? (
+                  <span
+                    className="w-4 h-4 rounded-full flex items-center justify-center text-white flex-shrink-0"
+                    style={{ backgroundColor: color?.bg }}
+                  >
+                    <Building2 className="h-2.5 w-2.5" />
+                  </span>
+                ) : (
+                  <span
+                    className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0"
+                    style={{ backgroundColor: color?.bg }}
+                  >
+                    {getInitials(u.full_name || u.email)}
+                  </span>
+                )}
                 {u.full_name?.split(' ')[0] || u.email}
               </button>
             );
@@ -784,7 +832,7 @@ export default function CalendarPage() {
           <MonthView
             currentDate={currentDate}
             events={filteredEvents}
-            users={users}
+            users={calendarUsers}
             userColorMap={userColorMap}
             isLaneMode={false}
             conflictSet={conflictSet}
@@ -930,22 +978,19 @@ function MonthEventPill({ event, owners, userColorMap, users, onClick, title, ha
        onClick={onClick}
        title={title || [event.title, startTime ? `at ${startTime}` : null, isOverdue ? 'Overdue' : null, sourceConfig?.tooltip].filter(Boolean).join(' - ')}
      >
-      {owners.length > 1 && (
-        <div className="flex -space-x-1 flex-shrink-0">
-          {owners.slice(0, 2).map(uid => {
-            const u = users.find(u => u.id === uid);
-            const c = userColorMap.get(uid);
-            return (
-              <span key={uid}
-                className="w-3 h-3 rounded-full border border-white text-white flex items-center justify-center text-[7px] font-bold"
-                style={{ backgroundColor: c?.bg }}
-              >
-                {getInitials(u?.full_name || u?.email || '?')[0]}
-              </span>
-            );
-          })}
-        </div>
-      )}
+      {/* Owner dot + first name */}
+      {(() => {
+        const primaryUid = owners[0];
+        const primaryUser = primaryUid ? users.find(u => u.id === primaryUid) : null;
+        const primaryColor = primaryUid ? userColorMap.get(primaryUid) : null;
+        const firstName = primaryUser?._isBusiness ? 'Flex' : (primaryUser?.full_name?.split(' ')[0] || '');
+        return firstName ? (
+          <span className="flex items-center gap-0.5 flex-shrink-0">
+            <span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ backgroundColor: primaryColor?.bg }} />
+            <span className="text-[9px] font-medium opacity-60">{firstName}</span>
+          </span>
+        ) : null;
+      })()}
       {/* Time + truncated title */}
       <span className="truncate min-w-0">
         {startTime && <span className="font-semibold opacity-70 mr-0.5">{startTime}</span>}
@@ -1128,6 +1173,11 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                       onClick={(e) => onEventClick(e, event)}
                       title={`${event.title}\n${fmtSydneyTime(event.start_time)} - ${fmtSydneyTime(event.end_time)}${event.location ? '\n' + event.location : ''}`}
                     >
+                      {/* Owner name tag */}
+                      {primaryOwner && (() => {
+                        const firstName = primaryOwner._isBusiness ? 'Flex' : (primaryOwner.full_name?.split(' ')[0] || '');
+                        return firstName ? <span className="text-[9px] font-medium opacity-70 leading-none">{firstName}</span> : null;
+                      })()}
                       <p className="text-[11px] font-bold leading-tight truncate">{event.title || 'Untitled'}</p>
                       {heightPx > 26 && (
                         <p className="text-[10px] leading-tight" style={{ opacity: 0.75 }}>{fmtSydneyTime(event.start_time, { hour: 'numeric', minute: '2-digit', hour12: false })} - {fmtSydneyTime(event.end_time, { hour: 'numeric', minute: '2-digit', hour12: false })}</p>
@@ -1514,6 +1564,19 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
       onClick={onClick}
       title={`${event.title} (${fmtSydneyTime(event.start_time)} - ${fmtSydneyTime(event.end_time)})`}
     >
+      {/* Owner name tag */}
+      {ownerUsers.length > 0 && (() => {
+        const prim = ownerUsers[0];
+        const primColor = userColorMap.get(prim.id);
+        const firstName = prim._isBusiness ? 'Flex' : (prim.full_name?.split(' ')[0] || '');
+        return firstName ? (
+          <span className="inline-flex items-center gap-0.5 text-[9px] font-medium rounded px-1 py-0 w-fit mb-0.5"
+            style={{ backgroundColor: `${primColor?.bg}20`, color: primColor?.text }}>
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: primColor?.bg }} />
+            {firstName}
+          </span>
+        ) : null;
+      })()}
       <div className="flex items-center gap-1">
         <p className="text-xs font-semibold leading-tight truncate flex-1">{event.title}</p>
         {hasConflict && <AlertTriangle className="h-3 w-3 text-orange-500 flex-shrink-0" title="Scheduling conflict" />}
@@ -1630,6 +1693,14 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
       onClick={onClick}
       title={`${event.title || 'Untitled'}\n${fmtSydneyTime(event.start_time)} - ${fmtSydneyTime(event.end_time)}${event.location ? '\n' + event.location : ''}`}
     >
+      {/* Owner name tag */}
+      {ownerUsers.length > 0 && (() => {
+        const prim = ownerUsers[0];
+        const firstName = prim?._isBusiness ? 'Flex' : (prim?.full_name?.split(' ')[0] || '');
+        return firstName ? (
+          <span className="text-[9px] font-medium opacity-70 leading-none">{firstName}</span>
+        ) : null;
+      })()}
       <div className="flex items-center gap-1 min-w-0">
         <p className="text-xs font-bold leading-tight truncate flex-1">{displayTitle}</p>
         {hasConflict && <AlertTriangle className="h-3 w-3 text-orange-400 flex-shrink-0" />}
