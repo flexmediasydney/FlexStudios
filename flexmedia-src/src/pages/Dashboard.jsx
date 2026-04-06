@@ -11,7 +11,7 @@ import { fixTimestamp } from "@/components/utils/dateUtils";
 import ProjectForm from "@/components/projects/ProjectForm";
 import TaskReportingDashboard from "@/components/dashboard/TaskReportingDashboard";
 import TaskDeadlineDashboard from "@/components/dashboard/TaskDeadlineDashboard";
-import ProjectHeatmap from "@/components/dashboard/ProjectHeatmap";
+// ProjectHeatmap removed — Territory tab covers the same functionality
 import DropboxFileFeed from "@/components/dashboard/DropboxFileFeed";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -444,13 +444,7 @@ export default function Dashboard() {
            >
              Task Reports
            </TabsTrigger>
-           <TabsTrigger 
-             value="map" 
-             title="Geographic project map (Ctrl+4)" 
-             className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent"
-           >
-             Project Map
-           </TabsTrigger>
+           {/* Project Map tab removed — Territory tab has all map functionality */}
            <TabsTrigger 
              value="files" 
              title="Recent Dropbox files (Ctrl+5)" 
@@ -628,11 +622,7 @@ export default function Dashboard() {
           </ErrorBoundary>
         </TabsContent>
 
-        <TabsContent value="map" className="space-y-6 mt-0">
-          <ErrorBoundary fallbackLabel="Project Heatmap">
-            <ProjectHeatmap />
-          </ErrorBoundary>
-        </TabsContent>
+        {/* Project Map tab content removed — use Territory tab */}
 
         <TabsContent value="files" className="space-y-6 mt-0">
           <ErrorBoundary fallbackLabel="File Feed">
