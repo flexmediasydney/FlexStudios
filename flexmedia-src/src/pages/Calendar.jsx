@@ -141,6 +141,49 @@ function EventTooltipContent({ event, owners, users, userColorMap }) {
     .filter(Boolean)
     .map(u => u._isBusiness ? 'FlexMedia' : u.full_name || u.email);
 
+  // Task-specific tooltip
+  if (event._isTask) {
+    return (
+      <div className="max-w-[280px] space-y-1.5">
+        <div className="flex items-start gap-2">
+          <div className="w-1 h-full rounded-full flex-shrink-0 self-stretch bg-violet-500" />
+          <div className="min-w-0">
+            <p className="font-semibold text-sm leading-tight">{event._isCompleted ? '✓ ' : ''}{event.title?.split(' | ')[0] || 'Task'}</p>
+            {event._projectTitle && (
+              <p className="text-xs text-blue-300 mt-0.5 underline decoration-dotted">
+                {event._projectTitle}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="space-y-0.5">
+          {event._assigneeName && (
+            <p className="text-xs opacity-80 flex items-center gap-1">
+              {event._assigneeType === 'team' ? <Users className="h-3 w-3" /> : <Camera className="h-3 w-3" />}
+              {event._assigneeName}
+              {event._assigneeType === 'team' && <span className="text-[9px] px-1 rounded bg-indigo-500/30 text-indigo-200">Team</span>}
+            </p>
+          )}
+          {event._autoAssignRole && (
+            <p className="text-[10px] opacity-60">Role: {event._autoAssignRole.replace(/_/g, ' ')}</p>
+          )}
+          {event._estimatedMinutes > 0 && (
+            <p className="text-[10px] opacity-60">Est: {event._estimatedMinutes}min</p>
+          )}
+          <p className="text-[10px] font-medium" style={{ color: event._isCompleted ? '#4ade80' : event._isBlocked ? '#fb923c' : '#60a5fa' }}>
+            {event._statusLabel}
+          </p>
+        </div>
+        {startStr && (
+          <p className="text-xs opacity-70 flex items-center gap-1">
+            <Clock className="h-3 w-3" /> Due: {startStr}
+          </p>
+        )}
+        <p className="text-[10px] opacity-40">Click to view project tasks</p>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-[260px] space-y-1.5">
       <div className="flex items-start gap-2">
@@ -313,23 +356,48 @@ export default function CalendarPage() {
     staleTime: 60 * 1000,
   });
 
+  // Build project lookup for task enrichment
+  const { data: allProjects = [] } = useQuery({
+    queryKey: ["calendar-projects-lookup"],
+    queryFn: () => api.entities.Project.filter({}, null, 500),
+    staleTime: 120 * 1000,
+    enabled: tasksWithDueDates.length > 0,
+  });
+  const projectMap = useMemo(() => new Map(allProjects.map(p => [p.id, p])), [allProjects]);
+  const teamMap = useMemo(() => new Map((teams || []).map(t => [t.id, t])), [teams]);
+
   const taskEvents = useMemo(() => {
-    return tasksWithDueDates.map(task => ({
-      id: `task:${task.id}`,
-      title: `${task.title}${task.is_completed ? ' ✓' : ''}`,
-      start_time: task.due_date,
-      end_time: task.due_date,
-      activity_type: 'task',
-      event_source: 'flexmedia',
-      _isTask: true,
-      _taskId: task.id,
-      _projectId: task.project_id,
-      _isCompleted: task.is_completed,
-      owner_user_id: task.assigned_to || null,
-      location: null,
-      description: task.description || null,
-    }));
-  }, [tasksWithDueDates]);
+    return tasksWithDueDates.map(task => {
+      const proj = projectMap.get(task.project_id);
+      const projectLabel = proj?.title || proj?.property_address || '';
+      const assigneeName = task.assigned_to_name || task.assigned_to_team_name || '';
+      const assigneeType = task.assigned_to_team_id ? 'team' : 'user';
+      const statusLabel = task.is_completed ? 'Completed' : task.is_blocked ? 'Blocked' : 'In Progress';
+
+      return {
+        id: `task:${task.id}`,
+        title: projectLabel ? `${task.title} | ${projectLabel}` : task.title,
+        start_time: task.due_date,
+        end_time: task.due_date,
+        activity_type: 'task',
+        event_source: 'flexmedia',
+        _isTask: true,
+        _taskId: task.id,
+        _projectId: task.project_id,
+        _projectTitle: projectLabel,
+        _isCompleted: task.is_completed,
+        _isBlocked: task.is_blocked,
+        _statusLabel: statusLabel,
+        _assigneeName: assigneeName,
+        _assigneeType: assigneeType,
+        _estimatedMinutes: task.estimated_minutes,
+        _autoAssignRole: task.auto_assign_role,
+        owner_user_id: task.assigned_to || task.assigned_to_team_id || null,
+        location: projectLabel,
+        description: `${statusLabel} · ${assigneeName || 'Unassigned'}${task.estimated_minutes ? ` · Est: ${task.estimated_minutes}min` : ''}`,
+      };
+    });
+  }, [tasksWithDueDates, projectMap]);
 
   // ── User → colour map ── (hash-based for stable colours regardless of user order)
   const userIdKey = users.map(u => u.id).join(',');
@@ -626,6 +694,11 @@ export default function CalendarPage() {
 
   const handleEventClick = useCallback((e, event) => {
     e.stopPropagation();
+    // Task events → navigate to project details tasks tab
+    if (event._isTask && event._projectId) {
+      window.location.href = `/ProjectDetails?id=${event._projectId}&tab=tasks`;
+      return;
+    }
     setEditingEvent(event);
     setDefaultStart(null);
     setDialogOpen(true);
