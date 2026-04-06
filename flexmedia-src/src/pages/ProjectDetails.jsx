@@ -4,6 +4,7 @@ import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
+import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { 
@@ -278,6 +279,18 @@ export default function ProjectDetails() {
       if (deadlineSyncTimeoutRef.current) clearTimeout(deadlineSyncTimeoutRef.current);
     };
   }, [projectId, project?.id]);
+
+  // Real-time sync: invalidate caches when timers complete on this project
+  useEffect(() => {
+    if (!project?.id) return;
+    const unsub = api.entities.TaskTimeLog.subscribe((event) => {
+      // Timer completed or updated — refresh effort data
+      if (event.data?.project_id === project.id) {
+        invalidateProjectCaches(queryClient, { timeLogs: true, effort: true });
+      }
+    });
+    return unsub;
+  }, [project?.id, queryClient]);
 
   // Sync denormalised fields if agent/agency name changes
   useEffect(() => {

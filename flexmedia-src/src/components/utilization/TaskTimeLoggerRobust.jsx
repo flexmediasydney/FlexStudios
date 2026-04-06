@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import { retryWithBackoff } from '@/lib/networkResilience';
+import { invalidateProjectCaches } from '@/lib/invalidateProjectCaches';
 import { Button } from '@/components/ui/button';
 import { Play, Pause, CheckCircle, Clock, AlertCircle, AlertTriangle, Plus } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -16,6 +18,8 @@ const DB_SYNC_INTERVAL = 15000; // Sync to DB every 15 seconds (reduced from 3s 
 const LOCAL_TIMER_INTERVAL = 1000; // Update UI timer every 1 second
 
 export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, currentUser }) {
+  const queryClient = useQueryClient();
+
   // State: separate active vs completed
   const [activeLog, setActiveLog] = useState(null);
   const [completedLog, setCompletedLog] = useState(null);
@@ -311,6 +315,8 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
         pause_time: now,
         total_seconds: totalDisplaySeconds
       });
+      // Bust both cache layers so UI updates immediately
+      invalidateProjectCaches(queryClient, { timeLogs: true, effort: true });
       logTimerActivity('timer_paused', `Timer paused on "${task.title}" by ${currentUser?.full_name}`);
     } catch (err) {
       setError(err.message || 'Failed to pause timer');
@@ -360,6 +366,8 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
         { maxRetries: 3, onRetry: (err, attempt) => console.warn(`Timer finish retry ${attempt}:`, err.message) }
       );
 
+      // Bust both cache layers so UI updates immediately
+      invalidateProjectCaches(queryClient, { timeLogs: true, effort: true });
       logTimerActivity('timer_completed', `Timer completed on "${task.title}" — ${Math.round(finalSeconds / 60)}m by ${currentUser?.full_name}`);
       if (onTaskComplete) onTaskComplete(task.id);
     } catch (err) {
@@ -511,6 +519,8 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       
       // setCurrentLog will be triggered by subscription
       lastActivityTime.current = Date.now();
+      // Bust both cache layers so UI updates immediately
+      invalidateProjectCaches(queryClient, { timeLogs: true, effort: true });
       logTimerActivity('timer_started', `Timer started on "${task.title}" by ${currentUser?.full_name}`);
     } catch (err) {
       setError(err.message || 'Failed to create timer');

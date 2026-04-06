@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
+import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -596,6 +597,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       // Bug fix: refresh task list so dependent tasks' is_blocked state updates in the UI.
       // Without this, the entity cache retains stale data until the next subscription push.
       refetchEntityList("ProjectTask");
+      invalidateProjectCaches(queryClient, { tasks: true, effort: true });
       scheduleDeadlineSync(projectId, 'task_completed');
       toast.success(wasCompleted ? "Task re-opened" : "Task completed");
     } catch (err) {
@@ -662,6 +664,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                   const failed = results.filter(r => r.status === 'rejected').length;
                   queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
                   refetchEntityList("ProjectTask");
+                  invalidateProjectCaches(queryClient, { tasks: true, effort: true });
                   if (failed > 0) {
                     toast.warning(`Completed ${succeeded} task${succeeded !== 1 ? 's' : ''}, ${failed} failed`);
                   } else {
