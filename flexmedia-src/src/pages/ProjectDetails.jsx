@@ -40,7 +40,7 @@ import ProjectEffortSummaryV2 from "@/components/projects/ProjectEffortSummaryV2
 import ProjectProgressBar from "@/components/projects/ProjectProgressBar";
 import TimeTrackingSummaryCard from "@/components/projects/TimeTrackingSummaryCard";
 import ProjectHealthIndicator from "@/components/projects/ProjectHealthIndicator";
-import QuickActionBar from "@/components/projects/QuickActionBar";
+// QuickActionBar removed — redundant with StagePipeline, task panels, and ActivityHub
 import ProjectRevisionsTab from "@/components/revisions/ProjectRevisionsTab";
 import ProjectWeatherCard from "@/components/projects/ProjectWeatherCard";
 import ActiveTimersPanel from "@/components/projects/ActiveTimersPanel";
@@ -1127,31 +1127,8 @@ export default function ProjectDetails() {
         <ErrorBoundary><ProjectStaffBar project={project} canEdit={memoizedCanEdit} /></ErrorBoundary>
       )}
 
-      {/* Quick Action Bar */}
-      <ErrorBoundary>
-        <QuickActionBar
-          project={project}
-          canEdit={memoizedCanEdit}
-          onStartTimer={() => handleTabChange('effort')}
-          onAddNote={() => {
-            // 'notes' tab doesn't exist — scroll to the ActivityHub compose box instead
-            const hub = document.querySelector('[data-activity-hub]');
-            if (hub) hub.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }}
-          onChangeStatus={(newStatus) => {
-            if (updateStatusMutation.isPending) return;
-            const stages = PROJECT_STAGES.map(s => s.value);
-            const currentIdx = stages.indexOf(project.status);
-            const newIdx = stages.indexOf(newStatus);
-            if (newIdx < currentIdx) {
-              setPendingBackwardStage(newStatus);
-              return;
-            }
-            updateStatusMutation.mutate(newStatus);
-          }}
-          onOpenChat={user ? () => setShowProjectChat(true) : null}
-        />
-      </ErrorBoundary>
+      {/* QuickActionBar removed — all actions accessible from their respective tabs:
+           Chat (task panel), Timer (task panel), Notes (ActivityHub), Status (StagePipeline) */}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
         {/* Main Content */}
