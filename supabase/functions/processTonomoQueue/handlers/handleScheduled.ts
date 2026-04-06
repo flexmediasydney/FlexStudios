@@ -27,6 +27,8 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   const eventId = p.id;
   const orderName = p.order?.orderName || p.orderName || 'Unknown order';
   const address = p.address?.formatted_address || p.location || p.order?.property_address?.formatted_address || '';
+  const addressLat = p.address?.lat || p.address?.latitude || null;
+  const addressLng = p.address?.lng || p.address?.longitude || null;
   const photographers = p.photographers || [];
   const agent = p.order?.listingAgents?.[0] || p.listingAgents?.[0] || null;
   const startTime = p.when?.start_time ? p.when.start_time * 1000 : null;
@@ -110,6 +112,9 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     title: strippedAddress,
     property_address: address,
     property_suburb: projectSuburb || null,
+    ...(addressLat && { geocoded_lat: addressLat }),
+    ...(addressLng && { geocoded_lng: addressLng }),
+    ...(addressLat && { geocoded_at: new Date().toISOString() }),
     source: 'tonomo',
     tonomo_order_id: orderId,
     tonomo_event_id: eventId,

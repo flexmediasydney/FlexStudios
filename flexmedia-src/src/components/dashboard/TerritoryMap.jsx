@@ -254,7 +254,15 @@ export default function TerritoryMap() {
   const { data: allProjects = [], loading } = useEntityList('Project', '-created_date', 1000);
   const { data: allUsers = [] } = useEntityList('User');
 
-  const mappable = useMemo(() => allProjects.filter(p => p?.lat && p?.lng && !isNaN(p.lat) && !isNaN(p.lng)), [allProjects]);
+  const mappable = useMemo(() => allProjects.filter(p => {
+    const lat = p?.geocoded_lat || p?.latitude;
+    const lng = p?.geocoded_lng || p?.longitude;
+    return lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
+  }).map(p => ({
+    ...p,
+    lat: parseFloat(p.geocoded_lat || p.latitude),
+    lng: parseFloat(p.geocoded_lng || p.longitude),
+  })), [allProjects]);
 
   const filtered = useMemo(() => {
     const now = new Date();
