@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Trash2, RefreshCw, Loader2, CalendarDays, CheckCircle, AlertCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
+import { useCalendarConnect } from "./useCalendarConnect";
 
 // Auto-sync interval — 5 minutes (fast enough for RSVP and reschedule pickup)
 const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -16,7 +17,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
   const queryClient = useQueryClient();
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null); // { created, updated, accounts, errors }
-  const [isConnecting, setIsConnecting] = useState(false);
+  const { connect: triggerConnect, connecting: isConnecting } = useCalendarConnect();
   const autoSyncRef = useRef(null);
   const { data: currentUser } = useCurrentUser();
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, email, eventCount }
@@ -96,22 +97,15 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
     };
   }, [connections, selectedUserEmail]);
 
+  // When the shared hook finishes connecting, trigger an immediate sync
+  const prevConnecting = useRef(false);
   useEffect(() => {
-    const handleMessage = (event) => {
-      if (event.data.type === 'calendar_auth_success') {
-        toast.success(`Google Calendar connected: ${event.data.email}`);
-        setIsConnecting(false);
-        queryClient.invalidateQueries({ queryKey: ["calendar-connections"] });
-        // Immediately sync the newly connected calendar
-        setTimeout(() => handleSync(), 1000);
-      } else if (event.data.type === 'calendar_auth_error') {
-        toast.error(event.data.error || "Failed to connect Google Calendar");
-        setIsConnecting(false);
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [queryClient]);
+    if (prevConnecting.current && !isConnecting) {
+      // Connection flow just completed — sync now
+      setTimeout(() => handleSync(), 1000);
+    }
+    prevConnecting.current = isConnecting;
+  }, [isConnecting]);
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }) =>
@@ -163,24 +157,13 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
     }
   });
 
-  const handleConnect = async () => {
+  const handleConnect = () => {
     // Client-side guard (server enforces too)
     if (atLimit) {
       toast.error(`Connection limit reached. ${isAdmin ? 'Admins' : 'Users'} can connect up to ${connectionLimit} calendars.`);
       return;
     }
-    try {
-      setIsConnecting(true);
-      const result = await api.functions.invoke('getGoogleCalendarOAuthUrl', {});
-      if (result.data.error) throw new Error(result.data.error);
-      const width = 600, height = 700;
-      const left = window.screenX + (window.outerWidth - width) / 2;
-      const top = window.screenY + (window.outerHeight - height) / 2;
-      window.open(result.data.authUrl, 'Google Calendar Authorization', `width=${width},height=${height},left=${left},top=${top}`);
-    } catch (error) {
-      toast.error(error.message || "Failed to initiate Google Calendar connection");
-      setIsConnecting(false);
-    }
+    triggerConnect();
   };
 
   const handleSync = async () => {

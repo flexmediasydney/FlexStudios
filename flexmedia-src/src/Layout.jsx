@@ -46,6 +46,7 @@ import NotificationToast from "@/components/notifications/NotificationToast";
 import { ChatProvider, useChat } from "@/components/chat/ChatContext";
 import ChatPanel from "@/components/chat/ChatPanel";
 import { ActiveTimersProvider } from "@/components/utilization/ActiveTimersContext";
+import CalendarConnectBanner from "@/components/calendar/CalendarConnectBanner";
 
 
 function ThemeToggle() {
@@ -623,6 +624,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
 
         {/* Main Content */}
         <main id="main-content" role="main" className="lg:ml-64 min-h-screen pt-14 lg:pt-16">
+          <CalendarConnectBanner />
           {children}
         </main>
 
