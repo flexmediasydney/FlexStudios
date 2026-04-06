@@ -40,7 +40,7 @@ import ProjectEffortSummaryV2 from "@/components/projects/ProjectEffortSummaryV2
 import ProjectProgressBar from "@/components/projects/ProjectProgressBar";
 import TimeTrackingSummaryCard from "@/components/projects/TimeTrackingSummaryCard";
 import ProjectHealthIndicator from "@/components/projects/ProjectHealthIndicator";
-// QuickActionBar removed — redundant with StagePipeline, task panels, and ActivityHub
+import EmailComposeDialog from "@/components/email/EmailComposeDialog";
 import ProjectRevisionsTab from "@/components/revisions/ProjectRevisionsTab";
 import ProjectWeatherCard from "@/components/projects/ProjectWeatherCard";
 import ActiveTimersPanel from "@/components/projects/ActiveTimersPanel";
@@ -159,6 +159,7 @@ export default function ProjectDetails() {
    const [showEditForm, setShowEditForm] = useState(false);
    const [showAgentSelector, setShowAgentSelector] = useState(false);
    const [showProjectChat, setShowProjectChat] = useState(false);
+   const [composeToAgent, setComposeToAgent] = useState(null);
    const [errorMessage, setErrorMessage] = useState(null);
    const [dismissedDeliveryPrompt, setDismissedDeliveryPrompt] = useState(false);
    // Backward stage regression confirmation
@@ -1457,9 +1458,13 @@ export default function ProjectDetails() {
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-sm">{agent?.name || 'Unknown'}</p>
                       {agent?.email && (
-                        <a href={`mailto:${encodeURIComponent(agent.email)}`} className="text-xs text-muted-foreground hover:text-primary truncate block">
+                        <button
+                          onClick={() => setComposeToAgent(agent.email)}
+                          className="text-xs text-muted-foreground hover:text-primary truncate block text-left cursor-pointer"
+                          title="Compose email to agent"
+                        >
                           {agent.email}
-                        </a>
+                        </button>
                       )}
                     </div>
                   </div>
@@ -1588,6 +1593,17 @@ export default function ProjectDetails() {
            onSetActiveChat={() => {}}
            onClose={() => setShowProjectChat(false)}
            currentUserEmail={user.email}
+         />
+       )}
+
+       {/* Email compose triggered by clicking agent email */}
+       {composeToAgent && (
+         <EmailComposeDialog
+           open={!!composeToAgent}
+           onOpenChange={(open) => { if (!open) setComposeToAgent(null); }}
+           defaultTo={composeToAgent}
+           defaultProjectId={projectId}
+           defaultSubject={project?.title || project?.property_address || ''}
          />
        )}
        </div>
