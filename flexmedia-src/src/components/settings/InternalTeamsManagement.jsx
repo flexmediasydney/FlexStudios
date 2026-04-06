@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -159,25 +159,19 @@ export default function InternalTeamsManagement() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Card>
-          <CardContent className="pt-4">
-            <div className="text-2xl font-bold">{stats.total}</div>
-            <p className="text-xs text-muted-foreground">Total Teams</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="text-2xl font-bold">{stats.active}</div>
-            <p className="text-xs text-muted-foreground">Active Teams</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <div className="text-2xl font-bold">{stats.totalMembers}</div>
-            <p className="text-xs text-muted-foreground">Total Members</p>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { value: stats.total, label: "Total Teams" },
+          { value: stats.active, label: "Active" },
+          { value: stats.totalMembers, label: "Members" },
+        ].map(({ value, label }) => (
+          <Card key={label}>
+            <CardContent className="py-3 px-4">
+              <div className="text-xl font-bold">{value}</div>
+              <p className="text-xs text-muted-foreground">{label}</p>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       {/* Search */}
@@ -206,8 +200,19 @@ export default function InternalTeamsManagement() {
           <TableBody>
             {filteredTeams.length === 0 ? (
               <TableRow>
-                <TableCell colSpan="5" className="text-center py-6 text-muted-foreground">
-                  {searchQuery ? "No teams match your search" : "No teams yet"}
+                <TableCell colSpan="5" className="text-center py-12">
+                  <div className="flex flex-col items-center gap-2">
+                    <Users className="h-8 w-8 text-muted-foreground/40" />
+                    <p className="text-sm text-muted-foreground">
+                      {searchQuery ? "No teams match your search." : "No teams created yet."}
+                    </p>
+                    {!searchQuery && canEdit && (
+                      <Button variant="outline" size="sm" onClick={() => handleOpen()} className="mt-1 gap-1.5">
+                        <Plus className="h-3.5 w-3.5" />
+                        Create your first team
+                      </Button>
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (
@@ -290,7 +295,7 @@ export default function InternalTeamsManagement() {
             <DialogTitle>{editingTeam ? "Edit Team" : "New Team"}</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
+            <div className="space-y-1.5">
               <Label htmlFor="name">Team Name *</Label>
               <Input
                 id="name"
@@ -299,7 +304,7 @@ export default function InternalTeamsManagement() {
                 required
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <Label htmlFor="description">Description</Label>
               <Textarea
                 id="description"
@@ -308,8 +313,8 @@ export default function InternalTeamsManagement() {
                 rows={2}
               />
             </div>
-            <div>
-              <label className="text-sm font-medium block mb-1.5">Team Function</label>
+            <div className="space-y-1.5">
+              <Label>Team Function</Label>
               <select
                 value={formData.team_function || ''}
                 onChange={e => setFormData(prev => ({ ...prev, team_function: e.target.value }))}
@@ -325,7 +330,7 @@ export default function InternalTeamsManagement() {
                 Used to auto-suggest this team in Fallback Role Assignments.
               </p>
             </div>
-            <div>
+            <div className="space-y-1.5">
               <Label htmlFor="color">Team Color</Label>
               <div className="flex gap-2">
                 <Input

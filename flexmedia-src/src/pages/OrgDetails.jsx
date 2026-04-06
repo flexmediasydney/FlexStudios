@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
 import { useEntityList } from "@/components/hooks/useEntityData";
@@ -39,15 +39,6 @@ const TABS = [
   { id: 'branding', label: 'Branding', icon: Palette },
 ];
 
-// ── History sub-filter tabs for Notes unified view ────────────────────────
-const HISTORY_FILTERS = [
-  { id: 'all', label: 'All' },
-  { id: 'notes', label: 'Notes' },
-  { id: 'activity', label: 'Activities' },
-  { id: 'emails', label: 'Emails' },
-  { id: 'changelog', label: 'Changelog' },
-];
-
 function ErrorState({ navigate, title, message }) {
   return (
     <div className="p-8">
@@ -78,8 +69,6 @@ export default function OrgDetails() {
     if (saved === 'activity-log' || saved === 'interactions' || saved === 'audit') return 'notes';
     return saved || 'notes';
   });
-  const [historyFilter, setHistoryFilter] = useState('all');
-
   const handleTabChange = (tab) => {
     setActiveTab(tab);
     sessionStorage.setItem(`tab-org-${agencyId}`, tab);
@@ -465,7 +454,7 @@ export default function OrgDetails() {
                 ) : priceMatrix.length === 0 ? (
                   <Card className="bg-muted/30 border-dashed">
                     <CardContent className="pt-6 pb-6 text-center">
-                      <p className="text-muted-foreground text-sm">No pricing configured for this agency</p>
+                      <p className="text-muted-foreground text-sm">No pricing configured for this organisation</p>
                       <p className="text-xs text-muted-foreground mt-1">Set up pricing in Settings &rarr; Price Matrix</p>
                     </CardContent>
                   </Card>

@@ -18,7 +18,6 @@ import {
   BarChart2,
   Search,
   UserCheck,
-  ChevronDown,
   ChevronRight,
   Sun,
   Moon,
@@ -90,30 +89,24 @@ const roleLabels = {
 };
 
 export default function Layout({ children, currentPageName }) {
-  const handleBack = () => {
-    if (window.history.length > 1) {
-      window.history.back();
-    }
-  };
-
   return (
     <NotificationProvider>
-      <LayoutContentWrapper currentPageName={currentPageName} children={children} onBack={handleBack} />
+      <LayoutContentWrapper currentPageName={currentPageName} children={children} />
     </NotificationProvider>
   );
 }
 
-function LayoutContentWrapper({ currentPageName, children, onBack }) {
+function LayoutContentWrapper({ currentPageName, children }) {
   const { data: user } = useCurrentUser();
-  
+
   return (
     <ActiveTimersProvider currentUser={user || null}>
-      <LayoutContent currentPageName={currentPageName} children={children} onBack={onBack} />
+      <LayoutContent currentPageName={currentPageName} children={children} />
     </ActiveTimersProvider>
   );
 }
 
-function LayoutContent({ currentPageName, children, onBack }) {
+function LayoutContent({ currentPageName, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const { data: user } = useCurrentUser();
@@ -126,7 +119,6 @@ function LayoutContent({ currentPageName, children, onBack }) {
   const navBadges = useMemo(() => {
     const inboxUnread = navEmails.filter(m => m.is_unread && !m.is_archived && !m.is_deleted).length;
     const pendingReview = navProjects.filter(p => p.status === 'pending_review').length;
-    const overdueTasks = 0; // tasks already loaded elsewhere, keep nav light
     return {
       Inbox: inboxUnread,
       NotificationsPage: notifUnread,
@@ -327,13 +319,13 @@ function LayoutContent({ currentPageName, children, onBack }) {
             to={createPageUrl(item.href)}
             onClick={() => setSidebarOpen(false)}
             className={cn(
-              "group flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-[0.98] flex-1 min-h-[40px]",
+              "group flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-[0.98] flex-1",
               isActive
-                ? "bg-primary text-primary-foreground font-semibold shadow-md"
+                ? "bg-primary/10 text-primary font-semibold ring-1 ring-primary/20"
                 : isChildActive
-                  ? "bg-primary/10 text-primary font-medium"
+                  ? "bg-muted/60 text-foreground font-medium"
                   : "text-muted-foreground hover:bg-muted/50 hover:text-foreground font-medium",
-              isChild && "text-[13px] py-1.5 min-h-[34px]"
+              isChild && "text-[13px] py-1 pl-2"
             )}
             title={item.name}
             aria-current={isActive ? "page" : undefined}
@@ -347,12 +339,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
             )}
             <span className="truncate flex-1">{item.name}</span>
             {item.badge > 0 && (
-              <span className={cn(
-                "ml-auto flex items-center justify-center text-[10px] font-bold rounded-full min-w-[20px] h-5 px-1.5 tabular-nums",
-                isActive
-                  ? "bg-primary-foreground/20 text-primary-foreground"
-                  : "bg-red-100 text-red-700"
-              )}>
+              <span className="ml-auto flex items-center justify-center text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 tabular-nums bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400">
                 {item.badge > 99 ? '99+' : item.badge}
               </span>
             )}
@@ -398,19 +385,19 @@ function LayoutContent({ currentPageName, children, onBack }) {
           <button
             onClick={() => toggleSection(section.id)}
             className={cn(
-              "w-full flex items-center gap-2 px-3 py-2.5 rounded-md font-semibold text-xs transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group min-h-[44px]",
-              isExpanded 
-                ? "bg-primary/10 text-primary hover:bg-primary/15" 
-                : "text-muted-foreground/60 hover:text-foreground hover:bg-muted/40"
+              "w-full flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold text-[11px] transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group",
+              isExpanded
+                ? "text-foreground/80 hover:bg-muted/40"
+                : "text-muted-foreground/50 hover:text-foreground hover:bg-muted/40"
             )}
             title={`${isExpanded ? 'Collapse' : 'Expand'} ${section.label}`}
             aria-expanded={isExpanded}
           >
-            <ChevronDown className={cn(
-              "h-4 w-4 transition-transform duration-200 flex-shrink-0",
-              isExpanded ? "rotate-180 text-primary" : "text-muted-foreground/50"
+            <ChevronRight className={cn(
+              "h-3 w-3 transition-transform duration-200 flex-shrink-0",
+              isExpanded && "rotate-90"
             )} />
-            <span className="flex-1 text-left uppercase tracking-wide">{section.label}</span>
+            <span className="flex-1 text-left uppercase tracking-wider">{section.label}</span>
           </button>
         ) : (
           <div className="pt-4 pb-2 px-3 first:pt-2">
@@ -422,7 +409,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
         
         {hasItems && isExpanded && (
           <div className={cn(
-            "space-y-0.5 ml-1 pl-2 border-l-2 border-primary/20 overflow-hidden transition-all duration-200",
+            "space-y-0.5 ml-1 pl-2 border-l border-border/50 overflow-hidden transition-all duration-200",
             "animate-in fade-in slide-in-from-left-2"
           )}>
             {section.items.map(item => (
@@ -450,7 +437,7 @@ function LayoutContent({ currentPageName, children, onBack }) {
          <header className="hidden lg:block fixed top-0 left-64 right-0 h-16 bg-card border-b z-40 px-6 shadow-xs backdrop-blur-sm bg-card/97">
            <div className="h-full flex items-center justify-between gap-4">
              {canGoBack && (
-               <button onClick={onBack} className="text-muted-foreground hover:text-foreground transition-colors p-2 hover:bg-muted/50 rounded-lg" title="Go back" aria-label="Go back to previous page">
+               <button onClick={() => window.history.back()} className="text-muted-foreground hover:text-foreground transition-colors p-2 hover:bg-muted/50 rounded-lg" title="Go back" aria-label="Go back to previous page">
                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                  </svg>
@@ -558,13 +545,8 @@ function LayoutContent({ currentPageName, children, onBack }) {
             ))}
           </nav>
 
-          {/* Divider */}
-          <div className="px-4 py-1">
-            <div className="h-px bg-border/30" />
-          </div>
-
           {/* Footer */}
-          <div className="p-3 border-t bg-muted/10 dark:bg-muted/5 space-y-1.5">
+          <div className="p-3 border-t border-border/40 space-y-1.5">
             {user && (
               <div className="px-2.5 py-2 rounded-lg bg-muted/50 border border-border/40 shadow-xs">
                 <div className="flex items-center gap-2 mb-1">
@@ -578,18 +560,6 @@ function LayoutContent({ currentPageName, children, onBack }) {
                 </Badge>
               </div>
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all duration-200 h-9 px-2 text-xs"
-              onClick={() => setSearchOpen(true)}
-              title="Global search (Ctrl+K)"
-              aria-label="Open global search"
-            >
-              <Search className="h-3.5 w-3.5 flex-shrink-0" />
-              <span>Search</span>
-              <kbd className="ml-auto text-[8px] bg-muted/40 px-1 py-0.5 rounded border border-border/30">⌘K</kbd>
-            </Button>
             <ThemeToggle />
             <Button
               variant="ghost"

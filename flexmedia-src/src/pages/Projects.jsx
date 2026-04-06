@@ -66,7 +66,7 @@ export default function Projects() {
   const [shootDateFrom, setShootDateFrom] = useState('');
   const [shootDateTo, setShootDateTo] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
-  const { canAccessProject, canSeePricing } = usePermissions();
+  const { canSeePricing } = usePermissions();
   const { enabledFields } = useCardFields();
   const { data: currentUser } = useCurrentUser();
 
@@ -129,12 +129,11 @@ export default function Projects() {
    // Secondary batch: loaded but not blocking
    const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 300);
    const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog", null, 50);
-   const { data: agents = [], loading: agentsLoading } = useEntityList("Agent", null, 50);
-   const { data: agencies = [], loading: agenciesLoading } = useEntityList("Agency", null, 50);
-   const { data: teams = [], loading: teamsLoading } = useEntityList("InternalTeam", null, 30);
+   const { data: agents = [] } = useEntityList("Agent", null, 50);
+   const { data: agencies = [] } = useEntityList("Agency", null, 50);
+   const { data: teams = [] } = useEntityList("InternalTeam", null, 30);
    const { data: allUsers = [] } = useEntityList("User", null, 30);
    const { data: allEmployeeRoles = [] } = useEntityList("EmployeeRole", null, 100);
-   const allInternalTeams = teams;
 
    const isLoading = projectsLoading || clientsLoading || productsLoading || packagesLoading;
 
@@ -157,8 +156,6 @@ export default function Projects() {
     });
     return ids;
   }, [myTeamIds, allEmployeeRoles]);
-
-  const projects = allProjects;
 
   // Bug fix: pre-compute task map BEFORE filteredProjects so sort can use it (avoids O(n*m) inside comparator)
   const tasksByProject = useMemo(() => {
@@ -184,7 +181,7 @@ export default function Projects() {
 
   // Memoize filtered projects to prevent excessive recalculation (Fix #10)
   const filteredProjects = useMemo(() => {
-    return projects
+    return allProjects
     .filter(project => {
       // Hide archived unless toggled on
       if (!showArchived && project.is_archived) return false;
@@ -337,7 +334,7 @@ export default function Projects() {
       }
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
-  }, [projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
+  }, [allProjects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
 
   // tasksByProject is now computed above filteredProjects (Bug fix #7)
 
@@ -429,7 +426,9 @@ export default function Projects() {
       cols.push({
         key: fieldId,
         label: fieldLabels[fieldId],
-        sortable: ["agency_name", "agent_name", "shoot_date", "delivery_date", "price", "priority", "outcome", "payment_status", "property_type"].includes(fieldId),
+        sortable: ["agency_name", "agent_name", "shoot_date", "delivery_date", "price", "invoiced_amount", "priority", "outcome", "payment_status", "property_type"].includes(fieldId),
+        align: ["price", "invoiced_amount"].includes(fieldId) ? "right" : undefined,
+        width: fieldId === "price" ? "110px" : (fieldId === "invoiced_amount" ? "110px" : undefined),
         render: (project) => {
           const tasks = tasksByProject[project.id] || [];
           const timeLogs = timeLogsByProject[project.id] || [];
@@ -463,6 +462,8 @@ export default function Projects() {
     allTasks.filter(t => filteredProjectIds.has(t.project_id) && !t.parent_task_id),
     [allTasks, filteredProjectIds]
   );
+
+  const archivedCount = useMemo(() => allProjects.filter(p => p.is_archived).length, [allProjects]);
 
   // Memoize callbacks (Fix #13)
   const handleEdit = useCallback((project) => {
@@ -549,7 +550,7 @@ export default function Projects() {
           agencies={agencies}
           teams={teams}
           internalUsers={allUsers}
-          internalTeams={allInternalTeams}
+          internalTeams={teams}
           activeFilters={filters}
           activeSort={sortBy}
           onFiltersChange={setFilters}
@@ -660,9 +661,9 @@ export default function Projects() {
             onClick={() => setShowArchived(v => !v)}
           >
             {showArchived ? "Hide archived" : "Show archived"}
-            {(() => { const count = allProjects.filter(p => p.is_archived).length; return count > 0 ? (
-              <Badge variant="secondary" className="text-[9px] h-4 px-1">{count}</Badge>
-            ) : null; })()}
+            {archivedCount > 0 && (
+              <Badge variant="secondary" className="text-[9px] h-4 px-1">{archivedCount}</Badge>
+            )}
           </Button>
           </div>
           </div>
@@ -722,7 +723,7 @@ export default function Projects() {
           pageSize={75}
           emptyMessage={
             searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all'
-              ? "No projects match your filters"
+              ? `No projects match your filters — ${allProjects.filter(p => !p.is_archived || showArchived).length} total available`
               : "No projects yet — create your first project above"
           }
         />
@@ -757,13 +758,16 @@ export default function Projects() {
             <div className="max-w-md mx-auto">
               {searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all' ? (
                 <>
-                  <div className="relative inline-block">
-                    <Search className="h-12 w-12 mx-auto mb-3 text-muted-foreground/30" />
-                    <div className="absolute inset-0 blur-xl bg-muted/20 rounded-full" />
-                  </div>
-                  <h3 className="text-lg font-semibold mb-2">No projects found</h3>
-                  <p className="text-muted-foreground mb-4 text-sm">
-                    Try adjusting your search or filters to see more results
+                  <Search className="h-10 w-10 mx-auto mb-3 text-muted-foreground/40" />
+                  <h3 className="text-lg font-semibold mb-1">No matching projects</h3>
+                  <p className="text-muted-foreground mb-1 text-sm">
+                    {searchQuery && <>No results for "<span className="font-medium text-foreground">{searchQuery}</span>". </>}
+                    {allProjects.length > 0 && (
+                      <span className="text-xs">({allProjects.filter(p => !p.is_archived || showArchived).length} total projects available)</span>
+                    )}
+                  </p>
+                  <p className="text-muted-foreground mb-4 text-xs">
+                    Try broadening your search or removing some filters.
                   </p>
                   <Button variant="outline" size="sm" onClick={() => { setSearchQuery(""); setSearchInput(""); setFilters({}); setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); }} className="shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9">
                     <X className="h-4 w-4 mr-1.5" />
@@ -805,7 +809,7 @@ export default function Projects() {
                const projectTasks = tasksByProject[project.id] || [];
                const projectTimeLogs = timeLogsByProject[project.id] || [];
                return (
-                 <div key={project.id} className="cursor-pointer hover:opacity-90 transition-opacity" onClick={() => handleEdit(project)}>
+                 <div key={project.id} className="cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all duration-150" onClick={() => handleEdit(project)}>
                    <ProjectCard project={project} products={products} packages={packages} tasks={projectTasks} timeLogs={projectTimeLogs} />
                  </div>
                );

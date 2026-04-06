@@ -360,7 +360,19 @@ export default function Organisations() {
             {!loading && filtered.length === 0 && (
               <div className="text-center py-16 text-muted-foreground">
                 <Building2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                <p className="font-medium">{search ? `No results for "${search}"` : 'No organisations found'}</p>
+                <p className="font-medium text-base">{search ? `No results for "${search}"` : 'No organisations yet'}</p>
+                <p className="text-xs mt-1 text-muted-foreground/70">
+                  {search ? 'Try a different search term' : 'Add your first organisation to get started'}
+                </p>
+                {search ? (
+                  <Button variant="outline" size="sm" onClick={() => setSearch('')} className="mt-3">
+                    Clear search
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={() => { setEditingAgency(null); setShowForm(true); }} className="mt-3">
+                    <Plus className="h-3.5 w-3.5 mr-1.5" />Add Organisation
+                  </Button>
+                )}
               </div>
             )}
             {!loading && (

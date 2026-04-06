@@ -1,10 +1,9 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
-import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { format, isToday, isTomorrow, parseISO, subDays, subWeeks, differenceInDays, addDays } from "date-fns";
@@ -14,7 +13,6 @@ import TaskReportingDashboard from "@/components/dashboard/TaskReportingDashboar
 import TaskDeadlineDashboard from "@/components/dashboard/TaskDeadlineDashboard";
 import ProjectHeatmap from "@/components/dashboard/ProjectHeatmap";
 import DropboxFileFeed from "@/components/dashboard/DropboxFileFeed";
-import RealtimeActivityStream from "@/components/dashboard/RealtimeActivityStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -44,7 +42,6 @@ import ErrorBoundary from '@/components/common/ErrorBoundary';
 
 export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);
-  const { canAccessProject } = usePermissions();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -68,14 +65,12 @@ export default function Dashboard() {
 
   // Load all necessary data
   const { data: allProjects = [], loading: projectsLoading } = useEntityList("Project", "-created_date", 500);
-  const { data: clients = [] } = useEntityList("Client", "-created_date", 1000);
   const { data: allTasks = [] } = useEntityList("ProjectTask", "-created_date", 500);
   const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog", "-created_date", 300);
   const { data: allUsers = [] } = useEntityList("User");
-  const { data: agencies = [] } = useEntityList("Agency");
-  const { data: agents = [] } = useEntityList("Agent");
   const { data: calendarEvents = [] } = useEntityList("CalendarEvent", "-start_time", 200);
 
+  // Use allProjects directly -- the intermediate alias added no value
   const projects = allProjects;
 
   // Dynamic page title
@@ -530,7 +525,7 @@ export default function Dashboard() {
            </ErrorBoundary>
 
           {/* Operational Widgets Row */}
-            <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '50ms'}}>
               <ErrorBoundary fallbackLabel="Today's Schedule" compact>
                 <TodaysScheduleWidget projects={projects} calendarEvents={calendarEvents} />
               </ErrorBoundary>
@@ -548,13 +543,33 @@ export default function Dashboard() {
           )}
 
           {/* Charts Row 1 - Revenue Comparison + Stage Distribution */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 animate-in fade-in duration-500" style={{animationDelay: '100ms'}}>
-            {projects.length > 0 ? <ErrorBoundary fallbackLabel="Revenue Chart" compact><RevenueComparisonChart projects={projects} /></ErrorBoundary> : <Card className="lg:col-span-2 p-8 flex items-center justify-center text-center text-muted-foreground text-sm min-h-[200px]">No revenue data yet</Card>}
-            {projects.length > 0 ? <ErrorBoundary fallbackLabel="Stage Distribution" compact><StageDistributionChart projects={projects} /></ErrorBoundary> : <Card className="p-8 flex items-center justify-center text-center text-muted-foreground text-sm min-h-[200px]">No project data yet</Card>}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 [&>*]:min-h-[240px] animate-in fade-in duration-500" style={{animationDelay: '100ms'}}>
+            {projects.length > 0 ? (
+              <ErrorBoundary fallbackLabel="Revenue Chart" compact><RevenueComparisonChart projects={projects} /></ErrorBoundary>
+            ) : (
+              <Card className="lg:col-span-2 min-h-[240px] flex flex-col items-center justify-center text-center p-8 border-dashed">
+                <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center mb-3">
+                  <Skeleton className="h-5 w-5 rounded" />
+                </div>
+                <p className="text-sm font-medium text-muted-foreground">No revenue data yet</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">Create your first project to start tracking revenue.</p>
+              </Card>
+            )}
+            {projects.length > 0 ? (
+              <ErrorBoundary fallbackLabel="Stage Distribution" compact><StageDistributionChart projects={projects} /></ErrorBoundary>
+            ) : (
+              <Card className="min-h-[240px] flex flex-col items-center justify-center text-center p-8 border-dashed">
+                <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center mb-3">
+                  <Skeleton className="h-5 w-5 rounded" />
+                </div>
+                <p className="text-sm font-medium text-muted-foreground">No project data yet</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">Projects will appear here as they move through stages.</p>
+              </Card>
+            )}
           </div>
 
           {/* Charts Row 2 */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 [&>*]:min-h-[280px]">
             <ErrorBoundary fallbackLabel="Project Velocity" compact>
               <ProjectVelocityChart data={velocityData} />
             </ErrorBoundary>
@@ -568,7 +583,7 @@ export default function Dashboard() {
           </div>
 
           {/* Charts Row 3 */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6 [&>*]:min-h-[280px]">
             <ErrorBoundary fallbackLabel="Cash Flow Forecast" compact>
               <CashFlowForecast data={cashFlowData} forecastedRevenue={forecastedRevenue} />
             </ErrorBoundary>
@@ -590,31 +605,16 @@ export default function Dashboard() {
           )}
 
           {/* Quick Actions */}
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
-            <QuickActionsPanel
-              urgentCount={executiveMetrics.overdueItems}
-              onNewProject={handleShowProjectForm}
-              onNewContact={() => navigate(createPageUrl("People") + "?new=true")}
-              onComposeEmail={() => navigate(createPageUrl("Inbox") + "?compose=true")}
-              onViewCalendar={() => navigate(createPageUrl("Calendar"))}
-              onViewInbox={() => navigate(createPageUrl("Inbox"))}
-              onViewReports={() => navigate(createPageUrl("Analytics"))}
-            />
-            
-            {/* Recent Activity Compact */}
-            <Card className="lg:col-span-3">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Recent Activity</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ErrorBoundary fallbackLabel="Recent Activity" compact>
-                  <RealtimeActivityStream maxItems={6} compact />
-                </ErrorBoundary>
-              </CardContent>
-            </Card>
-          </div>
+          <QuickActionsPanel
+            urgentCount={executiveMetrics.overdueItems}
+            onNewProject={handleShowProjectForm}
+            onNewContact={() => navigate(createPageUrl("People") + "?new=true")}
+            onComposeEmail={() => navigate(createPageUrl("Inbox") + "?compose=true")}
+            onViewCalendar={() => navigate(createPageUrl("Calendar"))}
+            onViewInbox={() => navigate(createPageUrl("Inbox"))}
+            onViewReports={() => navigate(createPageUrl("Analytics"))}
+          />
         </TabsContent>
-
 
         <TabsContent value="deadlines" className="space-y-6 mt-0">
           <ErrorBoundary fallbackLabel="Task Deadlines">
@@ -685,80 +685,80 @@ export default function Dashboard() {
 
 function DashboardSkeleton() {
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
+    <div className="space-y-4 sm:space-y-6 animate-pulse">
       {/* Skeleton: Pulse bar */}
-      <Card className="p-3">
-        <div className="flex items-center gap-4">
+      <Card className="p-2.5">
+        <div className="flex items-center gap-4 overflow-hidden">
           {Array(5).fill(0).map((_, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <Skeleton className="h-3 w-3 rounded-full" />
-              <Skeleton className="h-3 w-16" />
+            <div key={i} className="flex items-center gap-1.5 shrink-0">
+              <Skeleton className="h-2.5 w-2.5 rounded-full" />
+              <Skeleton className="h-2.5 w-14" />
             </div>
           ))}
         </div>
       </Card>
       {/* Skeleton: Two-column panels */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6">
-        <Card className="p-5 space-y-4">
-          <Skeleton className="h-5 w-36" />
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4 sm:gap-6">
+        <Card className="p-4 space-y-3">
+          <Skeleton className="h-4 w-32" />
           {Array(4).fill(0).map((_, i) => (
-            <div key={i} className="flex items-center gap-3">
-              <Skeleton className="h-4 w-4 rounded-full" />
-              <Skeleton className="h-4 flex-1" />
-              <Skeleton className="h-4 w-16" />
+            <div key={i} className="flex items-center gap-2.5">
+              <Skeleton className="h-3.5 w-3.5 rounded-full" />
+              <Skeleton className="h-3.5 flex-1" />
+              <Skeleton className="h-3.5 w-14" />
             </div>
           ))}
         </Card>
         <Card className="overflow-hidden">
-          <div className="px-4 py-3 border-b">
-            <Skeleton className="h-4 w-24" />
+          <div className="px-4 py-2.5 border-b">
+            <Skeleton className="h-3.5 w-20" />
           </div>
-          <div className="p-4 space-y-3">
-            {Array(5).fill(0).map((_, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <Skeleton className="h-8 w-8 rounded-full" />
+          <div className="p-4 space-y-2.5">
+            {Array(4).fill(0).map((_, i) => (
+              <div key={i} className="flex items-center gap-2.5">
+                <Skeleton className="h-7 w-7 rounded-full" />
                 <div className="flex-1 space-y-1">
                   <Skeleton className="h-3 w-3/4" />
-                  <Skeleton className="h-2.5 w-1/2" />
+                  <Skeleton className="h-2 w-1/2" />
                 </div>
-                <Skeleton className="h-3 w-12" />
+                <Skeleton className="h-2.5 w-10" />
               </div>
             ))}
           </div>
         </Card>
       </div>
       {/* Skeleton: Stats grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {Array(8).fill(0).map((_, i) => (
-          <Card key={i} className="p-4">
-            <div className="flex items-center justify-between mb-3">
-              <Skeleton className="h-3.5 w-20" />
-              <Skeleton className="h-8 w-8 rounded-full" />
+          <Card key={i} className="p-3">
+            <div className="flex items-center justify-between mb-2">
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-7 w-7 rounded-full" />
             </div>
-            <Skeleton className="h-7 w-24 mb-1" />
-            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-6 w-20 mb-1" />
+            <Skeleton className="h-2.5 w-14" />
           </Card>
         ))}
       </div>
       {/* Skeleton: Widgets row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {Array(4).fill(0).map((_, i) => (
-          <Card key={i} className="p-4 space-y-3">
-            <Skeleton className="h-4 w-28" />
-            <Skeleton className="h-20 w-full rounded-lg" />
-            <Skeleton className="h-3 w-20" />
+          <Card key={i} className="p-3 space-y-2.5">
+            <Skeleton className="h-3.5 w-24" />
+            <Skeleton className="h-16 w-full rounded-md" />
+            <Skeleton className="h-2.5 w-16" />
           </Card>
         ))}
       </div>
       {/* Skeleton: Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
         <Card className="lg:col-span-2 p-4">
-          <Skeleton className="h-5 w-36 mb-4" />
-          <Skeleton className="h-48 w-full rounded-lg" />
+          <Skeleton className="h-4 w-32 mb-3" />
+          <Skeleton className="h-44 w-full rounded-md" />
         </Card>
         <Card className="p-4">
-          <Skeleton className="h-5 w-28 mb-4" />
-          <Skeleton className="h-48 w-full rounded-lg" />
+          <Skeleton className="h-4 w-24 mb-3" />
+          <Skeleton className="h-44 w-full rounded-md" />
         </Card>
       </div>
     </div>

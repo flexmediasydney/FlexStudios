@@ -22,7 +22,7 @@ export const PRIORITY_LIST_STYLES = {
 // UI constants
 export const HOVER_CARD_DELAY_MS = 200;
 export const SEARCH_DEBOUNCE_MS = 300;
-export const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+export const AUTO_SYNC_INTERVAL_MS = 2 * 60 * 1000;
 export const MAX_THREADS_TO_DISPLAY = 500;
 export const MAX_UNDO_STACK = 20;
 export const COLUMN_SAVE_DEBOUNCE_MS = 500;

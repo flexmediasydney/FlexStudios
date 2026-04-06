@@ -5,15 +5,6 @@ import { Clock, Timer, Users, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useProjectEffortSummary } from './ProjectEffortSummaryV2';
 
-const ROLE_LABELS = {
-  photographer: 'Photographer',
-  videographer: 'Videographer',
-  image_editor: 'Image Editor',
-  video_editor: 'Video Editor',
-  floorplan_editor: 'Floorplan Editor',
-  drone_editor: 'Drone Editor',
-};
-
 function formatTime(seconds) {
   const s = Math.max(0, typeof seconds === 'number' ? seconds : 0);
   const h = Math.floor(s / 3600);

@@ -35,21 +35,20 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
       const name = project.client_name || project.agency_name;
       if (!name) return null;
       return (
-        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
           <Building className="h-3.5 w-3.5 flex-shrink-0" />
-          <span className="truncate">{name}</span>
+          <span className="truncate max-w-[160px]" title={name}>{name}</span>
         </div>
       );
     }
     case "agent_name": {
       if (!project.agent_id && !project.agent_name) return null;
-      // Try to get agent name from agent entity - fallback to stored name
       const agentName = project.agent_name;
       if (!agentName) return null;
       return (
-        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
           <User className="h-3.5 w-3.5 flex-shrink-0" />
-          <span className="truncate">{agentName}</span>
+          <span className="truncate max-w-[140px]" title={agentName}>{agentName}</span>
         </div>
       );
     }
@@ -84,9 +83,9 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
       const displayPrice = project.calculated_price || project.price;
       if (!displayPrice) return null;
       return (
-        <div className="flex items-center gap-1.5 text-sm font-semibold">
-          <DollarSign className="h-3.5 w-3.5 flex-shrink-0" />
-          <span>${Number(displayPrice).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+        <div className="flex items-center gap-1.5 text-sm font-semibold tabular-nums justify-end">
+          <span className="text-muted-foreground font-normal">$</span>
+          <span>{Number(displayPrice).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
       );
     }

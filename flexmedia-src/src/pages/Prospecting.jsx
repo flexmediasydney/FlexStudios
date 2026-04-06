@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useEntitiesData } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, Search, Grid, List, ChevronLeft, BarChart2 } from 'lucide-react';
+import { Plus, Search, Grid, List, ChevronLeft, BarChart2, Users } from 'lucide-react';
 import RelationshipStateKanban from '@/components/prospecting/RelationshipStateKanban';
 import ProspectingStatusKanban from '@/components/prospecting/ProspectingStatusKanban';
 import AgentListView from '@/components/prospecting/AgentListView';
@@ -125,20 +125,20 @@ export default function Prospecting() {
 
   if (loading) {
     return (
-      <div className="p-8 flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center h-screen bg-background">
         <div className="text-center">
-          <div className="animate-spin h-8 w-8 border-3 border-primary/30 border-t-primary rounded-full mx-auto mb-4"></div>
-          <p className="text-muted-foreground animate-pulse">Loading...</p>
+          <div className="animate-spin h-6 w-6 border-2 border-primary/30 border-t-primary rounded-full mx-auto mb-3"></div>
+          <p className="text-sm text-muted-foreground">Loading...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="p-8 min-h-screen bg-gradient-to-br from-background to-muted/20">
-      <div className="max-w-7xl mx-auto">
+    <div className="flex flex-col h-screen overflow-hidden bg-background">
+      <div className="flex-1 overflow-auto px-6 py-4">
         {/* Dashboard Toggle */}
-        <div className="mb-8 flex justify-end">
+        <div className="mb-4 flex justify-end">
           <Button
             onClick={() => setShowDashboard(!showDashboard)}
             variant={showDashboard ? 'default' : 'outline'}
@@ -151,13 +151,13 @@ export default function Prospecting() {
 
         {/* Dashboard */}
         {showDashboard && (
-          <div className="mb-8">
+          <div className="mb-4">
             <ProspectingDashboard />
           </div>
         )}
 
         {/* Header */}
-        <div className="flex flex-col gap-6 mb-8">
+        <div className="flex flex-col gap-3 mb-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               {drillDownState && (
@@ -172,49 +172,51 @@ export default function Prospecting() {
                 </Button>
               )}
               <div>
-                <h1 className="text-4xl font-bold">
-                  {drillDownState ? `${drillDownState} Pipeline` : 'Agents & Agencies'}
+                <h1 className="text-lg font-semibold">
+                  {drillDownState ? `${drillDownState} Pipeline` : 'Prospecting'}
                 </h1>
-                <p className="text-muted-foreground mt-2">
-                  {drillDownState ? 'Manage prospecting flow' : 'View all agents and agencies by relationship state'}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {drillDownState ? 'Manage prospecting flow' : 'People and organisations by relationship state'}
                 </p>
               </div>
             </div>
             <div className="flex gap-2">
-              <Button 
+              <Button
                 variant="outline"
-                className="gap-2"
+                size="sm"
+                className="gap-1.5 h-8"
                 onClick={() => setShowNewAgencyDialog(true)}
               >
-                <Plus className="h-4 w-4" />
-                New Agency
+                <Plus className="h-3.5 w-3.5" />
+                New Organisation
               </Button>
-              <Button 
-                className="gap-2"
+              <Button
+                size="sm"
+                className="gap-1.5 h-8"
                 onClick={() => setShowNewAgentDialog(true)}
               >
-                <Plus className="h-4 w-4" />
-                New Agent
+                <Plus className="h-3.5 w-3.5" />
+                New Person
               </Button>
             </div>
           </div>
 
           {/* Search */}
           {!drillDownState && (
-            <div className="relative max-w-md">
-              <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <div className="relative max-w-xs">
+              <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
               <Input
-                placeholder="Search agents or agencies..."
+                placeholder="Search people or organisations..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
+                className="pl-8 h-7 text-xs"
               />
             </div>
           )}
         </div>
 
         {/* View Toggle */}
-        <div className="flex gap-4 mb-6">
+        <div className="flex gap-3 mb-4">
           <div className="flex gap-2 bg-card p-1 rounded-lg w-fit">
             <Button
               variant={viewMode === 'kanban' ? 'default' : 'ghost'}
@@ -242,14 +244,14 @@ export default function Prospecting() {
               size="sm"
               onClick={() => setEntityFilter('agent')}
             >
-              Agents Only
+              People Only
             </Button>
             <Button
               variant={entityFilter === 'agency' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setEntityFilter('agency')}
             >
-              Agencies Only
+              Orgs Only
             </Button>
             <Button
               variant={entityFilter === 'both' ? 'default' : 'ghost'}
@@ -303,14 +305,27 @@ export default function Prospecting() {
         )}
 
         {allEntities.length === 0 && !drillDownState && (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground mb-4">
-              {searchTerm ? 'No results match your search' : 'No agents or agencies yet. Create your first one!'}
+          <div className="text-center py-16 text-muted-foreground">
+            <Users className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="font-medium text-base">
+              {searchTerm ? `No results for "${searchTerm}"` : 'No people or organisations yet'}
             </p>
-            {!searchTerm && (
-              <Button onClick={() => setShowNewAgentDialog(true)}>
-                Get Started
+            <p className="text-xs mt-1 text-muted-foreground/70">
+              {searchTerm ? 'Try a different search term' : 'Add your first contact to get started'}
+            </p>
+            {searchTerm ? (
+              <Button variant="outline" size="sm" onClick={() => setSearchTerm('')} className="mt-3">
+                Clear search
               </Button>
+            ) : (
+              <div className="flex gap-2 justify-center mt-3">
+                <Button size="sm" onClick={() => setShowNewAgentDialog(true)}>
+                  <Plus className="h-3.5 w-3.5 mr-1.5" />Add Person
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setShowNewAgencyDialog(true)}>
+                  <Plus className="h-3.5 w-3.5 mr-1.5" />Add Organisation
+                </Button>
+              </div>
             )}
           </div>
         )}

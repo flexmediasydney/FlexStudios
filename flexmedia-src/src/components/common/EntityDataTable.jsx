@@ -124,33 +124,39 @@ export default function EntityDataTable({
   if (loading) {
     return (
       <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b bg-muted/50">
+        <table className="w-full text-sm table-fixed">
+          <thead className="sticky top-0 z-10">
+            <tr className="border-b bg-muted/60">
               {/* BUG FIX #6: Show checkbox column placeholder in skeleton when selectable */}
               {selectable && (
-                <th className="px-2 py-2.5 w-10">
+                <th className="px-2 py-2 w-10">
                   <div className="h-3.5 w-3.5 rounded bg-muted animate-pulse mx-auto" />
                 </th>
               )}
               {columns.map(col => (
-                <th key={col.key} className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground" style={col.width ? { width: col.width } : undefined}>
+                <th key={col.key} className="px-3 py-2 text-left text-xs font-medium text-muted-foreground" style={col.width ? { width: col.width } : undefined}>
                   {col.label}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {Array.from({ length: 8 }).map((_, i) => (
-              <tr key={i} className="border-b">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <tr key={i} className="border-b last:border-0">
                 {selectable && (
-                  <td className="px-2 py-2.5 w-10">
+                  <td className="px-2 py-1.5 w-10">
                     <div className="h-3.5 w-3.5 rounded bg-muted animate-pulse mx-auto" />
                   </td>
                 )}
-                {columns.map(col => (
-                  <td key={col.key} className="px-3 py-2.5">
-                    <div className="h-4 rounded bg-muted animate-pulse" style={{ width: `${SKELETON_WIDTHS[i % SKELETON_WIDTHS.length]}%` }} />
+                {columns.map((col, ci) => (
+                  <td key={col.key} className="px-3 py-1.5">
+                    <div
+                      className="h-3.5 rounded bg-muted animate-pulse"
+                      style={{
+                        width: `${SKELETON_WIDTHS[(i + ci) % SKELETON_WIDTHS.length]}%`,
+                        animationDelay: `${(i * 50) + (ci * 20)}ms`,
+                      }}
+                    />
                   </td>
                 ))}
               </tr>
@@ -164,17 +170,17 @@ export default function EntityDataTable({
   return (
     <div className="flex flex-col">
       <div className="border rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-280px)]">
           <table
             ref={tableRef}
             className="w-full text-sm border-collapse table-fixed"
             role="grid"
             onKeyDown={handleTableKeyDown}
           >
-            <thead>
-              <tr className="border-b bg-muted/40">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b bg-muted/60 backdrop-blur-sm">
                 {selectable && (
-                  <th className="px-2 py-2.5 w-10 text-center" onClick={e => e.stopPropagation()}>
+                  <th className="px-2 py-2 w-10 text-center" onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
@@ -193,8 +199,9 @@ export default function EntityDataTable({
                   <th
                     key={col.key}
                     className={cn(
-                      "px-3 py-2.5 text-left text-xs font-semibold text-muted-foreground tracking-wide whitespace-nowrap",
+                      "px-3 py-2 text-left text-xs font-semibold text-muted-foreground tracking-wide whitespace-nowrap group/th",
                       col.sortable && "cursor-pointer hover:bg-muted/70 hover:text-foreground transition-colors select-none",
+                      sortKey === col.key && "text-foreground bg-muted/30",
                       col.align === 'right' && "text-right",
                       col.align === 'center' && "text-center",
                     )}
@@ -204,11 +211,16 @@ export default function EntityDataTable({
                     scope="col"
                   >
                     {col.sortable ? (
-                      <button type="button" className="inline-flex items-center gap-1 w-full text-left">
+                      <button type="button" className={cn(
+                        "inline-flex items-center gap-1 w-full text-left",
+                        sortKey === col.key && "text-foreground"
+                      )}>
                         {col.label}
                         {sortKey === col.key
-                          ? (sortDir === 'asc' ? <ChevronUp className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />)
-                          : <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-50" />}
+                          ? (sortDir === 'asc'
+                              ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-primary" />
+                              : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-primary" />)
+                          : <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-30 group-hover/th:opacity-60 transition-opacity" />}
                       </button>
                     ) : col.label}
                   </th>
@@ -234,7 +246,7 @@ export default function EntityDataTable({
                   onKeyDown={(e) => { if (e.key === 'Enter' && onRowClick) onRowClick(row); }}
                 >
                   {selectable && (
-                    <td className="px-2 py-2 w-10 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-2 py-1.5 w-10 text-center" onClick={e => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         className="rounded border-gray-300 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
@@ -248,7 +260,7 @@ export default function EntityDataTable({
                     <td
                       key={col.key}
                       className={cn(
-                        "px-3 py-2 align-middle overflow-hidden text-ellipsis",
+                        "px-3 py-1.5 align-middle overflow-hidden text-ellipsis",
                         col.align === 'right' && "text-right",
                         col.align === 'center' && "text-center",
                       )}

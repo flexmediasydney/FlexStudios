@@ -184,11 +184,13 @@ const EmailListRow = React.memo(function EmailListRow({
         <div
           className={cn(
             "group relative flex items-center gap-0 border-b cursor-pointer select-none",
-            "h-[56px] transition-all duration-150",
-            "hover:bg-blue-50 focus-visible:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
-            isSelected && "bg-blue-100 shadow-sm",
-            isUnread && !isSelected && "bg-blue-50 font-medium",
-            !isUnread && !isSelected && priorityClass
+            "h-[56px] transition-[background-color,box-shadow] duration-150",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
+            isSelected
+              ? "bg-blue-100/80 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.15)] hover:bg-blue-100"
+              : isUnread
+                ? "bg-blue-50/50 hover:bg-blue-100/50"
+                : cn("hover:bg-muted/60", priorityClass)
           )}
           style={{
             minWidth: `${totalRowWidth}px`,
@@ -234,8 +236,8 @@ const EmailListRow = React.memo(function EmailListRow({
            <FromHoverCard email={thread.from_email} name={thread.from_name}>
              <div
                className={cn(
-                 "truncate text-[14px] cursor-help leading-tight font-medium",
-                 isUnread ? "font-bold text-foreground" : "text-foreground/75"
+                 "truncate text-[13px] cursor-help leading-tight",
+                 isUnread ? "font-semibold text-foreground" : "font-normal text-muted-foreground"
                )}
                title={thread.from_name ? `${thread.from_name} <${thread.from_email}>` : thread.from_email}
              >
@@ -281,11 +283,16 @@ const EmailListRow = React.memo(function EmailListRow({
             <div className="flex items-center gap-1.5 min-w-0">
               {/* Unread dot */}
               {isUnread && (
-                <span className="flex-shrink-0 w-2 h-2 rounded-full bg-blue-600 shadow-sm animate-pulse" />
+                <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-blue-600" />
               )}
               {/* Thread count badge */}
               {thread.messages.length > 1 && (
-                <span className="flex-shrink-0 text-[11px] font-bold text-slate-600 bg-slate-200 rounded-full px-2 leading-5">
+                <span className={cn(
+                  "flex-shrink-0 text-[10px] font-semibold rounded-full px-1.5 leading-[18px] min-w-[20px] text-center tabular-nums",
+                  isUnread
+                    ? "text-blue-700 bg-blue-100 ring-1 ring-blue-200"
+                    : "text-muted-foreground bg-muted/80"
+                )}>
                   {thread.messages.length}
                 </span>
               )}
@@ -299,8 +306,8 @@ const EmailListRow = React.memo(function EmailListRow({
                 )}
               {/* Subject text */}
               <span className={cn(
-                  "truncate text-[14px] leading-snug cursor-default min-w-0 block font-medium",
-                  isUnread ? "font-bold text-foreground" : "text-foreground/80"
+                  "truncate text-[13px] leading-snug cursor-default min-w-0 block",
+                  isUnread ? "font-semibold text-foreground" : "font-normal text-foreground/70"
                 )}
                 title={cleanSubject}
               >
@@ -367,12 +374,17 @@ const EmailListRow = React.memo(function EmailListRow({
             {realAttachments.length > 0 && (
               <AttachmentsHoverCard attachments={realAttachments}>
                 <button
-                  className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-muted transition-colors"
+                  className="relative w-8 h-8 rounded-lg flex items-center justify-center hover:bg-muted/80 transition-colors"
                         onClick={(e) => e.stopPropagation()}
                         aria-label={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
                         title={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
                 >
-                  <Paperclip className="h-3.5 w-3.5 text-blue-500" />
+                  <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
+                  {realAttachments.length > 1 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] rounded-full bg-slate-500 text-white text-[9px] font-bold flex items-center justify-center leading-none px-0.5">
+                      {realAttachments.length}
+                    </span>
+                  )}
                 </button>
               </AttachmentsHoverCard>
             )}
@@ -420,10 +432,6 @@ const EmailListRow = React.memo(function EmailListRow({
         );
       })()}
 
-
-
-      {/* Thread/unread indicators moved into subject column — this space intentionally empty */}
-
       {/* Date */}
       {columns.some(c => c.id === 'date') && (() => {
         const col = columns.find(c => c.id === 'date');
@@ -434,8 +442,8 @@ const EmailListRow = React.memo(function EmailListRow({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className={cn(
-                    "text-[12px] whitespace-nowrap tabular-nums cursor-default font-medium",
-                    isUnread ? "font-bold text-foreground" : "text-muted-foreground/70"
+                    "text-[11px] whitespace-nowrap tabular-nums cursor-default",
+                    isUnread ? "font-semibold text-foreground" : "font-normal text-muted-foreground/60"
                   )}>
                     {displayDate}
                   </span>

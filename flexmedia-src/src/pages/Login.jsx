@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/api/supabaseClient';
 import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
@@ -13,12 +13,11 @@ import MagicLinkSent from '@/components/auth/MagicLinkSent';
 import PhoneOTPVerify from '@/components/auth/PhoneOTPVerify';
 
 // ─── State Machine ────────────────────────────────────────────────────────────
-// MAIN           → Primary view with Google + Email/Phone tabs
+// MAIN            → Primary view with Google + Email/Phone tabs
 // MAGIC_LINK_SENT → "Check your email" confirmation
-// PHONE_OTP      → Enter 6-digit phone code
-// PASSWORD       → Email + password form (expanded from email tab)
+// PHONE_OTP       → Enter 6-digit phone code
 // FORGOT_PASSWORD → Enter email for reset link
-// FORGOT_SENT    → "Check email for reset link"
+// FORGOT_SENT     → "Check email for reset link"
 
 export default function Login() {
   const [view, setView] = useState('MAIN');
@@ -64,7 +63,6 @@ export default function Login() {
   // Escalating brute force protection — persists across page refreshes via localStorage
   const MAX_ATTEMPTS = 5;
   const LOCKOUT_DURATIONS = [30_000, 60_000, 120_000, 300_000, 600_000]; // 30s, 1m, 2m, 5m, 10m
-  const isLocked = loginState.lockedUntil && Date.now() < loginState.lockedUntil;
 
   const checkRateLimit = () => {
     const fresh = getLoginState(); // Read latest from localStorage (cross-tab sync)
@@ -104,12 +102,16 @@ export default function Login() {
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
+  const [googleLoading, setGoogleLoading] = useState(false);
+
   const handleGoogleSignIn = async () => {
     setError(null);
+    setGoogleLoading(true);
     try {
       await api.auth.signInWithGoogle(`${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirect)}`);
     } catch (err) {
       setError(err.message || 'Google sign-in failed');
+      setGoogleLoading(false);
     }
   };
 
@@ -321,9 +323,13 @@ export default function Login() {
           variant="outline"
           className="w-full h-12 text-sm font-medium gap-3 border-border/80 hover:bg-muted/50"
           onClick={handleGoogleSignIn}
+          disabled={googleLoading}
         >
-          <GoogleIcon className="h-5 w-5" />
-          Continue with Google
+          {googleLoading ? (
+            <><Loader2 className="h-4 w-4 animate-spin" />Redirecting to Google...</>
+          ) : (
+            <><GoogleIcon className="h-5 w-5" />Continue with Google</>
+          )}
         </Button>
 
         {/* Divider */}
@@ -462,15 +468,10 @@ export default function Login() {
             </p>
           </form>
         )}
-        {/* Create Account Link */}
-        <div className="text-center pt-2 border-t border-border/40">
-          <p className="text-xs text-muted-foreground">
-            Don't have an account?{' '}
-            <Link to="/register" className="text-blue-600 hover:text-blue-700 font-medium hover:underline">
-              Create account
-            </Link>
-          </p>
-        </div>
+        {/* Contact admin notice */}
+        <p className="text-center text-xs text-muted-foreground/70 pt-2 border-t border-border/40">
+          Need an account? Contact your administrator.
+        </p>
       </div>
     </Shell>
   );
@@ -495,8 +496,8 @@ function Shell({ children }) {
           {children}
         </CardContent>
       </Card>
-      <p className="fixed bottom-4 left-0 right-0 text-center text-xs text-muted-foreground/50 px-4">
-        FlexMedia Sydney
+      <p className="fixed bottom-4 left-0 right-0 text-center text-xs text-muted-foreground/40 px-4">
+        FlexStudios
       </p>
     </div>
   );

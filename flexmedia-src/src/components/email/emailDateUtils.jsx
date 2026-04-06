@@ -1,18 +1,26 @@
-import { format, isToday } from "date-fns";
+import { format, isToday, isYesterday, differenceInCalendarDays, isThisYear } from "date-fns";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import { formatBytes } from "@/components/utils/formatters";
 
 /**
- * Consistent date formatting for email timestamps
- * Returns time for today, date for other days
+ * Smart date formatting for email timestamps:
+ * - Today: "2:34 PM"
+ * - Yesterday: "Yesterday"
+ * - This week (within 6 days): "Mon", "Tue", etc.
+ * - This year: "12 Mar"
+ * - Older: "12 Mar 2024"
  */
 export const formatEmailDate = (timestamp) => {
   try {
     const date = new Date(fixTimestamp(timestamp));
     if (!date.getTime()) return '';
-    return isToday(date) 
-      ? format(date, 'h:mm a')
-      : format(date, 'd MMM');
+    const now = new Date();
+    if (isToday(date)) return format(date, 'h:mm a');
+    if (isYesterday(date)) return 'Yesterday';
+    const daysDiff = differenceInCalendarDays(now, date);
+    if (daysDiff <= 6) return format(date, 'EEE');
+    if (isThisYear(date)) return format(date, 'd MMM');
+    return format(date, 'd MMM yyyy');
   } catch {
     return '';
   }

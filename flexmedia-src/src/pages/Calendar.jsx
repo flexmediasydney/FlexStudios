@@ -2,12 +2,14 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  Tooltip, TooltipContent, TooltipTrigger, TooltipProvider,
+} from "@/components/ui/tooltip";
+import {
   ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon,
-  Users, User, RefreshCw, Search, AlertTriangle, Clock, X,
-  Camera, Coffee, Globe, Building2
+  Users, RefreshCw, Search, AlertTriangle, Clock, X,
+  Camera, Coffee, Globe, Building2, MapPin
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { expandRecurringEvent } from "@/components/calendar/CalendarEventUtils";
@@ -22,7 +24,6 @@ import EventDetailsDialog from "@/components/calendar/EventDetailsDialog";
 import CalendarIntegration from "@/components/calendar/CalendarIntegration";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { usePermissions } from '@/components/auth/PermissionGuard';
 
@@ -33,7 +34,6 @@ const BUSINESS_START = 8;  // 8am
 const BUSINESS_END = 21;   // 9pm
 const SLOT_HEIGHT_BUSINESS = 64; // px per business hour
 const SLOT_HEIGHT_OFF = 20;      // px per off-hour (compressed)
-const SLOT_HEIGHT = 56; // legacy fallback
 const getSlotHeight = (hour) => (hour >= BUSINESS_START && hour < BUSINESS_END) ? SLOT_HEIGHT_BUSINESS : SLOT_HEIGHT_OFF;
 const getSlotTop = (hour) => {
   let top = 0;
@@ -109,26 +109,98 @@ function getInitials(name = '') {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
 }
 
+// Reusable current-time indicator line with pulse dot and time label
+function CurrentTimeIndicator({ topPx, showLabel = true }) {
+  const now = new Date();
+  const label = fmtSydneyTime(now.toISOString(), { hour: 'numeric', minute: '2-digit', hour12: false });
+  return (
+    <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
+      <div className="relative -ml-1.5 flex-shrink-0">
+        <div className="w-3 h-3 rounded-full bg-red-500 shadow-sm" />
+        <div className="absolute inset-0 w-3 h-3 rounded-full bg-red-500 animate-ping opacity-40" />
+      </div>
+      <div className="flex-1 h-[2px] bg-red-500/80" />
+      {showLabel && (
+        <span className="text-[9px] font-mono font-semibold text-red-600 bg-red-50 border border-red-200 rounded px-1 py-0 ml-0.5 flex-shrink-0 leading-tight">
+          {label}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Rich tooltip wrapper for event cards — shows full details on hover
+function EventTooltipContent({ event, owners, users, userColorMap }) {
+  const typeColor = getEventTypeColor(event);
+  const source = getEventSource(event);
+  const sourceConfig = EVENT_SOURCE_CONFIG[source];
+  const startStr = event.start_time ? fmtSydneyTime(event.start_time, { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+  const endStr = event.end_time ? fmtSydneyTime(event.end_time, { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+  const ownerNames = owners
+    .map(uid => users?.find(u => u.id === uid))
+    .filter(Boolean)
+    .map(u => u._isBusiness ? 'FlexMedia' : u.full_name || u.email);
+
+  return (
+    <div className="max-w-[260px] space-y-1.5">
+      <div className="flex items-start gap-2">
+        <div className="w-1 h-full rounded-full flex-shrink-0 self-stretch" style={{ backgroundColor: typeColor.border }} />
+        <div className="min-w-0">
+          <p className="font-semibold text-sm leading-tight">{event.title || 'Untitled'}</p>
+          {startStr && (
+            <p className="text-xs opacity-80 mt-0.5 flex items-center gap-1">
+              <Clock className="h-3 w-3 flex-shrink-0" />
+              {startStr}{endStr ? ` - ${endStr}` : ''}
+            </p>
+          )}
+        </div>
+      </div>
+      {event.location && (
+        <p className="text-xs opacity-80 flex items-center gap-1">
+          <MapPin className="h-3 w-3 flex-shrink-0" />
+          <span className="truncate">{event.location}</span>
+        </p>
+      )}
+      {ownerNames.length > 0 && (
+        <p className="text-xs opacity-70">
+          {ownerNames.join(', ')}
+        </p>
+      )}
+      {sourceConfig?.tooltip && (
+        <p className="text-[10px] opacity-50">{sourceConfig.tooltip}</p>
+      )}
+      {event.travel_time_minutes > 0 && (
+        <p className="text-[10px] opacity-60">{event.travel_time_minutes}min travel time</p>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 function CalendarSkeleton({ view }) {
-  if (view === 'month') {
-    return (
-      <div className="grid grid-cols-7 gap-px bg-border p-4">
-        {Array.from({ length: 35 }).map((_, i) => (
-          <Skeleton key={i} className="h-20 rounded-md" />
-        ))}
-      </div>
-    );
-  }
   return (
-    <div className="flex gap-px p-4">
-      {Array.from({ length: view === 'week' ? 7 : 1 }).map((_, i) => (
-        <div key={i} className="flex-1 space-y-2">
-          {Array.from({ length: 12 }).map((_, j) => (
-            <Skeleton key={j} className="h-8 rounded-md" />
+    <div className="flex flex-col items-center justify-center py-8">
+      <div className="flex items-center gap-2 text-muted-foreground mb-4">
+        <RefreshCw className="h-4 w-4 animate-spin" />
+        <span className="text-sm font-medium">Loading calendar events...</span>
+      </div>
+      {view === 'month' ? (
+        <div className="grid grid-cols-7 gap-px w-full px-4">
+          {Array.from({ length: 35 }).map((_, i) => (
+            <Skeleton key={i} className="h-20 rounded-md" />
           ))}
         </div>
-      ))}
+      ) : (
+        <div className="flex gap-px w-full px-4">
+          {Array.from({ length: view === 'week' ? 7 : 1 }).map((_, i) => (
+            <div key={i} className="flex-1 space-y-1">
+              {Array.from({ length: 14 }).map((_, j) => (
+                <Skeleton key={j} className={cn("rounded-sm", j >= 8 && j <= 12 ? "h-10" : "h-4")} />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -176,38 +248,6 @@ export default function CalendarPage() {
     });
   }, []);
 
-  // Countdown to next DB refresh (60s) and next Google sync (5min)
-  // Tick every 5s to reduce unnecessary re-renders (was 1s)
-  const [dbCountdown, setDbCountdown] = useState(60);
-  const [syncCountdown, setSyncCountdown] = useState(300);
-  const dbCountdownRef = useRef(null);
-  const syncCountdownRef = useRef(null);
-
-  useEffect(() => {
-    setDbCountdown(60);
-    dbCountdownRef.current = setInterval(() => {
-      setDbCountdown(s => {
-        if (s <= 5) { return 60; }
-        return s - 5;
-      });
-    }, 5000);
-    return () => clearInterval(dbCountdownRef.current);
-  }, []);
-
-  useEffect(() => {
-    setSyncCountdown(300);
-    syncCountdownRef.current = setInterval(() => {
-      setSyncCountdown(s => {
-        if (s <= 5) { return 300; }
-        return s - 5;
-      });
-    }, 5000);
-    return () => clearInterval(syncCountdownRef.current);
-  }, []);
-
-  const formatCountdown = (s) => s >= 60
-    ? `${Math.floor(s / 60)}m ${s % 60}s`
-    : `${s}s`;
 
   // ── Data ───────────────────────────────────────────────────────────────────
   const { data: currentUser } = useQuery({
@@ -600,13 +640,46 @@ export default function CalendarPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [navigate, handleTodayClick, dialogOpen, setView]);
 
+  // Ref for the calendar grid scroll container — used for auto-scroll to current time
+  const calendarGridRef = useRef(null);
+
+  // Auto-scroll to current time on initial load (week/day views)
+  useEffect(() => {
+    if (view === 'month' || eventsLoading) return;
+    // Small delay to let the DOM render before scrolling
+    const timer = setTimeout(() => {
+      const container = calendarGridRef.current;
+      if (!container) return;
+      const now = new Date();
+      const targetHour = Math.max(0, now.getHours() - 1); // scroll to 1hr before current
+      const scrollTarget = getSlotTop(targetHour);
+      container.scrollTo({ top: scrollTarget, behavior: 'smooth' });
+    }, 100);
+    return () => clearTimeout(timer);
+  // Only run on initial mount and view changes, not every date nav
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, eventsLoading]);
+
   // Are we in lane mode?
   const isLaneMode = view !== "month" &&
     (selectedUserIds.includes("all") || selectedUserIds.length > 1);
 
   const laneUsers = isLaneMode ? activeUsers : [];
 
+  // Compute event counts per filter chip for badges
+  const filterCounts = useMemo(() => {
+    const counts = { shoots: 0, meetings: 0, personal: 0, google: 0 };
+    for (const { event } of deduplicatedEvents) {
+      if (event.activity_type === 'shoot' || event.event_source === 'tonomo') counts.shoots++;
+      if (event.activity_type === 'meeting') counts.meetings++;
+      if (['lunch', 'personal', 'other'].includes(event.activity_type)) counts.personal++;
+      if (event.event_source === 'google') counts.google++;
+    }
+    return counts;
+  }, [deduplicatedEvents]);
+
   return (
+    <TooltipProvider delayDuration={300}>
     <div className="h-full flex flex-col bg-background">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex flex-col border-b">
@@ -628,21 +701,33 @@ export default function CalendarPage() {
           <h1 className="text-sm sm:text-lg font-semibold min-w-0 sm:min-w-[200px] truncate">{headerLabel()}</h1>
 
           {/* Filter chips */}
-          <div className="flex items-center gap-1">
+          <div className="hidden sm:flex items-center gap-1.5">
             {EVENT_FILTERS.map(f => {
               const active = activeFilters.has(f.id);
               const Icon = f.icon;
+              const count = filterCounts[f.id] || 0;
               return (
                 <button
                   key={f.id}
                   onClick={() => toggleFilter(f.id)}
                   className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all",
-                    active ? "bg-primary text-primary-foreground shadow-sm" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all duration-200",
+                    active
+                      ? "bg-primary text-primary-foreground border-primary shadow-md scale-[1.02]"
+                      : "bg-background text-muted-foreground border-border hover:border-primary/40 hover:bg-muted/60 hover:shadow-sm"
                   )}
+                  title={`${active ? 'Hide' : 'Show'} ${f.label.toLowerCase()} (${count})`}
                 >
                   <Icon className="h-3.5 w-3.5" />
-                  {f.label}
+                  <span className="hidden md:inline">{f.label}</span>
+                  {count > 0 && (
+                    <span className={cn(
+                      "min-w-[18px] h-[18px] rounded-full text-[10px] font-bold flex items-center justify-center",
+                      active ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                    )}>
+                      {count}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -660,7 +745,6 @@ export default function CalendarPage() {
                 }
                 setLastManualSync(now);
                 queryClient.invalidateQueries({ queryKey: ["calendar-events-team"] });
-                setDbCountdown(60);
               }}
               title="Refresh calendar events (rate-limited to 1 per 3 seconds)"
               aria-label="Refresh calendar events"
@@ -687,38 +771,32 @@ export default function CalendarPage() {
             ))}
           </div>
 
-          {/* Search with highlighting prep */}
-           <div className="relative" title="Search highlights matching text in results">
+          {/* Search */}
+           <div className="relative hidden sm:block" title="Search highlights matching text in results">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Escape') setSearchQuery(''); }}
-              placeholder="Search events (Esc to clear)…"
-              className="h-9 pl-8 pr-12 rounded-md border bg-background text-sm w-full sm:w-48 min-w-0 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 transition-all duration-150 hover:border-primary/50"
+              placeholder="Search events…"
+              className="h-9 pl-8 pr-8 rounded-md border bg-background text-sm w-44 min-w-0 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 transition-all duration-150 hover:border-primary/50"
             />
            {searchQuery && (
-             <>
-               <span className="absolute right-8 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 font-medium tabular-nums">{searchQuery.length}</span>
                <button
                  onClick={() => setSearchQuery("")}
-                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full p-1 transition-colors duration-150"
+                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full p-0.5 transition-colors duration-150"
                  title="Clear search (Esc)"
                  aria-label="Clear search"
                  >
                  <X className="h-3.5 w-3.5" />
                </button>
-             </>
            )}
           </div>
 
-          {/* Type filter + timezone indicator */}
-           <div className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground px-2 py-1">
-             🕐 Sydney
-           </div>
+          {/* Type filter */}
            <Select value={filterType} onValueChange={setFilterType}>
-             <SelectTrigger className="w-24 sm:w-36 h-9 text-sm">
+             <SelectTrigger className="w-24 sm:w-32 h-9 text-sm">
                <SelectValue placeholder="All types" />
              </SelectTrigger>
              <SelectContent>
@@ -833,10 +911,14 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {eventsFetching && !eventsLoading && <div className="h-0.5 bg-primary/20 animate-pulse w-full" />}
+      {eventsFetching && !eventsLoading && (
+        <div className="h-1 w-full bg-muted overflow-hidden">
+          <div className="h-full bg-primary/60 animate-pulse rounded-r-full" style={{ width: '40%', animation: 'pulse 1.5s ease-in-out infinite' }} />
+        </div>
+      )}
 
       {/* ── Calendar grid ──────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto min-h-0">
+      <div className="flex-1 overflow-auto min-h-0" ref={calendarGridRef}>
         {eventsLoading ? (
           <CalendarSkeleton view={view} />
         ) : (
@@ -896,6 +978,7 @@ export default function CalendarPage() {
         onSave={() => queryClient.invalidateQueries({ queryKey: ["calendar-events-team"] })}
       />
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -943,15 +1026,23 @@ function MonthView({ currentDate, events, users, userColorMap, conflictSet, onCe
               </div>
               <div className="space-y-0.5">
                 {dayItems.slice(0, 3).map(({ event, owners }) => (
-                  <MonthEventPill
-                    key={event.id}
-                    event={event}
-                    owners={owners}
-                    userColorMap={userColorMap}
-                    users={users}
-                    hasConflict={conflictSet.has(event.id)}
-                    onClick={(e) => onEventClick(e, event)}
-                  />
+                  <Tooltip key={event.id}>
+                    <TooltipTrigger asChild>
+                      <div>
+                        <MonthEventPill
+                          event={event}
+                          owners={owners}
+                          userColorMap={userColorMap}
+                          users={users}
+                          hasConflict={conflictSet.has(event.id)}
+                          onClick={(e) => onEventClick(e, event)}
+                        />
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="bg-popover text-popover-foreground border shadow-lg p-2.5">
+                      <EventTooltipContent event={event} owners={owners} users={users} userColorMap={userColorMap} />
+                    </TooltipContent>
+                  </Tooltip>
                 ))}
                 {dayItems.length > 3 && (
                   <div
@@ -1124,17 +1215,11 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   <div className="h-[2px] bg-red-400/40" />
                 </div>
 
-                {/* Current time indicator — BUG FIX: use Sydney time for positioning */}
+                {/* Current time indicator */}
                 {isTodayCol && (() => {
                   const nowSyd = getSydneyHourMinute(now.toISOString());
                   const nowMin = nowSyd.hour * 60 + nowSyd.minute;
-                  const topPx = minutesToPx(nowMin) + 44;
-                  return (
-                    <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
-                      <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 flex-shrink-0" />
-                      <div className="flex-1 h-[2px] bg-red-500" />
-                    </div>
-                  );
+                  return <CurrentTimeIndicator topPx={minutesToPx(nowMin) + 44} showLabel={false} />;
                 })()}
 
                 {/* Color-coded event blocks by user */}
@@ -1284,20 +1369,11 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                 );
               })}
 
-              {/* Current time indicator line — BUG FIX: use Sydney time */}
+              {/* Current time indicator */}
               {isTodayCol && (() => {
                 const nowSyd = getSydneyHourMinute(now.toISOString());
                 const nowMin = nowSyd.hour * 60 + nowSyd.minute;
-                const topPx = minutesToPx(nowMin);
-                return (
-                  <div
-                    className="absolute left-0 right-0 z-20 pointer-events-none flex items-center"
-                    style={{ top: topPx + 40 /* offset for header */ }}
-                  >
-                    <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 flex-shrink-0" />
-                    <div className="flex-1 h-[2px] bg-red-500" />
-                  </div>
-                );
+                return <CurrentTimeIndicator topPx={minutesToPx(nowMin) + 40} showLabel={false} />;
               })()}
 
               {/* Duration blocks */}
@@ -1466,18 +1542,12 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
                       );
                     })()}
 
-                    {/* Current time indicator — BUG FIX: use Sydney time */}
+                    {/* Current time indicator */}
                     {isToday(currentDate) && (() => {
                       const n = new Date();
                       const nSyd = getSydneyHourMinute(n.toISOString());
                       const nowMin = nSyd.hour * 60 + nSyd.minute;
-                      const topPx = minutesToPx(nowMin);
-                      return (
-                        <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
-                          <div className="w-2.5 h-2.5 rounded-full bg-red-500 -ml-1 flex-shrink-0 shadow-sm" />
-                          <div className="flex-1 h-[2px] bg-red-500" />
-                        </div>
-                      );
+                      return <CurrentTimeIndicator topPx={minutesToPx(nowMin)} />;
                     })()}
 
                     {/* Event blocks */}

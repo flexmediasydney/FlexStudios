@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -15,8 +15,6 @@ import {
   Tag,
 } from "lucide-react";
 
-import { format, formatDistanceToNow, isToday } from "date-fns";
-import { fixTimestamp } from "@/components/utils/dateUtils";
 import {
   Tooltip,
   TooltipContent,
@@ -32,11 +30,9 @@ import EmailComposeDialog from "./EmailComposeDialog";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import EmailAccountSetup from "./EmailAccountSetup";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
-import { useUndoRedo } from "@/components/hooks/useUndoRedo";
 import { useEntitySubscriptionWithFilter } from "@/components/hooks/useEntitySubscriptionWithFilter";
 
 import ProjectLinkDialogForInbox from "./ProjectLinkDialogForInbox";
-import LabelSelectorRobust from "./LabelSelectorRobust";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -47,6 +43,7 @@ import FolderButton from "./FolderButton";
 import BulkActionBar from "./BulkActionBar";
 import { FOLDER_FILTERS, applyFolderFilter } from "./emailFilterUtils";
 import { getAccountIdsFromThreads } from "./threadUtils";
+import { SEARCH_DEBOUNCE_MS, AUTO_SYNC_INTERVAL_MS, MAX_UNDO_STACK } from "./emailConstants";
 
 export default function EmailInboxMain() {
   const navigate = useNavigate();
@@ -78,12 +75,8 @@ export default function EmailInboxMain() {
   });
   const [showSaveFilter, setShowSaveFilter] = useState(false);
   const [saveFilterName, setSaveFilterName] = useState('');
-  const MAX_UNDO_STACK = 20;
-  const SEARCH_DEBOUNCE_MS = 300;
-  const AUTO_SYNC_INTERVAL_MS = 2 * 60 * 1000;
   const SYNC_COOLDOWN_MS = 5000;
   const lastManualSyncRef = useRef(0);
-  const MAX_THREADS_TO_DISPLAY = 500;
   const containerRef = useRef(null);
   const sidebarScrollRef = useRef(null);
   const searchContainerRef = useRef(null);
@@ -1261,16 +1254,25 @@ export default function EmailInboxMain() {
 
               <div className="px-3 sm:px-4 py-2 flex items-center justify-between gap-2 sm:gap-3">
                 <div className="flex-1 relative max-w-lg min-w-0" ref={searchContainerRef}>
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
+                  <Search className={cn(
+                    "absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 z-10 transition-colors",
+                    searchFocused ? "text-primary" : "text-muted-foreground"
+                  )} />
                   <Input
-                      placeholder="Search... from: to: has:attachment is:unread (/ to focus, ? for help)"
+                      placeholder={searchFocused ? "from: to: subject: has:attachment is:unread" : "Search emails..."}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       onFocus={() => setSearchFocused(true)}
                       onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
                       onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          if (searchQuery) {
+                            setSearchQuery('');
+                          }
+                          e.target.blur();
+                          return;
+                        }
                         if (e.key === 'Enter' && searchQuery.trim()) {
-                          // Save to recent searches
                           const recent = JSON.parse(localStorage.getItem('email-recent-searches') || '[]');
                           const updated = [searchQuery.trim(), ...recent.filter(s => s !== searchQuery.trim())].slice(0, 8);
                           localStorage.setItem('email-recent-searches', JSON.stringify(updated));
@@ -1278,9 +1280,14 @@ export default function EmailInboxMain() {
                           e.target.blur();
                         }
                       }}
-                      className="pl-9 pr-8 h-9 text-sm border-input/50 focus-visible:ring-1 bg-muted/40"
+                      className={cn(
+                        "pl-9 pr-8 h-9 text-sm transition-all",
+                        searchFocused
+                          ? "border-primary/50 ring-1 ring-primary/20 bg-background shadow-sm"
+                          : "border-input/50 bg-muted/40"
+                      )}
                      />
-                     {searchQuery && (
+                     {searchQuery ? (
                        <button
                          onClick={() => setSearchQuery('')}
                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors focus:outline-none"
@@ -1289,8 +1296,9 @@ export default function EmailInboxMain() {
                        >
                          <X className="h-3.5 w-3.5" />
                        </button>
-                     )}
-                     {/* Search hints dropdown removed — not needed */}
+                     ) : !searchFocused ? (
+                       <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/50 bg-muted/60 rounded px-1.5 py-0.5 font-mono pointer-events-none">/</kbd>
+                     ) : null}
                 </div>
 
                 <TooltipProvider delayDuration={300}>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
@@ -7,7 +7,7 @@ import { canAccessRoute } from "@/components/lib/routeAccess";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Shield, AlertCircle, ArrowLeft, Search, Eye, X, ChevronRight } from "lucide-react";
+import { Shield, AlertCircle, ArrowLeft, Search, Eye, X } from "lucide-react";
 import { toast } from "sonner";
 import PermissionMatrix from "@/components/settings/PermissionMatrix";
 import EntityAccessMatrix from "@/components/settings/EntityAccessMatrix";
@@ -28,8 +28,6 @@ const PAGE_SECTIONS = [
   { label: "Bookings", pages: ["TonomoIntegrationDashboard","TonomoPulse"] },
   { label: "Settings", pages: ["Settings","SettingsOrganisation","SettingsAutomationRules","SettingsRevisionTemplates","SettingsIntegrations","EmailSyncSettings","SettingsTonomoIntegration","SettingsTonomoMappings","SettingsNotifications","SettingsClients","SettingsProjectRulebook","SettingsTonomoWebhooks","BusinessRequirementsDocument","HierarchyVisualization","SettingsTeamsUsers"] },
 ];
-
-const FILTERED_PAGES = {};
 
 const ALL_PAGES = PAGE_SECTIONS.flatMap(s => s.pages);
 
@@ -133,7 +131,7 @@ function PeopleMode({ onViewAs }) {
   });
 
   return (
-    <div className={`grid gap-4 ${selected ? "grid-cols-[1fr_360px]" : "grid-cols-1"} items-start`}>
+    <div className={`grid gap-4 ${selected ? "grid-cols-1 lg:grid-cols-[1fr_360px]" : "grid-cols-1"} items-start`}>
       <div className="space-y-3">
         {/* Access requests */}
         {accessRequests.length > 0 && (
@@ -655,7 +653,7 @@ export default function RolesSecurityPanel() {
   return (
     <div className="space-y-4">
       {/* Role summary cards */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {Object.entries(ROLES).map(([role, style]) => {
           const count = countAccess(role);
           const pct = Math.round((count / ALL_PAGES.length) * 100);
@@ -701,10 +699,10 @@ export default function RolesSecurityPanel() {
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex gap-3">
         <Shield className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
         <div>
-          <div className="text-xs font-bold text-amber-900">Platform note</div>
+          <div className="text-xs font-bold text-amber-900">Security note</div>
           <div className="text-xs text-amber-700 mt-1 leading-relaxed">
-            Base44 returns all entity records to all authenticated users. Route guards and nav filtering prevent casual access.
-            A user with browser DevTools can see data in network responses — this is a known platform limitation.
+            Row-level security (RLS) policies in Supabase enforce data access at the database level.
+            Route guards and nav filtering provide the UI layer. Both work together to protect sensitive data.
           </div>
         </div>
       </div>

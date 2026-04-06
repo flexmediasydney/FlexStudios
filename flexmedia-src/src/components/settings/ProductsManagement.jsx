@@ -3,7 +3,7 @@ import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, GitBranch, History, Camera, BookOpen, LayoutList, Grid3x3, Trello } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -45,7 +45,6 @@ function getChangedFields(oldData, newData) {
 
 export default function ProductsManagement() {
   const { canEdit, canView } = useEntityAccess('products');
-  const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(null);
@@ -296,8 +295,19 @@ export default function ProductsManagement() {
                 <TableBody>
                   {filteredProducts.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
-                        {searchQuery ? "No products match your search" : "No products yet. Add your first product."}
+                      <TableCell colSpan={10} className="text-center py-16">
+                        <div className="flex flex-col items-center gap-2">
+                          <Search className="h-8 w-8 text-muted-foreground/40" />
+                          <p className="text-sm text-muted-foreground">
+                            {searchQuery ? "No products match your search." : "No products yet."}
+                          </p>
+                          {!searchQuery && canEdit && (
+                            <Button variant="outline" size="sm" onClick={() => handleOpen()} className="mt-1 gap-1.5">
+                              <Plus className="h-3.5 w-3.5" />
+                              Add your first product
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ) : filteredProducts.flatMap((product) => {
