@@ -8,9 +8,9 @@ import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { 
-  ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Phone,
+  ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Users, Phone,
   ExternalLink, Edit, Trash2, CheckCircle, Building,
-  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Copy, Camera
+  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera
 } from "lucide-react";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import StagePipeline from "@/components/projects/StagePipeline";
@@ -1313,86 +1313,78 @@ export default function ProjectDetails() {
           {/* Unified Project Effort */}
           <ErrorBoundary><ProjectEffortCard projectId={projectId} project={project} onNavigateToEffort={() => handleTabChange('effort')} /></ErrorBoundary>
 
-           {/* Agent + Agency */}
+           {/* Person (agent) + Organisation (agency) — combined compact card */}
            <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-3">
-              <CardTitle className="text-base lg:text-lg">Agent</CardTitle>
-              {agent && memoizedCanEdit && (
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowAgentSelector(true)} aria-label="Edit agent">
-                  <Edit className="h-4 w-4" />
-                </Button>
-              )}
-            </CardHeader>
-            <CardContent className="pt-0">
-              {agent ? (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                      <User className="h-4 w-4 text-primary" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-sm">{agent?.name || 'Unknown'}</p>
-                      {agent?.email && (
-                        <button
-                          onClick={() => setComposeToAgent(agent.email)}
-                          className="text-xs text-muted-foreground hover:text-primary truncate block text-left cursor-pointer"
-                          title="Compose email to agent"
-                        >
-                          {agent.email}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {agent?.phone && (
-                    <a href={`tel:${agent.phone}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary">
-                      <Phone className="h-3.5 w-3.5" />
-                      {agent.phone}
-                    </a>
+            <CardContent className="p-3 space-y-2.5">
+              {/* Person */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Person</p>
+                  {agent && memoizedCanEdit && (
+                    <button onClick={() => setShowAgentSelector(true)} className="text-muted-foreground hover:text-primary">
+                      <Edit className="h-3 w-3" />
+                    </button>
                   )}
                 </div>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-muted-foreground text-sm">No agent assigned</p>
-                  {memoizedCanEdit && (
-                    <Button variant="outline" size="sm" className="w-full" onClick={() => setShowAgentSelector(true)}>
-                      <Edit className="h-4 w-4 mr-2" />
-                      Assign Agent
-                    </Button>
+                {agent ? (
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                        <User className="h-3 w-3 text-primary" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-xs truncate">{agent.name || 'Unknown'}</p>
+                        {agent.email && (
+                          <button onClick={() => setComposeToAgent(agent.email)} className="text-[10px] text-muted-foreground hover:text-primary truncate block text-left">
+                            {agent.email}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {agent.phone && (
+                      <a href={`tel:${agent.phone}`} className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-primary mt-1 ml-8">
+                        <Phone className="h-2.5 w-2.5" /> {agent.phone}
+                      </a>
+                    )}
+                    {/* Team sub-widget */}
+                    {agent.current_team_name && (
+                      <div className="flex items-center gap-1.5 mt-1 ml-8">
+                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          <Users className="h-2.5 w-2.5" />
+                          {agent.current_team_name}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-muted-foreground text-xs">No person assigned</p>
+                    {memoizedCanEdit && (
+                      <Button variant="outline" size="sm" className="w-full mt-1 h-7 text-xs" onClick={() => setShowAgentSelector(true)}>
+                        <Edit className="h-3 w-3 mr-1" /> Assign
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Organisation */}
+              {agency && (
+                <div className="border-t pt-2">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Organisation</p>
+                  <Link to={createPageUrl("OrgDetails") + `?id=${agency.id}`} className="flex items-center gap-2 hover:text-primary transition-colors">
+                    <Building className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    <span className="font-medium text-xs">{agency.name}</span>
+                  </Link>
+                  {agency.phone && (
+                    <a href={`tel:${agency.phone}`} className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-primary mt-1 ml-5">
+                      <Phone className="h-2.5 w-2.5" /> {agency.phone}
+                    </a>
                   )}
                 </div>
               )}
             </CardContent>
           </Card>
-
-          {/* Agency */}
-          {agency && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base lg:text-lg">Agency</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0 space-y-2.5">
-                <Link
-                  to={createPageUrl("OrgDetails") + `?id=${agency.id}`}
-                  className="flex items-center gap-2 hover:text-primary transition-colors"
-                >
-                  <Building className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                  <span className="font-medium text-sm">{agency.name}</span>
-                </Link>
-                {agency.phone && (
-                  <a href={`tel:${agency.phone}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary">
-                    <Phone className="h-3.5 w-3.5" />
-                    {agency.phone}
-                  </a>
-                )}
-                {agency.address && (
-                  <div className="flex items-start gap-2 text-sm text-muted-foreground">
-                    <MapPin className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
-                    <span>{agency.address}</span>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
 
           {/* Agency Branding Summary */}
           <AgencyBrandingSummary agency={agency} />
