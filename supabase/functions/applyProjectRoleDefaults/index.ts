@@ -79,8 +79,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Get fallback team ID for a given tier
-    const getFallbackTeamId = (tier: string) => {
+    // Get fallback team ID for a given tier/role
+    const getFallbackTeamId = (tier: string, role?: string) => {
+      // Check role-specific fallback first (photographer/videographer have their own fields)
+      if (role === 'photographer' && defaults.photographer_fallback_team_id) return defaults.photographer_fallback_team_id;
+      if (role === 'videographer' && defaults.videographer_fallback_team_id) return defaults.videographer_fallback_team_id;
       if (tier === 'owner')   return defaults.owner_fallback_team_id   || null;
       if (tier === 'onsite')  return defaults.onsite_fallback_team_id  || null;
       if (tier === 'editing') return defaults.editing_fallback_team_id || null;
@@ -106,21 +109,25 @@ Deno.serve(async (req) => {
 
       // Slot is empty — look for a fallback
       const tier = ROLE_FALLBACK_TIER[slot.role];
-      const fallbackTeamId = getFallbackTeamId(tier);
+      const fallbackTeamId = getFallbackTeamId(tier, slot.role);
 
       if (!fallbackTeamId) {
         skipped.push(slot.role);
         continue;
       }
 
-      if (slot.role === 'project_owner') {
-        updates.project_owner_id   = fallbackTeamId;
-        updates.project_owner_type = 'team';
-        updates.project_owner_name = '(Fallback team — assign individual)';
-        applied.push(slot.role);
-      } else {
-        applied.push(`${slot.role} (team fallback pending)`);
+      // Assign the fallback team to this role
+      updates[slot.idField] = fallbackTeamId;
+      if (slot.nameField) updates[slot.nameField] = '(Team fallback)';
+      if (slot.typeField) updates[slot.typeField] = 'team';
+      // For roles without a typeField, use the corresponding _type column
+      if (!slot.typeField && slot.role !== 'project_owner') {
+        updates[`${slot.role}_type`] = 'team';
       }
+      if (slot.role === 'project_owner') {
+        updates.project_owner_type = 'team';
+      }
+      applied.push(slot.role);
     }
 
     // Sync legacy onsite_staff aliases from canonical fields
