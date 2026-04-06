@@ -943,7 +943,7 @@ export default function ProjectDetails() {
               className="text-left hover:text-primary transition-colors group truncate"
             >
               {project?.property_address || ''}
-              <Copy className="h-3 w-3 inline ml-1 opacity-0 group-hover:opacity-50" />
+              <ExternalLink className="h-3 w-3 inline ml-1 opacity-0 group-hover:opacity-50" />
             </button>
           </div>
           {project.calendar_auto_linked && (
