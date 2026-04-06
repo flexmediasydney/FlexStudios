@@ -1038,21 +1038,6 @@ export default function ProjectDetails() {
             <XCircle className="h-3.5 w-3.5" />
             {project.outcome === "lost" ? "✓ Lost" : "◯ Lost"}
           </button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-9 px-2.5 transition-colors"
-            title="Copy project link"
-            aria-label="Copy project link"
-            onClick={() => {
-              navigator.clipboard.writeText(window.location.href).then(
-                () => toast.success('Project link copied'),
-                () => toast.error('Failed to copy link')
-              );
-            }}
-          >
-            <Copy className="h-4 w-4" />
-          </Button>
           {memoizedCanEdit && (
            <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-shadow h-9" aria-label="Edit project">
              <Edit className="h-4 w-4" />
@@ -1150,11 +1135,6 @@ export default function ProjectDetails() {
           {/* Active Timers — live, real-time */}
           <ErrorBoundary><ActiveTimersPanel projectId={projectId} tasks={projectTasks} /></ErrorBoundary>
 
-          {/* Staff Assignments — inside main content area */}
-          {project && (
-            <ErrorBoundary><ProjectStaffBar project={project} canEdit={memoizedCanEdit} /></ErrorBoundary>
-          )}
-
           {/* Backward stage regression confirmation */}
           <AlertDialog open={!!pendingBackwardStage} onOpenChange={open => { if (!open) setPendingBackwardStage(null); }}>
             <AlertDialogContent>
@@ -1193,166 +1173,36 @@ export default function ProjectDetails() {
             </AlertDialogContent>
           </AlertDialog>
 
-          {/* Weather Card */}
-          {project?.property_address && (
-            <ErrorBoundary><ProjectWeatherCard
-              project={project}
-              products={enrichedWeatherProducts}
-            /></ErrorBoundary>
-          )}
+          {/* Weather + Project Details + Staff moved to right sidebar */}
 
-          {/* Project Details */}
-           <Card>
-             <CardHeader className="pb-2">
-               <div className="flex items-center justify-between">
-                 <CardTitle className="text-sm">Project Details</CardTitle>
-                 {project.source === 'tonomo' ? (
-                   <span className="text-[10px] px-1.5 py-0.5 rounded font-medium
-                                    bg-violet-100 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-800">
-                     ⚡ Tonomo
-                   </span>
-                 ) : (
-                   <span className="text-[10px] px-1.5 py-0.5 rounded font-medium
-                                    bg-muted text-muted-foreground border border-border">
-                     Manual
-                   </span>
-                 )}
-               </div>
-             </CardHeader>
-             <CardContent className="space-y-2 pt-0">
-               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Property Type</p>
-                  <p className="text-xs font-medium">{propertyTypeLabels[project.property_type] || project.property_type}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Priority</p>
-                  <Badge variant={project.priority === "urgent" ? "destructive" : "secondary"} className="text-xs h-5">
-                    {project.priority}
-                  </Badge>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5 flex items-center gap-0.5">
-                    <ClockIcon className="h-2.5 w-2.5" /> Duration
-                  </p>
-                  <p className="font-mono text-xs font-bold">
-                    {project && <ErrorBoundary><ProjectDurationTimer project={project} activities={projectActivities} /></ErrorBoundary>}
-                  </p>
-                </div>
-                {project.property_suburb && (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-0.5">Suburb</p>
-                    <p className="text-xs font-medium">{project.property_suburb}</p>
-                  </div>
+          {/* Project Details + Pricing — kept in main content for width */}
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm">Pricing & Deliverables</CardTitle>
+                {project.source === 'tonomo' && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-violet-100 text-violet-700 border border-violet-200">⚡ Tonomo</span>
                 )}
-                {project.shoot_date && (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-0.5">Shoot Date</p>
-                    <div className="flex items-center gap-1">
-                      <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                      <span className="text-xs font-medium">{fmtDate(project.shoot_date)}</span>
-                    </div>
-                  </div>
-                )}
-                {project.shoot_time && (
-                   <div>
-                     <p className="text-xs text-muted-foreground mb-0.5">Shoot Time</p>
-                     <div className="flex items-center gap-1 flex-wrap">
-                       <ClockIcon className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                      <span className="text-xs font-medium">{project.shoot_time}</span>
-                      {project.tonomo_is_twilight && (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-medium
-                                         px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300
-                                         border border-purple-200 dark:border-purple-800">
-                          🌅 Twilight
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {project.shooting_started_at && (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-0.5">Shoot started</p>
-                    <div className="flex items-center gap-1">
-                      <Camera className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                      <span className="text-xs font-medium">
-                        {/* BUG FIX: use fixTimestamp to handle timestamps without Z suffix */}
-                        {new Intl.DateTimeFormat('en-AU', {
-                          timeZone: 'Australia/Sydney',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          hour12: true,
-                        }).format(new Date(fixTimestamp(project.shooting_started_at)))}
-                      </span>
-                    </div>
-                  </div>
-                )}
-                {project.delivery_date && (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-0.5">Delivery Date</p>
-                    <span className="text-xs font-medium">{fmtDate(project.delivery_date)}</span>
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Tier</p>
-                  <span className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-xs font-semibold ${
-                    project.pricing_tier === "premium"
-                      ? "bg-amber-100 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300"
-                      : "bg-blue-100 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300"
-                  }`}>
-                    {project.pricing_tier === "premium" ? <Star className="h-2.5 w-2.5" /> : <Zap className="h-2.5 w-2.5" />}
-                    {project.pricing_tier === "premium" ? "Prem" : "Std"}
-                  </span>
-                </div>
-                {/* Quoted value and Invoiced removed — pricing visible in ProjectForm and PricingTable */}
-               </div>
-
-
-
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2 pt-0">
               {project.delivery_link?.trim() && (
-                <>
-                  <Separator />
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2">Delivery Link</p>
-                    <a 
-                      href={project.delivery_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 text-primary hover:underline text-sm"
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                      View Deliverables
-                    </a>
-                  </div>
-                </>
+                <div>
+                  <a href={project.delivery_link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-primary hover:underline text-sm">
+                    <ExternalLink className="h-4 w-4" /> View Deliverables
+                  </a>
+                </div>
               )}
-
               {canSeePricing && (
-                    <>
-                      <Separator />
-                      {project.price_matrix_snapshot && (
-                        <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-3">
-                          <p className="text-xs text-blue-700 dark:text-blue-300 font-semibold">📋 Price locked at calculation</p>
-                          {/* BUG FIX: was using toLocaleString() without timezone — shows UTC on servers, not Sydney */}
-                          <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">Snapshot captured: {fmtDate(project.updated_date, 'd MMM yyyy')}</p>
-                        </div>
-                      )}
-                      <ErrorBoundary>
-                        <ProjectPricingTable 
-                          project={project}
-                          pricingTier={project.pricing_tier || "standard"}
-                          canSeePricing={canSeePricing}
-                          canEdit={memoizedCanEdit}
-                        />
-                      </ErrorBoundary>
-                    </>
-                  )}
-
+                <ErrorBoundary>
+                  <ProjectPricingTable project={project} pricingTier={project.pricing_tier || "standard"} canSeePricing={canSeePricing} canEdit={memoizedCanEdit} />
+                </ErrorBoundary>
+              )}
               {project.notes?.trim() && (
                 <>
                   <Separator />
                   <div>
-                    <p className="text-xs text-muted-foreground mb-2">Notes</p>
+                    <p className="text-xs text-muted-foreground mb-1">Notes</p>
                     <p className="text-sm whitespace-pre-wrap">{project.notes}</p>
                   </div>
                 </>
@@ -1425,10 +1275,51 @@ export default function ProjectDetails() {
 
         {/* Sidebar */}
         <div className="space-y-3">
-          {/* Unified Project Effort (replaces TimeTrackingSummaryCard + ProjectEffortSummaryV2) */}
+          {/* Weather — compact */}
+          {project?.property_address && (
+            <ErrorBoundary><ProjectWeatherCard project={project} products={enrichedWeatherProducts} /></ErrorBoundary>
+          )}
+
+          {/* Project Info — compact */}
+          <Card>
+            <CardContent className="p-3 space-y-1.5">
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                {project?.shoot_date && (
+                  <div className="flex items-center gap-1">
+                    <Calendar className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-xs">{fmtDate(project.shoot_date)}</span>
+                  </div>
+                )}
+                {project?.shoot_time && (
+                  <div className="flex items-center gap-1">
+                    <ClockIcon className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-xs">{project.shoot_time}</span>
+                    {project.tonomo_is_twilight && <span className="text-[9px] px-1 rounded bg-purple-100 text-purple-700">twilight</span>}
+                  </div>
+                )}
+                <div className="flex items-center gap-1">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${project?.pricing_tier === 'premium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                    {project?.pricing_tier === 'premium' ? 'Premium' : 'Standard'}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-xs font-mono font-bold">
+                    {project && <ErrorBoundary><ProjectDurationTimer project={project} activities={projectActivities} /></ErrorBoundary>}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Staff Assignments */}
+          {project && (
+            <ErrorBoundary><ProjectStaffBar project={project} canEdit={memoizedCanEdit} /></ErrorBoundary>
+          )}
+
+          {/* Unified Project Effort */}
           <ErrorBoundary><ProjectEffortCard projectId={projectId} project={project} onNavigateToEffort={() => handleTabChange('effort')} /></ErrorBoundary>
 
-           {/* Agent + Agency combined on mobile */}
+           {/* Agent + Agency */}
            <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-3">
               <CardTitle className="text-base lg:text-lg">Agent</CardTitle>
