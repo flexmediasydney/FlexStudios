@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useEntityList, useEntityData } from "@/components/hooks/useEntityData";
 import { User, Users, ChevronDown, ChevronRight, AlertCircle, Camera, Video, ImageIcon, Film, PenTool, Compass, Crown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Card, CardContent } from "@/components/ui/card";
 import { createNotification } from "@/components/notifications/createNotification";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -193,66 +194,51 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
          <button
            disabled={!canEdit || isLoading}
            className={cn(
-             "relative flex items-center gap-2.5 px-3 py-2 rounded-lg border text-sm font-medium transition-all outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary",
+             "relative flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs font-medium transition-all w-full",
              isSet
-               ? "bg-card border-border text-foreground hover:border-primary/50 hover:shadow-sm"
+               ? "bg-card border-border text-foreground hover:border-primary/50"
                : isNotRequired
-               ? "bg-muted/40 border-border text-muted-foreground hover:border-muted-foreground/50"
+               ? "bg-muted/30 border-border text-muted-foreground"
                : "bg-amber-50 border-amber-300 text-amber-700 hover:border-amber-400",
              !canEdit && "cursor-default opacity-80",
              isLoading && "opacity-70 pointer-events-none"
            )}
-           title={canEdit ? `Click to assign ${label}` : "You don't have permission to edit"}
-           aria-label={`${label}: ${isSet ? currentName : isNotRequired ? "Not required" : "Not assigned"}`}
+           title={canEdit ? `Click to assign ${label}` : label}
          >
-          {/* Loading overlay */}
           {isLoading && (
-            <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/60 z-10">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/60 z-10">
+              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
             </div>
           )}
-          <div className="relative">
-            <Avatar className={cn("h-8 w-8", isSet ? "" : "opacity-60")}>
+          <div className="relative flex-shrink-0">
+            <Avatar className={cn("h-5 w-5", isSet ? "" : "opacity-60")}>
               <AvatarFallback className={cn(
-                "text-xs font-semibold",
+                "text-[9px] font-semibold",
                 isSet ? roleColor.bg + " " + roleColor.text : "bg-muted text-muted-foreground"
               )}>
                 {isSet ? (
-                  currentType === "team" ? <Users className="h-3.5 w-3.5" /> : getInitials(currentName)
+                  currentType === "team" ? <Users className="h-2.5 w-2.5" /> : getInitials(currentName)
                 ) : isNotRequired ? (
-                  <RoleIcon className="h-3.5 w-3.5" />
+                  <RoleIcon className="h-2.5 w-2.5" />
                 ) : (
-                  <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
+                  <AlertCircle className="h-2.5 w-2.5 text-amber-500" />
                 )}
               </AvatarFallback>
             </Avatar>
-            {/* Role badge */}
+          </div>
+          <div className="text-left min-w-0 flex-1">
+            <span className="text-[10px] text-muted-foreground mr-1">{label}:</span>
             <span className={cn(
-              "absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full flex items-center justify-center border-2 border-background",
-              roleColor.badge
+              "text-xs truncate",
+              isSet ? "font-medium" : isNotRequired ? "text-muted-foreground italic" : "text-amber-600 italic"
             )}>
-              <RoleIcon className="h-2.5 w-2.5 text-white" />
+              {isSet ? currentName : isNotRequired ? "N/R" : "Unassigned"}
             </span>
+            {isSet && currentType === "team" && (
+              <span className="ml-1 text-[8px] px-1 rounded bg-indigo-100 text-indigo-600 font-semibold">TEAM</span>
+            )}
           </div>
-          <div className="text-left min-w-0">
-            <p className="text-[10px] text-muted-foreground leading-none mb-0.5 uppercase tracking-wider font-medium">{label}</p>
-            <div className="flex items-center gap-1 min-w-0">
-              <p className={cn(
-                "leading-none text-sm truncate",
-                isSet ? "text-foreground font-medium" : isNotRequired ? "text-muted-foreground italic text-xs" : "text-amber-600 italic text-xs"
-              )}>
-                {isSet ? currentName : isNotRequired ? "Not required" : "Not assigned"}
-              </p>
-              {/* Team badge for visual distinction */}
-              {isSet && currentType === "team" && (
-                <span className="inline-flex items-center gap-0.5 px-1 py-px rounded text-[9px] font-semibold uppercase tracking-wider bg-indigo-100 text-indigo-600 border border-indigo-200 flex-shrink-0">
-                  <Users className="h-2 w-2" />
-                  Team
-                </span>
-              )}
-            </div>
-          </div>
-          {canEdit && !isLoading && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground ml-1 flex-shrink-0" />}
+          {canEdit && !isLoading && <ChevronDown className="h-3 w-3 text-muted-foreground flex-shrink-0" />}
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-2" align="start">
@@ -372,81 +358,57 @@ export default function ProjectStaffBar({ project, canEdit, onProjectUpdate }) {
    const hiddenCount = irrelevantRoles.length;
 
    return (
-     <div className="border-t border-b bg-gradient-to-r from-muted/40 to-muted/20 -mx-6 px-6 py-3">
-       <div className="flex items-center gap-2 mb-2">
-         <Users className="h-3.5 w-3.5 text-muted-foreground" />
-         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Team</p>
-         {requiredRoles.length > 0 && (
-           <span className="text-[10px] text-muted-foreground/60 font-medium">
-             {requiredRoles.length} role{requiredRoles.length !== 1 ? "s" : ""}
-           </span>
-         )}
-       </div>
-
-       {/* Required roles — always visible */}
-       <div className="flex flex-wrap gap-2">
-         {requiredRoles.map((mapping) => (
-           <StaffSelector
-             key={mapping.role}
-             roleKey={mapping.role}
-             legacyKey={legacyKeys[mapping.role]}
-             label={mapping.label}
-             project={displayProject}
-             canEdit={canEdit}
-             disabled={false}
-             users={users}
-             teams={teams}
-           />
-         ))}
-       </div>
-
-       {/* Irrelevant roles — collapsed by default */}
-       {hiddenCount > 0 && (
-         <div className="mt-2">
-           <button
-             onClick={() => setShowAllRoles(prev => !prev)}
-             className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70 hover:text-muted-foreground font-medium transition-colors py-0.5"
-           >
-             {showAllRoles ? (
-               <ChevronDown className="h-3 w-3" />
-             ) : (
-               <ChevronRight className="h-3 w-3" />
-             )}
-             {showAllRoles ? "Hide" : "Show"} {hiddenCount} other role{hiddenCount !== 1 ? "s" : ""}
-           </button>
-           {showAllRoles && (
-             <div className="flex flex-wrap gap-1.5 mt-1.5">
-               {irrelevantRoles.map((mapping) => {
-                 const idKey = `${mapping.role}_id`;
-                 const currentId = displayProject?.[idKey] || (legacyKeys[mapping.role] ? displayProject?.[`${legacyKeys[mapping.role]}_id`] : null);
-                 const isNotReqValue = currentId === "not_required";
-
-                 // If value is "not_required", show compact badge
-                 if (isNotReqValue || !currentId) {
-                   return (
-                     <NotRequiredBadge key={mapping.role} roleKey={mapping.role} label={mapping.label} />
-                   );
-                 }
-
-                 // If someone is actually assigned to a hidden role, show the full selector
-                 return (
-                   <StaffSelector
-                     key={mapping.role}
-                     roleKey={mapping.role}
-                     legacyKey={legacyKeys[mapping.role]}
-                     label={mapping.label}
-                     project={displayProject}
-                     canEdit={canEdit}
-                     disabled={false}
-                     users={users}
-                     teams={teams}
-                   />
-                 );
-               })}
-             </div>
-           )}
+     <Card>
+       <CardContent className="p-3">
+         <div className="flex items-center gap-1.5 mb-2">
+           <Users className="h-3 w-3 text-muted-foreground" />
+           <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Team</p>
          </div>
-       )}
-     </div>
+
+         {/* Required roles — compact grid */}
+         <div className="space-y-1">
+           {requiredRoles.map((mapping) => (
+             <StaffSelector
+               key={mapping.role}
+               roleKey={mapping.role}
+               legacyKey={legacyKeys[mapping.role]}
+               label={mapping.label}
+               project={displayProject}
+               canEdit={canEdit}
+               disabled={false}
+               users={users}
+               teams={teams}
+             />
+           ))}
+         </div>
+
+         {/* Irrelevant roles — collapsed */}
+         {hiddenCount > 0 && (
+           <div className="mt-1.5">
+             <button
+               onClick={() => setShowAllRoles(prev => !prev)}
+               className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-muted-foreground font-medium transition-colors"
+             >
+               {showAllRoles ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+               {hiddenCount} more
+             </button>
+             {showAllRoles && (
+               <div className="space-y-1 mt-1">
+                 {irrelevantRoles.map((mapping) => {
+                   const idKey = `${mapping.role}_id`;
+                   const currentId = displayProject?.[idKey] || (legacyKeys[mapping.role] ? displayProject?.[`${legacyKeys[mapping.role]}_id`] : null);
+                   if (!currentId || currentId === "not_required") {
+                     return <NotRequiredBadge key={mapping.role} roleKey={mapping.role} label={mapping.label} />;
+                   }
+                   return (
+                     <StaffSelector key={mapping.role} roleKey={mapping.role} legacyKey={legacyKeys[mapping.role]} label={mapping.label} project={displayProject} canEdit={canEdit} disabled={false} users={users} teams={teams} />
+                   );
+                 })}
+               </div>
+             )}
+           </div>
+         )}
+       </CardContent>
+     </Card>
    );
 }
