@@ -58,8 +58,8 @@ Deno.serve(async (req) => {
     const existingTasks = await entities.ProjectTask.filter({ project_id }, null, 1000);
 
     const onsiteRoles = [
-      { role: 'photographer', staffId: project.photographer_id || project.onsite_staff_1_id || null, staffName: project.photographer_name || project.onsite_staff_1_name || null, staffType: project.onsite_staff_1_type || 'user' },
-      { role: 'videographer', staffId: project.videographer_id || project.onsite_staff_2_id || null, staffName: project.videographer_name || project.onsite_staff_2_name || null, staffType: project.onsite_staff_2_type || 'user' },
+      { role: 'photographer', staffId: project.photographer_id || project.onsite_staff_1_id || null, staffName: project.photographer_name || project.onsite_staff_1_name || null, staffType: project.photographer_type || project.onsite_staff_1_type || 'user' },
+      { role: 'videographer', staffId: project.videographer_id || project.onsite_staff_2_id || null, staffName: project.videographer_name || project.onsite_staff_2_name || null, staffType: project.videographer_type || project.onsite_staff_2_type || 'user' },
     ];
 
     let dueDate: string | null = null;
