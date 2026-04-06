@@ -443,6 +443,13 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
       console.warn('applyProjectRoleDefaults after auto-approve failed (non-fatal):', err?.message);
     });
 
+    // Ensure pricing is calculated even if applyProjectRoleDefaults skips task generation
+    if (hasAutoProducts) {
+      invokeFunction('recalculateProjectPricingServerSide', { project_id: project.id }).catch((err: any) => {
+        console.error('Pricing calculation after auto-approve failed (non-fatal):', err?.message);
+      });
+    }
+
     // Only fire stage change for newly created projects, not race-condition updates
     if (operation === 'created') {
       invokeFunction('trackProjectStageChange', {
@@ -568,6 +575,13 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     }).catch((err: any) => {
       console.error('applyProjectRoleDefaults fire-and-forget failed:', err.message);
     });
+
+    // Ensure pricing is recalculated when products were auto-applied to existing project
+    if (hasAutoProducts) {
+      invokeFunction('recalculateProjectPricingServerSide', { project_id: project.id }).catch((err: any) => {
+        console.error('Pricing recalc for existing project failed (non-fatal):', err?.message);
+      });
+    }
   }
 
   return {

@@ -237,6 +237,11 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     invokeFunction('cleanupOrphanedProjectTasks', {
       project_id: project.id,
     }).catch(() => { /* non-fatal */ });
+
+    // Ensure pricing is recalculated when products change
+    invokeFunction('recalculateProjectPricingServerSide', { project_id: project.id }).catch((err: any) => {
+      console.error('Pricing recalc after change event failed (non-fatal):', err?.message);
+    });
   }
 
   return { summary: `Updated project for changed order ${orderId}` };

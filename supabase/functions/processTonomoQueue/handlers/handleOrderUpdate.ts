@@ -189,6 +189,11 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
     invokeFunction('applyProjectRoleDefaults', {
       project_id: project.id,
     }).catch(() => { /* non-fatal */ });
+
+    // Ensure pricing is recalculated when products change
+    invokeFunction('recalculateProjectPricingServerSide', { project_id: project.id }).catch((err: any) => {
+      console.error('Pricing recalc after order update failed (non-fatal):', err?.message);
+    });
   }
 
   return { summary: `Order update applied for ${orderId}` };

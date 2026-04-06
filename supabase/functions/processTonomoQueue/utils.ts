@@ -501,7 +501,26 @@ export async function resolveEntity(entities: any, tonomoUid: string, email: str
   const allEntities = await entities[entityDbName].list('-created_date', 500);
   const byEmail = email ? allEntities?.filter((e: any) => e.email === email) : [];
   const byName = !byEmail?.length && name ? allEntities?.filter((e: any) => e[nameField]?.toLowerCase() === name.toLowerCase()) : [];
-  const match = byEmail?.[0] || byName?.[0] || null;
+  let match = byEmail?.[0] || byName?.[0] || null;
+
+  // Auto-create Agent record when no match found — Tonomo agents are real estate
+  // agents who booked shoots and should exist in FlexStudios for project linking
+  if (!match && mappingType === 'agent' && entityDbName === 'Agent' && (name || email)) {
+    try {
+      const newAgent = await entities.Agent.create({
+        name: name || email || 'Unknown Agent',
+        email: email || null,
+        source: 'tonomo',
+        tonomo_uid: tonomoUid,
+      });
+      if (newAgent?.id) {
+        match = newAgent;
+        console.log(`[agent-autocreate] Created Agent "${name}" (${newAgent.id}) from Tonomo uid ${tonomoUid}`);
+      }
+    } catch (createErr: any) {
+      console.error(`[agent-autocreate] Failed to create Agent "${name}":`, createErr?.message);
+    }
+  }
 
   await upsertMappingSuggestion(entities, tonomoUid, name || email || tonomoUid, mappingType, entityDbName, match?.id || null, match?.[nameField] || null, match ? 'high' : 'low', allMappings);
   return { entityId: match?.id || null };
@@ -512,10 +531,21 @@ export async function loadMappingTable(entities: any) {
 }
 
 export async function upsertMappingSuggestion(entities: any, tonomoId: string, tonomoLabel: string, mappingType: string, entityType: string, entityId: string | null, entityLabel: string | null, confidence: string, allMappings: any[]) {
-  const existing = allMappings.filter((m: any) => m.tonomo_id === tonomoId && m.mapping_type === mappingType);
+  // Check for exact match (same tonomo_id + mapping_type)
+  const exactMatch = allMappings.filter((m: any) => m.tonomo_id === tonomoId && m.mapping_type === mappingType);
+  // Also check if a CONFIRMED mapping of ANY type already exists for this tonomo_id
+  // (prevents creating both service + package rows for the same item)
+  const confirmedAny = allMappings.find((m: any) => m.tonomo_id === tonomoId && m.is_confirmed);
+  if (confirmedAny) return; // Already has a confirmed mapping — don't create a competing suggestion
+
   const data = { tonomo_id: tonomoId, tonomo_label: tonomoLabel, mapping_type: mappingType, flexmedia_entity_type: entityType, flexmedia_entity_id: entityId, flexmedia_label: entityLabel, auto_suggested: true, confidence, last_seen_at: new Date().toISOString() };
-  if (existing?.length > 0 && !existing[0].is_confirmed) await entities.TonomoMappingTable.update(existing[0].id, data);
-  else if (!existing?.length) await entities.TonomoMappingTable.create(data);
+  if (exactMatch?.length > 0 && !exactMatch[0].is_confirmed) {
+    await entities.TonomoMappingTable.update(exactMatch[0].id, data);
+  } else if (!exactMatch?.length) {
+    const created = await entities.TonomoMappingTable.create(data);
+    // Push into allMappings so subsequent calls in the same webhook batch won't create duplicates
+    if (created) allMappings.push({ ...data, id: created.id });
+  }
 }
 
 export async function findProjectByOrderId(entities: any, orderId: string) {
