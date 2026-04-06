@@ -24,7 +24,7 @@ import { fmtDate, fixTimestamp } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import ProjectForm from "@/components/projects/ProjectForm";
 import TaskManagement from "@/components/projects/TaskManagement";
-import MediaDeliveryManager from "@/components/projects/MediaDeliveryManager";
+// MediaDeliveryManager removed — media tab no longer used
 import EffortLoggingTab from "@/components/projects/EffortLoggingTab";
 import ProjectCalendarEvents from "@/components/projects/ProjectCalendarEvents";
 import ProjectActivityHub from "@/components/projects/ProjectActivityHub";
@@ -52,7 +52,7 @@ import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
 // creating a new Set on every render. Since it's a constant, it belongs here.
-const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'tonomo']);
+const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'tonomo']);
 
 const serviceLabels = {
   photography: "📷 Photography",
@@ -1217,7 +1217,7 @@ export default function ProjectDetails() {
                 <TabsTrigger value="revisions" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Requests</TabsTrigger>
                 <TabsTrigger value="effort"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Effort</TabsTrigger>
                 <TabsTrigger value="calendar"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Calendar</TabsTrigger>
-                <TabsTrigger value="media"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Media</TabsTrigger>
+                {/* Media tab removed */}
                 {project.source === 'tonomo' && (
                   <TabsTrigger value="tonomo"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tonomo</TabsTrigger>
                 )}
@@ -1254,13 +1254,7 @@ export default function ProjectDetails() {
               )}
             </TabsContent>
 
-            <TabsContent value="media" className="mt-4">
-              {mountedTabs.has("media") ? (
-                <ErrorBoundary><MediaDeliveryManager projectId={projectId} project={project} canEdit={memoizedCanEdit} /></ErrorBoundary>
-              ) : (
-                <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/4"/><div className="h-40 bg-muted rounded"/></div>
-              )}
-            </TabsContent>
+            {/* Media tab content removed */}
 
             {project.source === 'tonomo' && (
               <TabsContent value="tonomo" className="mt-4">
