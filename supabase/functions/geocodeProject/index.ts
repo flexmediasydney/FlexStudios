@@ -24,14 +24,13 @@ Deno.serve(async (req) => {
     const targets = projects.filter((p: any) =>
       projectIds.includes(p.id) &&
       p.property_address &&
-      (p.lat == null || p.lng == null)
+      (p.geocoded_lat == null || p.geocoded_lng == null)
     );
 
     const results: any[] = [];
 
     for (const project of targets) {
       try {
-        // Bias to Australia
         const address = encodeURIComponent(project.property_address + ', Australia');
         const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${address}&region=au&key=${apiKey}`;
         const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -39,7 +38,7 @@ Deno.serve(async (req) => {
 
         if (data.status === 'OK' && data.results?.[0]?.geometry?.location) {
           const { lat, lng } = data.results[0].geometry.location;
-          await entities.Project.update(project.id, { lat, lng });
+          await entities.Project.update(project.id, { geocoded_lat: lat, geocoded_lng: lng, geocoded_at: new Date().toISOString() });
           results.push({ id: project.id, lat, lng, ok: true });
         } else {
           results.push({ id: project.id, ok: false, reason: data.status });
