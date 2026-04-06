@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { api } from "@/api/supabaseClient";
 import { retryWithBackoff } from "@/lib/networkResilience";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2, Star, Zap, Package, Box, Trash2, Edit, Plus, MapPin, AlertCircle, User, DollarSign, Info, CheckCircle } from "lucide-react";
 import AddressInput from "./AddressInput";
 import AgentSearchField from "./AgentSearchField";
@@ -36,7 +36,6 @@ import { toast } from "sonner";
 
 export default function ProjectForm({ project, open, onClose, onSave }) {
   const { canSeePricing } = usePermissions();
-  const queryClient = useQueryClient();
   const [formData, setFormData] = useState({
     title: "",
     agent_id: "",
@@ -59,16 +58,22 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
   useEffect(() => {
     latestAgentRef.current = { agent_id: formData.agent_id, agency_id: formData.agency_id };
   }, [formData.agent_id, formData.agency_id]);
-  const [titleOverride, setTitleOverride] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(null);
   const [initialFormData, setInitialFormData] = useState(project || {});
-  const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(null);
   const [saveError, setSaveError] = useState(null);
 
   // Monitor escape key for unsaved changes warning
   useEscapeKeyWarning(unsavedChanges);
+
+  // Beforeunload guard: warn when navigating away with unsaved changes
+  useEffect(() => {
+    if (!unsavedChanges) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [unsavedChanges]);
 
   const handleFieldChange = (field, value) => {
     const trimmed = typeof value === "string" ? value.slice(0, LIMITS[field] || LIMITS.short) : value;
@@ -163,7 +168,6 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         pricing_tier: project.pricing_tier || "standard",
         title_desc: project.title_desc || "",
       });
-      setTitleOverride(!!project.title);
     } else {
       const defaultType = projectTypes.find(t => t.is_default && t.is_active) || projectTypes[0] || null;
       setFormData({
@@ -187,7 +191,6 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         project_type_id: defaultType?.id || "",
         project_type_name: defaultType?.name || "",
       });
-      setTitleOverride(false);
     }
     setErrors({});
     setUnsavedChanges(false);
@@ -374,7 +377,16 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
       project_owner: readiness.errors.find(e => e.includes('owner')) || null,
     };
     setErrors(newErrors);
-    if (Object.values(newErrors).some(Boolean)) return;
+    const activeErrors = Object.entries(newErrors).filter(([, v]) => v);
+    if (activeErrors.length > 0) {
+      // Scroll to the first field with an error
+      const firstErrorField = activeErrors[0][0];
+      const el = document.querySelector(`[data-field="${firstErrorField}"]`) || document.querySelector(`[name="${firstErrorField}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      toast.error(`Please fix ${activeErrors.length} field${activeErrors.length > 1 ? 's' : ''}: ${activeErrors.map(([k]) => k.replace(/_/g, ' ')).join(', ')}`);
+      announceToScreenReader(`Validation failed. ${activeErrors.length} error${activeErrors.length > 1 ? 's' : ''} found.`);
+      return;
+    }
 
     setSaving(true);
     setSaveError(null);
@@ -389,9 +401,6 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         allProducts,
         packagesList
       );
-      if (normalized.removed.length > 0) {
-        // Product dedup occurred — normalized.removed contains details
-      }
       if (normalized.warnings.length > 0) {
         normalized.warnings.forEach(w => console.warn('Category overlap:', w.message));
       }
@@ -636,9 +645,31 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
       } catch (err) {
        console.error('Failed to save project:', err);
        setSaving(false);
-       setSaveError(err);
-       toast.error(err?.message || 'Failed to save project');
-       announceToScreenReader('Failed to save project. Please try again.');
+       // Extract specific field errors from Supabase constraint violations
+       const msg = err?.message || '';
+       let userMessage = msg;
+       const fieldErrors = {};
+       if (msg.includes('violates foreign key')) {
+         const match = msg.match(/column "(\w+)"/);
+         const field = match?.[1] || '';
+         fieldErrors[field] = 'Invalid reference -- the selected item may have been deleted';
+         userMessage = `Invalid reference in ${field.replace(/_/g, ' ')}`;
+       } else if (msg.includes('violates not-null')) {
+         const match = msg.match(/column "(\w+)"/);
+         const field = match?.[1] || '';
+         fieldErrors[field] = 'This field is required';
+         userMessage = `Missing required field: ${field.replace(/_/g, ' ')}`;
+       } else if (msg.includes('duplicate key')) {
+         userMessage = 'A project with these details already exists';
+       } else if (!msg || msg === 'Failed to fetch') {
+         userMessage = 'Network error -- check your connection and try again';
+       }
+       if (Object.keys(fieldErrors).length > 0) {
+         setErrors(prev => ({ ...prev, ...fieldErrors }));
+       }
+       setSaveError({ ...err, message: userMessage });
+       toast.error(userMessage || 'Failed to save project');
+       announceToScreenReader(`Save failed: ${userMessage}`);
       }
       };
 
@@ -682,7 +713,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         
         <form onSubmit={handleSubmit} className="space-y-4">
            {/* Address */}
-               <div>
+               <div data-field="property_address">
                  <Label className="text-sm font-medium flex items-center gap-1.5">
                    <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
                    Address
@@ -735,7 +766,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
           </div>
 
           {/* Agent */}
-          <div>
+          <div data-field="agent_id">
             <Label htmlFor="agent" className="flex items-center gap-1.5">
               <User className="h-3.5 w-3.5 text-muted-foreground" />
               Agent <span className="text-destructive">*</span>
@@ -752,7 +783,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
 
           {/* Project Type */}
           {projectTypes.length > 0 && (
-            <div>
+            <div data-field="project_type_id">
               <Label className="text-sm font-medium mb-2 block">
                 Project Type <span className="text-destructive">*</span>
                 {project?.id && <span className="ml-2 text-xs font-normal text-muted-foreground">(locked after creation)</span>}
@@ -840,10 +871,15 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
           </div>
 
           {/* Pricing Tier */}
-          <div>
+          <div data-field="pricing_tier">
             <Label className="mb-2 block flex items-center gap-1.5">
               <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
               Pricing Tier <span className="text-destructive">*</span>
+              {canSeePricing && formData.calculated_price > 0 && (
+                <span className={`ml-auto text-sm font-bold font-mono tabular-nums px-2 py-0.5 rounded-md ${calculatingPrice ? "bg-muted text-muted-foreground animate-pulse" : "bg-green-100 text-green-700 border border-green-200"}`}>
+                  {calculatingPrice ? "..." : `$${Number(formData.calculated_price).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                </span>
+              )}
             </Label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {[
@@ -887,11 +923,27 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
           </div>
 
           {/* Packages & Products */}
-          <div>
+          <div data-field="items">
             <div className="flex items-center justify-between mb-2">
               <Label className="text-sm font-medium flex items-center gap-1.5">
                 <Package className="h-3.5 w-3.5 text-muted-foreground" />
                 Products & Packages <span className="text-destructive">*</span>
+                {canSeePricing && (formData.products.length > 0 || formData.packages.length > 0) && (() => {
+                  const prodTotal = formData.products.reduce((sum, pi) => {
+                    const p = products.find(x => x.id === (pi.product_id || pi));
+                    return sum + ((p?.standard_price || p?.price || 0) * (pi.quantity || 1));
+                  }, 0);
+                  const pkgTotal = formData.packages.reduce((sum, pi) => {
+                    const p = packagesList.find(x => x.id === (pi.package_id || pi));
+                    return sum + (p?.standard_price || p?.price || 0) * (pi.quantity || 1);
+                  }, 0);
+                  const runningTotal = prodTotal + pkgTotal;
+                  return runningTotal > 0 ? (
+                    <span className="text-xs font-mono text-muted-foreground ml-1">
+                      (base ~${Number(runningTotal).toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 0 })})
+                    </span>
+                  ) : null;
+                })()}
               </Label>
               <Button
                 type="button"
@@ -924,7 +976,12 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
                         <Package className="h-4 w-4 text-primary shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold" title={pkg.name}>{pkg.name}</p>
-                          <p className="text-xs text-muted-foreground">{pkg.products?.length || 0} products included</p>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{pkg.products?.length || 0} products included</span>
+                            {canSeePricing && (pkg.standard_price || pkg.price) > 0 && (
+                              <span className="text-xs font-mono text-muted-foreground">${Number(pkg.standard_price || pkg.price).toFixed(2)}</span>
+                            )}
+                          </div>
                         </div>
                         <button 
                           type="button" 
@@ -985,12 +1042,18 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
                   if (!prod) return null;
                   const qty = prodItem.quantity || 1;
                   const isPerUnit = prod.pricing_type === "per_unit";
+                  const basePrice = prod.standard_price || prod.price || 0;
                   return (
                     <div key={prodId} className="flex items-center gap-2 py-2.5 px-3 rounded-lg border shadow-sm hover:shadow-md transition-shadow bg-gradient-to-r from-background to-muted/10">
                       <Box className="h-4 w-4 text-primary shrink-0" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold" title={prod.name}>{prod.name}</p>
-                        {prod.category && <p className="text-xs text-muted-foreground capitalize">{prod.category}</p>}
+                        <div className="flex items-center gap-2">
+                          {prod.category && <span className="text-xs text-muted-foreground capitalize">{prod.category}</span>}
+                          {canSeePricing && basePrice > 0 && (
+                            <span className="text-xs font-mono text-muted-foreground">${Number(basePrice).toFixed(2)}{isPerUnit ? '/ea' : ''}</span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         {isPerUnit ? (
@@ -1150,9 +1213,10 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
                       : `No ${(mapping.categories || []).join('/') || ''} services selected`;
                     return (
                       <div key={role.key}>
-                        <Label className="text-xs text-muted-foreground block mb-1">{role.label}</Label>
-                        <div className="flex items-center gap-2 p-3 rounded-lg border bg-muted/40 text-muted-foreground text-sm italic h-[60px]">
-                          {reason}
+                        <Label className="text-xs text-muted-foreground/60 block mb-1 line-through">{role.label}</Label>
+                        <div className="flex items-center gap-2 p-3 rounded-lg border-2 border-dashed border-muted bg-muted/20 text-muted-foreground/60 text-xs h-[60px] select-none cursor-not-allowed" title={reason}>
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0 opacity-40" />
+                          <span>{reason}</span>
                         </div>
                       </div>
                     );
@@ -1218,6 +1282,28 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               <UnsavedChangesWarning />
               <EscapeKeyWarningBanner unsavedChanges={unsavedChanges} />
             </>
+          )}
+
+          {/* Validation error summary */}
+          {Object.values(errors).some(Boolean) && !saveError && (
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/5 border border-destructive/20 text-sm">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-destructive">Please fix the following:</p>
+                <ul className="mt-1 space-y-0.5">
+                  {Object.entries(errors).filter(([, v]) => v).map(([field, msg]) => (
+                    <li key={field} className="text-xs text-destructive/80">
+                      <button type="button" className="underline hover:no-underline" onClick={() => {
+                        const el = document.querySelector(`[data-field="${field}"]`);
+                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }}>
+                        {field.replace(/_/g, ' ')}
+                      </button>: {msg}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           )}
 
           {/* Network error with retry */}

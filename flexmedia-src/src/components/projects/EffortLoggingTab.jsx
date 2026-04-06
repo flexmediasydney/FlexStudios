@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from "react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import React, { useState, useEffect, useMemo } from "react";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
@@ -8,12 +7,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { fmtTimestampCustom, fixTimestamp, APP_TZ } from "@/components/utils/dateUtils";
-import { ChevronDown, ChevronRight, Clock, Layout, List, X, Lock } from "lucide-react";
+import { fmtTimestampCustom, fixTimestamp } from "@/components/utils/dateUtils";
+import { ChevronDown, ChevronRight, Clock, Layout, List, X, Lock, Plus, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffortLogs, formatDuration, getStatusColor } from "./useEffortLogging";
 import TimerLogActions from "./TimerLogActions";
 import TimerLogDetailModal from "./TimerLogDetailModal";
+import ManualTimeEntryDialog from "./ManualTimeEntryDialog";
 
 /** Compute live seconds for a log, accounting for running timers whose total_seconds is stale */
 function computeLiveSeconds(log) {
@@ -35,6 +35,8 @@ export default function EffortLoggingTab({ projectId, project }) {
   const [filterStatus, setFilterStatus] = useState("all");
   const [sortBy, setSortBy] = useState("recent"); // "recent" or "duration"
   const [selectedLog, setSelectedLog] = useState(null);
+  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [manualEntryTask, setManualEntryTask] = useState(null);
 
   const { data: user } = useQuery({ queryKey: ["current-user"], queryFn: () => api.auth.me() });
   const { data: currentUser } = useQuery({ queryKey: ["user", user?.email], queryFn: () => api.entities.User.filter({ email: user.email }, null, 1).then(users => users[0] || null), enabled: !!user?.email });
@@ -50,13 +52,26 @@ export default function EffortLoggingTab({ projectId, project }) {
   const timeLogs = rawTimeLogs.filter(log => !deletedTaskIds.has(log.task_id));
 
   // Tick every second when any timer is running to keep durations live
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   const hasRunning = timeLogs.some(log => log.is_active && log.status === 'running');
   useEffect(() => {
     if (!hasRunning) return;
     const id = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(id);
   }, [hasRunning]);
+
+  // Summary: total time and per-role breakdown (recomputes each tick for live timers)
+  const summary = useMemo(() => {
+    const roleMap = {};
+    let total = 0;
+    for (const log of timeLogs) {
+      const secs = computeLiveSeconds(log);
+      total += secs;
+      const role = log.role || 'other';
+      roleMap[role] = (roleMap[role] || 0) + secs;
+    }
+    return { total, byRole: roleMap };
+  }, [timeLogs, tick]);
 
   const toggleExpand = (id) => {
     const newSet = new Set(expandedLogs);
@@ -141,11 +156,69 @@ export default function EffortLoggingTab({ projectId, project }) {
       <CardContent className="space-y-4">
         {timeLogs.length === 0 ? (
           <div className="text-center py-12">
-            <Clock className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-            <p className="text-sm text-muted-foreground">No time logged yet</p>
+            <Timer className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No time tracked yet</p>
+            <p className="text-xs text-muted-foreground/70 mt-1.5 max-w-xs mx-auto">
+              Start a timer from the Tasks tab, or add a manual entry below.
+            </p>
+            {!isClosed && tasks.filter(t => !t.is_deleted).length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-4 gap-1.5"
+                onClick={() => {
+                  const firstTask = tasks.find(t => !t.is_deleted);
+                  if (firstTask) {
+                    setManualEntryTask(firstTask);
+                    setShowManualEntry(true);
+                  }
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Manual Entry
+              </Button>
+            )}
           </div>
         ) : (
           <>
+            {/* Summary bar */}
+            <div className="flex flex-wrap items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/50 border text-sm">
+              <div className="flex items-center gap-1.5 font-semibold">
+                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                Total: {formatDuration(summary.total)}
+              </div>
+              {Object.entries(summary.byRole).length > 1 && (
+                <>
+                  <span className="text-muted-foreground/40">|</span>
+                  {Object.entries(summary.byRole)
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([role, secs]) => (
+                      <span key={role} className="text-xs text-muted-foreground">
+                        <span className="capitalize">{role.replace(/_/g, ' ')}</span>: {formatDuration(secs)}
+                      </span>
+                    ))}
+                </>
+              )}
+              {!isClosed && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto gap-1.5 h-7 text-xs"
+                  onClick={() => {
+                    const firstTask = tasks.find(t => !t.is_deleted);
+                    if (firstTask) {
+                      setManualEntryTask(firstTask);
+                      setShowManualEntry(true);
+                    }
+                  }}
+                  disabled={tasks.filter(t => !t.is_deleted).length === 0}
+                >
+                  <Plus className="h-3 w-3" />
+                  Add Manual Entry
+                </Button>
+              )}
+            </div>
+
             {/* Filters */}
             <div className="flex flex-wrap gap-2 items-center pb-3 border-b">
               <Select value={filterPerson} onValueChange={setFilterPerson}>
@@ -219,43 +292,81 @@ export default function EffortLoggingTab({ projectId, project }) {
                   {filteredLogs.length} {filteredLogs.length === 1 ? "entry" : "entries"}
                 </p>
                 {viewMode === "cards" ? (
-                   <CardViewContent groupedLogs={filteredGroupedLogs} tasks={tasks} expandedLogs={expandedLogs} toggleExpand={toggleExpand} onLogClick={setSelectedLog} currentUser={currentUser} isMasterAdmin={isMasterAdmin} />
-                 ) : (
-                   <TableViewContent timeLogs={filteredLogs} tasks={tasks} onLogClick={setSelectedLog} currentUser={currentUser} isMasterAdmin={isMasterAdmin} />
-                 )}
-                </>
+                  <CardViewContent groupedLogs={filteredGroupedLogs} tasks={tasks} expandedLogs={expandedLogs} toggleExpand={toggleExpand} onLogClick={setSelectedLog} currentUser={currentUser} isMasterAdmin={isMasterAdmin} />
+                ) : (
+                  <TableViewContent timeLogs={filteredLogs} tasks={tasks} onLogClick={setSelectedLog} currentUser={currentUser} isMasterAdmin={isMasterAdmin} />
                 )}
-                </>
-                )}
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
 
-                </CardContent>
-                </Card>
+      {selectedLog && (
+        <TimerLogDetailModal
+          log={selectedLog}
+          onClose={() => setSelectedLog(null)}
+          currentUser={currentUser}
+          isMasterAdmin={isMasterAdmin}
+        />
+      )}
 
-                {selectedLog && (
-                <TimerLogDetailModal 
-                log={selectedLog} 
-                onClose={() => setSelectedLog(null)}
-                currentUser={currentUser}
-                isMasterAdmin={isMasterAdmin}
-                />
-                )}
-                </>
-                );
-                }
+      {showManualEntry && manualEntryTask && (
+        <ManualTimeEntryDialog
+          open={showManualEntry}
+          onClose={() => { setShowManualEntry(false); setManualEntryTask(null); }}
+          task={manualEntryTask}
+          project={project}
+          user={currentUser}
+          role={manualEntryTask.auto_assign_role || 'admin'}
+        />
+      )}
+    </>
+  );
+}
 
 function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLogClick, currentUser, isMasterAdmin }) {
+  // Group entries by task for clear visual separation
+  const byTask = {};
+  for (const [groupKey, logs] of Object.entries(groupedLogs)) {
+    const taskId = logs[0]?.task_id;
+    if (!byTask[taskId]) byTask[taskId] = [];
+    byTask[taskId].push([groupKey, logs]);
+  }
+  const taskIds = Object.keys(byTask);
+  const hasMultipleTasks = taskIds.length > 1;
+
   return (
-    <div className="space-y-3">
-      {Object.entries(groupedLogs).map(([groupKey, logs]) => {
-        const isExpanded = expandedLogs.has(groupKey);
-        const parentLog = logs[0];
-        const totalLoggedTime = logs.reduce((sum, log) => sum + computeLiveSeconds(log), 0);
-        const isMultiSession = logs.length > 1;
-        const colors = getStatusColor(parentLog.status);
-        const taskTitle = tasks.find(t => t.id === parentLog.task_id)?.title || parentLog.task_id?.slice(0, 8);
+    <div className="space-y-4">
+      {taskIds.map((taskId, taskIdx) => {
+        const taskTitle = tasks.find(t => t.id === taskId)?.title || taskId?.slice(0, 8);
+        const taskGroups = byTask[taskId];
+        const taskTotalSecs = taskGroups.reduce((sum, [, logs]) => sum + logs.reduce((s, l) => s + computeLiveSeconds(l), 0), 0);
 
         return (
-          <div key={groupKey}>
+          <div key={taskId}>
+            {/* Task group header when multiple tasks */}
+            {hasMultipleTasks && (
+              <>
+                {taskIdx > 0 && <div className="border-t my-2" />}
+                <div className="flex items-center justify-between mb-2 px-1">
+                  <p className="text-xs font-semibold text-muted-foreground truncate">{taskTitle}</p>
+                  <span className="text-xs font-mono text-muted-foreground">{formatDuration(taskTotalSecs)}</span>
+                </div>
+              </>
+            )}
+            <div className="space-y-3">
+              {taskGroups.map(([groupKey, logs]) => {
+      const isExpanded = expandedLogs.has(groupKey);
+      const parentLog = logs[0];
+      const totalLoggedTime = logs.reduce((sum, log) => sum + computeLiveSeconds(log), 0);
+      const isMultiSession = logs.length > 1;
+      const colors = getStatusColor(parentLog.status);
+      const entryTaskTitle = tasks.find(t => t.id === parentLog.task_id)?.title || parentLog.task_id?.slice(0, 8);
+
+      return (
+        <div key={groupKey}>
             <div
               onClick={() => {
                 if (isMultiSession) {
@@ -300,8 +411,8 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
                   {/* Task Context */}
                   <div className="mb-3 pb-3 border-b border-current border-opacity-10">
                     <p className="text-xs text-muted-foreground font-medium">Task</p>
-                    <p className="font-medium text-sm truncate">{taskTitle}</p>
-                    <p className="text-xs text-muted-foreground">Effort: <span className="font-semibold capitalize">{parentLog.role}</span></p>
+                    <p className="font-medium text-sm truncate">{entryTaskTitle}</p>
+                    <p className="text-xs text-muted-foreground">Effort: <span className="font-semibold capitalize">{parentLog.role?.replace(/_/g, ' ')}</span></p>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-2">
@@ -356,6 +467,10 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
                  ))}
                </div>
              )}
+        </div>
+      );
+    })}
+            </div>
           </div>
         );
       })}
@@ -397,7 +512,7 @@ function TableViewContent({ timeLogs, tasks, onLogClick, currentUser, isMasterAd
                 <TableCell className="text-xs">
                   <div>
                     <p className="font-medium truncate">{taskTitle}</p>
-                    <p className="text-muted-foreground text-[10px] capitalize">{log.role}</p>
+                    <p className="text-muted-foreground text-[10px] capitalize">{log.role?.replace(/_/g, ' ')}</p>
                   </div>
                 </TableCell>
                 <TableCell>

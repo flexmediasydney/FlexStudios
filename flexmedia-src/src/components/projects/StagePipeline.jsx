@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { PROJECT_STAGES } from "./projectStatuses";
 import { api } from "@/api/supabaseClient";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
+import { Check, AlertTriangle, Lock, ChevronDown, ChevronUp } from "lucide-react";
 
 function formatDuration(seconds) {
   if (seconds < 0) seconds = 0;
@@ -88,10 +89,49 @@ function computeSafeSeconds(timer) {
   return Math.max(0, Math.min(diff, 90 * 24 * 3600));
 }
 
-export default function StagePipeline({ project, onStatusChange, canEdit }) {
+/* ── Confirmation Dialog ──────────────────────────────────────────────── */
+function ConfirmStageDialog({ open, onConfirm, onCancel, targetLabel, currentLabel }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onCancel}>
+      <div
+        className="bg-card border border-border rounded-xl shadow-2xl p-5 max-w-sm w-full mx-4 animate-in fade-in zoom-in-95 duration-150"
+        onClick={e => e.stopPropagation()}
+      >
+        <p className="text-sm font-semibold text-foreground mb-1">Advance Project Stage?</p>
+        <p className="text-xs text-muted-foreground mb-4">
+          Move from <strong>{currentLabel}</strong> to <strong>{targetLabel}</strong>?
+          This will update the project status for all team members.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card hover:bg-muted transition-colors"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="px-3 py-1.5 text-xs font-medium rounded-md bg-[#1a73e8] hover:bg-[#1558b0] text-white transition-colors"
+            onClick={onConfirm}
+          >
+            Move to {targetLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function StagePipeline({ project, onStatusChange, canEdit, allTasksDone, projectTasks }) {
   // Real-time subscription — triggers a re-render instantly on any timer change
   const [stageTimers, setStageTimers] = useState([]);
   const [timerKey, setTimerKey] = useState(0);
+
+  // Confirmation dialog state for forward advancement
+  const [confirmTarget, setConfirmTarget] = useState(null);
+
+  // Compact mode for mobile
+  const [expanded, setExpanded] = useState(false);
 
   // BUG FIX (subscription audit): Was fetching ALL ProjectStageTimers across all
   // projects via .list(), then filtering client-side. For a system with many projects
@@ -158,6 +198,24 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
     }
   }, [project.status]);
 
+  // ── Delivery guard: compute task readiness for "Delivered" stage ───────────
+  const deliveryGuard = useMemo(() => {
+    const tasks = projectTasks || [];
+    const active = tasks.filter(t => !t.is_deleted && !t.is_archived);
+    if (active.length === 0) return { ready: true, reason: null, completedCount: 0, totalCount: 0 };
+    const completed = active.filter(t => t.is_completed);
+    const incomplete = active.length - completed.length;
+    if (incomplete > 0) {
+      return {
+        ready: false,
+        reason: `${incomplete} of ${active.length} task${active.length > 1 ? 's' : ''} still incomplete`,
+        completedCount: completed.length,
+        totalCount: active.length,
+      };
+    }
+    return { ready: true, reason: null, completedCount: completed.length, totalCount: active.length };
+  }, [projectTasks]);
+
   const handleStageClick = useCallback((stageValue) => {
     if (!canEdit) return;
     const s = sessionRef.current;
@@ -165,6 +223,29 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
     // in_revision is managed automatically by the revision system — block manual entry
     if (stageValue === 'in_revision') return;
 
+    // Delivery guard: block advancing to delivered if tasks are incomplete
+    if (stageValue === 'delivered' && !deliveryGuard.ready) {
+      toast.error(deliveryGuard.reason || 'Cannot deliver: tasks are incomplete');
+      return;
+    }
+
+    // Show confirmation dialog for forward advancement
+    const stageValues = PROJECT_STAGES.map(st => st.value);
+    const currentIdx = stageValues.indexOf(s.status);
+    const targetIdx = stageValues.indexOf(stageValue);
+    if (targetIdx > currentIdx) {
+      setConfirmTarget(stageValue);
+      return;
+    }
+
+    // Backward moves are handled by ProjectDetails (pendingBackwardStage dialog).
+    // Do NOT optimistically update session state here — let ProjectDetails confirm
+    // first, then the project.status prop change will sync back via useEffect.
+    onStatusChange(stageValue);
+  }, [canEdit, deliveryGuard, onStatusChange]);
+
+  const executeStageChange = useCallback((stageValue) => {
+    const s = sessionRef.current;
     const now = new Date().toISOString();
     const nowMs = Date.now();
 
@@ -191,11 +272,21 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
 
     forceRender();
     onStatusChange(stageValue);
-  }, [canEdit, onStatusChange, forceRender]);
+  }, [onStatusChange, forceRender]);
+
+  const handleConfirm = useCallback(() => {
+    if (confirmTarget) {
+      executeStageChange(confirmTarget);
+      setConfirmTarget(null);
+    }
+  }, [confirmTarget, executeStageChange]);
 
   // ── Derive time info ──────────────────────────────────────────────────────
   const s = sessionRef.current;
   const currentIndex = PROJECT_STAGES.findIndex(st => st.value === s.status);
+
+  const isArchived = project?.is_archived === true;
+  const isCancelled = project?.outcome === 'lost';
 
   // Close orphaned timers once via useEffect (not during render) to avoid
   // spamming the API on every re-render. Track which IDs we've already patched.
@@ -275,178 +366,356 @@ export default function StagePipeline({ project, onStatusChange, canEdit }) {
     };
   }
 
+  // ── Compact mode: determine which stages to show on mobile ────────────────
+  const visibleStagesCompact = useMemo(() => {
+    if (expanded) return PROJECT_STAGES.map((_, i) => i);
+    // Show: first completed that has time, current stage, next stage
+    const visible = new Set();
+    // Always show current
+    if (currentIndex >= 0) visible.add(currentIndex);
+    // Previous stage (most recent completed)
+    if (currentIndex > 0) visible.add(currentIndex - 1);
+    // Next stage
+    if (currentIndex < PROJECT_STAGES.length - 1) visible.add(currentIndex + 1);
+    return [...visible].sort((a, b) => a - b);
+  }, [currentIndex, expanded]);
+
+  const hiddenCount = PROJECT_STAGES.length - visibleStagesCompact.length;
+
+  // ── Current stage label for header ────────────────────────────────────────
+  const currentStageLabel = PROJECT_STAGES[currentIndex]?.label || project.status;
+  const currentTimeInfo = currentIndex >= 0 ? getStageTimeInfo(PROJECT_STAGES[currentIndex], currentIndex) : null;
+
   return (
     <TooltipProvider delayDuration={100}>
-      <div className="overflow-x-auto rounded-lg border border-border bg-card p-3 shadow-sm">
-        <p className="text-xs font-bold text-muted-foreground mb-3 uppercase tracking-wide">Project Stage Pipeline</p>
-        <div className="flex min-w-max gap-0">
-          {PROJECT_STAGES.map((stage, index) => {
-            const isCompleted = index < currentIndex;
-            const isCurrent = index === currentIndex;
-            const isFuture = index > currentIndex;
-            const timeInfo = getStageTimeInfo(stage, index);
-            const isFirst = index === 0;
-            const isLast = index === PROJECT_STAGES.length - 1;
+      {/* Confirmation dialog for forward advancement */}
+      <ConfirmStageDialog
+        open={!!confirmTarget}
+        onConfirm={handleConfirm}
+        onCancel={() => setConfirmTarget(null)}
+        targetLabel={PROJECT_STAGES.find(st => st.value === confirmTarget)?.label || confirmTarget}
+        currentLabel={PROJECT_STAGES[currentIndex]?.label || s.status}
+      />
 
-            const bgClass = isCurrent
-              ? "bg-[#1a73e8] text-white"
-              : isCompleted
-              ? "bg-[#34a853] text-white"
-              : timeInfo
-              ? "bg-[#c5cae9] text-[#3c4043]"
-              : "bg-[#e8eaed] text-[#5f6368]";
-
-            const hoverClass = canEdit
-              ? isCurrent ? "hover:bg-[#1558b0]"
-              : isCompleted ? "hover:bg-[#2d8f47]"
-              : timeInfo ? "hover:bg-[#aab0e0]"
-              : "hover:bg-[#dadce0]"
-              : "";
-
-            const clipPath = isFirst
-              ? "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%)"
-              : isLast
-              ? "polygon(10px 0, 100% 0, 100% 100%, 10px 100%, 0 50%)"
-              : "polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)";
-
-            const stageButton = (
+      <div className={cn(
+        "rounded-lg border bg-card shadow-sm",
+        isArchived && "border-muted opacity-70",
+        isCancelled && "border-red-200 dark:border-red-900/40"
+      )}>
+        {/* Header: stage label + live timer + mobile compact toggle */}
+        <div className="flex items-center justify-between px-3 pt-2.5 pb-1">
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Pipeline</p>
+            {(isArchived || isCancelled) && (
+              <span className={cn(
+                "text-[9px] font-bold uppercase px-1.5 py-0.5 rounded",
+                isArchived ? "bg-muted text-muted-foreground" : "bg-red-100 dark:bg-red-950/30 text-red-600 dark:text-red-400"
+              )}>
+                {isArchived ? "Archived" : "Cancelled"}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Current stage summary with live timer */}
+            {currentTimeInfo?.entryTime && (
+              <span className="text-[10px] text-muted-foreground font-medium hidden sm:inline-flex items-center gap-1">
+                In <span className="font-semibold text-foreground">{currentStageLabel}</span> for{" "}
+                <span className="font-mono tabular-nums text-foreground">
+                  <LiveTimer since={currentTimeInfo.entryTime} baseSeconds={currentTimeInfo.durationSeconds} compact={true} />
+                </span>
+              </span>
+            )}
+            {/* Mobile expand/collapse toggle */}
+            {hiddenCount > 0 && (
               <button
-                key={stage.value}
-                onClick={() => handleStageClick(stage.value)}
-                className={cn(
-                  "relative flex flex-col items-center justify-center h-12 transition-all duration-200 select-none outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary active:scale-95",
-                  isFirst ? "pl-4 pr-6 min-w-[90px]" : isLast ? "pl-6 pr-4 min-w-[90px]" : "px-5 min-w-[90px]",
-                  bgClass, hoverClass,
-                  canEdit ? "cursor-pointer" : "cursor-default opacity-90",
-                  isCurrent && "ring-2 ring-[#1a73e8]/30"
-                )}
-                style={{ clipPath, marginLeft: index === 0 ? 0 : "-2px" }}
-                disabled={!canEdit}
-                aria-label={`${stage.label} - ${isCompleted ? "completed" : isCurrent ? "current" : "future"}`}
+                onClick={() => setExpanded(v => !v)}
+                className="sm:hidden flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded border border-transparent hover:border-border"
               >
-                {isCurrent && <PulseDot />}
-
-                {timeInfo?.isReEntry && (
-                  <span className={cn(
-                    "absolute top-0.5 right-1.5 text-[8px] font-bold rounded-full px-1.5 py-0.5 leading-tight shadow-sm",
-                    isCurrent || isCompleted ? "bg-card/40 text-white backdrop-blur-sm" : "bg-[#3c4043]/30 text-[#3c4043]"
-                  )} title={`Visited ${timeInfo.visitCount} times`}>
-                    ×{timeInfo.visitCount}
-                  </span>
+                {expanded ? (
+                  <>Collapse <ChevronUp className="h-3 w-3" /></>
+                ) : (
+                  <>{hiddenCount} more <ChevronDown className="h-3 w-3" /></>
                 )}
-
-                <span className="text-[10px] font-bold leading-tight text-center whitespace-nowrap opacity-95 tracking-wide">
-                  {stage.label}
-                </span>
-
-                <span className="text-[11px] font-bold leading-tight mt-1 tabular-nums">
-                  {isCurrent && timeInfo?.entryTime ? (
-                    <LiveTimer since={timeInfo.entryTime} baseSeconds={timeInfo.durationSeconds} compact={false} />
-                  ) : timeInfo ? (
-                    formatDuration(timeInfo.durationSeconds)
-                  ) : (
-                    <span className="opacity-40 text-[10px]">—</span>
-                  )}
-                </span>
               </button>
-            );
+            )}
+          </div>
+        </div>
 
-            if (!timeInfo && isFuture) return stageButton;
+        {/* Stage chips */}
+        <div className="overflow-x-auto px-3 pb-3">
+          <div className="flex min-w-max gap-0">
+            {PROJECT_STAGES.map((stage, index) => {
+              const isCompleted = index < currentIndex;
+              const isCurrent = index === currentIndex;
+              const isFuture = index > currentIndex;
+              const timeInfo = getStageTimeInfo(stage, index);
+              const isFirst = index === 0;
+              const isLast = index === PROJECT_STAGES.length - 1;
+              const isDeliveredStage = stage.value === 'delivered';
+              const isRevisionStage = stage.value === 'in_revision';
 
-            const sortedVisits = timeInfo?.dbTimers
-              ? [...timeInfo.dbTimers].sort((a, b) => new Date(fixTimestamp(a.entry_time)) - new Date(fixTimestamp(b.entry_time)))
-              : [];
+              // Mobile compact: hide stages not in visible set
+              const isVisibleCompact = visibleStagesCompact.includes(index);
 
-            return (
-              <Tooltip key={stage.value}>
-                <TooltipTrigger asChild>{stageButton}</TooltipTrigger>
-                <TooltipContent side="bottom" className="p-0 overflow-hidden shadow-xl border-0 w-64">
-                  <div className="bg-[#202124] text-white rounded-lg overflow-hidden">
-                    <div className={cn(
-                      "px-4 py-2.5 flex items-center justify-between",
-                      isCurrent ? "bg-[#1a73e8]" : isCompleted ? "bg-[#34a853]" : "bg-[#5f6368]"
-                    )}>
-                      <p className="font-semibold text-sm">{stage.label}</p>
-                      {isCurrent ? (
-                        <span className="flex items-center gap-1 text-[10px] font-medium bg-card/20 rounded-full px-2 py-0.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-card animate-pulse" />
-                          LIVE
-                        </span>
-                      ) : timeInfo ? (
-                        <span className="text-[10px] font-medium bg-card/20 rounded-full px-2 py-0.5">
-                          {timeInfo.visitCount}× visited
-                        </span>
-                      ) : null}
-                    </div>
+              // Delivery guard badge: show warning on Delivered stage if tasks incomplete
+              const showDeliveryWarning = isDeliveredStage && isFuture && !deliveryGuard.ready && deliveryGuard.totalCount > 0;
 
-                    {timeInfo && (
-                      <div className="px-4 py-3 space-y-3 text-xs">
-                        {sortedVisits.length > 1 && (
-                          <div className="space-y-1.5">
-                            <p className="text-[10px] uppercase tracking-wider text-white/40 font-semibold">Visit History</p>
-                            {sortedVisits.map((visit, i) => (
-                              <div key={visit.id || i} className="flex items-center justify-between bg-card/5 rounded px-2 py-1">
-                                <div className="text-white/60">
-                                  <span className="text-white/40 text-[10px]">#{i + 1} </span>
-                                  <span>{new Date(fixTimestamp(visit.entry_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
-                                   {visit.exit_time && (
-                                     <span className="text-white/40"> → {new Date(fixTimestamp(visit.exit_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
-                                   )}
-                                  {!visit.exit_time && isCurrent && (
-                                    <span className="text-blue-300"> → now</span>
-                                  )}
-                                </div>
-                                <span className="font-mono font-bold text-white tabular-nums">
-                                  {!visit.exit_time && isCurrent
-                                    ? <LiveTimer since={visit.entry_time} baseSeconds={visit.duration_seconds || 0} />
-                                    : formatDuration(visit.duration_seconds || 0)}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+              const bgClass = isArchived
+                ? "bg-muted text-muted-foreground"
+                : isCancelled
+                ? isCurrent ? "bg-red-500 text-white" : isCompleted ? "bg-red-200 text-red-800 dark:bg-red-900/30 dark:text-red-300" : "bg-muted text-muted-foreground"
+                : isCurrent
+                ? "bg-[#1a73e8] text-white"
+                : isCompleted
+                ? "bg-[#34a853] text-white"
+                : timeInfo
+                ? "bg-[#c5cae9] text-[#3c4043]"
+                : "bg-[#e8eaed] text-[#5f6368]";
 
-                        {sortedVisits.length === 1 && (
-                          <div className="space-y-1.5 text-white/80">
-                            <div className="flex justify-between">
-                              <span className="text-white/50">Entered</span>
-                              <span className="font-medium">{new Date(fixTimestamp(sortedVisits[0].entry_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+              const hoverClass = canEdit && !isArchived
+                ? isCurrent ? "hover:bg-[#1558b0]"
+                : isCompleted ? "hover:bg-[#2d8f47]"
+                : timeInfo ? "hover:bg-[#aab0e0]"
+                : "hover:bg-[#dadce0]"
+                : "";
+
+              const clipPath = isFirst
+                ? "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%)"
+                : isLast
+                ? "polygon(10px 0, 100% 0, 100% 100%, 10px 100%, 0 50%)"
+                : "polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%)";
+
+              const stageButton = (
+                <button
+                  key={stage.value}
+                  onClick={() => handleStageClick(stage.value)}
+                  className={cn(
+                    "relative flex flex-col items-center justify-center h-12 transition-all duration-200 select-none outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary",
+                    isFirst ? "pl-4 pr-6 min-w-[90px]" : isLast ? "pl-6 pr-4 min-w-[90px]" : "px-5 min-w-[90px]",
+                    bgClass, hoverClass,
+                    canEdit && !isArchived ? "cursor-pointer active:scale-95" : "cursor-default opacity-90",
+                    isCurrent && !isArchived && !isCancelled && "ring-2 ring-[#1a73e8]/30",
+                    isFuture && !timeInfo && !isArchived && "opacity-60",
+                    // Mobile compact visibility
+                    !isVisibleCompact && "hidden sm:flex"
+                  )}
+                  style={{ clipPath, marginLeft: index === 0 ? 0 : "-2px" }}
+                  disabled={!canEdit || isArchived}
+                  aria-label={`${stage.label} - ${isCompleted ? "completed" : isCurrent ? "current" : "future"}${showDeliveryWarning ? " - tasks incomplete" : ""}`}
+                >
+                  {/* Active stage pulse indicator */}
+                  {isCurrent && !isArchived && !isCancelled && <PulseDot />}
+
+                  {/* Completed stage checkmark */}
+                  {isCompleted && !isArchived && (
+                    <span className="absolute top-0.5 left-1.5">
+                      <Check className="h-3 w-3 text-white/80" strokeWidth={3} />
+                    </span>
+                  )}
+
+                  {/* Re-entry visit count badge */}
+                  {timeInfo?.isReEntry && (
+                    <span className={cn(
+                      "absolute top-0.5 right-1.5 text-[8px] font-bold rounded-full px-1.5 py-0.5 leading-tight shadow-sm",
+                      isCurrent || isCompleted ? "bg-card/40 text-white backdrop-blur-sm" : "bg-[#3c4043]/30 text-[#3c4043]"
+                    )} title={`Visited ${timeInfo.visitCount} times`}>
+                      x{timeInfo.visitCount}
+                    </span>
+                  )}
+
+                  {/* Delivery guard warning badge */}
+                  {showDeliveryWarning && (
+                    <span className="absolute -top-1 -right-1 z-10 flex items-center justify-center">
+                      <AlertTriangle className="h-3.5 w-3.5 text-amber-500 drop-shadow-sm" />
+                    </span>
+                  )}
+
+                  <span className="text-[10px] font-bold leading-tight text-center whitespace-nowrap opacity-95 tracking-wide">
+                    {stage.label}
+                  </span>
+
+                  <span className="text-[11px] font-bold leading-tight mt-1 tabular-nums">
+                    {isCurrent && timeInfo?.entryTime ? (
+                      <LiveTimer since={timeInfo.entryTime} baseSeconds={timeInfo.durationSeconds} compact={false} />
+                    ) : timeInfo ? (
+                      formatDuration(timeInfo.durationSeconds)
+                    ) : (
+                      <span className="opacity-40 text-[10px]">--</span>
+                    )}
+                  </span>
+                </button>
+              );
+
+              // Non-editable tooltip for locked stages
+              if (!canEdit && isFuture) {
+                return (
+                  <Tooltip key={stage.value}>
+                    <TooltipTrigger asChild>{stageButton}</TooltipTrigger>
+                    <TooltipContent side="bottom" className="text-xs max-w-[200px]">
+                      <div className="flex items-center gap-1.5">
+                        <Lock className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                        <span>You need edit permissions to advance the project stage.</span>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              }
+
+              // Revision stage tooltip (always blocked for manual entry)
+              if (isRevisionStage && isFuture) {
+                return (
+                  <Tooltip key={stage.value}>
+                    <TooltipTrigger asChild>{stageButton}</TooltipTrigger>
+                    <TooltipContent side="bottom" className="text-xs max-w-[220px]">
+                      <span>In Revision is set automatically when a revision is created. It cannot be set manually.</span>
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              }
+
+              // Delivery guard tooltip on Delivered stage
+              if (showDeliveryWarning) {
+                return (
+                  <Tooltip key={stage.value}>
+                    <TooltipTrigger asChild>{stageButton}</TooltipTrigger>
+                    <TooltipContent side="bottom" className="p-0 overflow-hidden shadow-xl border-0 w-64">
+                      <div className="bg-[#202124] text-white rounded-lg overflow-hidden">
+                        <div className="px-4 py-2.5 bg-amber-600 flex items-center gap-2">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          <p className="font-semibold text-sm">Not Ready to Deliver</p>
+                        </div>
+                        <div className="px-4 py-3 text-xs space-y-2">
+                          <p className="text-white/80">{deliveryGuard.reason}</p>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-amber-500 rounded-full transition-all"
+                                style={{ width: `${deliveryGuard.totalCount > 0 ? (deliveryGuard.completedCount / deliveryGuard.totalCount) * 100 : 0}%` }}
+                              />
                             </div>
-                            {sortedVisits[0].exit_time ? (
-                              <div className="flex justify-between">
-                                <span className="text-white/50">Exited</span>
-                                <span className="font-medium">{new Date(fixTimestamp(sortedVisits[0].exit_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
-                              </div>
-                            ) : isCurrent ? (
-                              <div className="flex justify-between">
-                                <span className="text-white/50">Status</span>
-                                <span className="text-blue-300 font-medium">Still active</span>
-                              </div>
-                            ) : null}
+                            <span className="text-white/50 text-[10px] font-mono">
+                              {deliveryGuard.completedCount}/{deliveryGuard.totalCount}
+                            </span>
                           </div>
-                        )}
-
-                        <div className="flex justify-between items-center pt-2 border-t border-white/10">
-                          <span className="font-semibold text-white text-[11px]">
-                            {isCurrent ? "⏱ Time in stage" : "Total duration"}
-                          </span>
-                          <span className="font-bold text-white font-mono tabular-nums text-sm">
-                            {isCurrent && timeInfo.entryTime
-                              ? <LiveTimer since={timeInfo.entryTime} baseSeconds={timeInfo.durationSeconds} />
-                              : formatDuration(timeInfo.durationSeconds)}
-                          </span>
                         </div>
                       </div>
-                    )}
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              }
 
-                    {!timeInfo && (
-                      <div className="px-4 py-3 text-xs text-white/40 text-center">Not yet reached</div>
-                    )}
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            );
-          })}
+              // Future stages with no time info — no detailed tooltip needed
+              if (!timeInfo && isFuture) return stageButton;
+
+              const sortedVisits = timeInfo?.dbTimers
+                ? [...timeInfo.dbTimers].sort((a, b) => new Date(fixTimestamp(a.entry_time)) - new Date(fixTimestamp(b.entry_time)))
+                : [];
+
+              return (
+                <Tooltip key={stage.value}>
+                  <TooltipTrigger asChild>{stageButton}</TooltipTrigger>
+                  <TooltipContent side="bottom" className="p-0 overflow-hidden shadow-xl border-0 w-64">
+                    <div className="bg-[#202124] text-white rounded-lg overflow-hidden">
+                      <div className={cn(
+                        "px-4 py-2.5 flex items-center justify-between",
+                        isCurrent ? "bg-[#1a73e8]" : isCompleted ? "bg-[#34a853]" : "bg-[#5f6368]"
+                      )}>
+                        <p className="font-semibold text-sm">{stage.label}</p>
+                        {isCurrent ? (
+                          <span className="flex items-center gap-1 text-[10px] font-medium bg-card/20 rounded-full px-2 py-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-card animate-pulse" />
+                            LIVE
+                          </span>
+                        ) : timeInfo ? (
+                          <span className="text-[10px] font-medium bg-card/20 rounded-full px-2 py-0.5">
+                            {timeInfo.visitCount}x visited
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {timeInfo && (
+                        <div className="px-4 py-3 space-y-3 text-xs">
+                          {sortedVisits.length > 1 && (
+                            <div className="space-y-1.5">
+                              <p className="text-[10px] uppercase tracking-wider text-white/40 font-semibold">Visit History</p>
+                              {sortedVisits.map((visit, i) => (
+                                <div key={visit.id || i} className="flex items-center justify-between bg-card/5 rounded px-2 py-1">
+                                  <div className="text-white/60">
+                                    <span className="text-white/40 text-[10px]">#{i + 1} </span>
+                                    <span>{new Date(fixTimestamp(visit.entry_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                                     {visit.exit_time && (
+                                       <span className="text-white/40"> &rarr; {new Date(fixTimestamp(visit.exit_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                                     )}
+                                    {!visit.exit_time && isCurrent && (
+                                      <span className="text-blue-300"> &rarr; now</span>
+                                    )}
+                                  </div>
+                                  <span className="font-mono font-bold text-white tabular-nums">
+                                    {!visit.exit_time && isCurrent
+                                      ? <LiveTimer since={visit.entry_time} baseSeconds={visit.duration_seconds || 0} />
+                                      : formatDuration(visit.duration_seconds || 0)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {sortedVisits.length === 1 && (
+                            <div className="space-y-1.5 text-white/80">
+                              <div className="flex justify-between">
+                                <span className="text-white/50">Entered</span>
+                                <span className="font-medium">{new Date(fixTimestamp(sortedVisits[0].entry_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                              </div>
+                              {sortedVisits[0].exit_time ? (
+                                <div className="flex justify-between">
+                                  <span className="text-white/50">Exited</span>
+                                  <span className="font-medium">{new Date(fixTimestamp(sortedVisits[0].exit_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                                </div>
+                              ) : isCurrent ? (
+                                <div className="flex justify-between">
+                                  <span className="text-white/50">Status</span>
+                                  <span className="text-blue-300 font-medium">Still active</span>
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
+
+                          <div className="flex justify-between items-center pt-2 border-t border-white/10">
+                            <span className="font-semibold text-white text-[11px]">
+                              {isCurrent ? "Time in stage" : "Total duration"}
+                            </span>
+                            <span className="font-bold text-white font-mono tabular-nums text-sm">
+                              {isCurrent && timeInfo.entryTime
+                                ? <LiveTimer since={timeInfo.entryTime} baseSeconds={timeInfo.durationSeconds} />
+                                : formatDuration(timeInfo.durationSeconds)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {!timeInfo && (
+                        <div className="px-4 py-3 text-xs text-white/40 text-center">Not yet reached</div>
+                      )}
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </div>
+
+          {/* Mobile: Show All / Collapse toggle below pipeline */}
+          {hiddenCount > 0 && (
+            <button
+              onClick={() => setExpanded(v => !v)}
+              className="sm:hidden w-full mt-1.5 flex items-center justify-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors py-1 rounded border border-dashed border-border/50 hover:border-border"
+            >
+              {expanded ? (
+                <>Show less <ChevronUp className="h-3 w-3" /></>
+              ) : (
+                <>Show all {PROJECT_STAGES.length} stages <ChevronDown className="h-3 w-3" /></>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </TooltipProvider>

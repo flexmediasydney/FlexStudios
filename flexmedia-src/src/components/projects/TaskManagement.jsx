@@ -12,7 +12,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { Plus, CalendarIcon, CheckCheck } from "lucide-react";
 import { scheduleDeadlineSync } from "./taskDeadlineSync";
-import { format, differenceInSeconds } from "date-fns";
+import { differenceInSeconds } from "date-fns";
 import { wallClockToUTC } from "@/components/lib/deadlinePresets";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import TaskListView from "./TaskListView";
@@ -83,9 +83,8 @@ export function CountdownTimer({ dueDate, compact = false, thresholds }) {
   const days = Math.floor(absSeconds / 86400);
   const hours = Math.floor((absSeconds % 86400) / 3600);
   const minutes = Math.floor((absSeconds % 3600) / 60);
-  const secs = absSeconds % 60;
 
-  // Always show all components: xD XXh XXm XXs
+  // Always show all components: xD XXh XXm
   const totalHours = absSeconds / 3600;
 
   let text, color;
@@ -158,6 +157,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
    const [newTask, setNewTask] = useState({ title: "", description: "", task_type: "back_office", assigned_to: "", assigned_to_name: "", due_date: null });
    const [sortBy, setSortBy] = useState("workflow");
    const [deleteConfirm, setDeleteConfirm] = useState(null);
+   // Optimistic completion state: map of taskId -> { is_completed, completed_at }
+   const [optimisticCompletions, setOptimisticCompletions] = useState({});
    const { data: user = null } = useQuery({
      queryKey: ["currentUser"],
      queryFn: () => api.auth.me()
@@ -196,7 +197,14 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     500,
     projectId ? (t) => t.project_id === projectId && !t.is_deleted : null
   );
-  const tasks = allTasksRaw;
+  // Apply optimistic completion overrides so the UI updates instantly on toggle
+  const tasks = React.useMemo(() => {
+    if (Object.keys(optimisticCompletions).length === 0) return allTasksRaw;
+    return allTasksRaw.map(t => {
+      const opt = optimisticCompletions[t.id];
+      return opt ? { ...t, is_completed: opt.is_completed, completed_at: opt.completed_at } : t;
+    });
+  }, [allTasksRaw, optimisticCompletions]);
 
   const { data: revisions = [] } = useEntityList(
     projectId ? "ProjectRevision" : null,
@@ -221,6 +229,18 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, [projectId, queryClient]);
+
+  // Real-time task subscription: ensures external task updates (e.g. timer completion,
+  // stage-change auto-completion) trigger a re-render without waiting for polling.
+  useEffect(() => {
+    if (!projectId) return;
+    const unsubscribe = api.entities.ProjectTask.subscribe((event) => {
+      if (event?.data?.project_id === projectId) {
+        refetchEntityList("ProjectTask");
+      }
+    });
+    return typeof unsubscribe === 'function' ? () => unsubscribe() : undefined;
+  }, [projectId]);
 
   const { data: taskChatCounts = {} } = useQuery({
     queryKey: ["taskChatCounts", projectId],
@@ -300,7 +320,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     return () => { mounted = false; };
   }, [projectId, taskAssigneeFingerprint, users, teams]);
 
-  const UPLOADED_STAGES_FOR_CREATE = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
+  const UPLOADED_STAGES = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
 
   const createMutation = useMutation({
     mutationFn: (data) => {
@@ -358,7 +378,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       }).catch(() => {});
 
       // Info toast for onsite tasks created after upload
-      if (variables.task_type === 'onsite' && UPLOADED_STAGES_FOR_CREATE.includes(project?.status)) {
+      if (variables.task_type === 'onsite' && UPLOADED_STAGES.includes(project?.status)) {
         toast.info("Onsite task created after upload — remember to log effort manually", { duration: 4000 });
       } else {
         toast.success("Task added");
@@ -515,8 +535,6 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     onError: (err) => { setDeleteConfirm(null); toast.error(err?.message || "Failed to delete task"); },
   });
 
-  const UPLOADED_STAGES = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
-
   // Race condition fix: guard against double-click while toggleComplete is in flight
   const togglingRef = React.useRef(new Set());
 
@@ -545,6 +563,11 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     // Race condition fix: capture the value at call time to prevent stale closure reads
     const wasCompleted = task.is_completed;
     togglingRef.current.add(task.id);
+
+    // Optimistic update: flip completion state immediately for responsive UI
+    const newCompleted = !wasCompleted;
+    const newCompletedAt = newCompleted ? new Date().toISOString() : null;
+    setOptimisticCompletions(prev => ({ ...prev, [task.id]: { is_completed: newCompleted, completed_at: newCompletedAt } }));
 
     try {
       await api.entities.ProjectTask.update(task.id, {
@@ -599,10 +622,36 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       refetchEntityList("ProjectTask");
       invalidateProjectCaches(queryClient, { tasks: true, effort: true });
       scheduleDeadlineSync(projectId, 'task_completed');
-      toast.success(wasCompleted ? "Task re-opened" : "Task completed");
+
+      // Dependency unblocking feedback: count how many tasks this completion unblocks
+      if (!wasCompleted && Array.isArray(tasks)) {
+        const unblocked = tasks.filter(t =>
+          !t.is_completed &&
+          Array.isArray(t.depends_on_task_ids) &&
+          t.depends_on_task_ids.includes(task.id) &&
+          // Only count tasks whose SOLE remaining incomplete dependency was this task
+          t.depends_on_task_ids.every(depId =>
+            depId === task.id || tasks.find(d => d.id === depId)?.is_completed
+          )
+        );
+        if (unblocked.length > 0) {
+          toast.success(`Task completed — ${unblocked.length} task${unblocked.length > 1 ? 's' : ''} unblocked`);
+        } else {
+          toast.success("Task completed");
+        }
+      } else {
+        toast.success(wasCompleted ? "Task re-opened" : "Task completed");
+      }
     } catch (err) {
       toast.error(err.message || "Failed to update task");
     } finally {
+      // Clear optimistic state — real data from refetch takes over on success;
+      // on error this reverts the UI to the server-true state
+      setOptimisticCompletions(prev => {
+        const next = { ...prev };
+        delete next[task.id];
+        return next;
+      });
       togglingRef.current.delete(task.id);
     }
   };
@@ -613,8 +662,6 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     const dependents = tasks.filter(t => Array.isArray(t?.depends_on_task_ids) && t.depends_on_task_ids.includes(id));
     setDeleteConfirm({ id, title: task?.title || '', dependentNames: dependents.map(t => t?.title || 'Untitled').filter(Boolean) });
   };
-
-
 
   const completedCount = tasks.filter(t => t.is_completed).length;
   const progress = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
@@ -658,17 +705,32 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                 onClick={async () => {
                   const incomplete = tasks.filter(t => !t.is_completed && !t.is_locked && !isBlocked(t));
                   if (incomplete.length === 0) { toast.info("No completable tasks — all remaining tasks are blocked or locked"); return; }
+                  const progressToastId = toast.loading(`Completing ${incomplete.length} task${incomplete.length !== 1 ? 's' : ''}...`);
+                  // Optimistic: mark all as completed immediately
+                  setOptimisticCompletions(prev => {
+                    const next = { ...prev };
+                    const now = new Date().toISOString();
+                    incomplete.forEach(t => { next[t.id] = { is_completed: true, completed_at: now }; });
+                    return next;
+                  });
                   // Race condition fix: use Promise.allSettled to handle partial failures gracefully
                   const results = await Promise.allSettled(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: new Date().toISOString() })));
                   const succeeded = results.filter(r => r.status === 'fulfilled').length;
                   const failed = results.filter(r => r.status === 'rejected').length;
+                  // Clear optimistic state now that real data is arriving
+                  setOptimisticCompletions(prev => {
+                    const next = { ...prev };
+                    incomplete.forEach(t => { delete next[t.id]; });
+                    return next;
+                  });
                   queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
                   refetchEntityList("ProjectTask");
                   invalidateProjectCaches(queryClient, { tasks: true, effort: true });
+                  toast.dismiss(progressToastId);
                   if (failed > 0) {
                     toast.warning(`Completed ${succeeded} task${succeeded !== 1 ? 's' : ''}, ${failed} failed`);
                   } else {
-                    toast.success(`Completed ${succeeded} task${succeeded !== 1 ? 's' : ''}`);
+                    toast.success(`${succeeded} task${succeeded !== 1 ? 's' : ''} completed`);
                   }
                   logActivity('tasks_completed', `Marked ${succeeded} of ${incomplete.length} remaining tasks complete`);
                   scheduleDeadlineSync(projectId, 'bulk_complete');
@@ -906,8 +968,6 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     </div>
   );
 }
-
-
 
 function AssigneeSelector({ value, users, teams, onChange }) {
   return (

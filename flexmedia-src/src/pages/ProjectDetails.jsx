@@ -8,7 +8,7 @@ import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { 
-  ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Phone, Mail, 
+  ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Phone,
   ExternalLink, Edit, Trash2, CheckCircle, Building,
   Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Copy, Camera
 } from "lucide-react";
@@ -32,7 +32,6 @@ import ProjectActivityHub from "@/components/projects/ProjectActivityHub";
 import AgencyBrandingSummary from "@/components/projects/AgencyBrandingSummary";
 import ProjectStaffBar from "@/components/projects/ProjectStaffBar";
 import ProjectPresenceIndicator from "@/components/projects/ProjectPresenceIndicator";
-import EmailComposeDialog from "@/components/email/EmailComposeDialog";
 import ProjectPricingTable from "@/components/projects/ProjectPricingTable";
 import ProjectDurationTimer from "@/components/projects/ProjectDurationTimer";
 import ProjectValidationBanner from "@/components/projects/ProjectValidationBanner";
@@ -159,7 +158,6 @@ export default function ProjectDetails() {
    const { canSeePricing, canEditProject, canAccessProject, isMasterAdmin, isEmployee, user: permUser } = usePermissions();
    const [showEditForm, setShowEditForm] = useState(false);
    const [showAgentSelector, setShowAgentSelector] = useState(false);
-   const [showEmailCompose, setShowEmailCompose] = useState(false);
    const [showProjectChat, setShowProjectChat] = useState(false);
    const [errorMessage, setErrorMessage] = useState(null);
    const [dismissedDeliveryPrompt, setDismissedDeliveryPrompt] = useState(false);
@@ -801,14 +799,14 @@ export default function ProjectDetails() {
 
   if (isLoading) {
     return (
-      <div className="p-6 lg:p-8 space-y-6">
+      <div className="p-4 lg:p-8 space-y-4">
         <Skeleton className="h-8 w-48" />
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-6">
+        <Skeleton className="h-12 w-full" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2">
             <Skeleton className="h-48 w-full" />
-            <Skeleton className="h-32 w-full" />
           </div>
-          <Skeleton className="h-64 w-full" />
+          <Skeleton className="h-48 w-full" />
         </div>
       </div>
     );
@@ -1143,8 +1141,6 @@ export default function ProjectDetails() {
             updateStatusMutation.mutate(newStatus);
           }}
           onOpenChat={user ? () => setShowProjectChat(true) : null}
-          isMasterAdmin={isMasterAdmin}
-          isEmployee={isEmployee}
         />
       </ErrorBoundary>
 
@@ -1174,6 +1170,8 @@ export default function ProjectDetails() {
                 updateStatusMutation.mutate(newStatus);
               }}
               canEdit={memoizedCanEdit}
+              allTasksDone={allTasksDone}
+              projectTasks={projectTasks}
             /></ErrorBoundary>
           )}
 
@@ -1472,7 +1470,7 @@ export default function ProjectDetails() {
         </div>
 
         {/* Sidebar */}
-        <div className="space-y-4 lg:space-y-6">
+        <div className="space-y-3">
           {/* Time Tracking Summary */}
           <ErrorBoundary><TimeTrackingSummaryCard projectId={projectId} project={project} /></ErrorBoundary>
 
@@ -1558,29 +1556,6 @@ export default function ProjectDetails() {
 
           {/* Agency Branding Summary */}
           <AgencyBrandingSummary agency={agency} />
-
-          {/* Quick Actions sidebar — email compose + additional actions */}
-          <Card className="hidden lg:block">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base lg:text-lg">Actions</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0 space-y-2">
-              {user && (
-                <Button
-                  onClick={() => setShowProjectChat(true)}
-                  className="w-full hover:shadow-md transition-shadow"
-                  title="Open chat for this project"
-                >
-                  💬 Chat
-                </Button>
-              )}
-              {memoizedCanEdit && (
-                <Button className="w-full" variant="outline" onClick={() => setShowEmailCompose(true)} title="Send email for this project">
-                  📧 Send Email
-                </Button>
-              )}
-            </CardContent>
-          </Card>
         </div>
       </div>
 
@@ -1590,15 +1565,6 @@ export default function ProjectDetails() {
         onClose={() => setShowEditForm(false)}
         onSave={() => setShowEditForm(false)}
       />
-
-      {/* Email Composer */}
-      {showEmailCompose && (
-        <EmailComposeDialog
-          onClose={() => setShowEmailCompose(false)}
-          defaultProjectId={projectId}
-          defaultProjectTitle={project?.title}
-        />
-      )}
 
       {/* Agent Selector Dialog */}
        {showAgentSelector && (

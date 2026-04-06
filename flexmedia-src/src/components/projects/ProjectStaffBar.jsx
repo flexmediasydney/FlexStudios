@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useEntityList, useEntityData } from "@/components/hooks/useEntityData";
-import { User, Users, ChevronDown, AlertCircle, Camera, Video, ImageIcon, Film, PenTool, Compass, Crown } from "lucide-react";
+import { User, Users, ChevronDown, ChevronRight, AlertCircle, Camera, Video, ImageIcon, Film, PenTool, Compass, Crown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createNotification } from "@/components/notifications/createNotification";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -62,8 +62,29 @@ export function isRoleRequired(role, project, allProducts, allPackages) {
 }
 
 
+/**
+ * NotRequiredBadge — static, non-editable pill for roles set to "not_required"
+ */
+function NotRequiredBadge({ roleKey, label }) {
+  const RoleIcon = ROLE_ICONS[roleKey] || User;
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs bg-muted/50 text-muted-foreground border border-transparent cursor-default select-none">
+            <RoleIcon className="h-3 w-3 opacity-50" />
+            <span className="font-medium opacity-70">{label}</span>
+            <span className="text-[10px] italic opacity-50">N/R</span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent>{label}: Not required</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 
-function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, disabledLabel, users, teams }) {
+
+function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, disabledLabel, users, teams, isSaving }) {
   const [open, setOpen] = useState(false);
 
   const idKey = `${roleKey}_id`;
@@ -130,11 +151,12 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
 
   const isNotRequired = currentId === "not_required";
   const isSet = !!currentId && !isNotRequired;
+  const isLoading = mutation.isPending || isSaving;
 
   const RoleIcon = ROLE_ICONS[roleKey] || User;
   const roleColor = ROLE_COLORS[roleKey] || { bg: "bg-muted", text: "text-muted-foreground", badge: "bg-muted-foreground" };
 
-  // If videographer is not required, show a static "Not required" pill
+  // If the role is disabled (not needed for this project's products), show static pill
   if (disabled) {
     return (
       <TooltipProvider>
@@ -160,23 +182,35 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
     );
   }
 
+  // If the role value is explicitly "not_required", render as a subtle badge (not editable field)
+  if (isNotRequired && !canEdit) {
+    return <NotRequiredBadge roleKey={roleKey} label={label} />;
+  }
+
   return (
      <Popover open={open && canEdit} onOpenChange={(v) => canEdit && setOpen(v)}>
        <PopoverTrigger asChild>
          <button
-           disabled={!canEdit}
+           disabled={!canEdit || isLoading}
            className={cn(
-             "flex items-center gap-2.5 px-3 py-2 rounded-lg border text-sm font-medium transition-all outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary",
+             "relative flex items-center gap-2.5 px-3 py-2 rounded-lg border text-sm font-medium transition-all outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary",
              isSet
                ? "bg-card border-border text-foreground hover:border-primary/50 hover:shadow-sm"
                : isNotRequired
                ? "bg-muted/40 border-border text-muted-foreground hover:border-muted-foreground/50"
                : "bg-amber-50 border-amber-300 text-amber-700 hover:border-amber-400",
-             !canEdit && "cursor-default opacity-80"
+             !canEdit && "cursor-default opacity-80",
+             isLoading && "opacity-70 pointer-events-none"
            )}
            title={canEdit ? `Click to assign ${label}` : "You don't have permission to edit"}
            aria-label={`${label}: ${isSet ? currentName : isNotRequired ? "Not required" : "Not assigned"}`}
          >
+          {/* Loading overlay */}
+          {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/60 z-10">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
           <div className="relative">
             <Avatar className={cn("h-8 w-8", isSet ? "" : "opacity-60")}>
               <AvatarFallback className={cn(
@@ -200,13 +234,25 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
               <RoleIcon className="h-2.5 w-2.5 text-white" />
             </span>
           </div>
-          <div className="text-left">
+          <div className="text-left min-w-0">
             <p className="text-[10px] text-muted-foreground leading-none mb-0.5 uppercase tracking-wider font-medium">{label}</p>
-            <p className={cn("leading-none text-sm", isSet ? "text-foreground font-medium" : isNotRequired ? "text-muted-foreground italic text-xs" : "text-amber-600 italic text-xs")}>
-              {isSet ? currentName : isNotRequired ? "Not required" : "Not assigned"}
-            </p>
+            <div className="flex items-center gap-1 min-w-0">
+              <p className={cn(
+                "leading-none text-sm truncate",
+                isSet ? "text-foreground font-medium" : isNotRequired ? "text-muted-foreground italic text-xs" : "text-amber-600 italic text-xs"
+              )}>
+                {isSet ? currentName : isNotRequired ? "Not required" : "Not assigned"}
+              </p>
+              {/* Team badge for visual distinction */}
+              {isSet && currentType === "team" && (
+                <span className="inline-flex items-center gap-0.5 px-1 py-px rounded text-[9px] font-semibold uppercase tracking-wider bg-indigo-100 text-indigo-600 border border-indigo-200 flex-shrink-0">
+                  <Users className="h-2 w-2" />
+                  Team
+                </span>
+              )}
+            </div>
           </div>
-          {canEdit && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground ml-1 flex-shrink-0" />}
+          {canEdit && !isLoading && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground ml-1 flex-shrink-0" />}
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-2" align="start">
@@ -240,7 +286,11 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
                   )}
                   onClick={() => select(u.id, u.full_name, "user")}
                 >
-                  <User className="h-3.5 w-3.5 flex-shrink-0" />
+                  <Avatar className="h-5 w-5 flex-shrink-0">
+                    <AvatarFallback className="text-[8px] bg-muted text-muted-foreground font-semibold">
+                      {getInitials(u.full_name)}
+                    </AvatarFallback>
+                  </Avatar>
                   {u.full_name}
                 </button>
               ))}
@@ -258,8 +308,11 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
                   )}
                   onClick={() => select(t.id, t.name, "team")}
                 >
-                  <Users className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-indigo-100 text-indigo-600 flex-shrink-0">
+                    <Users className="h-3 w-3" />
+                  </span>
                   {t.name}
+                  <span className="ml-auto text-[9px] font-semibold uppercase tracking-wider text-indigo-500 bg-indigo-50 px-1 py-px rounded">Team</span>
                 </button>
               ))}
             </>
@@ -270,13 +323,31 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
   );
 }
 
-export default function ProjectStaffBar({ project, canEdit }) {
+export default function ProjectStaffBar({ project, canEdit, onProjectUpdate }) {
    const { data: liveProject } = useEntityData("Project", project?.id);
    const { data: allProducts = [] } = useEntityList("Product");
    const { data: allPackages = [] } = useEntityList("Package");
    const { data: users = [] } = useEntityList("User");
    const { data: teams = [] } = useEntityList("InternalTeam");
    const { mappings } = useRoleMappings();
+   const [showAllRoles, setShowAllRoles] = useState(false);
+
+   // Real-time subscription: when roles are changed via applyProjectRoleDefaults
+   // (edge function), trigger parent refresh so the entire project view stays in sync.
+   useEffect(() => {
+     if (!project?.id) return;
+     let mounted = true;
+     const unsub = api.entities.Project.subscribe((event) => {
+       if (!mounted) return;
+       if (event.id === project.id || event.data?.id === project.id) {
+         onProjectUpdate?.();
+       }
+     });
+     return () => {
+       mounted = false;
+       if (typeof unsub === 'function') unsub();
+     };
+   }, [project?.id, onProjectUpdate]);
 
    if (!project) return null;
 
@@ -285,31 +356,97 @@ export default function ProjectStaffBar({ project, canEdit }) {
    // Legacy key mapping for photographer/videographer
    const legacyKeys = { photographer: "onsite_staff_1", videographer: "onsite_staff_2" };
 
+   // Partition roles into required vs irrelevant for this project's products
+   const requiredRoles = [];
+   const irrelevantRoles = [];
+
+   for (const mapping of mappings) {
+     const isNeeded = isRoleRequiredForProject(mapping, displayProject, allProducts, allPackages);
+     if (isNeeded) {
+       requiredRoles.push(mapping);
+     } else {
+       irrelevantRoles.push(mapping);
+     }
+   }
+
+   const hiddenCount = irrelevantRoles.length;
+
    return (
      <div className="border-t border-b bg-gradient-to-r from-muted/40 to-muted/20 -mx-6 px-6 py-3">
        <div className="flex items-center gap-2 mb-2">
          <Users className="h-3.5 w-3.5 text-muted-foreground" />
          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Team</p>
+         {requiredRoles.length > 0 && (
+           <span className="text-[10px] text-muted-foreground/60 font-medium">
+             {requiredRoles.length} role{requiredRoles.length !== 1 ? "s" : ""}
+           </span>
+         )}
        </div>
+
+       {/* Required roles — always visible */}
        <div className="flex flex-wrap gap-2">
-         {mappings.map((mapping) => {
-           const isNeeded = isRoleRequiredForProject(mapping, displayProject, allProducts, allPackages);
-           return (
-             <StaffSelector
-               key={mapping.role}
-               roleKey={mapping.role}
-               legacyKey={legacyKeys[mapping.role]}
-               label={mapping.label}
-               project={displayProject}
-               canEdit={canEdit}
-               disabled={!isNeeded}
-               disabledLabel="Not required"
-               users={users}
-               teams={teams}
-             />
-           );
-         })}
+         {requiredRoles.map((mapping) => (
+           <StaffSelector
+             key={mapping.role}
+             roleKey={mapping.role}
+             legacyKey={legacyKeys[mapping.role]}
+             label={mapping.label}
+             project={displayProject}
+             canEdit={canEdit}
+             disabled={false}
+             users={users}
+             teams={teams}
+           />
+         ))}
        </div>
+
+       {/* Irrelevant roles — collapsed by default */}
+       {hiddenCount > 0 && (
+         <div className="mt-2">
+           <button
+             onClick={() => setShowAllRoles(prev => !prev)}
+             className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70 hover:text-muted-foreground font-medium transition-colors py-0.5"
+           >
+             {showAllRoles ? (
+               <ChevronDown className="h-3 w-3" />
+             ) : (
+               <ChevronRight className="h-3 w-3" />
+             )}
+             {showAllRoles ? "Hide" : "Show"} {hiddenCount} other role{hiddenCount !== 1 ? "s" : ""}
+           </button>
+           {showAllRoles && (
+             <div className="flex flex-wrap gap-1.5 mt-1.5">
+               {irrelevantRoles.map((mapping) => {
+                 const idKey = `${mapping.role}_id`;
+                 const currentId = displayProject?.[idKey] || (legacyKeys[mapping.role] ? displayProject?.[`${legacyKeys[mapping.role]}_id`] : null);
+                 const isNotReqValue = currentId === "not_required";
+
+                 // If value is "not_required", show compact badge
+                 if (isNotReqValue || !currentId) {
+                   return (
+                     <NotRequiredBadge key={mapping.role} roleKey={mapping.role} label={mapping.label} />
+                   );
+                 }
+
+                 // If someone is actually assigned to a hidden role, show the full selector
+                 return (
+                   <StaffSelector
+                     key={mapping.role}
+                     roleKey={mapping.role}
+                     legacyKey={legacyKeys[mapping.role]}
+                     label={mapping.label}
+                     project={displayProject}
+                     canEdit={canEdit}
+                     disabled={false}
+                     users={users}
+                     teams={teams}
+                   />
+                 );
+               })}
+             </div>
+           )}
+         </div>
+       )}
      </div>
    );
 }

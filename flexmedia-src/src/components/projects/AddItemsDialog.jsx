@@ -273,7 +273,14 @@ export default function AddItemsDialog({
           {product.name?.charAt(0).toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-foreground leading-tight">{product.name}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-foreground leading-tight">{product.name}</p>
+            {(product.standard_price || product.price) > 0 && (
+              <span className="text-xs font-mono text-muted-foreground ml-auto shrink-0">
+                ${Number(product.standard_price || product.price).toFixed(2)}{isPerUnit ? '/ea' : ''}
+              </span>
+            )}
+          </div>
           {product.description && (
             <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{product.description}</p>
           )}
@@ -321,7 +328,14 @@ export default function AddItemsDialog({
             <Package className="h-4 w-4 text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-foreground leading-tight">{pkg.name}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium text-foreground leading-tight">{pkg.name}</p>
+              {(pkg.standard_price || pkg.price) > 0 && (
+                <span className="text-xs font-mono text-muted-foreground ml-auto shrink-0">
+                  ${Number(pkg.standard_price || pkg.price).toFixed(2)}
+                </span>
+              )}
+            </div>
             {pkg.description && (
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{pkg.description}</p>
             )}
@@ -494,7 +508,25 @@ export default function AddItemsDialog({
         </Tabs>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t flex items-center gap-2">
+        <div className="px-5 py-3 border-t space-y-2">
+          {selectedCount > 0 && (() => {
+            const prodTotal = Object.entries(pendingProducts).reduce((sum, [id, qty]) => {
+              const p = availableProducts.find(x => x.id === id) || allProductsFull.find(x => x.id === id);
+              return sum + ((p?.standard_price || p?.price || 0) * qty);
+            }, 0);
+            const pkgTotal = pendingPackage ? (() => {
+              const p = availablePackages.find(x => x.id === pendingPackage.id);
+              return (p?.standard_price || p?.price || 0) * (pendingPackage.qty || 1);
+            })() : 0;
+            const total = prodTotal + pkgTotal;
+            return total > 0 ? (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Estimated addition:</span>
+                <span className="font-mono font-semibold text-green-700">+${Number(total).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+            ) : null;
+          })()}
+          <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="flex-1" onClick={handleClose}>
             Cancel
           </Button>
@@ -506,6 +538,7 @@ export default function AddItemsDialog({
           >
             {selectedCount > 0 ? `Add ${selectedCount} Item${selectedCount > 1 ? "s" : ""}` : "Add Selected"}
           </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

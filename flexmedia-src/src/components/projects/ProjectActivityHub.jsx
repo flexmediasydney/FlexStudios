@@ -1,43 +1,134 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import {
   MessageSquare, Mail, Pin,
-  ChevronDown, ChevronRight, Lightbulb
+  ChevronDown, ChevronRight, Lightbulb,
+  FileText, Zap, ListChecks, ArrowUpDown
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { fixTimestamp } from '@/components/utils/dateUtils';
+import { fixTimestamp, formatRelative, fmtTimestampCustom } from '@/components/utils/dateUtils';
 import UnifiedNoteComposer from '@/components/notes/UnifiedNoteComposer';
 import EmailComposeDialog from '@/components/email/EmailComposeDialog';
 import ProjectActivityFeedItem from './ProjectActivityFeedItem';
 
-const COMPOSE_TABS = [
-  { key: 'note', label: 'Note', icon: MessageSquare },
-  { key: 'email', label: 'Email', icon: Mail },
+// ── Filter chip definitions ──────────────────────────────────────────────────
+// Multi-selectable chips. "All" is a special toggle that clears other selections.
+const FILTER_CHIPS = [
+  { key: 'all',       label: 'All',            icon: null },
+  { key: 'notes',     label: 'Notes',          icon: MessageSquare },
+  { key: 'emails',    label: 'Emails',         icon: Mail },
+  { key: 'status',    label: 'Status Changes', icon: ArrowUpDown },
+  { key: 'tasks',     label: 'Task Updates',   icon: ListChecks },
+  { key: 'tonomo',    label: 'Tonomo',         icon: Zap },
 ];
 
-const FEED_FILTERS = [
-  { key: 'all', label: 'All' },
-  { key: 'notes', label: 'Notes' },
-  { key: 'activities', label: 'Activities' },
-  { key: 'emails', label: 'Emails' },
-  { key: 'changelog', label: 'Changelog' },
-];
+// Actions that count as "status changes"
+const STATUS_ACTIONS = new Set(['status_change', 'outcome_changed', 'payment_changed']);
+// Actions that count as "task updates"
+const TASK_ACTIONS = new Set(['task_added', 'task_completed', 'task_deleted']);
+// Actions from Tonomo
+const TONOMO_ACTIONS = new Set([
+  'tonomo_booking_created', 'tonomo_booking_updated', 'tonomo_rescheduled',
+  'tonomo_changed', 'tonomo_cancelled', 'tonomo_delivered',
+]);
+
+// ── Empty state messages per filter ──────────────────────────────────────────
+const EMPTY_MESSAGES = {
+  all: {
+    title: 'No activity yet',
+    subtitle: 'Add a note or send an email to get started',
+  },
+  notes: {
+    title: 'No notes yet',
+    subtitle: 'Use the composer above to add a note to this project',
+  },
+  emails: {
+    title: 'No emails linked to this project yet',
+    subtitle: 'Link emails from your inbox or compose a new one',
+  },
+  status: {
+    title: 'No status changes recorded',
+    subtitle: 'Status, outcome, and payment changes will appear here',
+  },
+  tasks: {
+    title: 'No task updates yet',
+    subtitle: 'Task additions, completions, and deletions will appear here',
+  },
+  tonomo: {
+    title: 'No Tonomo activity',
+    subtitle: 'Bookings synced from Tonomo will appear here',
+  },
+  field_changes: {
+    title: 'No field changes recorded',
+    subtitle: 'Edits to project fields like price, address, and dates will appear here',
+  },
+};
+
+const EMPTY_ICONS = {
+  all: Lightbulb,
+  notes: MessageSquare,
+  emails: Mail,
+  status: ArrowUpDown,
+  tasks: ListChecks,
+  tonomo: Zap,
+  field_changes: FileText,
+};
 
 const ITEMS_PER_PAGE = 30;
+
+// ── Smart timestamp: relative for recent, absolute for older ─────────────────
+function smartTimestamp(ts) {
+  if (!ts) return '\u2014';
+  const fixed = fixTimestamp(ts);
+  const now = new Date();
+  const then = new Date(fixed);
+  const diffMs = now - then;
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+
+  // Within 7 days: use relative time
+  if (diffMs < 7 * ONE_DAY && diffMs >= 0) {
+    return formatRelative(ts);
+  }
+  // Older: absolute date
+  return fmtTimestampCustom(ts, {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  });
+}
 
 export default function ProjectActivityHub({ projectId, project }) {
   const { data: currentUser } = useCurrentUser();
   const queryClient = useQueryClient();
 
-  const [composeTab, setComposeTab] = useState('note');
-  const [composeExpanded, setComposeExpanded] = useState(true);
-  const [feedFilter, setFeedFilter] = useState('all');
+  // Filter state: set of active chip keys. Default is just 'all'.
+  const [activeFilters, setActiveFilters] = useState(new Set(['all']));
+  const [fieldChangesOnly, setFieldChangesOnly] = useState(false);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
   const [showEmailCompose, setShowEmailCompose] = useState(false);
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+
+  // ── Filter chip toggle logic ──
+  const toggleFilter = useCallback((key) => {
+    setActiveFilters(prev => {
+      if (key === 'all') {
+        // "All" always resets to just All
+        return new Set(['all']);
+      }
+      const next = new Set(prev);
+      next.delete('all'); // selecting any specific chip de-selects All
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      // If nothing selected, revert to All
+      return next.size === 0 ? new Set(['all']) : next;
+    });
+    setVisibleCount(ITEMS_PER_PAGE);
+  }, []);
 
   // ── Data fetching ──
 
@@ -97,6 +188,49 @@ export default function ProjectActivityHub({ projectId, project }) {
     queryClient.invalidateQueries({ queryKey: ['project-activities', projectId] });
   }, [queryClient, projectId]);
 
+  // ── Real-time subscriptions ──
+  const refetchActivities = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['project-activities', projectId] });
+  }, [queryClient, projectId]);
+
+  const refetchNotes = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['org-notes-project', projectId] });
+  }, [queryClient, projectId]);
+
+  const refetchEmails = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['project-emails', projectId] });
+  }, [queryClient, projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const unsub = api.entities.ProjectActivity.subscribe((event) => {
+      if (event.data?.project_id === projectId) {
+        refetchActivities();
+      }
+    });
+    return typeof unsub === 'function' ? unsub : undefined;
+  }, [projectId, refetchActivities]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const unsub = api.entities.OrgNote.subscribe((event) => {
+      if (event.data?.project_id === projectId) {
+        refetchNotes();
+      }
+    });
+    return typeof unsub === 'function' ? unsub : undefined;
+  }, [projectId, refetchNotes]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const unsub = api.entities.EmailMessage.subscribe((event) => {
+      if (event.data?.project_id === projectId) {
+        refetchEmails();
+      }
+    });
+    return typeof unsub === 'function' ? unsub : undefined;
+  }, [projectId, refetchEmails]);
+
   // ── Pinned notes ──
   const pinnedNotes = useMemo(
     () => notes.filter(n => n.is_pinned && !n.parent_note_id),
@@ -112,7 +246,6 @@ export default function ProjectActivityHub({ projectId, project }) {
         map[n.parent_note_id].push(n);
       }
     }
-    // Sort replies oldest-first within each thread
     for (const key of Object.keys(map)) {
       map[key].sort((a, b) =>
         new Date(fixTimestamp(a.created_date)) - new Date(fixTimestamp(b.created_date))
@@ -125,7 +258,7 @@ export default function ProjectActivityHub({ projectId, project }) {
   const allItems = useMemo(() => {
     const items = [];
 
-    // Only include root notes (not replies)
+    // Only include root notes (not replies, not pinned)
     const rootNotes = notes.filter(n => !n.parent_note_id && !n.is_pinned);
     for (const n of rootNotes) {
       items.push({
@@ -168,21 +301,31 @@ export default function ProjectActivityHub({ projectId, project }) {
     );
   }, [notes, activities, emails, replyMap]);
 
-  // ── Filtered items ──
+  // ── Filtered items (multi-select chips + field changes toggle) ──
   const filteredItems = useMemo(() => {
-    switch (feedFilter) {
-      case 'notes':
-        return allItems.filter(i => i.type === 'note');
-      case 'activities':
-        return allItems.filter(i => i.type === 'activity');
-      case 'emails':
-        return allItems.filter(i => i.type === 'email');
-      case 'changelog':
-        return allItems.filter(i => i.type === 'activity' && i._raw?.changed_fields?.length > 0);
-      default:
-        return allItems;
+    let result = allItems;
+
+    // If not "all", apply multi-select chip filters
+    if (!activeFilters.has('all')) {
+      result = result.filter(item => {
+        if (activeFilters.has('notes') && item.type === 'note') return true;
+        if (activeFilters.has('emails') && item.type === 'email') return true;
+        if (activeFilters.has('status') && item.type === 'activity' && STATUS_ACTIONS.has(item.action)) return true;
+        if (activeFilters.has('tasks') && item.type === 'activity' && TASK_ACTIONS.has(item.action)) return true;
+        if (activeFilters.has('tonomo') && item.type === 'activity' && (TONOMO_ACTIONS.has(item.action) || item._raw?.actor_type === 'tonomo')) return true;
+        return false;
+      });
     }
-  }, [allItems, feedFilter]);
+
+    // "Show field changes only" toggle narrows activity items to those with changed_fields
+    if (fieldChangesOnly) {
+      result = result.filter(item =>
+        item.type !== 'activity' || (item._raw?.changed_fields?.length > 0)
+      );
+    }
+
+    return result;
+  }, [allItems, activeFilters, fieldChangesOnly]);
 
   const visibleItems = filteredItems.slice(0, visibleCount);
   const hasMore = visibleCount < filteredItems.length;
@@ -191,78 +334,55 @@ export default function ProjectActivityHub({ projectId, project }) {
   const counts = useMemo(() => ({
     all: allItems.length,
     notes: allItems.filter(i => i.type === 'note').length,
-    activities: allItems.filter(i => i.type === 'activity').length,
     emails: allItems.filter(i => i.type === 'email').length,
-    changelog: allItems.filter(i => i.type === 'activity' && i._raw?.changed_fields?.length > 0).length,
+    status: allItems.filter(i => i.type === 'activity' && STATUS_ACTIONS.has(i.action)).length,
+    tasks: allItems.filter(i => i.type === 'activity' && TASK_ACTIONS.has(i.action)).length,
+    tonomo: allItems.filter(i => i.type === 'activity' && (TONOMO_ACTIONS.has(i.action) || i._raw?.actor_type === 'tonomo')).length,
   }), [allItems]);
 
   const isLoading = notesLoading || activitiesLoading || emailsLoading;
 
+  // ── Determine which empty state to show ──
+  const emptyStateKey = useMemo(() => {
+    if (fieldChangesOnly && activeFilters.has('all')) return 'field_changes';
+    if (activeFilters.has('all')) return 'all';
+    // Pick the first active filter for the empty message
+    for (const chip of FILTER_CHIPS) {
+      if (chip.key !== 'all' && activeFilters.has(chip.key)) return chip.key;
+    }
+    return 'all';
+  }, [activeFilters, fieldChangesOnly]);
+
   return (
     <div className="space-y-0" data-activity-hub>
-      {/* ── Compose Bar ── */}
+      {/* ── Note Composer (always visible) ── */}
       <Card className="overflow-hidden">
-        {/* Compose tab bar */}
-        <div className="flex items-center border-b bg-muted/30">
-          <div className="flex items-center gap-0.5 px-2 py-1.5">
-            {COMPOSE_TABS.map(tab => {
-              const Icon = tab.icon;
-              const isActive = composeTab === tab.key && composeExpanded;
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => {
-                    if (tab.key === 'email') {
-                      setShowEmailCompose(true);
-                      return;
-                    }
-                    if (composeTab === tab.key) {
-                      setComposeExpanded(e => !e);
-                    } else {
-                      setComposeTab(tab.key);
-                      setComposeExpanded(true);
-                    }
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    isActive
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
-                  }`}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {tab.label}
-                </button>
-              );
-            })}
+        <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-foreground/70">
+            <MessageSquare className="h-3.5 w-3.5" />
+            Quick Note
           </div>
-          <div className="flex-1" />
           <button
-            onClick={() => setComposeExpanded(e => !e)}
-            className="p-2 text-muted-foreground hover:text-foreground transition-colors mr-1"
-            title={composeExpanded ? 'Collapse composer' : 'Expand composer'}
+            onClick={() => setShowEmailCompose(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
           >
-            {composeExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <Mail className="h-3.5 w-3.5" />
+            Email
           </button>
         </div>
-
-        {/* Compose body */}
-        {composeExpanded && (
-          <div className="p-3">
-            {composeTab === 'note' && (
-              <div className="shadow-sm rounded-lg">
-                <UnifiedNoteComposer
-                  agencyId={project?.agency_id}
-                  projectId={projectId}
-                  contextType="project"
-                  contextLabel={project?.title || project?.property_address || 'Project'}
-                  currentUser={currentUser}
-                  onSave={handleNoteSaved}
-                  onCancel={() => {}}
-                />
-              </div>
-            )}
+        <div className="p-3">
+          <div className="shadow-sm rounded-lg">
+            <UnifiedNoteComposer
+              agencyId={project?.agency_id}
+              projectId={projectId}
+              contextType="project"
+              contextLabel={project?.title || project?.property_address || 'Project'}
+              currentUser={currentUser}
+              onSave={handleNoteSaved}
+              onCancel={() => {}}
+            />
           </div>
-        )}
+        </div>
       </Card>
 
       {/* ── Pinned Section ── */}
@@ -296,6 +416,7 @@ export default function ProjectActivityHub({ projectId, project }) {
                   isLast={idx === pinnedNotes.length - 1}
                   onNoteRefresh={handleNoteSaved}
                   currentUser={currentUser}
+                  smartTimestamp={smartTimestamp}
                 />
               ))}
             </div>
@@ -303,25 +424,24 @@ export default function ProjectActivityHub({ projectId, project }) {
         </div>
       )}
 
-      {/* ── Filter Tabs ── */}
-      <div className="flex items-center gap-1 px-1 py-2 mt-3 overflow-x-auto">
-        {FEED_FILTERS.map(tab => {
-          const count = counts[tab.key];
-          const isActive = feedFilter === tab.key;
+      {/* ── Filter Chips (multi-select) + field changes toggle ── */}
+      <div className="flex items-center gap-1.5 px-1 py-2 mt-3 overflow-x-auto flex-wrap">
+        {FILTER_CHIPS.map(chip => {
+          const count = counts[chip.key];
+          const isActive = activeFilters.has(chip.key);
+          const ChipIcon = chip.icon;
           return (
             <button
-              key={tab.key}
-              onClick={() => {
-                setFeedFilter(tab.key);
-                setVisibleCount(ITEMS_PER_PAGE);
-              }}
+              key={chip.key}
+              onClick={() => toggleFilter(chip.key)}
               className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium transition-colors whitespace-nowrap ${
                 isActive
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
               }`}
             >
-              {tab.label}
+              {ChipIcon && <ChipIcon className="h-3 w-3" />}
+              {chip.label}
               {count > 0 && (
                 <span className={`text-[9px] px-1 py-0.5 rounded-full leading-none ${
                   isActive ? 'bg-card/25 text-white' : 'bg-muted-foreground/15 text-muted-foreground'
@@ -332,6 +452,25 @@ export default function ProjectActivityHub({ projectId, project }) {
             </button>
           );
         })}
+
+        {/* Divider */}
+        <div className="w-px h-5 bg-border mx-1" />
+
+        {/* Field changes toggle */}
+        <button
+          onClick={() => {
+            setFieldChangesOnly(v => !v);
+            setVisibleCount(ITEMS_PER_PAGE);
+          }}
+          className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium transition-colors whitespace-nowrap ${
+            fieldChangesOnly
+              ? 'bg-amber-100 text-amber-800 border border-amber-300'
+              : 'bg-muted text-muted-foreground hover:bg-muted/80'
+          }`}
+        >
+          <FileText className="h-3 w-3" />
+          Field changes only
+        </button>
       </div>
 
       {/* ── Timeline Feed ── */}
@@ -350,16 +489,21 @@ export default function ProjectActivityHub({ projectId, project }) {
           </div>
         ) : visibleItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
-            <Lightbulb className="h-10 w-10 text-yellow-300 mb-3" />
-            <p className="text-sm font-medium text-foreground/60">
-              {feedFilter === 'all' ? 'No activity yet' : `No ${feedFilter} yet`}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {feedFilter === 'all'
-                ? 'Add a note or send an email to get started'
-                : `Switch to "All" to see other activity types`
-              }
-            </p>
+            {(() => {
+              const EmptyIcon = EMPTY_ICONS[emptyStateKey] || Lightbulb;
+              const msg = EMPTY_MESSAGES[emptyStateKey] || EMPTY_MESSAGES.all;
+              return (
+                <>
+                  <EmptyIcon className="h-10 w-10 text-muted-foreground/40 mb-3" />
+                  <p className="text-sm font-medium text-foreground/60">
+                    {msg.title}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {msg.subtitle}
+                  </p>
+                </>
+              );
+            })()}
           </div>
         ) : (
           <>
@@ -372,6 +516,7 @@ export default function ProjectActivityHub({ projectId, project }) {
                 onNoteRefresh={handleNoteSaved}
                 currentUser={currentUser}
                 isEmailOwner={item.type === 'email' && item._raw ? myAccountIds.has(item._raw.email_account_id) : false}
+                smartTimestamp={smartTimestamp}
               />
             ))}
             {hasMore && (

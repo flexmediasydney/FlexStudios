@@ -59,6 +59,8 @@ export default function ProjectActivityFeedItem({
   currentUser,
   // For emails
   isEmailOwner = false,
+  // Optional smart timestamp formatter from parent
+  smartTimestamp,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [replyType, setReplyType] = useState(null);
@@ -113,10 +115,12 @@ export default function ProjectActivityFeedItem({
     }
   };
 
-  const timestamp = fmtTimestampCustom(item.timestamp, {
-    day: '2-digit', month: '2-digit', year: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  });
+  const timestamp = smartTimestamp
+    ? smartTimestamp(item.timestamp)
+    : fmtTimestampCustom(item.timestamp, {
+        day: '2-digit', month: '2-digit', year: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      });
 
   return (
     <div className="relative group">
