@@ -125,7 +125,7 @@ export default function AgencyBrandingSummary({ agency }) {
           {previewFile && (
             <div className="flex flex-col">
               {/* Header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
+              <div className="flex items-center justify-between px-4 pr-12 py-3 border-b bg-muted/30">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium truncate">{previewFile.file_name || 'File'}</p>
                   {previewFile.uploaded_at && (
