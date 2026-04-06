@@ -5,7 +5,7 @@ import { api } from '@/api/supabaseClient';
  * Hook that subscribes to real-time updates for entities matching a filter
  * Replaces polling with true real-time subscription for better performance
  */
-export function useEntitySubscriptionWithFilter(entityName, filter = {}, initialData = []) {
+export function useEntitySubscriptionWithFilter(entityName, filter = {}, initialData = [], { sortBy = null, limit = null } = {}) {
   const [data, setData] = useState(initialData);
   const [loading, setLoading] = useState(true);
 
@@ -15,7 +15,7 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
     // Initial fetch
     const fetchInitial = async () => {
       try {
-        const results = await api.entities[entityName].filter(filter);
+        const results = await api.entities[entityName].filter(filter, sortBy, limit);
         if (isMounted) {
           setData(results);
           setLoading(false);
@@ -73,7 +73,7 @@ export function useEntitySubscriptionWithFilter(entityName, filter = {}, initial
 
   const refetch = async () => {
     try {
-      const results = await api.entities[entityName].filter(filter);
+      const results = await api.entities[entityName].filter(filter, sortBy, limit);
       setData(results);
     } catch (error) {
       console.error(`Failed to refetch ${entityName}:`, error);

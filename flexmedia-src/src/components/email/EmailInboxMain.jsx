@@ -215,7 +215,8 @@ export default function EmailInboxMain() {
   const { data: messages = [], loading: messagesLoading, refetch: refetchMessages } = useEntitySubscriptionWithFilter(
     'EmailMessage',
     messageFilters,
-    []
+    [],
+    { sortBy: '-received_at', limit: 5000 }
   );
 
 
