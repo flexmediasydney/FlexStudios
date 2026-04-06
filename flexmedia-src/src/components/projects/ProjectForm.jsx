@@ -396,8 +396,18 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         normalized.warnings.forEach(w => console.warn('Category overlap:', w.message));
       }
 
+      const trimmed = trimFormData(formData);
+      // FK fields: empty strings → null (Supabase rejects "" as UUID)
+      const FK_FIELDS = [
+        'agent_id', 'agency_id', 'client_id', 'project_type_id', 'project_owner_id',
+        'photographer_id', 'videographer_id', 'image_editor_id', 'video_editor_id',
+        'floorplan_editor_id', 'drone_editor_id', 'onsite_staff_1_id', 'onsite_staff_2_id',
+      ];
+      for (const fk of FK_FIELDS) {
+        if (trimmed[fk] === '' || trimmed[fk] === 'not_required') trimmed[fk] = null;
+      }
       const dataToSave = {
-        ...trimFormData(formData),
+        ...trimmed,
         products: normalized.products,
         packages: normalized.packages,
         agent_name: agent?.name || formData.agent_name || "",
