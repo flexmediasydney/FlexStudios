@@ -28,6 +28,7 @@ import MediaDeliveryManager from "@/components/projects/MediaDeliveryManager";
 import EffortLoggingTab from "@/components/projects/EffortLoggingTab";
 import ProjectCalendarEvents from "@/components/projects/ProjectCalendarEvents";
 import ProjectActivityHub from "@/components/projects/ProjectActivityHub";
+import AgencyBrandingSummary from "@/components/projects/AgencyBrandingSummary";
 import ProjectStaffBar from "@/components/projects/ProjectStaffBar";
 import ProjectPresenceIndicator from "@/components/projects/ProjectPresenceIndicator";
 import EmailComposeDialog from "@/components/email/EmailComposeDialog";
@@ -1519,7 +1520,7 @@ export default function ProjectDetails() {
                 <CardTitle className="text-base lg:text-lg">Agency</CardTitle>
               </CardHeader>
               <CardContent className="pt-0 space-y-2.5">
-                <Link 
+                <Link
                   to={createPageUrl("OrgDetails") + `?id=${agency.id}`}
                   className="flex items-center gap-2 hover:text-primary transition-colors"
                 >
@@ -1541,6 +1542,9 @@ export default function ProjectDetails() {
               </CardContent>
             </Card>
           )}
+
+          {/* Agency Branding Summary */}
+          <AgencyBrandingSummary agency={agency} />
 
           {/* Quick Actions sidebar — email compose + additional actions */}
           <Card className="hidden lg:block">
