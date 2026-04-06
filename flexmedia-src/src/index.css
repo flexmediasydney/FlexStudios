@@ -157,6 +157,37 @@
   height: 50px;
 }
 
+/* Rich leaflet tooltip for map pins */
+.leaflet-tooltip-custom {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08);
+  max-width: 300px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.leaflet-tooltip-custom::before {
+  border-top-color: white;
+}
+
+.dark .leaflet-tooltip-custom {
+  background: hsl(220 20% 14%);
+  border-color: hsl(220 15% 22%);
+  color: hsl(220 10% 85%);
+}
+
+.dark .leaflet-tooltip-custom::before {
+  border-top-color: hsl(220 20% 14%);
+}
+
+/* Permanent suburb label tooltips on territory bubbles */
+.leaflet-tooltip-pane .leaflet-tooltip {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
 /* ── Mobile responsive utilities ───────────────────────────────────────────── */
 
 /* Hide scrollbar for tab strips and horizontal scroll areas */
