@@ -59,7 +59,7 @@ export default function ListingComparison({
       {/* Unmatched Listings */}
       {unmatchedListings.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
             <AlertCircle className="h-5 w-5 text-amber-600" />
             Unmatched External Listings ({unmatchedListings.length})
           </h2>
@@ -68,13 +68,13 @@ export default function ListingComparison({
               <Card key={listing.id} className="p-4">
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
-                    <div className="text-sm text-slate-600">Address</div>
-                    <div className="font-medium text-slate-900">
+                    <div className="text-sm text-muted-foreground">Address</div>
+                    <div className="font-medium text-foreground">
                       {listing.address}
                     </div>
                   </div>
                   <div>
-                    <div className="text-sm text-slate-600">Portal</div>
+                    <div className="text-sm text-muted-foreground">Portal</div>
                     <div className="flex gap-2 items-center">
                       <Badge variant="outline" className="capitalize">
                         {listing.source_portal}
@@ -88,15 +88,15 @@ export default function ListingComparison({
 
                 {listing.price && (
                   <div className="mb-4 text-sm">
-                    <span className="text-slate-600">Price: </span>
-                    <span className="font-medium text-slate-900">
+                    <span className="text-muted-foreground">Price: </span>
+                    <span className="font-medium text-foreground">
                       ${listing.price.toLocaleString()}
                     </span>
                   </div>
                 )}
 
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-slate-700">
+                  <label className="text-sm font-medium text-foreground/80">
                     Match to Internal Project
                   </label>
                   <div className="flex gap-2">
@@ -138,7 +138,7 @@ export default function ListingComparison({
       {/* Matched Listings */}
       {matchedListings.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
             <CheckCircle2 className="h-5 w-5 text-green-600" />
             Matched Listings ({matchedListings.length})
           </h2>
@@ -147,14 +147,14 @@ export default function ListingComparison({
               <Card key={listing.id} className="p-4 bg-green-50 border-green-200">
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <div className="text-xs text-slate-600">External</div>
-                    <div className="font-medium text-slate-900">
+                    <div className="text-xs text-muted-foreground">External</div>
+                    <div className="font-medium text-foreground">
                       {listing.address}
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs text-slate-600">Internal Project</div>
-                    <div className="font-medium text-slate-900">
+                    <div className="text-xs text-muted-foreground">Internal Project</div>
+                    <div className="font-medium text-foreground">
                       {listing.matched_project_title}
                     </div>
                   </div>
@@ -171,7 +171,7 @@ export default function ListingComparison({
       {/* Empty State */}
       {externalListings.length === 0 && (
         <Card className="p-8 text-center">
-          <div className="text-slate-500 text-sm">
+          <div className="text-muted-foreground text-sm">
             No external listings added yet. Add listings from Domain or REA to get started.
           </div>
         </Card>
@@ -180,7 +180,7 @@ export default function ListingComparison({
       {/* Uncovered Projects */}
       {internalProjects.length > externalListings.length && (
         <div>
-          <h2 className="text-lg font-semibold text-slate-900 mb-4">
+          <h2 className="text-lg font-semibold text-foreground mb-4">
             Internal Projects Without External Listings
           </h2>
           <div className="space-y-2">
@@ -194,10 +194,10 @@ export default function ListingComparison({
               .map((project) => (
                 <Card key={project.id} className="p-4 bg-slate-50">
                   <div className="text-sm">
-                    <div className="font-medium text-slate-900">
+                    <div className="font-medium text-foreground">
                       {project.title}
                     </div>
-                    <div className="text-slate-600">
+                    <div className="text-muted-foreground">
                       {project.property_address}
                     </div>
                   </div>

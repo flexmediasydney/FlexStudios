@@ -169,7 +169,7 @@ export default function LabelSelectorRobust({
               "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all",
               selectedLabels.length > 0
                 ? "bg-blue-50 text-blue-700 hover:bg-blue-100"
-                : "text-slate-500 hover:text-foreground hover:bg-muted"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
             )}
             title="Manage labels"
           >
@@ -292,7 +292,7 @@ export default function LabelSelectorRobust({
                     className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                     style={{ backgroundColor: label.color || "#64748b" }}
                   />
-                  <span className="text-sm text-slate-700 flex-1 truncate">{label.name}</span>
+                  <span className="text-sm text-foreground/80 flex-1 truncate">{label.name}</span>
 
                   {/* Admin actions on hover */}
                   {isAdmin && (
@@ -302,7 +302,7 @@ export default function LabelSelectorRobust({
                         onClick={() => setEditingLabel({ ...label })}
                         title="Edit label"
                       >
-                        <Pencil className="h-3 w-3 text-slate-400" />
+                        <Pencil className="h-3 w-3 text-muted-foreground/70" />
                       </button>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
@@ -310,7 +310,7 @@ export default function LabelSelectorRobust({
                             className="p-1 hover:bg-red-50 rounded transition-colors"
                             title="Delete label"
                           >
-                            <Trash2 className="h-3 w-3 text-slate-400 hover:text-red-500" />
+                            <Trash2 className="h-3 w-3 text-muted-foreground/70 hover:text-red-500" />
                           </button>
                         </AlertDialogTrigger>
                         <AlertDialogContent>
@@ -343,8 +343,8 @@ export default function LabelSelectorRobust({
             {showCreate ? (
               <div className="p-3 space-y-2.5 bg-slate-50/50">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-600">New Label</span>
-                  <button onClick={() => setShowCreate(false)} className="text-slate-400 hover:text-slate-600">
+                  <span className="text-xs font-semibold text-muted-foreground">New Label</span>
+                  <button onClick={() => setShowCreate(false)} className="text-muted-foreground/70 hover:text-muted-foreground">
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </div>

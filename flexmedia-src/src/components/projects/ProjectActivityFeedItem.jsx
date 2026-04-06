@@ -217,16 +217,16 @@ export default function ProjectActivityFeedItem({
           {item.type === 'note' && (
             <div className={`mt-1.5 rounded-lg p-2.5 ${config.bgColor} border ${config.borderColor}`}>
               {item._raw?.content_html && !expanded ? (
-                <p className="text-sm text-gray-700 line-clamp-3 whitespace-pre-wrap">
+                <p className="text-sm text-foreground/80 line-clamp-3 whitespace-pre-wrap">
                   {item._raw.content || item._raw.content_html?.replace(/<[^>]*>/g, '').substring(0, 200)}
                 </p>
               ) : item._raw?.content_html && expanded ? (
                 <div
-                  className="text-sm text-gray-700 prose prose-sm max-w-none"
+                  className="text-sm text-foreground/80 prose prose-sm max-w-none"
                   dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(item._raw.content_html) }}
                 />
               ) : (
-                <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                <p className="text-sm text-foreground/80 whitespace-pre-wrap">
                   {item.content || item._raw?.content}
                 </p>
               )}
@@ -299,33 +299,33 @@ export default function ProjectActivityFeedItem({
 
           {item.type === 'email' && (
             <>
-              <p className="text-sm font-medium text-gray-700 mt-1">{item._raw?.subject || item.subject}</p>
+              <p className="text-sm font-medium text-foreground/80 mt-1">{item._raw?.subject || item.subject}</p>
               {!expanded && (
-                <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">
+                <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">
                   {item._raw?.body?.replace(/<[^>]*>/g, '').substring(0, 150) || item.preview}
                 </p>
               )}
               {expanded && item._raw && (
-                <div className="mt-2 space-y-2 bg-gray-50 rounded-lg p-3 border border-gray-200">
+                <div className="mt-2 space-y-2 bg-muted/50 rounded-lg p-3 border">
                   <div className="space-y-1.5">
                     <div className="text-xs">
-                      <span className="text-gray-500">From: </span>
-                      <span className="text-gray-700">{item._raw.from}</span>
+                      <span className="text-muted-foreground">From: </span>
+                      <span className="text-foreground/80">{item._raw.from}</span>
                     </div>
                     <div className="text-xs">
-                      <span className="text-gray-500">To: </span>
-                      <span className="text-gray-700">{item._raw.to?.join(', ')}</span>
+                      <span className="text-muted-foreground">To: </span>
+                      <span className="text-foreground/80">{item._raw.to?.join(', ')}</span>
                     </div>
                   </div>
                   <div className="border-t pt-2">
                     <div
-                      className="text-sm text-gray-700 prose prose-sm max-w-none"
+                      className="text-sm text-foreground/80 prose prose-sm max-w-none"
                       dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(item._raw.body) }}
                     />
                   </div>
                   {item._raw.attachments?.length > 0 && (
                     <div className="border-t pt-2">
-                      <p className="text-xs font-medium text-gray-600 mb-1">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">
                         Attachments ({item._raw.attachments.length})
                       </p>
                       {item._raw.attachments.map((att, i) => (
@@ -337,7 +337,7 @@ export default function ProjectActivityFeedItem({
                           className="flex items-center gap-1 text-xs text-blue-600 hover:underline"
                         >
                           {att.filename}
-                          {att.size && <span className="text-gray-400">({(att.size / 1024).toFixed(1)} KB)</span>}
+                          {att.size && <span className="text-muted-foreground/70">({(att.size / 1024).toFixed(1)} KB)</span>}
                         </a>
                       ))}
                     </div>

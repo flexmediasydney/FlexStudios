@@ -72,12 +72,12 @@ export default function ImpactWarningDialog({
               <div className="space-y-2">
                 {changes.map((change, i) => (
                   <div key={i} className="text-sm bg-card rounded p-2">
-                    <div className="font-medium text-gray-900">{formatFieldLabel(change.field)}</div>
-                    <div className="text-xs text-gray-600 mt-1">
+                    <div className="font-medium text-foreground">{formatFieldLabel(change.field)}</div>
+                    <div className="text-xs text-muted-foreground mt-1">
                       <span className="inline-block bg-red-100 text-red-700 px-2 py-1 rounded mr-2">
                         {change.old_value || "—"}
                       </span>
-                      <span className="text-gray-400">→</span>
+                      <span className="text-muted-foreground/70">→</span>
                       <span className="inline-block bg-green-100 text-green-700 px-2 py-1 rounded ml-2">
                         {change.new_value || "—"}
                       </span>
@@ -138,19 +138,19 @@ function ImpactGroup({ icon, label, count, items }) {
     <div className="bg-card rounded p-2.5 border border-red-100">
       <div className="flex items-center gap-2 mb-2">
         <Icon className="h-4 w-4 text-red-600" />
-        <span className="text-sm font-semibold text-gray-900">{label}</span>
+        <span className="text-sm font-semibold text-foreground">{label}</span>
         <span className="ml-auto text-xs font-bold bg-red-600 text-white px-2 py-1 rounded-full">
           {count}
         </span>
       </div>
-      <div className="text-sm text-gray-700 space-y-1 ml-6">
+      <div className="text-sm text-foreground/80 space-y-1 ml-6">
         {items.slice(0, 5).map((item, i) => (
-          <div key={i} className="truncate text-gray-600">
+          <div key={i} className="truncate text-muted-foreground">
             <span className="text-red-500">▸</span> {item}
           </div>
         ))}
         {items.length > 5 && (
-          <div className="text-gray-500 font-medium italic text-xs">
+          <div className="text-muted-foreground font-medium italic text-xs">
             + {items.length - 5} more
           </div>
         )}

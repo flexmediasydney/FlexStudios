@@ -14,9 +14,9 @@ const HARDCODED_DEFAULTS = [
   {
     role: "photographer",
     label: "Photographer",
-    categories: ["images", "drones", "virtual_staging"],
+    categories: ["photography", "drone", "virtual_staging"],
     always_required: false,
-    description: "Required when project includes images, drone, or virtual staging",
+    description: "Required when project includes photography, drone, or virtual staging",
     order: 1,
   },
   {
@@ -30,7 +30,7 @@ const HARDCODED_DEFAULTS = [
   {
     role: "image_editor",
     label: "Image Editor",
-    categories: ["images", "drones", "virtual_staging"],
+    categories: ["photography", "drone", "virtual_staging"],
     always_required: false,
     description: "Required when project includes images, drone, or virtual staging",
     order: 3,
@@ -54,7 +54,7 @@ const HARDCODED_DEFAULTS = [
   {
     role: "drone_editor",
     label: "Drone Editor",
-    categories: ["drones"],
+    categories: ["drone"],
     always_required: false,
     description: "Required when project includes drone services",
     order: 6,

@@ -121,21 +121,21 @@ export default function InstallPrompt() {
   if (showIOSPrompt && !showPrompt) {
     return (
       <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md animate-in slide-in-from-bottom-4 duration-300">
-        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-card p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900">
+        <div className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow-lg">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
             <Share className="h-5 w-5" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+            <p className="text-sm font-medium text-foreground">
               Add to Home Screen
             </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className="text-xs text-muted-foreground">
               Tap <Share className="inline h-3 w-3" /> then &quot;Add to Home Screen&quot;
             </p>
           </div>
           <button
             onClick={handleDismiss}
-            className="rounded-md p-1.5 text-slate-400 hover:bg-muted hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            className="rounded-md p-1.5 text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground"
             aria-label="Dismiss install prompt"
           >
             <X className="h-4 w-4" />
@@ -150,15 +150,15 @@ export default function InstallPrompt() {
 
   return (
     <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md animate-in slide-in-from-bottom-4 duration-300">
-      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-card p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900">
+      <div className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow-lg">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
           <Download className="h-5 w-5" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+          <p className="text-sm font-medium text-foreground">
             Add FlexStudios to Home Screen
           </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
+          <p className="text-xs text-muted-foreground">
             Quick access &amp; offline support
           </p>
         </div>
@@ -168,7 +168,7 @@ export default function InstallPrompt() {
           </Button>
           <button
             onClick={handleDismiss}
-            className="rounded-md p-1.5 text-slate-400 hover:bg-muted hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            className="rounded-md p-1.5 text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground"
             aria-label="Dismiss install prompt"
           >
             <X className="h-4 w-4" />

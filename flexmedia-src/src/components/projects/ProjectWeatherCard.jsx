@@ -177,7 +177,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
 
   if (error || !weather) {
     return (
-      <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-50 border border-gray-200 text-xs text-gray-400">
+      <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/50 border text-xs text-muted-foreground/70">
         <Cloud className="h-4 w-4" />
         Weather unavailable for {suburb}
       </div>
@@ -195,16 +195,16 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <WeatherIcon className={`h-5 w-5 flex-shrink-0 ${iconColor}`} />
             <div className="min-w-0">
-              <span className="font-semibold text-gray-800">{weather.suburb}{weather.state ? `, ${weather.state}` : ""}</span>
-              <span className="text-gray-500 ml-1.5 text-xs">{weatherLabel}</span>
+              <span className="font-semibold text-foreground">{weather.suburb}{weather.state ? `, ${weather.state}` : ""}</span>
+              <span className="text-muted-foreground ml-1.5 text-xs">{weatherLabel}</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
             <div className="flex items-center gap-1">
               <Thermometer className="h-3.5 w-3.5 text-red-400" />
               <span className="font-medium">{weather.tempMax}°</span>
-              <span className="text-gray-400">/ {weather.tempMin}°C</span>
+              <span className="text-muted-foreground/70">/ {weather.tempMin}°C</span>
             </div>
 
             {weather.rain > 0 && (

@@ -81,7 +81,7 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
       <div className="flex gap-4">
         <div className="flex flex-col items-center">
           <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isOwner ? 'bg-purple-100' : 'bg-gray-100'}`}>
-            <Mail className={`h-4 w-4 ${isOwner ? 'text-purple-600' : 'text-gray-400'}`} />
+            <Mail className={`h-4 w-4 ${isOwner ? 'text-purple-600' : 'text-muted-foreground/70'}`} />
           </div>
           <div className="w-0.5 h-12 bg-gray-200 mt-2" />
         </div>
@@ -90,10 +90,10 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
           {/* Header */}
           <div className="flex items-start justify-between gap-2">
             <div className="flex-1">
-              <p className="text-sm font-medium text-gray-900">
+              <p className="text-sm font-medium text-foreground">
                 {fmtTimestampCustom(email.received_at, { dateStyle: 'medium', timeStyle: 'short' })} • {email.from_name || email.from}
               </p>
-              <p className="text-sm font-medium text-gray-700 mt-1">{email.subject}</p>
+              <p className="text-sm font-medium text-foreground/80 mt-1">{email.subject}</p>
             </div>
 
             <div className="flex items-center gap-1">
@@ -199,35 +199,35 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
 
           {/* Preview (collapsed) */}
           {!expanded && email.body && (
-            <p className="text-sm text-gray-600 mt-2 line-clamp-2">
+            <p className="text-sm text-muted-foreground mt-2 line-clamp-2">
               {email.body.replace(/<[^>]*>/g, '')}
             </p>
           )}
 
           {/* Expanded email body */}
           {expanded && (
-            <div className="mt-3 space-y-3 bg-gray-50 rounded-lg p-3 border border-gray-200">
+            <div className="mt-3 space-y-3 bg-muted/50 rounded-lg p-3 border">
               <div className="space-y-2">
                 <div>
-                  <p className="text-xs text-gray-500">From:</p>
-                  <p className="text-sm text-gray-700">{email.from}</p>
+                  <p className="text-xs text-muted-foreground">From:</p>
+                  <p className="text-sm text-foreground/80">{email.from}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500">To:</p>
-                  <p className="text-sm text-gray-700">{email.to?.join(", ")}</p>
+                  <p className="text-xs text-muted-foreground">To:</p>
+                  <p className="text-sm text-foreground/80">{email.to?.join(", ")}</p>
                 </div>
               </div>
 
               <div className="border-t pt-3">
                 <div
-                  className="text-sm text-gray-700 prose prose-sm max-w-none"
+                  className="text-sm text-foreground/80 prose prose-sm max-w-none"
                   dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(email.body) }}
                 />
               </div>
 
               {email.attachments?.length > 0 && (
                 <div className="border-t pt-3">
-                  <p className="text-xs font-medium text-gray-600 mb-2">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">
                     Attachments ({email.attachments.length})
                   </p>
                   <div className="space-y-1">
@@ -240,7 +240,7 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
                         className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline"
                       >
                         📎 {att.filename}
-                        {att.size && <span className="text-gray-400">({(att.size / 1024).toFixed(1)} KB)</span>}
+                        {att.size && <span className="text-muted-foreground/70">({(att.size / 1024).toFixed(1)} KB)</span>}
                       </a>
                     ))}
                   </div>

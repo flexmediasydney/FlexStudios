@@ -144,7 +144,7 @@ export default function EmailLabelsTab() {
 
         {/* Create New Label */}
         <div className="bg-slate-50 border rounded-xl p-4 mb-6 space-y-3">
-          <h4 className="text-sm font-semibold text-slate-700">Create Label</h4>
+          <h4 className="text-sm font-semibold text-foreground/80">Create Label</h4>
           <Input
             placeholder="e.g. Hot Lead, Follow Up, Urgent..."
             value={newName}
@@ -175,7 +175,7 @@ export default function EmailLabelsTab() {
 
         {/* Labels List */}
         <div>
-          <h4 className="text-sm font-semibold text-slate-700 mb-3">
+          <h4 className="text-sm font-semibold text-foreground/80 mb-3">
             Your Labels
             {labels.length > 0 && (
               <span className="text-muted-foreground font-normal ml-1.5">({labels.length})</span>
@@ -231,7 +231,7 @@ export default function EmailLabelsTab() {
                           className="w-3 h-3 rounded-full flex-shrink-0 ring-1 ring-black/10"
                           style={{ backgroundColor: label.color || "#64748b" }}
                         />
-                        <span className="text-sm font-medium text-slate-700 flex-1">{label.name}</span>
+                        <span className="text-sm font-medium text-foreground/80 flex-1">{label.name}</span>
                         <LabelBadge label={label.name} color={label.color} className="text-[10px]" />
                         <div className="flex gap-1 ml-2">
                           <button
@@ -239,7 +239,7 @@ export default function EmailLabelsTab() {
                             onClick={() => startEdit(label)}
                             title="Edit label"
                           >
-                            <Pencil className="h-3.5 w-3.5 text-slate-400" />
+                            <Pencil className="h-3.5 w-3.5 text-muted-foreground/70" />
                           </button>
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
@@ -247,7 +247,7 @@ export default function EmailLabelsTab() {
                                 className="p-1.5 hover:bg-red-50 rounded-md transition-colors"
                                 title="Delete label"
                               >
-                                <Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-500" />
+                                <Trash2 className="h-3.5 w-3.5 text-muted-foreground/70 hover:text-red-500" />
                               </button>
                             </AlertDialogTrigger>
                             <AlertDialogContent>
