@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
-import { CalendarIcon, Trash2, AlertTriangle, ClockIcon, MessageCircle, Users, User, Lock } from "lucide-react";
+import { CalendarIcon, Trash2, AlertTriangle, ClockIcon, Users, User, Lock } from "lucide-react";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { format } from "date-fns";
@@ -14,7 +14,6 @@ import TaskTimeLoggerRobust from "@/components/utilization/TaskTimeLoggerRobust"
 import TaskEffortSectionVirtualized from "./TaskEffortSectionVirtualized";
 import TaskEffortBadge from "./TaskEffortBadge";
 import { useEntityList } from "@/components/hooks/useEntityData";
-import { useChat } from "@/components/chat/ChatContext";
 import { cn } from "@/lib/utils";
 import ConfirmDialog from "@/components/common/ConfirmDialog";
 import { fixTimestamp } from "@/components/utils/dateUtils";
@@ -68,7 +67,6 @@ export default function TaskDetailPanel({
     setEditingDeadline(false);
   }, [task.id, task.due_date]);
 
-  const { openChat } = useChat();
 
   // Live time logs for this specific task (real-time actual effort)
   const { data: taskTimeLogs = [] } = useEntityList('TaskTimeLog', null, null, log => log.task_id === task.id);
@@ -104,16 +102,6 @@ export default function TaskDetailPanel({
     onError: (err) => toast.error(err?.message || 'Failed to update task lock'),
   });
 
-  const handleOpenChat = () => {
-    if (!user) return;
-    openChat({
-      type: 'task',
-      taskId: task.id,
-      taskTitle: task.title,
-      projectId,
-      projectTitle: project?.title || "Project"
-    });
-  };
 
   const handleDeleteDeadline = () => {
     onUpdateDeadline(task.id, { due_date: null });
@@ -310,10 +298,6 @@ export default function TaskDetailPanel({
 
       {/* Actions */}
       <div className="flex items-center gap-1 pt-1.5 border-t">
-        <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={handleOpenChat}>
-          <MessageCircle className="h-3 w-3 mr-1" />
-          Chat
-        </Button>
         {effectiveCanEdit && (
           <>
             <Button

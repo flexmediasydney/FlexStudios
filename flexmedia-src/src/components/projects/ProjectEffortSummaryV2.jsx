@@ -267,6 +267,38 @@ export function useProjectEffortSummary(projectId, project = null) {
   const totalEst = metrics.task.estimatedTotal + metrics.revision.estimatedTotal;
   const totalAct = metrics.task.actualTotal + metrics.revision.actualTotal;
 
+  // Expose raw data for detailed breakdowns (used by ProjectEffortCard popover)
+  const runningTimers = useMemo(() =>
+    timeLogs.filter(l => l.is_active && l.status === 'running').map(log => {
+      const task = projectTasks.find(t => t.id === log.task_id);
+      return { ...log, taskTitle: task?.title || 'Unknown task', elapsed: computeLogSeconds(log) };
+    }),
+    [timeLogs, projectTasks, tick]
+  );
+
+  const perTaskBreakdown = useMemo(() => {
+    const knownTaskIds = new Set(projectTasks.map(t => t.id));
+    const taskMap = {};
+    projectTasks.forEach(task => {
+      if (task.is_deleted) return;
+      taskMap[task.id] = {
+        id: task.id,
+        title: task.title || 'Untitled',
+        role: task.auto_assign_role || 'none',
+        estimated: (typeof task.estimated_minutes === 'number' ? task.estimated_minutes : 0) * 60,
+        actual: 0,
+      };
+    });
+    timeLogs.filter(log => knownTaskIds.has(log.task_id)).forEach(log => {
+      if (taskMap[log.task_id]) {
+        taskMap[log.task_id].actual += computeLogSeconds(log);
+      }
+    });
+    return Object.values(taskMap)
+      .filter(t => t.estimated > 0 || t.actual > 0)
+      .sort((a, b) => b.actual - a.actual);
+  }, [timeLogs, projectTasks, tick]);
+
   return {
     task: metrics.task,
     revision: metrics.revision,
@@ -276,6 +308,8 @@ export function useProjectEffortSummary(projectId, project = null) {
     totalActual: totalAct,
     totalUtilization: totalEst > 0 ? Math.min(Math.round((totalAct / totalEst) * 100), 999) : 0,
     hasRunning: hasRunningTimer,
+    runningTimers,
+    perTaskBreakdown,
   };
 }
 

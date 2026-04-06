@@ -216,19 +216,6 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   const { data: users = [] } = useEntityList("User", null, 500);
   const { data: teams = [] } = useEntityList("InternalTeam", null, 200, { is_active: true });
 
-  useEffect(() => {
-    if (!projectId) return;
-    let mounted = true;
-    const unsubscribe = api.entities.TaskChat.subscribe((event) => {
-      if (mounted && event?.data?.project_id === projectId) {
-        queryClient.invalidateQueries({ queryKey: ["taskChatCounts", projectId] });
-      }
-    });
-    return () => {
-      mounted = false;
-      if (typeof unsubscribe === 'function') unsubscribe();
-    };
-  }, [projectId, queryClient]);
 
   // Real-time task subscription: ensures external task updates (e.g. timer completion,
   // stage-change auto-completion) trigger a re-render without waiting for polling.
@@ -242,27 +229,6 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     return typeof unsubscribe === 'function' ? () => unsubscribe() : undefined;
   }, [projectId]);
 
-  const { data: taskChatCounts = {} } = useQuery({
-    queryKey: ["taskChatCounts", projectId],
-    queryFn: async () => {
-      if (!projectId) return {};
-      try {
-        const chats = await api.entities.TaskChat.filter({ project_id: projectId }, null, 1000);
-        const counts = {};
-        if (Array.isArray(chats)) {
-          chats.forEach(chat => {
-            if (chat?.task_id) {
-              counts[chat.task_id] = (counts[chat.task_id] || 0) + 1;
-            }
-          });
-        }
-        return counts;
-      } catch {
-        return {};
-      }
-    },
-    enabled: !!projectId
-  });
 
   // Sync task assignee denormalized fields when users/teams change.
   // BUG FIX: `tasks` is a new array reference on every render from useEntityList,
@@ -769,7 +735,6 @@ export default function TaskManagement({ projectId, project, canEdit }) {
           onDelete={requestDelete}
           onUpdateDeadline={(id, data) => updateMutation.mutate({ id, data })}
           thresholds={thresholds}
-          taskChatCounts={taskChatCounts}
           projectId={projectId}
           project={project}
           user={user}

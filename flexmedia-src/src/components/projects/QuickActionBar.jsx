@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  StickyNote, ArrowRightLeft, Play, MessageSquare, MoreHorizontal,
+  StickyNote, ArrowRightLeft, Play, MoreHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PROJECT_STAGES } from "@/components/projects/projectStatuses";
@@ -35,7 +35,6 @@ const SHORTCUTS = {
   timer:  { key: "t", label: `${modKey}Shift+T` },
   note:   { key: "n", label: `${modKey}Shift+N` },
   status: { key: "s", label: `${modKey}Shift+S` },
-  chat:   { key: "c", label: `${modKey}Shift+C` },
 };
 
 /* ------------------------------------------------------------------ */
@@ -77,7 +76,6 @@ export default function QuickActionBar({
   onStartTimer,
   onAddNote,
   onChangeStatus,
-  onOpenChat,
 }) {
   const [statusOpen, setStatusOpen] = useState(false);
 
@@ -88,10 +86,7 @@ export default function QuickActionBar({
       if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
 
       const key = e.key.toLowerCase();
-      if (key === SHORTCUTS.chat.key && onOpenChat) {
-        e.preventDefault();
-        onOpenChat();
-      } else if (key === SHORTCUTS.timer.key && canEdit && onStartTimer) {
+      if (key === SHORTCUTS.timer.key && canEdit && onStartTimer) {
         e.preventDefault();
         onStartTimer();
       } else if (key === SHORTCUTS.note.key && onAddNote) {
@@ -102,7 +97,7 @@ export default function QuickActionBar({
         setStatusOpen((prev) => !prev);
       }
     },
-    [canEdit, onStartTimer, onAddNote, onOpenChat],
+    [canEdit, onStartTimer, onAddNote],
   );
 
   useEffect(() => {
@@ -167,22 +162,6 @@ export default function QuickActionBar({
     <TooltipProvider delayDuration={300}>
       <div className="flex items-center gap-1.5">
 
-        {/* ===== Primary actions ===== */}
-        {onOpenChat && (
-          <ActionButton
-            onClick={onOpenChat}
-            icon={MessageSquare}
-            label="Chat"
-            shortcut={SHORTCUTS.chat.label}
-            className="border-purple-200 text-purple-700 hover:bg-purple-50 hover:border-purple-300 hover:text-purple-800"
-          />
-        )}
-
-        {/* Separator between primary and utility groups */}
-        {onOpenChat && (
-          <div className="hidden sm:block h-5 w-px bg-border mx-1" aria-hidden="true" />
-        )}
-
         {/* ===== Utility actions ===== */}
         {canEdit && (
           <ActionButton
@@ -228,12 +207,6 @@ export default function QuickActionBar({
                 Actions
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {onOpenChat && (
-                <DropdownMenuItem onClick={onOpenChat}>
-                  <MessageSquare className="mr-2 h-4 w-4 text-purple-600" />
-                  Chat
-                </DropdownMenuItem>
-              )}
               {canEdit && (
                 <DropdownMenuItem onClick={onStartTimer}>
                   <Play className="mr-2 h-4 w-4 text-green-600" />

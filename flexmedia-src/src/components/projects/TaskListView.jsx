@@ -1,8 +1,7 @@
 import React, { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, Circle, Lock, MessageCircle, CalendarIcon, Trash2, AlertTriangle, ClockIcon } from "lucide-react";
+import { CheckCircle2, Circle, Lock, CalendarIcon, Trash2, AlertTriangle, ClockIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CountdownTimer, CompletionTimer, getCountdownState } from "./TaskManagement";
 import TaskDetailPanel from "./TaskDetailPanel";
@@ -58,7 +57,6 @@ export default function TaskListView({
   onDelete,
   onUpdateDeadline,
   thresholds,
-  taskChatCounts,
   projectId,
   project,
   user,
@@ -227,14 +225,6 @@ export default function TaskListView({
 
                   {/* Quick Info */}
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {/* Chat count */}
-                    {(taskChatCounts[task.id] || 0) > 0 && (
-                      <Badge variant="secondary" className="h-5 px-1.5 text-xs">
-                        <MessageCircle className="h-3 w-3 mr-0.5" />
-                        {taskChatCounts[task.id]}
-                      </Badge>
-                    )}
-
                     {/* Effort badge (compact) - show if task has an estimate */}
                     {(task.estimated_minutes > 0 || actualSecondsByTask[task.id] > 0) && (
                       <TaskEffortBadge

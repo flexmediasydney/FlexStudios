@@ -43,8 +43,6 @@ import { useTheme } from "@/lib/ThemeContext";
 
 import GlobalNotificationBar, { NotificationBell } from "@/components/notifications/GlobalNotificationBar";
 import NotificationToast from "@/components/notifications/NotificationToast";
-import { ChatProvider, useChat } from "@/components/chat/ChatContext";
-import ChatPanel from "@/components/chat/ChatPanel";
 import { ActiveTimersProvider } from "@/components/utilization/ActiveTimersContext";
 import CalendarConnectBanner from "@/components/calendar/CalendarConnectBanner";
 
@@ -100,9 +98,7 @@ export default function Layout({ children, currentPageName }) {
 
   return (
     <NotificationProvider>
-      <ChatProvider>
-        <LayoutContentWrapper currentPageName={currentPageName} children={children} onBack={handleBack} />
-      </ChatProvider>
+      <LayoutContentWrapper currentPageName={currentPageName} children={children} onBack={handleBack} />
     </NotificationProvider>
   );
 }
@@ -121,7 +117,6 @@ function LayoutContent({ currentPageName, children, onBack }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const { data: user } = useCurrentUser();
-  const { openChats, activeChat, setActiveChat, closeChat } = useChat();
   
   // ── Live badge counts for nav ──────────────────────────────────────────
   const { unreadCount: notifUnread } = useNotifications();
@@ -628,19 +623,6 @@ function LayoutContent({ currentPageName, children, onBack }) {
 
         <GlobalSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
 
-        {/* Chat Panel */}
-        {activeChat && openChats.length > 0 && user && (
-          <ChatPanel
-            openChats={openChats}
-            activeChat={activeChat}
-            onSetActiveChat={setActiveChat}
-            onClose={() => {
-              const [type, id] = activeChat.split(':');
-              closeChat(type, id);
-            }}
-            currentUserEmail={user.email}
-          />
-        )}
       </div>
     </>
   );

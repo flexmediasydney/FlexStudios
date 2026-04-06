@@ -24,7 +24,6 @@ import { fmtDate, fixTimestamp } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import ProjectForm from "@/components/projects/ProjectForm";
 import TaskManagement from "@/components/projects/TaskManagement";
-import ChatPanel from "@/components/chat/ChatPanel";
 import MediaDeliveryManager from "@/components/projects/MediaDeliveryManager";
 import EffortLoggingTab from "@/components/projects/EffortLoggingTab";
 import ProjectCalendarEvents from "@/components/projects/ProjectCalendarEvents";
@@ -36,9 +35,8 @@ import ProjectPricingTable from "@/components/projects/ProjectPricingTable";
 import ProjectDurationTimer from "@/components/projects/ProjectDurationTimer";
 import ProjectValidationBanner from "@/components/projects/ProjectValidationBanner";
 import ConcurrentEditDetector from "@/components/projects/ConcurrentEditDetector";
-import ProjectEffortSummaryV2 from "@/components/projects/ProjectEffortSummaryV2";
+import ProjectEffortCard from "@/components/projects/ProjectEffortCard";
 import ProjectProgressBar from "@/components/projects/ProjectProgressBar";
-import TimeTrackingSummaryCard from "@/components/projects/TimeTrackingSummaryCard";
 import ProjectHealthIndicator from "@/components/projects/ProjectHealthIndicator";
 import EmailComposeDialog from "@/components/email/EmailComposeDialog";
 import ProjectRevisionsTab from "@/components/revisions/ProjectRevisionsTab";
@@ -158,7 +156,6 @@ export default function ProjectDetails() {
    const { canSeePricing, canEditProject, canAccessProject, isMasterAdmin, isEmployee, user: permUser } = usePermissions();
    const [showEditForm, setShowEditForm] = useState(false);
    const [showAgentSelector, setShowAgentSelector] = useState(false);
-   const [showProjectChat, setShowProjectChat] = useState(false);
    const [composeToAgent, setComposeToAgent] = useState(null);
    const [errorMessage, setErrorMessage] = useState(null);
    const [dismissedDeliveryPrompt, setDismissedDeliveryPrompt] = useState(false);
@@ -1432,11 +1429,8 @@ export default function ProjectDetails() {
 
         {/* Sidebar */}
         <div className="space-y-3">
-          {/* Time Tracking Summary */}
-          <ErrorBoundary><TimeTrackingSummaryCard projectId={projectId} project={project} /></ErrorBoundary>
-
-          {/* Project Effort Summary (detailed) */}
-           <ErrorBoundary><ProjectEffortSummaryV2 projectId={projectId} project={project} /></ErrorBoundary>
+          {/* Unified Project Effort (replaces TimeTrackingSummaryCard + ProjectEffortSummaryV2) */}
+          <ErrorBoundary><ProjectEffortCard projectId={projectId} project={project} onNavigateToEffort={() => handleTabChange('effort')} /></ErrorBoundary>
 
            {/* Agent + Agency combined on mobile */}
            <Card>
@@ -1585,16 +1579,6 @@ export default function ProjectDetails() {
        )}
        </ErrorBoundary>
 
-       {/* Project Chat Panel */}
-       {showProjectChat && user && (
-         <ChatPanel
-           openChats={[{ type: 'project', projectId, projectTitle: project?.title }]}
-           activeChat={`project:${projectId}`}
-           onSetActiveChat={() => {}}
-           onClose={() => setShowProjectChat(false)}
-           currentUserEmail={user.email}
-         />
-       )}
 
        {/* Email compose triggered by clicking agent email */}
        {composeToAgent && (

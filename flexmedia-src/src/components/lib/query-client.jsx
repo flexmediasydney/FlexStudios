@@ -26,7 +26,6 @@ export const queryKeys = {
   tasks: {
     all: ['tasks'],
     byProject: (projectId) => [...queryKeys.tasks.all, 'project', projectId],
-    chatCounts: (projectId) => ['taskChatCounts', projectId],
     timeLogs: () => ['taskTimeLogs'],
     liveTimers: () => ['liveActiveTimers'],
   },
