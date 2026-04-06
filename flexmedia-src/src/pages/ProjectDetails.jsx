@@ -379,6 +379,15 @@ export default function ProjectDetails() {
        actor_name: user?.full_name || null,
      }).catch(err => console.warn('trackProjectStageChange failed:', err?.message));
 
+     // Recalculate task deadlines + unblock tasks triggered by this stage
+     // (e.g., "project_onsite" trigger unblocks Upload Raws when moving to onsite)
+     api.functions.invoke('calculateProjectTaskDeadlines', {
+       project_id: projectId,
+       trigger_event: `status_${newStatus}`,
+     }).then(() => {
+       refetchEntityList('ProjectTask');
+     }).catch(err => console.warn('Task deadline recalc failed:', err?.message));
+
      logActivity('status_change',
        `Stage changed from ${stageLabel(oldStatus)} to ${stageLabel(newStatus)}`,
        { changed_fields: [{ field: 'status', old_value: oldStatus, new_value: newStatus }] }
