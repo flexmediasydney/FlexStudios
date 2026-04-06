@@ -20,6 +20,21 @@ import { AlertCircle } from 'lucide-react';
 import InstallPrompt from '@/components/pwa/InstallPrompt';
 import OfflineBanner from '@/components/ui/OfflineBanner';
 
+// Auto-reload on chunk load failure (stale deploy)
+// When Vercel deploys new code, old chunk hashes become 404s
+window.addEventListener('unhandledrejection', (event) => {
+  const msg = event?.reason?.message || '';
+  if (msg.includes('Failed to fetch dynamically imported module') || msg.includes('Loading chunk')) {
+    const reloadKey = '_chunk_reload';
+    const lastReload = sessionStorage.getItem(reloadKey);
+    // Only auto-reload once per session to prevent infinite loops
+    if (!lastReload || Date.now() - Number(lastReload) > 30000) {
+      sessionStorage.setItem(reloadKey, String(Date.now()));
+      window.location.reload();
+    }
+  }
+});
+
 const LazyFallback = () => (
   <div className="fixed inset-0 flex items-center justify-center">
     <div className="w-8 h-8 border-4 border-border border-t-slate-800 rounded-full animate-spin"></div>
