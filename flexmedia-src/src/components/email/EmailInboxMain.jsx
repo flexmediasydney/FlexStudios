@@ -1320,27 +1320,7 @@ export default function EmailInboxMain() {
                   </Tooltip>
                 </TooltipProvider>
 
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9"
-                  onClick={handleUndo}
-                  disabled={undoStack.length === 0}
-                  title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].type}` : "Nothing to undo"}
-                >
-                  <span className="text-base">↶</span>
-                </Button>
-
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="h-9 w-9" 
-                  onClick={handleRedo}
-                  disabled={redoStack.length === 0}
-                  title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].type}` : "Nothing to redo"}
-                >
-                  <span className="text-base">↷</span>
-                </Button>
+                {/* Undo/redo buttons removed — undo available via toast action links */}
               </div>
 
               {/* Saved filter presets */}
