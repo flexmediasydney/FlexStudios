@@ -421,6 +421,92 @@ function SuburbPanel({ cluster, onClose, allProjects }) {
           </div>
           <AvgTurnaroundStat projects={projects} />
         </div>
+
+        {/* ── Concentration Risk Warning ── */}
+        {concentrationRisk && (
+          <div className={cn(
+            'rounded-lg border px-3 py-2.5',
+            concentrationRisk.level === 'high'
+              ? 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800'
+              : 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800'
+          )}>
+            <div className="flex items-start gap-2">
+              <AlertTriangle className={cn('h-3.5 w-3.5 mt-0.5 shrink-0', concentrationRisk.level === 'high' ? 'text-red-600' : 'text-amber-600')} />
+              <div>
+                <div className={cn('text-[11px] font-semibold', concentrationRisk.level === 'high' ? 'text-red-700 dark:text-red-400' : 'text-amber-700 dark:text-amber-400')}>
+                  {concentrationRisk.level === 'high' ? 'High' : 'Moderate'} concentration risk
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  {concentrationRisk.name} has {concentrationRisk.count} of {concentrationRisk.total} projects ({concentrationRisk.pct}%)
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Client Mix: new vs repeat ── */}
+        {agentProjectCounts.total > 0 && (
+          <div>
+            <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2 flex items-center gap-1.5">
+              <PieChart className="h-3 w-3" /> Client Mix
+            </div>
+            <div className="space-y-2">
+              <div className="h-3 bg-muted rounded-full overflow-hidden flex">
+                {repeatPct > 0 && (
+                  <div className="h-full bg-primary transition-all" style={{ width: `${repeatPct}%`, borderTopLeftRadius: '9999px', borderBottomLeftRadius: '9999px' }} title={`Repeat: ${repeatPct}%`} />
+                )}
+                {newPct > 0 && (
+                  <div className="h-full bg-orange-400 transition-all" style={{ width: `${newPct}%`, borderTopRightRadius: '9999px', borderBottomRightRadius: '9999px' }} title={`New: ${newPct}%`} />
+                )}
+              </div>
+              <div className="flex items-center justify-between text-[10px]">
+                <div className="flex items-center gap-1.5">
+                  <div className="h-2 w-2 rounded-full bg-primary" />
+                  <span className="text-muted-foreground">Repeat</span>
+                  <span className="font-bold">{repeatPct}%</span>
+                  <span className="text-muted-foreground">({agentProjectCounts.repeat})</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="h-2 w-2 rounded-full bg-orange-400" />
+                  <span className="text-muted-foreground">New</span>
+                  <span className="font-bold">{newPct}%</span>
+                  <span className="text-muted-foreground">({agentProjectCounts.firstTime})</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Top Agents ── */}
+        {topAgentsData.length > 0 && (
+          <div>
+            <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2 flex items-center gap-1.5">
+              <Users className="h-3 w-3" /> Top Agents
+            </div>
+            {topAgentsData.map((agent) => (
+              <Link
+                key={agent.id}
+                to={createPageUrl('PersonDetails') + `?id=${agent.id}`}
+                className="flex items-center justify-between py-2 border-b border-border/30 last:border-0 hover:bg-muted/50 -mx-1 px-1 rounded transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
+                    <User className="h-3 w-3 text-primary" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium">{agent.name}</div>
+                    <div className="text-[10px] text-muted-foreground">{agent.count} project{agent.count !== 1 ? 's' : ''}</div>
+                  </div>
+                </div>
+                <div className="text-right flex items-center gap-1">
+                  <span className="text-xs font-bold tabular-nums">${agent.value.toLocaleString()}</span>
+                  <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+
         <div>
           <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Shoot Schedule</div>
           <ShootScheduleChart projects={projects} />
@@ -430,7 +516,7 @@ function SuburbPanel({ cluster, onClose, allProjects }) {
             <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Top agencies</div>
             {topAgencies.map(([name, count]) => (
               <div key={name} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0">
-                <div className="flex items-center gap-2"><Building2 className="h-3 w-3 text-muted-foreground" /><span className="text-xs font-medium">{name}</span></div>
+                <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: getAgencyColor(name) }} /><Building2 className="h-3 w-3 text-muted-foreground" /><span className="text-xs font-medium">{name}</span></div>
                 <Badge variant="outline" className="text-[10px] h-5">{count}</Badge>
               </div>
             ))}
@@ -624,6 +710,78 @@ function ActiveProjectDots({ clusters }) {
       </CircleMarker>
     );
   });
+}
+
+// ─── Agency-colored territory bubbles ─────────────────────────────────
+function AgencyBubbles({ clusters, onSelect, selectedSuburb }) {
+  return clusters.map((cluster, i) => {
+    const dominant = getDominantAgency(cluster.projects);
+    const bubbleColor = dominant ? getAgencyColor(dominant.name) : '#94a3b8';
+    const radius = Math.max(14, Math.min(55, (cluster.projects.length / 30) * 55));
+    const isSelected = selectedSuburb === cluster.suburb;
+    return (
+      <CircleMarker
+        key={`agency-${cluster.suburb}-${i}`}
+        center={[cluster.lat, cluster.lng]}
+        radius={radius}
+        pathOptions={{
+          fillColor: isSelected ? '#2563eb' : bubbleColor,
+          fillOpacity: isSelected ? 0.9 : 0.7,
+          color: '#fff',
+          weight: isSelected ? 3 : 2,
+          opacity: 0.95,
+        }}
+        eventHandlers={{ click: () => onSelect(cluster) }}
+      >
+        <LTooltip direction="top" offset={[0, -radius]} permanent={radius >= 22}>
+          <div className="text-center px-1">
+            <div className="font-bold text-xs leading-tight">{cluster.suburb}</div>
+            <div className="text-[10px] text-muted-foreground">
+              {dominant ? dominant.name : 'No agency'} &middot; {cluster.projects.length} projects
+            </div>
+          </div>
+        </LTooltip>
+      </CircleMarker>
+    );
+  });
+}
+
+// ─── Agency legend panel ──────────────────────────────────────────────
+function AgencyLegend({ clusters }) {
+  const agencyCounts = useMemo(() => {
+    const counts = {};
+    clusters.forEach(c => c.projects.forEach(p => {
+      if (p.agency_name) counts[p.agency_name] = (counts[p.agency_name] || 0) + 1;
+    }));
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [clusters]);
+
+  if (agencyCounts.length === 0) return null;
+
+  return (
+    <div className="absolute top-3 right-3 w-52 bg-background/95 backdrop-blur-sm border rounded-xl shadow-lg z-20 overflow-hidden">
+      <div className="px-3 py-2 border-b bg-muted/30">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Agency Colors</span>
+          <Building2 className="h-3 w-3 text-muted-foreground" />
+        </div>
+      </div>
+      <div className="max-h-64 overflow-y-auto p-1.5">
+        {agencyCounts.slice(0, 15).map(([name, count]) => (
+          <div key={name} className="flex items-center gap-2 px-2 py-1.5 rounded text-xs">
+            <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: getAgencyColor(name) }} />
+            <span className="flex-1 truncate font-medium">{name}</span>
+            <span className="text-[10px] text-muted-foreground tabular-nums">{count}</span>
+          </div>
+        ))}
+        {agencyCounts.length > 15 && (
+          <div className="text-[10px] text-muted-foreground text-center py-1">
+            +{agencyCounts.length - 15} more agencies
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ─── Timeline slider + playback ───────────────────────────────────────
@@ -1186,6 +1344,7 @@ export default function TerritoryMap() {
         <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
           {[
             { v: 'territory', l: 'Territory', icon: Layers },
+            { v: 'agencies', l: 'Agencies', icon: Building2 },
             { v: 'pins', l: 'All Pins', icon: MapPin },
             { v: 'heatmap', l: 'Heatmap', icon: Flame },
             { v: 'timeline', l: 'Timeline', icon: Clock },
@@ -1203,7 +1362,7 @@ export default function TerritoryMap() {
           ))}
         </div>
 
-        {(mode === 'territory' || mode === 'heatmap') && (
+        {(mode === 'territory' || mode === 'heatmap' || mode === 'agencies') && (
           <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
             {[{ v: 'count', l: 'Volume' }, { v: 'revenue', l: 'Revenue' }, { v: 'avg_value', l: 'Avg Value' }].map(({ v, l }) => (
               <button key={v} onClick={() => setMetric(v)} className={cn('text-xs px-2.5 py-1 rounded-md font-medium transition-all', metric === v ? 'bg-background shadow-sm' : 'text-muted-foreground')}>{l}</button>
@@ -1444,17 +1603,28 @@ export default function TerritoryMap() {
             <TileLayer attribution={TILE_ATTR} url={mapTheme === 'dark' ? TILE_DARK : TILE_LIGHT} key={mapTheme} />
             <ZoomControl position="bottomright" />
 
+            {/* Fly-to target for suburb search */}
+            {flyToTarget && <MapFlyTo center={[flyToTarget.lat, flyToTarget.lng]} zoom={14} />}
+
             {(mode === 'territory' || mode === 'timeline') && (
               <TerritoryBubbles
                 clusters={activeClusters}
                 metric={metric}
-                onSelect={(c) => setSelectedCluster(c)}
+                onSelect={handleClusterClick}
                 selectedSuburb={selectedCluster?.suburb}
               />
             )}
 
             {mode === 'heatmap' && (
               <HeatmapOverlay projects={filtered} />
+            )}
+
+            {mode === 'agencies' && (
+              <AgencyBubbles
+                clusters={activeClusters}
+                onSelect={handleClusterClick}
+                selectedSuburb={selectedCluster?.suburb}
+              />
             )}
 
             {mode === 'pins' && (
@@ -1476,7 +1646,7 @@ export default function TerritoryMap() {
         )}
 
         {/* Top suburbs leaderboard (territory, heatmap & timeline modes) */}
-        {(mode === 'territory' || mode === 'timeline' || mode === 'heatmap') && topSuburbs.length > 0 && (
+        {(mode === 'territory' || mode === 'timeline' || mode === 'heatmap' || mode === 'agencies') && topSuburbs.length > 0 && (
           <div className="absolute top-3 left-3 w-56 bg-background/95 backdrop-blur-sm border rounded-xl shadow-lg z-20 overflow-hidden">
             <div className="px-3 py-2 border-b bg-muted/30">
               <div className="flex items-center justify-between">
@@ -1546,6 +1716,9 @@ export default function TerritoryMap() {
           </div>
         )}
 
+        {/* Agency legend (agencies mode only) */}
+        {mode === 'agencies' && <AgencyLegend clusters={activeClusters} />}
+
         {/* Timeline controls */}
         {mode === 'timeline' && timelineMonths.length > 0 && (
           <TimelineControls
@@ -1563,8 +1736,26 @@ export default function TerritoryMap() {
           />
         )}
 
-        {/* Suburb detail panel */}
-        {selectedCluster && <SuburbPanel cluster={selectedCluster} onClose={() => setSelectedCluster(null)} />}
+        {/* Suburb detail panel (hidden during compare) */}
+        {selectedCluster && !compareMode && <SuburbPanel cluster={selectedCluster} onClose={() => setSelectedCluster(null)} allProjects={allProjects} />}
+
+        {/* Compare panel */}
+        {compareMode && compareA && compareB && (
+          <ComparePanel clusterA={compareA} clusterB={compareB} onClose={exitCompareMode} />
+        )}
+
+        {/* Compare mode selection indicators */}
+        {compareMode && compareA && !compareB && (
+          <div className="absolute top-3 right-3 z-20 bg-purple-50 dark:bg-purple-950/40 border border-purple-300 dark:border-purple-700 rounded-xl shadow-lg px-4 py-3">
+            <div className="flex items-center gap-2 text-xs">
+              <div className="h-6 w-6 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold text-[10px]">1</div>
+              <span className="font-medium text-purple-700 dark:text-purple-300">{compareA.suburb}</span>
+              <ArrowRight className="h-3 w-3 text-muted-foreground" />
+              <div className="h-6 w-6 rounded-full bg-muted border-2 border-dashed border-amber-400 flex items-center justify-center font-bold text-[10px] text-muted-foreground">2</div>
+              <span className="text-muted-foreground">Select second suburb...</span>
+            </div>
+          </div>
+        )}
 
         {/* Revenue intelligence summary bar */}
         {mode !== 'timeline' && filtered.length > 0 && (
@@ -1614,6 +1805,34 @@ export default function TerritoryMap() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* ── Persistent summary stats footer ── */}
+      <div className="shrink-0 border-t bg-zinc-900 text-zinc-300 px-4 py-1.5 flex items-center justify-between gap-6 text-xs font-medium tabular-nums overflow-x-auto">
+        <div className="flex items-center gap-1.5">
+          <Layers className="h-3 w-3 text-zinc-500" />
+          <span>{footerStats.total} projects</span>
+        </div>
+        <div className="w-px h-3 bg-zinc-700" />
+        <div className="flex items-center gap-1.5">
+          <DollarSign className="h-3 w-3 text-green-500" />
+          <span>${footerStats.revenue.toLocaleString()} total</span>
+        </div>
+        <div className="w-px h-3 bg-zinc-700" />
+        <div className="flex items-center gap-1.5">
+          <BarChart3 className="h-3 w-3 text-blue-400" />
+          <span>${footerStats.avgVal.toLocaleString()} avg</span>
+        </div>
+        <div className="w-px h-3 bg-zinc-700" />
+        <div className="flex items-center gap-1.5">
+          <Crosshair className="h-3 w-3 text-amber-400" />
+          <span>{footerStats.geocodedPct}% geocoded</span>
+        </div>
+        <div className="w-px h-3 bg-zinc-700" />
+        <div className="flex items-center gap-1.5">
+          <MapPin className="h-3 w-3 text-purple-400" />
+          <span>Top: {footerStats.topSuburb}</span>
+        </div>
       </div>
     </div>
   );
