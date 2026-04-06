@@ -234,6 +234,101 @@ function FilterDropdown({ label, icon: Icon, options, selected, onChange, search
   );
 }
 
+// ─── Shoot density by day of week ────────────────────────────────────
+const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+function ShootScheduleChart({ projects }) {
+  const dayCounts = useMemo(() => {
+    const counts = [0, 0, 0, 0, 0, 0, 0]; // Mon-Sun
+    projects.forEach(p => {
+      if (!p.shoot_date) return;
+      const d = parseDate(p.shoot_date);
+      if (!d) return;
+      const dow = getDay(d); // 0=Sun
+      const idx = dow === 0 ? 6 : dow - 1; // convert to Mon=0..Sun=6
+      counts[idx]++;
+    });
+    return counts;
+  }, [projects]);
+  const max = Math.max(...dayCounts, 1);
+  return (
+    <div className="space-y-1">
+      {DAY_LABELS.map((label, i) => (
+        <div key={label} className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground w-7 text-right font-medium">{label}</span>
+          <div className="flex-1 h-3 bg-muted/50 rounded overflow-hidden">
+            <div
+              className="h-full rounded bg-primary/60 transition-all"
+              style={{ width: `${(dayCounts[i] / max) * 100}%` }}
+            />
+          </div>
+          <span className="text-[10px] font-bold w-5 text-right tabular-nums">{dayCounts[i]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Average turnaround time ─────────────────────────────────────────
+function AvgTurnaroundStat({ projects }) {
+  const { color, label } = useMemo(() => {
+    const delivered = projects.filter(p =>
+      p.status === 'delivered' && p.created_date && p.last_status_change
+    );
+    if (delivered.length === 0) return { color: 'text-muted-foreground', label: 'N/A' };
+    const totalDays = delivered.reduce((sum, p) => {
+      const start = new Date(fixTimestamp(p.created_date));
+      const end = new Date(fixTimestamp(p.last_status_change));
+      return sum + Math.max(0, differenceInDays(end, start));
+    }, 0);
+    const avgDays = Math.round(totalDays / delivered.length);
+    let c = 'text-green-600';
+    if (avgDays > 14) c = 'text-red-600';
+    else if (avgDays >= 7) c = 'text-amber-600';
+    return { color: c, label: `${avgDays}d` };
+  }, [projects]);
+  return (
+    <div className="bg-muted/50 rounded-lg p-2.5 text-center">
+      <div className={cn("text-lg font-bold", color)}>{label}</div>
+      <div className="text-[9px] text-muted-foreground uppercase">Avg Turnaround</div>
+    </div>
+  );
+}
+
+// ─── Drive time radius overlay ───────────────────────────────────────
+const DRIVE_RADII = [
+  { label: '15min', km: 10 },
+  { label: '30min', km: 20 },
+  { label: '45min', km: 30 },
+  { label: '60min', km: 40 },
+];
+
+function DriveRadiusOverlay({ selectedRadius }) {
+  if (selectedRadius === null) return null;
+  return (
+    <>
+      {DRIVE_RADII.slice(0, selectedRadius + 1).map((r, i) => (
+        <Circle
+          key={r.label}
+          center={SYDNEY}
+          radius={r.km * 1000}
+          pathOptions={{
+            fillColor: '#3b82f6',
+            fillOpacity: i === selectedRadius ? 0.08 : 0.03,
+            color: '#3b82f6',
+            weight: i === selectedRadius ? 2 : 1,
+            opacity: i === selectedRadius ? 0.6 : 0.25,
+            dashArray: i === selectedRadius ? undefined : '6 4',
+          }}
+        >
+          <LTooltip direction="top" permanent={false}>
+            <span className="text-xs font-medium">{r.label} drive ({r.km}km)</span>
+          </LTooltip>
+        </Circle>
+      ))}
+    </>
+  );
+}
+
 // ─── Suburb detail panel ──────────────────────────────────────────────
 function SuburbPanel({ cluster, onClose, allProjects }) {
   if (!cluster) return null;
@@ -309,7 +404,7 @@ function SuburbPanel({ cluster, onClose, allProjects }) {
         <button onClick={onClose} className="p-1 rounded hover:bg-muted"><X className="h-4 w-4" /></button>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           <div className="bg-muted/50 rounded-lg p-2.5 text-center">
             <div className="text-lg font-bold">{projects.length}</div>
             <div className="text-[9px] text-muted-foreground uppercase">Projects</div>
@@ -324,6 +419,11 @@ function SuburbPanel({ cluster, onClose, allProjects }) {
             </div>
             <div className="text-[9px] text-muted-foreground uppercase">6mo Growth</div>
           </div>
+          <AvgTurnaroundStat projects={projects} />
+        </div>
+        <div>
+          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Shoot Schedule</div>
+          <ShootScheduleChart projects={projects} />
         </div>
         {topAgencies.length > 0 && (
           <div>
@@ -497,6 +597,35 @@ function TerritoryBubbles({ clusters, metric, onSelect, selectedSuburb }) {
   });
 }
 
+// ─── Active project indicator dots ──────────────────────────────────
+function ActiveProjectDots({ clusters }) {
+  return clusters.map((cluster, i) => {
+    const activeCount = cluster.projects.filter(p =>
+      ['onsite', 'uploaded', 'submitted'].includes(p.status)
+    ).length;
+    if (activeCount === 0) return null;
+    return (
+      <CircleMarker
+        key={`active-${cluster.suburb}-${i}`}
+        center={[cluster.lat, cluster.lng]}
+        radius={5}
+        pathOptions={{
+          fillColor: '#f97316',
+          fillOpacity: 0.9,
+          color: '#fff',
+          weight: 1.5,
+          opacity: 1,
+          className: 'animate-pulse',
+        }}
+      >
+        <LTooltip direction="right" offset={[8, 0]}>
+          <span className="text-[10px] font-bold">{activeCount} active project{activeCount !== 1 ? 's' : ''}</span>
+        </LTooltip>
+      </CircleMarker>
+    );
+  });
+}
+
 // ─── Timeline slider + playback ───────────────────────────────────────
 function TimelineControls({ months, currentIndex, onChange, playing, onTogglePlay, stats }) {
   if (!months.length) return null;
@@ -573,6 +702,166 @@ function TimelineControls({ months, currentIndex, onChange, playing, onTogglePla
   );
 }
 
+// ─── Map fly-to helper (for suburb search zoom) ─────────────────────
+function MapFlyTo({ center, zoom }) {
+  const map = useMap();
+  useEffect(() => {
+    if (center) map.flyTo(center, zoom ?? 14, { duration: 1.2 });
+  }, [center, zoom, map]);
+  return null;
+}
+
+// ─── Compare panel: side-by-side suburb stats ────────────────────────
+function ComparePanel({ clusterA, clusterB, onClose }) {
+  if (!clusterA || !clusterB) return null;
+
+  function getStats(cluster) {
+    const projects = cluster.projects;
+    const totalRev = projects.reduce((s, p) => s + projectValue(p), 0);
+    const avgVal = projects.length > 0 ? Math.round(totalRev / projects.length) : 0;
+    const agencies = {};
+    projects.forEach(p => { if (p.agency_name) agencies[p.agency_name] = (agencies[p.agency_name] || 0) + 1; });
+    const topAgency = Object.entries(agencies).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A';
+    const now = new Date();
+    const sixAgo = subMonths(now, 6);
+    const twelveAgo = subMonths(now, 12);
+    const recent = projects.filter(p => p.created_date && new Date(fixTimestamp(p.created_date)) >= sixAgo).length;
+    const prior = projects.filter(p => { if (!p.created_date) return false; const d = new Date(fixTimestamp(p.created_date)); return d >= twelveAgo && d < sixAgo; }).length;
+    const growth = prior > 0 ? Math.round(((recent - prior) / prior) * 100) : recent > 0 ? 100 : 0;
+    return { count: projects.length, totalRev, avgVal, growth, topAgency };
+  }
+
+  const sA = getStats(clusterA);
+  const sB = getStats(clusterB);
+
+  const rows = [
+    { label: 'Projects', a: sA.count, b: sB.count, fmt: v => v },
+    { label: 'Revenue', a: sA.totalRev, b: sB.totalRev, fmt: v => `$${v.toLocaleString()}` },
+    { label: 'Avg Value', a: sA.avgVal, b: sB.avgVal, fmt: v => `$${v.toLocaleString()}` },
+    { label: 'Growth (6mo)', a: sA.growth, b: sB.growth, fmt: v => `${v > 0 ? '+' : ''}${v}%` },
+  ];
+
+  return (
+    <div className="absolute top-0 right-0 h-full w-[420px] bg-background border-l shadow-xl z-20 flex flex-col">
+      <div className="flex items-center justify-between px-4 py-3 border-b shrink-0 bg-primary/5">
+        <div className="flex items-center gap-2">
+          <GitCompare className="h-4 w-4 text-primary" />
+          <h3 className="font-bold text-sm">Compare Suburbs</h3>
+        </div>
+        <button onClick={onClose} className="p-1 rounded hover:bg-muted"><X className="h-4 w-4" /></button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="bg-blue-50 dark:bg-blue-950/30 rounded-lg p-2">
+            <div className="text-xs font-bold text-blue-700 dark:text-blue-300 truncate">{clusterA.suburb}</div>
+            <div className="text-[9px] text-muted-foreground">{sA.count} projects</div>
+          </div>
+          <div className="flex items-center justify-center">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase">vs</span>
+          </div>
+          <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-2">
+            <div className="text-xs font-bold text-amber-700 dark:text-amber-300 truncate">{clusterB.suburb}</div>
+            <div className="text-[9px] text-muted-foreground">{sB.count} projects</div>
+          </div>
+        </div>
+        {rows.map(({ label, a, b, fmt }) => {
+          const mx = Math.max(Math.abs(a), Math.abs(b), 1);
+          return (
+            <div key={label} className="space-y-1.5">
+              <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{label}</div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] w-14 text-right font-medium text-blue-700 dark:text-blue-300 shrink-0">{fmt(a)}</span>
+                  <div className="flex-1 h-4 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${(Math.abs(a) / mx) * 100}%` }} />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] w-14 text-right font-medium text-amber-700 dark:text-amber-300 shrink-0">{fmt(b)}</span>
+                  <div className="flex-1 h-4 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full rounded-full bg-amber-500 transition-all" style={{ width: `${(Math.abs(b) / mx) * 100}%` }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        <div className="grid grid-cols-2 gap-3 pt-2">
+          <div>
+            <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">Top Agency</div>
+            <div className="text-xs font-medium flex items-center gap-1.5">
+              <Building2 className="h-3 w-3 text-blue-500 shrink-0" />
+              <span className="truncate">{sA.topAgency}</span>
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">Top Agency</div>
+            <div className="text-xs font-medium flex items-center gap-1.5">
+              <Building2 className="h-3 w-3 text-amber-500 shrink-0" />
+              <span className="truncate">{sB.topAgency}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Suburb search dropdown ──────────────────────────────────────────
+function SuburbSearchDropdown({ clusters, onSelect }) {
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef(null);
+
+  const matches = useMemo(() => {
+    if (!search.trim()) return [];
+    const q = search.toLowerCase();
+    return clusters
+      .filter(c => c.suburb && c.suburb.toLowerCase().includes(q))
+      .sort((a, b) => b.projects.length - a.projects.length)
+      .slice(0, 8);
+  }, [search, clusters]);
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+        <Input
+          ref={inputRef}
+          placeholder="Search suburb..."
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setOpen(true); }}
+          onFocus={() => { if (search.trim()) setOpen(true); }}
+          onBlur={() => setTimeout(() => setOpen(false), 200)}
+          className="h-7 text-xs pl-7 w-40"
+        />
+      </div>
+      {open && matches.length > 0 && (
+        <div className="absolute top-full left-0 mt-1 w-56 bg-background border rounded-lg shadow-lg z-50 max-h-56 overflow-y-auto">
+          {matches.map((cluster, i) => (
+            <button
+              key={`${cluster.suburb}-${i}`}
+              className="w-full text-left px-3 py-2 hover:bg-muted transition-colors flex items-center justify-between text-xs border-b border-border/20 last:border-0"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onSelect(cluster);
+                setSearch('');
+                setOpen(false);
+              }}
+            >
+              <span className="font-medium flex items-center gap-1.5">
+                <MapPin className="h-3 w-3 text-muted-foreground shrink-0" />
+                {cluster.suburb}
+              </span>
+              <span className="text-[10px] text-muted-foreground">{cluster.projects.length} projects</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────
 export default function TerritoryMap() {
   const navigate = useNavigate();
@@ -597,6 +886,21 @@ export default function TerritoryMap() {
   const [playing, setPlaying] = useState(false);
   const [timelineIndex, setTimelineIndex] = useState(0);
   const timelineRef = useRef(null);
+
+  // Drive radius toggle
+  const [driveRadius, setDriveRadius] = useState(null); // null = off, 0-3 = DRIVE_RADII index
+
+  // Compare mode
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareA, setCompareA] = useState(null);
+  const [compareB, setCompareB] = useState(null);
+
+  // Fullscreen
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const containerRef = useRef(null);
+
+  // Suburb search fly-to target
+  const [flyToTarget, setFlyToTarget] = useState(null);
 
   // Geocoding
   const [geocoding, setGeocoding] = useState(false);
@@ -819,9 +1123,64 @@ export default function TerritoryMap() {
     navigate(createPageUrl('ProjectDetails') + `?id=${project.id}`);
   }, [navigate]);
 
+  // Compare mode: handle cluster click
+  const handleClusterClick = useCallback((cluster) => {
+    if (!compareMode) {
+      setSelectedCluster(cluster);
+      return;
+    }
+    if (!compareA) {
+      setCompareA(cluster);
+    } else if (!compareB) {
+      setCompareB(cluster);
+    }
+  }, [compareMode, compareA, compareB]);
+
+  const exitCompareMode = useCallback(() => {
+    setCompareMode(false);
+    setCompareA(null);
+    setCompareB(null);
+  }, []);
+
+  // Fullscreen toggle
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  // Suburb search handler: zoom + open detail
+  const handleSuburbSearch = useCallback((cluster) => {
+    setFlyToTarget({ lat: cluster.lat, lng: cluster.lng });
+    setSelectedCluster(cluster);
+    // Reset fly target after animation
+    setTimeout(() => setFlyToTarget(null), 2000);
+  }, []);
+
+  // Summary stats for footer
+  const footerStats = useMemo(() => {
+    const avgVal = filtered.length > 0 ? Math.round(totalRevenue / filtered.length) : 0;
+    // Top suburb by count
+    const suburbCounts = {};
+    filtered.forEach(p => {
+      const s = p.property_suburb || 'Unknown';
+      suburbCounts[s] = (suburbCounts[s] || 0) + 1;
+    });
+    const topSuburb = Object.entries(suburbCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '-';
+    return { total: filtered.length, revenue: totalRevenue, avgVal, geocodedPct, topSuburb };
+  }, [filtered, totalRevenue, geocodedPct]);
+
   // ─── Render ──────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full">
+    <div ref={containerRef} className="flex flex-col h-full bg-background">
       {/* ── Top toolbar: mode selector, metric toggle, theme toggle ── */}
       <div className="flex flex-wrap items-center gap-2 p-3 border-b bg-background shrink-0">
         <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
@@ -852,14 +1211,87 @@ export default function TerritoryMap() {
           </div>
         )}
 
+        {/* Suburb search */}
+        <SuburbSearchDropdown clusters={activeClusters} onSelect={handleSuburbSearch} />
+
+        {/* Compare mode toggle */}
+        {(mode === 'territory' || mode === 'heatmap') && (
+          <button
+            onClick={compareMode ? exitCompareMode : () => { setCompareMode(true); setCompareA(null); setCompareB(null); setSelectedCluster(null); }}
+            className={cn(
+              'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all',
+              compareMode
+                ? 'bg-purple-50 text-purple-700 border-purple-300 dark:bg-purple-950/30 dark:text-purple-300'
+                : 'text-muted-foreground border-border hover:border-foreground/30 hover:bg-muted'
+            )}
+          >
+            <GitCompare className="h-3 w-3" />
+            {compareMode ? 'Exit Compare' : 'Compare'}
+          </button>
+        )}
+
         <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+          {/* Compare mode prompt */}
+          {compareMode && (
+            <span className="font-medium text-purple-600 dark:text-purple-400 animate-pulse">
+              {!compareA ? 'Click first suburb...' : !compareB ? 'Click second suburb...' : ''}
+            </span>
+          )}
           <span className="font-medium tabular-nums">{filtered.length} projects &middot; ${totalRevenue.toLocaleString()} &middot; {geocodedPct}% geocoded</span>
+          {/* Drive radius toggle */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                className={cn(
+                  'flex items-center gap-1 px-2 py-1.5 rounded-lg border text-xs font-medium transition-all',
+                  driveRadius !== null
+                    ? 'bg-blue-50 text-blue-700 border-blue-300'
+                    : 'hover:bg-muted border-border'
+                )}
+                title="Show drive time radius from Sydney CBD"
+              >
+                <Truck className="h-3 w-3" />
+                {driveRadius !== null ? DRIVE_RADII[driveRadius].label : 'Drive'}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-40 p-1.5" align="end">
+              <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest px-2 py-1 mb-1">Drive Radius</div>
+              <button
+                onClick={() => setDriveRadius(null)}
+                className={cn(
+                  'w-full text-left px-2 py-1.5 rounded text-xs hover:bg-muted transition-colors flex items-center gap-2',
+                  driveRadius === null && 'bg-muted font-medium'
+                )}
+              >
+                <X className="h-3 w-3 text-muted-foreground" /> Off
+              </button>
+              {DRIVE_RADII.map((r, idx) => (
+                <button
+                  key={r.label}
+                  onClick={() => setDriveRadius(idx)}
+                  className={cn(
+                    'w-full text-left px-2 py-1.5 rounded text-xs hover:bg-muted transition-colors flex items-center gap-2',
+                    driveRadius === idx && 'bg-blue-50 text-blue-700 font-medium'
+                  )}
+                >
+                  <Radio className="h-3 w-3" /> {r.label} ({r.km}km)
+                </button>
+              ))}
+            </PopoverContent>
+          </Popover>
           <button
             onClick={() => setMapTheme(t => t === 'light' ? 'dark' : 'light')}
             className="p-1.5 rounded-lg border hover:bg-muted transition-colors"
             title={mapTheme === 'light' ? 'Dark mode' : 'Light mode'}
           >
             {mapTheme === 'light' ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            onClick={toggleFullscreen}
+            className="p-1.5 rounded-lg border hover:bg-muted transition-colors"
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {isFullscreen ? <Minimize className="h-3.5 w-3.5" /> : <Maximize className="h-3.5 w-3.5" />}
           </button>
         </div>
       </div>
@@ -1032,6 +1464,13 @@ export default function TerritoryMap() {
                 mode="pipeline"
                 onSelectProject={handleProjectClick}
               />
+            )}
+            {/* Drive time radius circles */}
+            <DriveRadiusOverlay selectedRadius={driveRadius} />
+
+            {/* Active project indicator dots */}
+            {(mode === 'territory' || mode === 'timeline') && (
+              <ActiveProjectDots clusters={activeClusters} />
             )}
           </MapContainer>
         )}
