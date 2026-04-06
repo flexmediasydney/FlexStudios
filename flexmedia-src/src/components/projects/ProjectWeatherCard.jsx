@@ -107,26 +107,30 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
       setLoading(true);
       setError(null);
       try {
-        // Step 1: Geocode suburb
+        // Step 1: Geocode suburb — include state + Australia for accuracy
+        const searchTerm = [suburb, addressState, 'Australia'].filter(Boolean).join(' ');
         const geoRes = await fetch(
-          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(suburb)}&count=5&language=en&format=json`,
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchTerm)}&count=10&language=en&format=json`,
           { signal: controller.signal }
         );
         const geoData = await geoRes.json();
 
-        // Filter for Australian results, prefer matching state if provided
+        // Strictly prefer Australian results
         const results = geoData.results || [];
         let auResult = results.find(r => r.country_code === "AU" && r.admin1 === addressState);
         if (!auResult) {
           auResult = results.find(r => r.country_code === "AU");
         }
+        // Fallback: use project's geocoded coordinates if suburb not in geocoder
         if (!auResult) {
-          auResult = results[0];
-        }
-
-        if (!auResult) {
-          if (!controller.signal.aborted) { setError("Location not found"); setLoading(false); }
-          return;
+          const projLat = project?.geocoded_lat || project?.latitude;
+          const projLng = project?.geocoded_lng || project?.longitude;
+          if (projLat && projLng) {
+            auResult = { latitude: parseFloat(projLat), longitude: parseFloat(projLng), name: suburb, admin1: addressState };
+          } else {
+            if (!controller.signal.aborted) { setError("Location not found"); setLoading(false); }
+            return;
+          }
         }
 
         const { latitude, longitude, name, admin1 } = auResult;
