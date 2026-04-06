@@ -671,6 +671,9 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     return task.is_blocked === true;
   };
 
+  // Onsite tasks are auto-managed (created by syncOnsiteEffortTasks, completed by logOnsiteEffortOnUpload)
+  const isOnsiteTask = (task) => task?.task_type === 'onsite' || task?.template_id?.startsWith('onsite:');
+
   if (isLoading) return <div className="py-8 text-center text-sm text-muted-foreground">Loading tasks...</div>;
 
   // Enrich all tasks

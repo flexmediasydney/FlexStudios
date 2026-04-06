@@ -297,8 +297,8 @@ export default function TaskDetailPanel({
         </div>
       )}
 
-      {/* Time Logger */}
-      {user && !task.is_completed && !task.is_locked && (
+      {/* Time Logger — hidden for onsite tasks (auto-managed) */}
+      {user && !task.is_completed && !task.is_locked && !isOnsite && (
         <TaskTimeLoggerRobust task={task} project={project} currentUser={user} />
       )}
 
