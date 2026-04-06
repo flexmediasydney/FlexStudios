@@ -1593,7 +1593,6 @@ export default function TerritoryMap() {
           </div>
         ) : (
           <MapContainer
-            key={mapKey}
             center={SYDNEY}
             zoom={11}
             style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
@@ -1657,18 +1656,20 @@ export default function TerritoryMap() {
               </div>
             </div>
             <div className="max-h-80 overflow-y-auto">
-              {topSuburbs.map((cluster, i) => {
+              {(() => {
+                // Compute maxVal once outside the loop instead of per-iteration
+                const first = topSuburbs[0];
+                const maxVal = first
+                  ? metric === 'revenue' ? first.projects.reduce((s, p) => s + projectValue(p), 0)
+                    : metric === 'avg_value' ? (first.projects.length > 0 ? first.projects.reduce((s, p) => s + projectValue(p), 0) / first.projects.length : 1)
+                    : first.projects.length
+                  : 1;
+                return topSuburbs.map((cluster, i) => {
                 const val = metric === 'revenue'
                   ? cluster.projects.reduce((s, p) => s + projectValue(p), 0)
                   : metric === 'avg_value'
                     ? (cluster.projects.length > 0 ? cluster.projects.reduce((s, p) => s + projectValue(p), 0) / cluster.projects.length : 0)
                     : cluster.projects.length;
-                const maxVal = (() => {
-                  const first = topSuburbs[0];
-                  if (metric === 'revenue') return first.projects.reduce((s, p) => s + projectValue(p), 0);
-                  if (metric === 'avg_value') return first.projects.length > 0 ? first.projects.reduce((s, p) => s + projectValue(p), 0) / first.projects.length : 1;
-                  return first.projects.length;
-                })();
                 const avgVal = metric === 'avg_value' ? val : null;
                 const isAboveAvg = avgVal !== null && avgVal >= overallAvgValue;
                 const isBelowAvg = avgVal !== null && avgVal < overallAvgValue;
@@ -1706,7 +1707,8 @@ export default function TerritoryMap() {
                     </div>
                   </button>
                 );
-              })}
+              });
+              })()}
             </div>
             {metric === 'avg_value' && (
               <div className="px-3 py-1.5 border-t bg-muted/20 text-[9px] text-muted-foreground text-center">

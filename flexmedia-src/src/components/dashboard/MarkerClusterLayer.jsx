@@ -288,7 +288,7 @@ export default function MarkerClusterLayer({
       let initials = '';
       const staffId = project.project_owner_id || project.onsite_staff_1_id;
       if (staffId) {
-        const u = users.find(u => u.id === staffId);
+        const u = users.find(usr => usr.id === staffId);
         if (u?.full_name) {
           initials = u.full_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
         }
