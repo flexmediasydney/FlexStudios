@@ -1,8 +1,9 @@
 import {
-  Users, Phone, CheckSquare, AlertCircle, Mail, Coffee, Calendar
+  Users, Phone, CheckSquare, AlertCircle, Mail, Coffee, Calendar, Camera
 } from 'lucide-react';
 
 export const ACTIVITY_TYPES = {
+  shoot:    { label: 'Shoot',    Icon: Camera,        color: '#f97316', bgColor: '#fff7ed' },
   meeting:  { label: 'Meeting',  Icon: Users,         color: '#3b82f6', bgColor: '#eff6ff' },
   call:     { label: 'Call',     Icon: Phone,         color: '#10b981', bgColor: '#f0fdf4' },
   task:     { label: 'Task',     Icon: CheckSquare,   color: '#8b5cf6', bgColor: '#f5f3ff' },
