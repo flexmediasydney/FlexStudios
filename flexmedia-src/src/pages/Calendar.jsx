@@ -28,7 +28,25 @@ import { usePermissions } from '@/components/auth/PermissionGuard';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const VIEWS = ['month', 'week', 'day'];
-const SLOT_HEIGHT = 56; // px per hour slot
+// Business hours (8am-9pm) get full height, off-hours are compressed
+const BUSINESS_START = 8;  // 8am
+const BUSINESS_END = 21;   // 9pm
+const SLOT_HEIGHT_BUSINESS = 64; // px per business hour
+const SLOT_HEIGHT_OFF = 20;      // px per off-hour (compressed)
+const SLOT_HEIGHT = 56; // legacy fallback
+const getSlotHeight = (hour) => (hour >= BUSINESS_START && hour < BUSINESS_END) ? SLOT_HEIGHT_BUSINESS : SLOT_HEIGHT_OFF;
+const getSlotTop = (hour) => {
+  let top = 0;
+  for (let h = 0; h < hour; h++) top += getSlotHeight(h);
+  return top;
+};
+const TOTAL_DAY_HEIGHT = (() => { let t = 0; for (let h = 0; h < 24; h++) t += getSlotHeight(h); return t; })();
+// Convert total minutes-from-midnight to pixel position (variable-height aware)
+function minutesToPx(totalMinutes) {
+  const hour = Math.floor(totalMinutes / 60);
+  const min = totalMinutes % 60;
+  return getSlotTop(hour) + (min / 60) * getSlotHeight(hour);
+}
 
 // Event type color coding: shoots=blue, meetings=green, personal=gray
 const EVENT_TYPE_COLORS = {
@@ -1072,8 +1090,8 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
         <div className="w-14 flex-shrink-0 border-r">
           <div className="border-b" style={{ height: 44 }} />
           {hours.map(h => (
-            <div key={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
-              <span className="text-xs text-muted-foreground">
+            <div key={h} style={{ height: getSlotHeight(h) }} className={cn("border-b flex items-start justify-end pr-2 pt-1", (h < BUSINESS_START || h >= BUSINESS_END) && "bg-muted/30")}>
+              <span className={cn("text-muted-foreground", (h < BUSINESS_START || h >= BUSINESS_END) ? "text-[9px]" : "text-xs")}>
                 {h === 0 ? '' : `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`}
               </span>
             </div>
@@ -1097,8 +1115,8 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
 
                 {/* Hour slots */}
                 {hours.map(h => (
-                  <div key={h} data-hour={h} style={{ height: SLOT_HEIGHT }}
-                    className="border-b hover:bg-muted/10 cursor-pointer group relative"
+                  <div key={h} data-hour={h} style={{ height: getSlotHeight(h) }}
+                    className={cn("border-b hover:bg-muted/10 cursor-pointer group relative", (h < BUSINESS_START || h >= BUSINESS_END) && "bg-muted/30")}
                     onDoubleClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellDoubleClick(dt); }}
                     onClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellClick(dt); }}
                   >
@@ -1107,7 +1125,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                 ))}
 
                 {/* Working hours end boundary */}
-                <div className="absolute left-0 right-0 z-15 pointer-events-none" style={{ top: 44 + (19 * SLOT_HEIGHT) }}>
+                <div className="absolute left-0 right-0 z-15 pointer-events-none" style={{ top: 44 + minutesToPx(19 * 60) }}>
                   <div className="h-[2px] bg-red-400/40" />
                 </div>
 
@@ -1115,7 +1133,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                 {isTodayCol && (() => {
                   const nowSyd = getSydneyHourMinute(now.toISOString());
                   const nowMin = nowSyd.hour * 60 + nowSyd.minute;
-                  const topPx = (nowMin / 60) * SLOT_HEIGHT + 44;
+                  const topPx = minutesToPx(nowMin) + 44;
                   return (
                     <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
                       <div className="w-2 h-2 rounded-full bg-red-500 -ml-1 flex-shrink-0" />
@@ -1138,8 +1156,8 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   const startSyd = getSydneyHourMinute(event.start_time);
                   const startMin = startSyd.hour * 60 + startSyd.minute;
                   const durMin = Math.max(15, differenceInMinutes(end, start));
-                  const topPx = (startMin / 60) * SLOT_HEIGHT + 44;
-                  const heightPx = Math.max(22, (durMin / 60) * SLOT_HEIGHT - 2);
+                  const topPx = minutesToPx(startMin) + 44;
+                  const heightPx = Math.max(22, minutesToPx(startMin + durMin) - minutesToPx(startMin) - 2);
 
                   const userColor = primaryOwner ? userColorMap.get(primaryOwner.id) : PERSON_COLORS[0];
                   const isTonomo = event.event_source === 'tonomo' || event.tonomo_appointment_id;
@@ -1216,8 +1234,8 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
       <div className="w-14 flex-shrink-0 border-r">
         <div className="border-b" style={{ height: 40 }} />
         {hours.map(h => (
-          <div key={h} data-hour={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
-            <span className="text-xs text-muted-foreground">
+          <div key={h} data-hour={h} style={{ height: getSlotHeight(h) }} className={cn("border-b flex items-start justify-end pr-2 pt-1", (h < BUSINESS_START || h >= BUSINESS_END) && "bg-muted/30")}>
+            <span className={cn("text-muted-foreground", (h < BUSINESS_START || h >= BUSINESS_END) ? "text-[9px]" : "text-xs")}>
               {h === 0 ? '' : `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`}
             </span>
           </div>
@@ -1256,8 +1274,8 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   <div
                     key={h}
                     data-hour={h}
-                    style={{ height: SLOT_HEIGHT }}
-                    className="border-b hover:bg-muted/10 cursor-pointer group relative"
+                    style={{ height: getSlotHeight(h) }}
+                    className={cn("border-b hover:bg-muted/10 cursor-pointer group relative", (h < BUSINESS_START || h >= BUSINESS_END) && "bg-muted/30")}
                     onDoubleClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellDoubleClick(dt); }}
                     onClick={() => { const dt = new Date(d); dt.setHours(h,0,0,0); onCellClick(dt); }}
                   >
@@ -1275,7 +1293,7 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
               {isTodayCol && (() => {
                 const nowSyd = getSydneyHourMinute(now.toISOString());
                 const nowMin = nowSyd.hour * 60 + nowSyd.minute;
-                const topPx = (nowMin / 60) * SLOT_HEIGHT;
+                const topPx = minutesToPx(nowMin);
                 return (
                   <div
                     className="absolute left-0 right-0 z-20 pointer-events-none flex items-center"
@@ -1295,7 +1313,6 @@ function TeamWeekView({ currentDate, events, users, userColorMap, isLaneMode, al
                   owners={owners}
                   userColorMap={userColorMap}
                   allUsers={users}
-                  slotHeight={SLOT_HEIGHT}
                   headerOffset={40}
                   hasConflict={conflictSet.has(event.id)}
                   onClick={(e) => onEventClick(e, event)}
@@ -1318,7 +1335,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
   // Auto-scroll to working hours (7am) on mount
   useEffect(() => {
     if (dayLaneRef.current) {
-      const scrollTarget = 7 * SLOT_HEIGHT; // 7am
+      const scrollTarget = getSlotTop(7); // 7am
       dayLaneRef.current.scrollTop = scrollTarget;
     }
   }, [currentDate]);
@@ -1355,7 +1372,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
           <div className="text-xs font-medium text-muted-foreground mb-1">All Day</div>
           {allDayItems.map(({ event, owners }) => (
             <StandardEventBlock key={event.id} event={event} owners={owners}
-              userColorMap={userColorMap} allUsers={users} slotHeight={SLOT_HEIGHT}
+              userColorMap={userColorMap} allUsers={users}
               isAllDay onClick={(e) => onEventClick(e, event)} />
           ))}
         </div>
@@ -1365,8 +1382,8 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
         {/* Time gutter */}
         <div className="w-14 flex-shrink-0 border-r">
           {hours.map(h => (
-            <div key={h} style={{ height: SLOT_HEIGHT }} className="border-b flex items-start justify-end pr-2 pt-1">
-              <span className="text-xs text-muted-foreground">
+            <div key={h} style={{ height: getSlotHeight(h) }} className={cn("border-b flex items-start justify-end pr-2 pt-1", (h < BUSINESS_START || h >= BUSINESS_END) && "bg-muted/30")}>
+              <span className={cn("text-muted-foreground", (h < BUSINESS_START || h >= BUSINESS_END) ? "text-[9px]" : "text-xs")}>
                 {h === 0 ? '' : `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`}
               </span>
             </div>
@@ -1409,8 +1426,8 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
                   {/* Hour grid slots */}
                   <div className="relative">
                     {hours.map(h => (
-                      <div key={h} style={{ height: SLOT_HEIGHT }}
-                        className="border-b hover:bg-muted/10 cursor-pointer group"
+                      <div key={h} style={{ height: getSlotHeight(h) }}
+                        className={cn("border-b hover:bg-muted/10 cursor-pointer group", (h < BUSINESS_START || h >= BUSINESS_END) && "bg-muted/30")}
                         onDoubleClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellDoubleClick(dt, u.id); }}
                         onClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellClick(dt, u.id); }}
                       >
@@ -1420,8 +1437,8 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
 
                     {/* Unavailable time shading */}
                     {getUnavailableRanges(u.id, currentDate).map((range, rIdx) => {
-                      const topPx = (range.start / 60) * SLOT_HEIGHT;
-                      const heightPx = ((range.end - range.start) / 60) * SLOT_HEIGHT;
+                      const topPx = minutesToPx(range.start);
+                      const heightPx = minutesToPx(range.end) - minutesToPx(range.start);
                       return (
                         <div
                           key={rIdx}
@@ -1438,7 +1455,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
                       if (userAvail && userAvail.is_available && userAvail.end_time) {
                         const [eh, em] = userAvail.end_time.split(':').map(Number);
                         const endMin = eh * 60 + (em || 0);
-                        const linePx = (endMin / 60) * SLOT_HEIGHT;
+                        const linePx = minutesToPx(endMin);
                         return (
                           <div className="absolute left-0 right-0 z-15 pointer-events-none" style={{ top: linePx }}>
                             <div className="h-[2px] bg-red-400/60" />
@@ -1446,7 +1463,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
                         );
                       }
                       // Default: show line at 19:00 (7pm)
-                      const defaultEnd = (19 * 60 / 60) * SLOT_HEIGHT;
+                      const defaultEnd = minutesToPx(19 * 60);
                       return (
                         <div className="absolute left-0 right-0 z-15 pointer-events-none" style={{ top: defaultEnd }}>
                           <div className="h-[2px] bg-red-400/40" />
@@ -1459,7 +1476,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
                       const n = new Date();
                       const nSyd = getSydneyHourMinute(n.toISOString());
                       const nowMin = nSyd.hour * 60 + nSyd.minute;
-                      const topPx = (nowMin / 60) * SLOT_HEIGHT;
+                      const topPx = minutesToPx(nowMin);
                       return (
                         <div className="absolute left-0 right-0 z-20 pointer-events-none flex items-center" style={{ top: topPx }}>
                           <div className="w-2.5 h-2.5 rounded-full bg-red-500 -ml-1 flex-shrink-0 shadow-sm" />
@@ -1479,7 +1496,6 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
                        totalUsers={1}
                        userColorMap={userColorMap}
                        allUsers={users}
-                       slotHeight={SLOT_HEIGHT}
                        currentUserId={currentUserId}
                        hasConflict={conflictSet.has(event.id)}
                        onClick={(e) => onEventClick(e, event)}
@@ -1495,8 +1511,8 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
           /* Single column */
           <div className="flex-1 relative overflow-y-auto">
             {hours.map(h => (
-              <div key={h} style={{ height: SLOT_HEIGHT }}
-                className="border-b hover:bg-muted/10 cursor-pointer group relative"
+              <div key={h} style={{ height: getSlotHeight(h) }}
+                className={cn("border-b hover:bg-muted/10 cursor-pointer group relative", (h < BUSINESS_START || h >= BUSINESS_END) && "bg-muted/30")}
                 onDoubleClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellDoubleClick(dt); }}
                 onClick={() => { const dt = new Date(currentDate); dt.setHours(h,0,0,0); onCellClick(dt); }}
               >
@@ -1507,7 +1523,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
             ))}
             {timedItems.map(({ event, owners }) => (
               <StandardEventBlock key={event.id} event={event} owners={owners}
-                userColorMap={userColorMap} allUsers={users} slotHeight={SLOT_HEIGHT}
+                userColorMap={userColorMap} allUsers={users}
                 hasConflict={conflictSet.has(event.id)}
                 onClick={(e) => onEventClick(e, event)} />
             ))}
@@ -1521,7 +1537,7 @@ function TeamDayView({ currentDate, events, users, userColorMap, isLaneMode, all
 // ── EVENT BLOCKS ──────────────────────────────────────────────────────────────
 
 // Proportional duration block for standard (non-lane) views
-function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight, isAllDay, userColor, headerOffset = 0, hasConflict, onClick }) {
+function StandardEventBlock({ event, owners, userColorMap, allUsers, isAllDay, userColor, headerOffset = 0, hasConflict, onClick }) {
   const typeColor = getEventTypeColor(event);
 
   if (isAllDay) {
@@ -1544,8 +1560,8 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
   const startMinutes = startSyd.hour * 60 + startSyd.minute;
   const durationMinutes = Math.max(15, differenceInMinutes(end, start));
 
-  const topPx = (startMinutes / 60) * slotHeight + headerOffset;
-  const heightPx = Math.max(20, (durationMinutes / 60) * slotHeight - 2);
+  const topPx = minutesToPx(startMinutes) + headerOffset;
+  const heightPx = Math.max(20, minutesToPx(startMinutes + durationMinutes) - minutesToPx(startMinutes) - 2);
 
   const ownerUsers = owners.map(uid => allUsers.find(u => u.id === uid)).filter(Boolean);
 
@@ -1612,7 +1628,7 @@ function StandardEventBlock({ event, owners, userColorMap, allUsers, slotHeight,
 }
 
 // Block for lane (team) view — Tonomo-style solid colored blocks
-function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap, allUsers, slotHeight, onClick, currentUserId, hasConflict, dayMode }) {
+function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap, allUsers, onClick, currentUserId, hasConflict, dayMode }) {
   const start = new Date(fixTimestamp(event.start_time));
   const end = event.end_time
     ? new Date(fixTimestamp(event.end_time))
@@ -1622,8 +1638,8 @@ function LaneEventBlock({ event, owners, user, userIdx, totalUsers, userColorMap
   const startSyd = getSydneyHourMinute(event.start_time);
   const startMinutes = startSyd.hour * 60 + startSyd.minute;
   const durationMinutes = Math.max(15, differenceInMinutes(end, start));
-  const topPx = (startMinutes / 60) * slotHeight;
-  const heightPx = Math.max(24, (durationMinutes / 60) * slotHeight - 2);
+  const topPx = minutesToPx(startMinutes);
+  const heightPx = Math.max(24, minutesToPx(startMinutes + durationMinutes) - minutesToPx(startMinutes) - 2);
 
   // In day mode (full lane), use full width. In week sub-lane mode, position by user index.
   const laneWidth = dayMode ? 100 : (100 / totalUsers);
