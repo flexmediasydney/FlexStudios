@@ -208,10 +208,9 @@ Deno.serve(async (req) => {
 
     // Trigger task generation
     const hasProducts = (project.products?.length > 0) || (project.packages?.length > 0);
-    const shouldGenerateTasks = !skip_task_generation && hasProducts &&
-                                project.status !== 'pending_review';
+    const shouldGenerateTasks = !skip_task_generation && hasProducts;
 
-    const taskResults: any = { skipped: true, reason: 'no products or pending review' };
+    const taskResults: any = { skipped: true, reason: 'no products' };
 
     if (shouldGenerateTasks) {
       try {
