@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
+import { api } from '@/api/supabaseClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -10,7 +11,7 @@ import { createPageUrl } from '@/utils';
 import {
   X, ChevronRight, MapPin, DollarSign, TrendingUp, TrendingDown,
   Building2, Play, Pause, Layers, BarChart3, Eye, Clock,
-  Loader2, Crosshair, List, Calendar
+  Loader2, Crosshair, List, Calendar, AlertTriangle
 } from 'lucide-react';
 import { MapContainer, TileLayer, useMap, CircleMarker, Tooltip as LTooltip, ZoomControl } from 'react-leaflet';
 import { fixTimestamp, fmtDate } from '@/components/utils/dateUtils';
@@ -251,8 +252,33 @@ export default function TerritoryMap() {
   const [playing, setPlaying] = useState(false);
   const [mapKey, setMapKey] = useState(0);
 
-  const { data: allProjects = [], loading } = useEntityList('Project', '-created_date', 1000);
+  const [geocoding, setGeocoding] = useState(false);
+  const [geocodeResult, setGeocodeResult] = useState(null);
+
+  const { data: allProjects = [], loading, refetch: refreshProjects } = useEntityList('Project', '-created_date', 1000);
   const { data: allUsers = [] } = useEntityList('User');
+
+  const handleGeocodeNow = useCallback(async () => {
+    setGeocoding(true);
+    setGeocodeResult(null);
+    try {
+      const ungeocodedIds = allProjects
+        .filter(p => p.property_address && !p.geocoded_lat && !p.latitude)
+        .map(p => p.id)
+        .slice(0, 100);
+      if (ungeocodedIds.length === 0) {
+        setGeocodeResult({ ok: false, message: 'No un-geocoded projects with addresses found.' });
+        return;
+      }
+      const result = await api.functions.invoke('geocodeProject', { projectIds: ungeocodedIds });
+      setGeocodeResult({ ok: true, message: `Geocoded ${result?.geocoded ?? 0} of ${result?.total ?? ungeocodedIds.length} projects.` });
+      if (refreshProjects) refreshProjects();
+    } catch (err) {
+      setGeocodeResult({ ok: false, message: err?.message || 'Geocoding failed. Check that GOOGLE_PLACES_API_KEY is configured.' });
+    } finally {
+      setGeocoding(false);
+    }
+  }, [allProjects, refreshProjects]);
 
   const mappable = useMemo(() => allProjects.filter(p => {
     const lat = p?.geocoded_lat || p?.latitude;
@@ -327,6 +353,33 @@ export default function TerritoryMap() {
       <div className="relative flex-1" style={{ minHeight: 500 }}>
         {loading ? (
           <div className="absolute inset-0 flex items-center justify-center bg-muted/20 z-10"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+        ) : mappable.length === 0 ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-muted/10">
+            <div className="text-center max-w-md px-6">
+              <div className="mx-auto w-16 h-16 rounded-full bg-muted/60 flex items-center justify-center mb-4">
+                <MapPin className="h-8 w-8 text-muted-foreground" />
+              </div>
+              <h3 className="text-lg font-semibold mb-2">No geocoded projects yet</h3>
+              <p className="text-sm text-muted-foreground mb-1">
+                {allProjects.filter(p => p.property_address).length} projects have addresses but none have been geocoded.
+              </p>
+              <p className="text-xs text-muted-foreground mb-5">
+                Projects are geocoded automatically when created. You can also trigger batch geocoding manually.
+              </p>
+              <Button
+                onClick={handleGeocodeNow}
+                disabled={geocoding}
+                className="gap-2"
+              >
+                {geocoding ? <><Loader2 className="h-4 w-4 animate-spin" /> Geocoding...</> : <><Crosshair className="h-4 w-4" /> Geocode Now</>}
+              </Button>
+              {geocodeResult && (
+                <div className={cn('mt-3 text-xs px-3 py-2 rounded-lg', geocodeResult.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-amber-50 text-amber-700 border border-amber-200')}>
+                  {geocodeResult.message}
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
           <MapContainer key={mapKey} center={SYDNEY} zoom={11} style={{ height: '100%', width: '100%' }} zoomControl={false} className="z-0">
             <TileLayer attribution={TILE_ATTR} url={mapTheme === 'dark' ? TILE_DARK : TILE_LIGHT} key={mapTheme} />
