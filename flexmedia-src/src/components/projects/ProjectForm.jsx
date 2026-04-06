@@ -879,14 +879,19 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label className="text-xs font-medium">Shoot Date</Label>
-              <Input type="date" className="h-9 text-sm" value={formData.shoot_date || ""} onChange={(e) => { setFormData(prev => ({ ...prev, shoot_date: e.target.value })); setUnsavedChanges(true); }} />
-            </div>
-            <div>
-              <Label className="text-xs font-medium">Shoot Time</Label>
-              <Input type="time" className="h-9 text-sm" value={formData.shoot_time || ""} onChange={(e) => { setFormData(prev => ({ ...prev, shoot_time: e.target.value })); setUnsavedChanges(true); }} />
-            </div>
+            {/* Shoot date/time only shown when editing — added separately after project creation */}
+            {project?.id && (
+              <>
+                <div>
+                  <Label className="text-xs font-medium">Shoot Date</Label>
+                  <Input type="date" className="h-9 text-sm" value={formData.shoot_date || ""} onChange={(e) => { setFormData(prev => ({ ...prev, shoot_date: e.target.value })); setUnsavedChanges(true); }} />
+                </div>
+                <div>
+                  <Label className="text-xs font-medium">Shoot Time</Label>
+                  <Input type="time" className="h-9 text-sm" value={formData.shoot_time || ""} onChange={(e) => { setFormData(prev => ({ ...prev, shoot_time: e.target.value })); setUnsavedChanges(true); }} />
+                </div>
+              </>
+            )}
           </div>
 
           {/* Pricing Tier */}
