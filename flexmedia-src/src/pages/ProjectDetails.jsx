@@ -1120,13 +1120,26 @@ export default function ProjectDetails() {
         </div>
       )}
 
-      {/* Staff Assignments */}
+      {/* Status Pipeline — full width for maximum stage visibility */}
       {project && (
-        <ErrorBoundary><ProjectStaffBar project={project} canEdit={memoizedCanEdit} /></ErrorBoundary>
+        <ErrorBoundary><StagePipeline
+          project={project}
+          onStatusChange={(newStatus) => {
+            if (updateStatusMutation.isPending) return;
+            const stages = PROJECT_STAGES.map(s => s.value);
+            const currentIdx = stages.indexOf(project.status);
+            const newIdx = stages.indexOf(newStatus);
+            if (newIdx < currentIdx) {
+              setPendingBackwardStage(newStatus);
+              return;
+            }
+            updateStatusMutation.mutate(newStatus);
+          }}
+          canEdit={memoizedCanEdit}
+          allTasksDone={allTasksDone}
+          projectTasks={projectTasks}
+        /></ErrorBoundary>
       )}
-
-      {/* QuickActionBar removed — all actions accessible from their respective tabs:
-           Chat (task panel), Timer (task panel), Notes (ActivityHub), Status (StagePipeline) */}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
         {/* Main Content */}
@@ -1137,26 +1150,9 @@ export default function ProjectDetails() {
           {/* Active Timers — live, real-time */}
           <ErrorBoundary><ActiveTimersPanel projectId={projectId} tasks={projectTasks} /></ErrorBoundary>
 
-          {/* Status Pipeline — Pipedrive style */}
+          {/* Staff Assignments — inside main content area */}
           {project && (
-            <ErrorBoundary><StagePipeline
-              project={project}
-              onStatusChange={(newStatus) => {
-                if (updateStatusMutation.isPending) return;
-                const stages = PROJECT_STAGES.map(s => s.value);
-                const currentIdx = stages.indexOf(project.status);
-                const newIdx = stages.indexOf(newStatus);
-                // Moving backward requires explicit confirmation to prevent accidental regressions
-                if (newIdx < currentIdx) {
-                  setPendingBackwardStage(newStatus);
-                  return;
-                }
-                updateStatusMutation.mutate(newStatus);
-              }}
-              canEdit={memoizedCanEdit}
-              allTasksDone={allTasksDone}
-              projectTasks={projectTasks}
-            /></ErrorBoundary>
+            <ErrorBoundary><ProjectStaffBar project={project} canEdit={memoizedCanEdit} /></ErrorBoundary>
           )}
 
           {/* Backward stage regression confirmation */}
