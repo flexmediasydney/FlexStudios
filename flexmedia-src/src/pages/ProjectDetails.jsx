@@ -1310,33 +1310,7 @@ export default function ProjectDetails() {
                     {project.pricing_tier === "premium" ? "Prem" : "Std"}
                   </span>
                 </div>
-                {canSeePricing && displayPrice > 0 && (
-                  <div className="col-span-2 sm:col-span-1">
-                    <p className="text-xs text-muted-foreground mb-0.5">Quoted value</p>
-                    <span
-                      className="text-sm font-bold text-primary"
-                      title={`AUD $${Number(displayPrice).toFixed(2)}`}
-                    >
-                      ${Number(displayPrice).toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                    </span>
-                    {project.price_matrix_snapshot && (
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {project.calculated_price !== project.price && "(adjusted)"}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {canSeePricing && memoizedCanEdit && (
-                  <div className="col-span-2 sm:col-span-1">
-                    <p className="text-xs text-muted-foreground mb-0.5">Invoiced</p>
-                    <InvoicedAmountInput
-                      value={project.invoiced_amount ?? ""}
-                      onSave={(v) => updateInvoicedMutation.mutate(v)}
-                      isPending={updateInvoicedMutation.isPending}
-                    />
-                  </div>
-                )}
+                {/* Quoted value and Invoiced removed — pricing visible in ProjectForm and PricingTable */}
                </div>
 
 
