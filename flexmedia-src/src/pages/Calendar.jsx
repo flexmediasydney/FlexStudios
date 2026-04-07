@@ -381,7 +381,6 @@ export default function CalendarPage() {
     enabled: tasksWithDueDates.length > 0,
   });
   const projectMap = useMemo(() => new Map(allProjects.map(p => [p.id, p])), [allProjects]);
-  const teamMap = useMemo(() => new Map((teams || []).map(t => [t.id, t])), [teams]);
 
   const taskEvents = useMemo(() => {
     return tasksWithDueDates.map(task => {
