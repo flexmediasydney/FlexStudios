@@ -163,6 +163,21 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
 
   if (Object.keys(updates).length) await entities.Project.update(project.id, updates);
 
+  // Sync calendar event time when shoot date changes
+  if (updates.shoot_date || updates.shoot_time) {
+    try {
+      const calEvents = await entities.CalendarEvent.filter({ project_id: project.id }, null, 50);
+      const tonomoEvent = calEvents.find((ev: any) => ev.event_source === 'tonomo' && !ev.is_done);
+      if (tonomoEvent && updates.shoot_date) {
+        const timeStr = updates.shoot_time || project.shoot_time || '09:00';
+        const startDt = new Date(`${updates.shoot_date}T${timeStr}:00+11:00`);
+        await entities.CalendarEvent.update(tonomoEvent.id, {
+          start_time: startDt.toISOString(),
+        }).catch(() => {});
+      }
+    } catch { /* non-fatal */ }
+  }
+
   await writeAudit(entities, {
     action: 'booking_created_or_changed', entity_type: 'Project', entity_id: project.id,
     operation: Object.keys(updates).length ? 'updated' : 'no_changes',

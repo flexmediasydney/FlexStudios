@@ -95,9 +95,21 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     updates.tonomo_raw_services = JSON.stringify(services);
   }
 
+  // Update project shoot_date/shoot_time when appointment time changes
+  const changedStartTime = p.when?.start_time ? p.when.start_time * 1000 : null;
+  if (changedStartTime && !overriddenFields.includes('shoot_date')) {
+    const dt = new Date(changedStartTime);
+    updates.shoot_date = dt.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+    updates.shoot_time = dt.toLocaleTimeString('en-AU', {
+      timeZone: 'Australia/Sydney',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+
   // Update CalendarEvent for this appointment (staff + time)
   const appointmentEventId = p.id;
-  const changedStartTime = p.when?.start_time ? p.when.start_time * 1000 : null;
   if (appointmentEventId) {
     try {
       const projectCalEvents = await entities.CalendarEvent.filter({ project_id: project.id }, '-start_time', 100).catch(() => []);
@@ -124,6 +136,29 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
         if (Object.keys(calUpdates).length > 0) {
           await entities.CalendarEvent.update(appointmentEvent.id, calUpdates);
         }
+      } else if (changedStartTime) {
+        // Fallback: create calendar event if none exists for this appointment
+        const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
+        await entities.CalendarEvent.create({
+          title: project.title || `Shoot — ${orderId}`,
+          description: `Tonomo appointment (created during change event) for order ${orderId}`,
+          start_time: new Date(changedStartTime).toISOString(),
+          end_time: endTime ? new Date(endTime).toISOString() : null,
+          location: project.property_address || '',
+          google_event_id: appointmentEventId,
+          tonomo_appointment_id: appointmentEventId,
+          project_id: project.id,
+          owner_user_id: updates.project_owner_id || project.photographer_id || null,
+          agent_id: updates.agent_id || project.agent_id || null,
+          agency_id: updates.agency_id || project.agency_id || null,
+          activity_type: 'shoot',
+          is_synced: false,
+          is_done: false,
+          auto_linked: true,
+          link_source: 'tonomo_webhook',
+          link_confidence: 'exact',
+          event_source: 'tonomo',
+        });
       }
     } catch (calErr: any) {
       console.error('CalendarEvent update failed (non-fatal):', calErr.message);

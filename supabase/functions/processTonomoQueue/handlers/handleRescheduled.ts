@@ -85,10 +85,14 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
       );
       if (appointmentEvent) {
         const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
-        await entities.CalendarEvent.update(appointmentEvent.id, {
+        const calUpdates: Record<string, any> = {
           start_time: new Date(startTime).toISOString(),
           end_time: endTime ? new Date(endTime).toISOString() : null,
-        });
+        };
+        if (updates.photographer_id) calUpdates.owner_user_id = updates.photographer_id;
+        if (updates.agent_id) calUpdates.agent_id = updates.agent_id;
+        if (updates.agency_id) calUpdates.agency_id = updates.agency_id;
+        await entities.CalendarEvent.update(appointmentEvent.id, calUpdates);
       } else {
         // CalendarEvent not found — create one as fallback (original scheduled may have failed)
         const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
