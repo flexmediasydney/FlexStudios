@@ -63,6 +63,7 @@ export default function TonomoIntegrationDashboard() {
   const { data: user } = useCurrentUser();
   const [tab, setTab] = useState("overview");
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [queueSort, setQueueSort] = useState("latest");
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -258,6 +259,19 @@ export default function TonomoIntegrationDashboard() {
   const deadLetters = useMemo(() => queue.filter(q => q.status === 'dead_letter'), [queue]);
   const mappingGaps = useMemo(() => mappings.filter(m => !m.is_confirmed).length, [mappings]);
 
+  const sortedPendingProjects = useMemo(() => {
+    const list = [...pendingProjects];
+    switch (queueSort) {
+      case 'latest': return list.sort((a, b) => new Date(b.created_date || 0) - new Date(a.created_date || 0));
+      case 'oldest': return list.sort((a, b) => new Date(a.created_date || 0) - new Date(b.created_date || 0));
+      case 'price_high': return list.sort((a, b) => (b.calculated_price || b.price || 0) - (a.calculated_price || a.price || 0));
+      case 'price_low': return list.sort((a, b) => (a.calculated_price || a.price || 0) - (b.calculated_price || b.price || 0));
+      case 'agent': return list.sort((a, b) => (a.agent_name || '').localeCompare(b.agent_name || ''));
+      case 'health':
+      default: return list; // Already sorted by health priority from the query
+    }
+  }, [pendingProjects, queueSort]);
+
   const stats = useMemo(() => ({
     gaps: mappingGaps,
     deadLetters: deadLetters.length,
@@ -393,11 +407,22 @@ export default function TonomoIntegrationDashboard() {
 
           {/* Pending Review Queue */}
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Pending Review Queue ({pendingProjects.length})</CardTitle>
+              <Select value={queueSort} onValueChange={setQueueSort}>
+                <SelectTrigger className="w-36 h-7 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="health">Priority</SelectItem>
+                  <SelectItem value="latest">Latest First</SelectItem>
+                  <SelectItem value="oldest">Oldest First</SelectItem>
+                  <SelectItem value="price_high">Price High→Low</SelectItem>
+                  <SelectItem value="price_low">Price Low→High</SelectItem>
+                  <SelectItem value="agent">By Person</SelectItem>
+                </SelectContent>
+              </Select>
             </CardHeader>
             <CardContent className="space-y-3">
-              {pendingProjects.map(p => (
+              {sortedPendingProjects.map(p => (
                 <PendingReviewCard key={p.id} project={p} />
               ))}
               {pendingProjects.length === 0 && (
