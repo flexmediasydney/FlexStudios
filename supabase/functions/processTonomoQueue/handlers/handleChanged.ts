@@ -95,9 +95,10 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     updates.tonomo_raw_services = JSON.stringify(services);
   }
 
-  // Update CalendarEvent for this appointment
+  // Update CalendarEvent for this appointment (staff + time)
   const appointmentEventId = p.id;
-  if (appointmentEventId && Object.keys(updates).length > 0) {
+  const changedStartTime = p.when?.start_time ? p.when.start_time * 1000 : null;
+  if (appointmentEventId) {
     try {
       const projectCalEvents = await entities.CalendarEvent.filter({ project_id: project.id }, '-start_time', 100).catch(() => []);
       const appointmentEvent = projectCalEvents.find(
@@ -113,11 +114,19 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
             name: ph.name, email: ph.email, tonomoId: ph.id
           })));
         }
+        // Update time if the webhook includes new start/end times
+        if (changedStartTime) {
+          calUpdates.start_time = new Date(changedStartTime).toISOString();
+          const changedEndTime = p.when?.end_time ? p.when.end_time * 1000 : null;
+          if (changedEndTime) calUpdates.end_time = new Date(changedEndTime).toISOString();
+        }
         calUpdates.event_source = 'tonomo';
-        await entities.CalendarEvent.update(appointmentEvent.id, calUpdates);
+        if (Object.keys(calUpdates).length > 0) {
+          await entities.CalendarEvent.update(appointmentEvent.id, calUpdates);
+        }
       }
     } catch (calErr: any) {
-      console.error('CalendarEvent staff update failed (non-fatal):', calErr.message);
+      console.error('CalendarEvent update failed (non-fatal):', calErr.message);
     }
   }
 
