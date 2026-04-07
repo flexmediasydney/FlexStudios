@@ -21,6 +21,23 @@ export async function handleCancelled(entities: any, orderId: string, p: any) {
 
   await entities.Project.update(project.id, updates);
 
+  // Delete the calendar event for this cancelled appointment
+  const appointmentId = p.id || p.appointment_id || null;
+  if (appointmentId) {
+    try {
+      const linkedEvents = await entities.CalendarEvent.filter({ project_id: project.id }, null, 50);
+      const cancelledEvents = linkedEvents.filter((ev: any) =>
+        ev.tonomo_appointment_id === appointmentId || ev.google_event_id === appointmentId
+      );
+      for (const ev of cancelledEvents) {
+        await entities.CalendarEvent.delete(ev.id).catch(() => {});
+        console.log(`[cancelled] Deleted calendar event ${ev.id} for cancelled appointment ${appointmentId}`);
+      }
+    } catch (err: any) {
+      console.warn(`[cancelled] Failed to clean calendar events:`, err?.message);
+    }
+  }
+
   // Stop running timers on cancellation
   invokeFunction('trackProjectStageChange', {
     project_id: project.id,
