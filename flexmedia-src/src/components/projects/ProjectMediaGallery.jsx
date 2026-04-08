@@ -70,25 +70,30 @@ function formatSize(bytes) {
 }
 
 function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
-  const [blobUrl, setBlobUrl] = useState(() => blobCache.get(file._proxyPath) || null);
+  const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const ref = useRef(null);
+  const observerRef = useRef(null);
+  const hasStarted = useRef(false);
 
   const isImage = file.type === 'image';
-  // Build proxy path: tonomoBasePath + folder/filename relative to parent Tonomo share
   const proxyPath = tonomoBasePath && file.name
     ? `${tonomoBasePath}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
     : null;
 
-  // Lazy load when card enters viewport
-  useEffect(() => {
-    if (!isImage || !proxyPath || blobUrl || error) return;
-    if (!ref.current) return;
+  // Callback ref — attaches observer as soon as the DOM node exists
+  const cardRef = useCallback((node) => {
+    if (!node || !isImage || !proxyPath || hasStarted.current) return;
 
+    // Check cache first
+    const cached = blobCache.get(proxyPath);
+    if (cached) { setBlobUrl(cached); return; }
+
+    observerRef.current?.disconnect();
     const observer = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
         observer.disconnect();
+        hasStarted.current = true;
         setLoading(true);
         loadQueue.push(async () => {
           const url = await fetchProxyImage(proxyPath);
@@ -100,9 +105,9 @@ function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
       }
     }, { rootMargin: '300px' });
 
-    observer.observe(ref.current);
-    return () => observer.disconnect();
-  }, [isImage, proxyPath, blobUrl, error]);
+    observer.observe(node);
+    observerRef.current = observer;
+  }, [isImage, proxyPath]);
 
   const handleClick = () => {
     const url = file.preview_url || deliverableLink;
@@ -111,7 +116,7 @@ function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
 
   return (
     <button
-      ref={ref}
+      ref={cardRef}
       type="button"
       onClick={handleClick}
       className="group relative rounded-lg border bg-card overflow-hidden transition-all hover:shadow-md hover:-translate-y-0.5 text-left w-full"
