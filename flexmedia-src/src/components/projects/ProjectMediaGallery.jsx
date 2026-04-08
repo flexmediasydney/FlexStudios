@@ -73,41 +73,30 @@ function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const observerRef = useRef(null);
-  const hasStarted = useRef(false);
+  const started = useRef(false);
 
   const isImage = file.type === 'image';
   const proxyPath = tonomoBasePath && file.name
     ? `${tonomoBasePath}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
     : null;
 
-  // Callback ref — attaches observer as soon as the DOM node exists
-  const cardRef = useCallback((node) => {
-    if (!node || !isImage || !proxyPath || hasStarted.current) return;
-
-    // Check cache first
+  // Fetch image on mount — no IntersectionObserver complexity
+  useEffect(() => {
+    if (!isImage || !proxyPath || started.current) return;
     const cached = blobCache.get(proxyPath);
     if (cached) { setBlobUrl(cached); return; }
-
-    observerRef.current?.disconnect();
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) {
-        observer.disconnect();
-        hasStarted.current = true;
-        setLoading(true);
-        loadQueue.push(async () => {
-          const url = await fetchProxyImage(proxyPath);
-          if (url) setBlobUrl(url);
-          else setError(true);
-          setLoading(false);
-        });
-        processQueue();
-      }
-    }, { rootMargin: '300px' });
-
-    observer.observe(node);
-    observerRef.current = observer;
+    started.current = true;
+    setLoading(true);
+    loadQueue.push(async () => {
+      const url = await fetchProxyImage(proxyPath);
+      if (url) setBlobUrl(url);
+      else setError(true);
+      setLoading(false);
+    });
+    processQueue();
   }, [isImage, proxyPath]);
+
+  const cardRef = null; // no ref needed
 
   const handleClick = () => {
     const url = file.preview_url || deliverableLink;
