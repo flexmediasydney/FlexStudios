@@ -165,6 +165,50 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ─── Action: stream_url — get a direct Dropbox URL for video streaming ─
+    // Returns a JSON { url } that the browser can use as <video src> directly
+    // Dropbox streams from their CDN with range request support (instant playback)
+    if (action === 'stream_url' && body.file_path) {
+      if (!parentShareUrl) return errorResponse('DROPBOX_PARENT_SHARE_URL not configured', 500, req);
+
+      let relPath = body.file_path;
+      if (pathPrefix && relPath.startsWith(pathPrefix)) {
+        relPath = relPath.slice(pathPrefix.length);
+        if (!relPath.startsWith('/')) relPath = '/' + relPath;
+      }
+
+      // Use get_shared_link_file but capture the redirect URL from Dropbox
+      // Actually, we'll create a temporary link by making the download request
+      // and extracting the CDN URL from the response headers
+      const arg = JSON.stringify({ url: parentShareUrl, path: relPath });
+      const dbxRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
+        redirect: 'manual', // Don't follow redirects — capture the URL
+      });
+
+      // If Dropbox redirects, return the redirect URL
+      if (dbxRes.status >= 300 && dbxRes.status < 400) {
+        const location = dbxRes.headers.get('location');
+        if (location) {
+          return jsonResponse({ url: location }, 200, req);
+        }
+      }
+
+      // If no redirect, stream the response and return a data URL approach won't work for large files
+      // Instead, just return the proxy URL pattern for the frontend to use
+      if (dbxRes.ok) {
+        // Dropbox returned the content directly — no redirect
+        // We can't return a streaming URL, so return a flag to use proxy mode instead
+        // But first, consume the body to avoid hanging
+        await dbxRes.body?.cancel();
+        return jsonResponse({ use_proxy: true }, 200, req);
+      }
+
+      const errText = await dbxRes.text().catch(() => '');
+      return jsonResponse({ error: `Dropbox ${dbxRes.status}`, detail: errText.slice(0, 200) }, 400, req);
+    }
+
     // ─── Action: proxy — serve full file via parent Tonomo share link ───
     if ((action === 'proxy' || action === 'thumb') && body.file_path) {
       if (!parentShareUrl) return errorResponse('DROPBOX_PARENT_SHARE_URL not configured', 500, req);

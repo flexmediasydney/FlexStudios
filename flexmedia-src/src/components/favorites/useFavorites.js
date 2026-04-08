@@ -139,6 +139,7 @@ export function useFavorites() {
       }
     } else {
       // ── Optimistic addition ──
+      const favoritedByName = user?.full_name || user?.email || 'Unknown';
       const optimisticRecord = {
         id: `_optimistic_${Date.now()}`,
         user_id: userId,
@@ -149,6 +150,7 @@ export function useFavorites() {
         project_title: projectTitle || null,
         property_address: propertyAddress || null,
         tonomo_base_path: tonomoBasePath || null,
+        favorited_by_name: favoritedByName,
         tags: [],
         created_date: new Date().toISOString(),
       };
@@ -164,6 +166,7 @@ export function useFavorites() {
           project_title: projectTitle || null,
           property_address: propertyAddress || null,
           tonomo_base_path: tonomoBasePath || null,
+          favorited_by_name: favoritedByName,
           tags: [],
         });
         api.entities.AuditLog.create({

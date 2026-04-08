@@ -55,6 +55,28 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
   finally { pending.delete(cacheKey); }
 }
 
+// ---- Dropbox preview URL builder ----
+// Parent share link for the Tonomo delivery folder
+const DROPBOX_SHARE_BASE = 'https://www.dropbox.com/scl/fo/7wnvxwd9722243256h33m/ANBWjH-I1_RZbjyWt0n4Agg';
+const DROPBOX_RLKEY = 'jhdry20jttkrn0o1v8bpmcsmf';
+const TONOMO_PREFIX = '/flex media team folder/tonomo';
+
+function buildDropboxPreviewUrl(fullPath) {
+  if (!fullPath) return null;
+  // Strip the shared-folder prefix to get the relative path within the share
+  const lowerPath = fullPath.toLowerCase();
+  const lowerPrefix = TONOMO_PREFIX.toLowerCase();
+  let relativePath = fullPath;
+  if (lowerPath.startsWith(lowerPrefix)) {
+    relativePath = fullPath.slice(TONOMO_PREFIX.length);
+  }
+  // Ensure leading slash
+  if (!relativePath.startsWith('/')) relativePath = '/' + relativePath;
+  // Encode each path segment individually
+  const encodedPath = relativePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  return `${DROPBOX_SHARE_BASE}${encodedPath}?rlkey=${DROPBOX_RLKEY}&dl=0`;
+}
+
 // ---- Helpers ----
 function FileIcon({ type, className }) {
   switch (type) {
@@ -97,13 +119,14 @@ function FileFavoriteCard({ favorite, isVisible }) {
 
   useEffect(() => {
     if (!isImage || !proxyPath || started.current) return;
-    const cached = blobCache.get(proxyPath);
+    // fetchProxyImage stores blobs under "thumb::path", so look up with the same key
+    const cached = blobCache.get(`thumb::${proxyPath}`);
     if (cached) { setBlobUrl(cached); return; }
     if (!isVisible) return;
     started.current = true;
     setLoading(true);
     loadQueue.push(async () => {
-      const url = await fetchProxyImage(proxyPath);
+      const url = await fetchProxyImage(proxyPath, 'thumb');
       if (url) setBlobUrl(url);
       setLoading(false);
     });
@@ -111,6 +134,12 @@ function FileFavoriteCard({ favorite, isVisible }) {
   }, [isImage, proxyPath, isVisible]);
 
   const handleClick = () => {
+    // Construct Dropbox preview URL on the fly from the share link pattern
+    // The full dropbox path = tonomo_base_path + file_path, minus the shared folder prefix
+    if (proxyPath) {
+      const dropboxUrl = buildDropboxPreviewUrl(proxyPath);
+      if (dropboxUrl) { safeWindowOpen(dropboxUrl); return; }
+    }
     if (favorite.preview_url) safeWindowOpen(favorite.preview_url);
   };
 

@@ -85,6 +85,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
   const [index, setIndex] = useState(initialIndex);
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
+  const [fullResUrl, setFullResUrl] = useState(null);
   const file = files[index];
 
   const isVideo = file?.type === 'video';
@@ -93,16 +94,46 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
     ? `${tonomoBasePath}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
     : null;
 
-  // Load video blob when a video file is selected
+  // Videos: get a streaming URL from edge function (instant playback via Dropbox CDN)
   useEffect(() => {
     if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
     setVideoLoading(true);
     setVideoUrl(null);
-    fetchProxyImage(proxyPath, 'proxy').then(url => {
-      setVideoUrl(url);
-      setVideoLoading(false);
-    });
+
+    // Try stream_url first (returns a direct Dropbox CDN URL for instant streaming)
+    fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+      body: JSON.stringify({ action: 'stream_url', file_path: proxyPath }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.url) {
+          setVideoUrl(data.url);
+          setVideoLoading(false);
+        } else {
+          // Fallback: proxy the full file
+          return fetchProxyImage(proxyPath, 'proxy').then(url => {
+            setVideoUrl(url);
+            setVideoLoading(false);
+          });
+        }
+      })
+      .catch(() => setVideoLoading(false));
   }, [isVideo, proxyPath]);
+
+  // Images: show thumb immediately, load full-res in background
+  useEffect(() => {
+    if (!isImage || !proxyPath) { setFullResUrl(null); return; }
+    setFullResUrl(null);
+    // Check if we already have full-res cached
+    const cached = blobCache.get(`proxy::${proxyPath}`);
+    if (cached) { setFullResUrl(cached); return; }
+    // Load full-res in background
+    fetchProxyImage(proxyPath, 'proxy').then(url => {
+      if (url) setFullResUrl(url);
+    });
+  }, [isImage, proxyPath]);
 
   // Keyboard nav
   useEffect(() => {
@@ -115,7 +146,9 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
     return () => window.removeEventListener('keydown', handler);
   }, [index, files.length, onClose]);
 
-  const imgBlobUrl = isImage ? blobCache.get(proxyPath) : null;
+  // Show full-res if available, otherwise thumb
+  const thumbUrl = isImage ? (blobCache.get(`thumb::${proxyPath}`) || blobCache.get(proxyPath)) : null;
+  const imgBlobUrl = fullResUrl || thumbUrl;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose}>
