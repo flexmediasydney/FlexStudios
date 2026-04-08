@@ -705,10 +705,10 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project }) {
   );
 }
 
-const PARTIAL_DELIVERY_STAGES = ['in_production', 'in_progress', 'submitted', 'uploaded'];
+const FULL_DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
 
 function isPartialDelivery(project) {
-  return PARTIAL_DELIVERY_STAGES.includes(project.status) && !!project.tonomo_deliverable_link;
+  return !FULL_DELIVERY_STAGES.includes(project.status) && !!project.tonomo_deliverable_link;
 }
 
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
@@ -1140,20 +1140,19 @@ export default function DeliveryFeed() {
     const days = parseInt(dateFilter, 10);
     const now = new Date();
     const DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
-    const PARTIAL_STAGES = ['in_production', 'in_progress', 'submitted', 'uploaded'];
     return allProjects
       .filter(p => {
         // Fully delivered projects
         if (DELIVERY_STAGES.includes(p.status)) return true;
-        // Partial deliveries: have a deliverable link but not yet officially delivered
-        if (PARTIAL_STAGES.includes(p.status) && p.tonomo_deliverable_link) return true;
+        // ANY project with a Dropbox link is a partial delivery (media exists)
+        if (p.tonomo_deliverable_link) return true;
         return false;
       })
       .filter(p => p.tonomo_delivered_at || p.tonomo_deliverable_link || p.tonomo_delivered_files || p.tonomo_deliverable_path)
       .filter(p => {
         if (days === 0) return true;
-        // Partial deliveries with a Dropbox link always show (media may be uploading now)
-        if (PARTIAL_STAGES.includes(p.status) && p.tonomo_deliverable_link) return true;
+        // Partial deliveries always show (media may be uploading right now)
+        if (!DELIVERY_STAGES.includes(p.status) && p.tonomo_deliverable_link) return true;
         const delivered = p.tonomo_delivered_at || p.updated_date;
         if (!delivered) return false;
         return differenceInDays(now, new Date(fixTimestamp(delivered))) <= days;
