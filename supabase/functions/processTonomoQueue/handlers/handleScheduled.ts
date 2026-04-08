@@ -438,15 +438,19 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     },
   });
 
-  // If auto-approved, fire role defaults + task gen + notification
-  if (canAutoApprove && project?.id) {
-    const autoStatus = sharedData.shoot_date ? 'scheduled' : 'to_be_scheduled';
-
+  // Always apply role defaults on new/updated projects — regardless of auto-approve status
+  // Role defaults fill empty slots with configured fallback users/teams from Settings
+  if (project?.id) {
     invokeFunction('applyProjectRoleDefaults', {
       project_id: project.id,
     }).catch((err: any) => {
-      console.warn('applyProjectRoleDefaults after auto-approve failed (non-fatal):', err?.message);
+      console.warn('applyProjectRoleDefaults failed (non-fatal):', err?.message);
     });
+  }
+
+  // If auto-approved, fire additional side effects (pricing, stage change, notifications)
+  if (canAutoApprove && project?.id) {
+    const autoStatus = sharedData.shoot_date ? 'scheduled' : 'to_be_scheduled';
 
     // Ensure pricing is calculated even if applyProjectRoleDefaults skips task generation
     if (hasAutoProducts) {
