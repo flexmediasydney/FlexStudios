@@ -14,7 +14,7 @@ import {
   Search, Building2, ChevronDown, ChevronUp, Clock,
   CheckCircle2, Package, Play, Zap, X, ChevronLeft, ChevronRight,
   ArrowRight, Eye, RefreshCw, DollarSign, Timer, AlertTriangle, CreditCard,
-  FolderOpen, Download, Map, Video
+  FolderOpen, Download, Map as MapIcon, Video
 } from 'lucide-react';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
@@ -27,8 +27,8 @@ const TYPE_CONFIG = {
   // Additional types from tonomo_delivered_files objects
   photos: { label: 'Photos', icon: Camera, color: 'bg-blue-100 text-blue-700' },
   pdf: { label: 'PDF', icon: FileText, color: 'bg-red-100 text-red-700' },
-  floorplan: { label: 'Floor Plan', icon: Map, color: 'bg-amber-100 text-amber-700' },
-  'floor plan': { label: 'Floor Plan', icon: Map, color: 'bg-amber-100 text-amber-700' },
+  floorplan: { label: 'Floor Plan', icon: MapIcon, color: 'bg-amber-100 text-amber-700' },
+  'floor plan': { label: 'Floor Plan', icon: MapIcon, color: 'bg-amber-100 text-amber-700' },
   drone: { label: 'Drone', icon: Camera, color: 'bg-sky-100 text-sky-700' },
 };
 
