@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
 
     if (body?._health_check) {
-      return jsonResponse({ _version: 'v2.0', _fn: 'applyProjectRoleDefaults', _ts: '2026-03-17' });
+      return jsonResponse({ _version: 'v3.0', _fn: 'applyProjectRoleDefaults', _ts: '2026-04-08' });
     }
 
     const { project_id, skip_task_generation } = body;
@@ -107,7 +107,21 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Slot is empty — look for a fallback
+      // ── Priority 1: Individual user default ────────────────────────────
+      const userDefaultField = `${slot.role}_default_user_id`;
+      const userDefaultId = defaults[userDefaultField];
+      if (userDefaultId) {
+        updates[slot.idField] = userDefaultId;
+        const defaultUser = usersById.get(userDefaultId);
+        if (slot.nameField) updates[slot.nameField] = defaultUser?.full_name || '';
+        if (slot.typeField) updates[slot.typeField] = 'user';
+        else if (slot.role === 'project_owner') updates.project_owner_type = 'user';
+        else updates[`${slot.role}_type`] = 'user';
+        applied.push(slot.role);
+        continue;
+      }
+
+      // ── Priority 2: Team fallback ──────────────────────────────────────
       const tier = ROLE_FALLBACK_TIER[slot.role];
       const fallbackTeamId = getFallbackTeamId(tier, slot.role);
 

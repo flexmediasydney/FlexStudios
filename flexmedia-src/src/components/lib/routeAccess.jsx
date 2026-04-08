@@ -74,6 +74,7 @@ export const ROUTE_ACCESS = {
   BusinessRequirementsDocument: ADMIN_EMPLOYEE,
   HierarchyVisualization: ADMIN_EMPLOYEE,
 
+  SettingsStaffDefaults: ADMIN_ONLY,
   SettingsSystemHealth: ADMIN_ONLY,
 
   // ── ADMIN ONLY ────────────────────────────────────────────

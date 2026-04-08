@@ -98,6 +98,7 @@ const SettingsSystemHealth = React.lazy(() => import('./pages/SettingsSystemHeal
 const SettingsTeamsUsers = React.lazy(() => import('./pages/SettingsTeamsUsers'));
 const SettingsTonomoIntegration = React.lazy(() => import('./pages/SettingsTonomoIntegration'));
 const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMappings'));
+const SettingsStaffDefaults = React.lazy(() => import('./pages/SettingsStaffDefaults'));
 const SettingsTonomoWebhooks = React.lazy(() => import('./pages/SettingsTonomoWebhooks'));
 const TeamDetails = React.lazy(() => import('./pages/TeamDetails'));
 const TeamPulsePage = React.lazy(() => import('./pages/TeamPulsePage'));
@@ -147,6 +148,7 @@ export const PAGES = {
     "SettingsProductsPackages": SettingsProductsPackages,
     "SettingsProjectRulebook": SettingsProjectRulebook,
     "SettingsRevisionTemplates": SettingsRevisionTemplates,
+    "SettingsStaffDefaults": SettingsStaffDefaults,
     "SettingsSystemHealth": SettingsSystemHealth,
     "SettingsTeamsUsers": SettingsTeamsUsers,
     "SettingsTonomoIntegration": SettingsTonomoIntegration,
