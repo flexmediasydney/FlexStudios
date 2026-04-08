@@ -12,7 +12,8 @@ import { Input } from '@/components/ui/input';
 import {
   X, ChevronLeft, ChevronRight, Download, ZoomIn, ZoomOut,
   Play, Film, FileText, Image as ImageIcon, Loader2, RefreshCw,
-  Maximize2, Minimize2, Search, Filter, Camera, Building2
+  Maximize2, Minimize2, Search, Filter, Camera, Building2,
+  FolderOpen, Map, ExternalLink, Eye
 } from 'lucide-react';
 import { differenceInDays, format } from 'date-fns';
 
@@ -54,6 +55,43 @@ function fmtDuration(ms) {
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+// ─── Delivered-files object helpers ──────────────────────────────────────────
+const DELIVERED_TYPE_CONFIG = {
+  photos:       { label: 'Photos',     color: 'bg-blue-100 text-blue-700',   icon: Camera },
+  pdf:          { label: 'PDF',        color: 'bg-red-100 text-red-700',     icon: FileText },
+  video:        { label: 'Video',      color: 'bg-purple-100 text-purple-700', icon: Film },
+  floorplan:    { label: 'Floor Plan', color: 'bg-amber-100 text-amber-700', icon: Map },
+  drone:        { label: 'Drone',      color: 'bg-sky-100 text-sky-700',     icon: Camera },
+};
+
+function normalizeDeliveredType(typeStr) {
+  if (!typeStr) return 'photos';
+  const lower = typeStr.toLowerCase().trim();
+  if (lower === 'photos' || lower === 'photo') return 'photos';
+  if (lower === 'pdf') return 'pdf';
+  if (lower === 'video' || lower === 'videos') return 'video';
+  if (lower === 'floor plan' || lower === 'floorplan') return 'floorplan';
+  if (lower.includes('drone')) return 'drone';
+  return 'photos';
+}
+
+function getDeliveredFileUrl(item) {
+  if (!item) return null;
+  if (item.pdfUrl) return item.pdfUrl;
+  return item.url || null;
+}
+
+function parseDeliveredFiles(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 // ─── Lightbox ─────────────────────────────────────────────────────────────────
@@ -325,11 +363,14 @@ function MediaTile({ file, onClick }) {
 
 // ─── Project media block ───────────────────────────────────────────────────────
 function ProjectMediaBlock({ project, onOpenLightbox }) {
-  const [status, setStatus] = useState('idle'); // idle | loading | done | error
+  const [status, setStatus] = useState('idle'); // idle | loading | done | error | delivered_files
   const [files, setFiles] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const blockMountedRef = useRef(true);
+
+  const deliveredFiles = useMemo(() => parseDeliveredFiles(project.tonomo_delivered_files), [project.tonomo_delivered_files]);
+  const hasDeliveredFiles = deliveredFiles.length > 0;
 
   useEffect(() => {
     blockMountedRef.current = true;
@@ -339,6 +380,11 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
   // BUG FIX: guard setState calls with mounted check so unmounting mid-fetch
   // doesn't cause setState-after-unmount warnings and memory leaks.
   const load = useCallback(async () => {
+    // If we have delivered_files objects, use them directly without Dropbox API
+    if (hasDeliveredFiles && !project.tonomo_deliverable_path) {
+      setStatus('delivered_files');
+      return;
+    }
     if (!project.tonomo_deliverable_path) return;
     setStatus('loading');
     setErrorMsg('');
@@ -347,14 +393,28 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
         path: project.tonomo_deliverable_path
       });
       if (!blockMountedRef.current) return;
-      setFiles(res?.files || []);
-      setStatus('done');
+      const apiFiles = res?.files || [];
+      if (apiFiles.length > 0) {
+        setFiles(apiFiles);
+        setStatus('done');
+      } else if (hasDeliveredFiles) {
+        // API returned nothing, fall back to delivered_files
+        setStatus('delivered_files');
+      } else {
+        setFiles([]);
+        setStatus('done');
+      }
     } catch (e) {
       if (!blockMountedRef.current) return;
-      setErrorMsg(e?.message || 'Failed to load media');
-      setStatus('error');
+      // On Dropbox API error, fall back to delivered_files if available
+      if (hasDeliveredFiles) {
+        setStatus('delivered_files');
+      } else {
+        setErrorMsg(e?.message || 'Failed to load media');
+        setStatus('error');
+      }
     }
-  }, [project.tonomo_deliverable_path]);
+  }, [project.tonomo_deliverable_path, hasDeliveredFiles]);
 
   // Auto-load on mount
   useEffect(() => { load(); }, [load]);
@@ -454,6 +514,62 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
         </div>
       )}
 
+      {/* Delivered files fallback — rendered as a list of deliverables */}
+      {status === 'delivered_files' && deliveredFiles.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+              {deliveredFiles.length} deliverable{deliveredFiles.length !== 1 ? 's' : ''}
+            </span>
+            {project.tonomo_deliverable_link && (
+              <a href={project.tonomo_deliverable_link} target="_blank" rel="noopener noreferrer"
+                className="text-[10px] text-primary hover:underline flex items-center gap-1">
+                <FolderOpen className="h-3 w-3" /> Open in Dropbox
+              </a>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {deliveredFiles.map((item, i) => {
+              if (typeof item === 'string') {
+                return (
+                  <a key={i} href={item} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border/40 bg-muted/30 hover:bg-muted/60 transition-colors">
+                    <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <span className="text-xs truncate">{item.split('/').pop() || item}</span>
+                  </a>
+                );
+              }
+              const typeKey = normalizeDeliveredType(item.type);
+              const cfg = DELIVERED_TYPE_CONFIG[typeKey] || DELIVERED_TYPE_CONFIG.photos;
+              const Icon = cfg.icon;
+              const fileUrl = getDeliveredFileUrl(item);
+              const isFolder = typeKey === 'photos' || typeKey === 'drone';
+              return (
+                <a key={i} href={fileUrl || '#'} target="_blank" rel="noopener noreferrer"
+                  className={cn(
+                    'flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border/40 transition-colors group',
+                    fileUrl ? 'bg-muted/30 hover:bg-muted/60' : 'bg-muted/20 cursor-default'
+                  )}
+                  onClick={fileUrl ? undefined : (e) => e.preventDefault()}>
+                  <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', cfg.color)}>
+                    {isFolder ? <FolderOpen className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{item.name || 'Untitled'}</p>
+                  </div>
+                  <Badge className={cn('text-[10px] shrink-0', cfg.color)}>{item.type || 'File'}</Badge>
+                  {fileUrl && (
+                    <span className="text-muted-foreground group-hover:text-primary transition-colors shrink-0">
+                      {typeKey === 'pdf' ? <Eye className="h-3.5 w-3.5" /> : <ExternalLink className="h-3.5 w-3.5" />}
+                    </span>
+                  )}
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {status === 'done' && visibleFiles.length === 0 && (
         <p className="text-sm text-muted-foreground text-center py-4">
           {typeFilter === 'all' ? 'No media files found in this folder' : `No ${typeFilter} files`}
@@ -496,7 +612,7 @@ export default function DropboxFileFeed() {
     const days = parseInt(dateRange, 10);
 
     return allProjects
-      .filter(p => p?.tonomo_deliverable_path)
+      .filter(p => p?.tonomo_deliverable_path || p?.tonomo_delivered_files)
       .filter(p => {
         if (stageFilter !== 'all') return p.status === stageFilter;
         return true;
@@ -544,7 +660,7 @@ export default function DropboxFileFeed() {
   // ── Agency options ──────────────────────────────────────────────────────────
   const agencyOptions = useMemo(() => {
     const seen = new Map();
-    allProjects.filter(p => p.tonomo_deliverable_path).forEach(p => {
+    allProjects.filter(p => p.tonomo_deliverable_path || p.tonomo_delivered_files).forEach(p => {
       if (p.agency_id && p.agency_name) seen.set(p.agency_id, p.agency_name);
       else if (p.agency_name) seen.set(p.agency_name, p.agency_name);
     });
@@ -555,7 +671,7 @@ export default function DropboxFileFeed() {
   const staffOptions = useMemo(() => {
     const ids = new Set(
       allProjects
-        .filter(p => p.tonomo_deliverable_path)
+        .filter(p => p.tonomo_deliverable_path || p.tonomo_delivered_files)
         .flatMap(p => [...new Set([p.project_owner_id, p.photographer_id, p.videographer_id, p.onsite_staff_1_id, p.onsite_staff_2_id].filter(Boolean))])
     );
     return allUsers
@@ -644,7 +760,7 @@ export default function DropboxFileFeed() {
           <Camera className="h-12 w-12 mx-auto opacity-20" />
           <p className="text-sm">No projects match your filters</p>
           <p className="text-xs opacity-60">
-            Only Tonomo-sourced projects with a delivery folder path appear here
+            Only Tonomo-sourced projects with delivery data appear here
           </p>
         </div>
       ) : (

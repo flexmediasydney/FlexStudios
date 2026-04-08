@@ -13,7 +13,8 @@ import {
   Camera, Film, FileText, Image as ImageIcon, ExternalLink, Loader2,
   Search, Building2, ChevronDown, ChevronUp, Clock,
   CheckCircle2, Package, Play, Zap, X, ChevronLeft, ChevronRight,
-  ArrowRight, Eye, RefreshCw, DollarSign, Timer, AlertTriangle, CreditCard
+  ArrowRight, Eye, RefreshCw, DollarSign, Timer, AlertTriangle, CreditCard,
+  FolderOpen, Download, Map, Video
 } from 'lucide-react';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
@@ -23,6 +24,12 @@ const TYPE_CONFIG = {
   image: { label: 'Photos', icon: ImageIcon, color: 'bg-blue-100 text-blue-700' },
   video: { label: 'Video', icon: Film, color: 'bg-purple-100 text-purple-700' },
   document: { label: 'Floorplan', icon: FileText, color: 'bg-amber-100 text-amber-700' },
+  // Additional types from tonomo_delivered_files objects
+  photos: { label: 'Photos', icon: Camera, color: 'bg-blue-100 text-blue-700' },
+  pdf: { label: 'PDF', icon: FileText, color: 'bg-red-100 text-red-700' },
+  floorplan: { label: 'Floor Plan', icon: Map, color: 'bg-amber-100 text-amber-700' },
+  'floor plan': { label: 'Floor Plan', icon: Map, color: 'bg-amber-100 text-amber-700' },
+  drone: { label: 'Drone', icon: Camera, color: 'bg-sky-100 text-sky-700' },
 };
 
 function classifyUrl(url) {
@@ -31,6 +38,46 @@ function classifyUrl(url) {
   if (['.mp4', '.mov', '.avi', '.webm'].some(e => lower.includes(e))) return 'video';
   if (['.pdf', '.ai', '.eps'].some(e => lower.includes(e))) return 'document';
   return 'image';
+}
+
+/** Normalize a tonomo_delivered_files type string to a TYPE_CONFIG key */
+function normalizeDeliveredType(typeStr) {
+  if (!typeStr) return 'photos';
+  const lower = typeStr.toLowerCase().trim();
+  if (lower === 'photos' || lower === 'photo') return 'photos';
+  if (lower === 'pdf') return 'pdf';
+  if (lower === 'video' || lower === 'videos') return 'video';
+  if (lower === 'floor plan' || lower === 'floorplan') return 'floorplan';
+  if (lower === 'drone' || lower.includes('drone')) return 'drone';
+  // Fallback — try classifying from the URL
+  return 'photos';
+}
+
+/** Get the best link for a delivered file object (prefers Firebase PDF URLs) */
+function getDeliveredFileUrl(item) {
+  if (!item) return null;
+  // For PDFs, prefer pdfUrl (Firebase-hosted) over Dropbox
+  if (item.pdfUrl) return item.pdfUrl;
+  return item.url || null;
+}
+
+/** Get icon component for a delivered file object */
+function getDeliveredFileIcon(item) {
+  const typeKey = normalizeDeliveredType(item?.type);
+  const cfg = TYPE_CONFIG[typeKey];
+  return cfg?.icon || FileText;
+}
+
+/** Parse delivered_files safely — handles both string JSON and already-parsed arrays */
+function parseDeliveredFiles(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function projectRevenue(p) {
@@ -42,7 +89,7 @@ function projectTitle(p) {
 }
 
 function deliveredFileCount(p) {
-  try { return JSON.parse(p.tonomo_delivered_files || '[]').length; } catch { return 0; }
+  return parseDeliveredFiles(p.tonomo_delivered_files).length;
 }
 
 function relativeTime(dateStr) {
@@ -174,7 +221,8 @@ function DeliveryCard({ project, isNew }) {
   const deliveredAt = project.tonomo_delivered_at || project.updated_date || project.created_date;
   const deliverableLink = project.tonomo_deliverable_link;
   const deliverablePath = project.tonomo_deliverable_path;
-  const deliveredFiles = useMemo(() => { try { return JSON.parse(project.tonomo_delivered_files || '[]'); } catch { return []; } }, [project.tonomo_delivered_files]);
+  const deliveredFiles = useMemo(() => parseDeliveredFiles(project.tonomo_delivered_files), [project.tonomo_delivered_files]);
+  const hasDeliveredFiles = deliveredFiles.length > 0;
   const value = projectRevenue(project);
   const isPaid = project.tonomo_payment_status === 'paid';
   const packageName = project.tonomo_package;
@@ -189,27 +237,41 @@ function DeliveryCard({ project, isNew }) {
     } catch { return null; }
   }, [project.shoot_date, deliveredAt]);
 
-  const dropboxSource = deliverablePath || deliverableLink || null;
+  // Skip Dropbox API entirely when we have delivered_files data
+  const dropboxSource = hasDeliveredFiles ? null : (deliverablePath || deliverableLink || null);
   const isShareUrl = !deliverablePath && !!deliverableLink;
 
   useEffect(() => {
-    if (!dropboxSource || files.length > 0) return;
+    // Don't fetch from Dropbox if we already have delivered_files objects
+    if (hasDeliveredFiles || !dropboxSource || files.length > 0) return;
     let mounted = true;
     setLoadingFiles(true);
     fetchThumbnails(dropboxSource, isShareUrl).then(result => {
       if (mounted) { setFiles(result); setLoadingFiles(false); }
     });
     return () => { mounted = false; };
-  }, [dropboxSource, isShareUrl]);
+  }, [dropboxSource, isShareUrl, hasDeliveredFiles]);
 
   const fileTypeCounts = useMemo(() => {
-    const c = { image: 0, video: 0, document: 0 };
-    if (files.length > 0) { files.forEach(f => { if (c[f.type] !== undefined) c[f.type]++; }); }
-    else { deliveredFiles.forEach(url => { c[classifyUrl(url)]++; }); }
+    const c = { image: 0, video: 0, document: 0, photos: 0, pdf: 0, floorplan: 0, drone: 0 };
+    if (hasDeliveredFiles) {
+      // Count from delivered_files objects using their type field
+      deliveredFiles.forEach(item => {
+        if (typeof item === 'object' && item !== null) {
+          const typeKey = normalizeDeliveredType(item.type);
+          if (c[typeKey] !== undefined) c[typeKey]++;
+          else c.photos++; // fallback
+        } else if (typeof item === 'string') {
+          c[classifyUrl(item)]++;
+        }
+      });
+    } else if (files.length > 0) {
+      files.forEach(f => { if (c[f.type] !== undefined) c[f.type]++; });
+    }
     return c;
-  }, [files, deliveredFiles]);
+  }, [files, deliveredFiles, hasDeliveredFiles]);
 
-  const totalFileCount = files.length > 0 ? files.length : deliveredFiles.length;
+  const totalFileCount = hasDeliveredFiles ? deliveredFiles.length : files.length;
 
   return (
     <div className={cn('border rounded-xl overflow-hidden transition-all hover:shadow-md bg-card', isNew && 'ring-2 ring-green-300 ring-opacity-50')}>
@@ -254,7 +316,8 @@ function DeliveryCard({ project, isNew }) {
             )}
           </div>
 
-          {files.length > 0 && !expanded && (
+          {/* Collapsed preview: Dropbox thumbnails or delivered_files type icons */}
+          {!expanded && (files.length > 0 ? (
             <div className="hidden sm:flex gap-1 shrink-0 mr-1">
               {files.filter(f => f.thumbnail).slice(0, 5).map((file, i) => (
                 <div key={file.path || i} className="w-11 h-11 rounded-md overflow-hidden bg-muted border border-border/40 shrink-0">
@@ -265,7 +328,24 @@ function DeliveryCard({ project, isNew }) {
                 <div className="w-11 h-11 rounded-md bg-muted/60 border border-border/40 flex items-center justify-center text-[10px] text-muted-foreground font-semibold shrink-0">+{files.length - 5}</div>
               )}
             </div>
-          )}
+          ) : hasDeliveredFiles && (
+            <div className="hidden sm:flex gap-1 shrink-0 mr-1">
+              {deliveredFiles.slice(0, 4).map((item, i) => {
+                if (typeof item !== 'object' || !item) return null;
+                const typeKey = normalizeDeliveredType(item.type);
+                const cfg = TYPE_CONFIG[typeKey] || TYPE_CONFIG.photos;
+                const Icon = cfg.icon;
+                return (
+                  <div key={i} className={cn('w-11 h-11 rounded-md flex items-center justify-center shrink-0 border border-border/40', cfg.color)}>
+                    <Icon className="h-4 w-4" />
+                  </div>
+                );
+              })}
+              {deliveredFiles.length > 4 && (
+                <div className="w-11 h-11 rounded-md bg-muted/60 border border-border/40 flex items-center justify-center text-[10px] text-muted-foreground font-semibold shrink-0">+{deliveredFiles.length - 4}</div>
+              )}
+            </div>
+          ))}
 
           <div className="flex items-center gap-2 shrink-0">
             {deliverableLink && <a href={deliverableLink} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-primary transition-colors" title="Open delivery folder"><ExternalLink className="h-4 w-4" /></a>}
@@ -277,9 +357,90 @@ function DeliveryCard({ project, isNew }) {
 
       {expanded && (
         <div className="border-t px-4 py-3">
-          {loadingFiles ? (
-            <div className="flex items-center justify-center gap-2 py-6 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /><span className="text-xs">Loading media from Dropbox...</span></div>
+          {/* Case 1: We have delivered_files objects — render as a deliverables list */}
+          {hasDeliveredFiles ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                  {deliveredFiles.length} deliverable{deliveredFiles.length !== 1 ? 's' : ''}
+                </span>
+                {deliverableLink && (
+                  <a href={deliverableLink} target="_blank" rel="noopener noreferrer"
+                    className="text-[10px] text-primary hover:underline flex items-center gap-1">
+                    <FolderOpen className="h-3 w-3" /> Open in Dropbox
+                  </a>
+                )}
+              </div>
+              {deliveredFiles.map((item, i) => {
+                // Handle both object and legacy string formats
+                if (typeof item === 'string') {
+                  return (
+                    <a key={i} href={item} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border/40 bg-muted/30 hover:bg-muted/60 transition-colors group">
+                      <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <span className="text-xs truncate flex-1">{item.split('/').pop() || item}</span>
+                    </a>
+                  );
+                }
+
+                const typeKey = normalizeDeliveredType(item.type);
+                const cfg = TYPE_CONFIG[typeKey] || TYPE_CONFIG.photos;
+                const Icon = cfg.icon;
+                const fileUrl = getDeliveredFileUrl(item);
+                const isFolder = typeKey === 'photos' || typeKey === 'drone';
+                const itemName = item.name || 'Untitled';
+
+                return (
+                  <a key={i} href={fileUrl || '#'} target="_blank" rel="noopener noreferrer"
+                    className={cn(
+                      'flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border/40 transition-colors group',
+                      fileUrl ? 'bg-muted/30 hover:bg-muted/60 cursor-pointer' : 'bg-muted/20 cursor-default'
+                    )}
+                    onClick={fileUrl ? undefined : (e) => e.preventDefault()}>
+                    {/* Icon */}
+                    <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', cfg.color)}>
+                      {isFolder ? <FolderOpen className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                    </div>
+
+                    {/* Name + type */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{itemName}</p>
+                      {item.path_lower && (
+                        <p className="text-[10px] text-muted-foreground truncate">{item.path_lower}</p>
+                      )}
+                    </div>
+
+                    {/* Type badge */}
+                    <Badge className={cn('text-[10px] shrink-0', cfg.color)}>
+                      {item.type || 'File'}
+                    </Badge>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {fileUrl && (
+                        <span className="text-muted-foreground group-hover:text-primary transition-colors">
+                          {typeKey === 'pdf' ? (
+                            <Eye className="h-3.5 w-3.5" />
+                          ) : isFolder ? (
+                            <Download className="h-3.5 w-3.5" />
+                          ) : (
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          ) : loadingFiles ? (
+            /* Case 2: Loading from Dropbox API */
+            <div className="flex items-center justify-center gap-2 py-6 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-xs">Loading media from Dropbox...</span>
+            </div>
           ) : files.length > 0 ? (
+            /* Case 3: Dropbox API returned files with thumbnails */
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-muted-foreground">{files.length} files from Dropbox</span>
@@ -309,15 +470,12 @@ function DeliveryCard({ project, isNew }) {
               </div>
             </div>
           ) : dropboxSource ? (
-            <div className="text-center py-4 text-xs text-muted-foreground">No files found in Dropbox — <a href={deliverableLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">open in Dropbox</a></div>
-          ) : deliveredFiles.length > 0 ? (
-            <div className="space-y-1">
-              <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1">Delivery links</div>
-              {deliveredFiles.slice(0, 10).filter(url => typeof url === 'string').map((url, i) => (
-                <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-xs text-primary hover:underline truncate"><ExternalLink className="h-3 w-3 shrink-0" /><span className="truncate">{url.split('/').pop() || url}</span></a>
-              ))}
+            /* Case 4: Dropbox source exists but API returned nothing */
+            <div className="text-center py-4 text-xs text-muted-foreground">
+              No files found in Dropbox — <a href={deliverableLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">open in Dropbox</a>
             </div>
           ) : (
+            /* Case 5: No data at all */
             <div className="text-center py-4 text-xs text-muted-foreground">No delivery data available</div>
           )}
         </div>
