@@ -158,6 +158,99 @@ function processThumbnailQueue() {
   }
 }
 
+// ─── Lazy thumbnail fetching (on-demand per file card) ──────────────────────
+const THUMB_MAX_CONCURRENT = 4;
+let thumbActiveCount = 0;
+const thumbQueue = [];
+
+function processThumbQueue() {
+  while (thumbActiveCount < THUMB_MAX_CONCURRENT && thumbQueue.length > 0) {
+    const job = thumbQueue.shift();
+    thumbActiveCount++;
+    job().finally(() => { thumbActiveCount--; processThumbQueue(); });
+  }
+}
+
+/** Fetch a single file thumbnail via the edge function. Returns base64 string or null. */
+function fetchSingleThumbnail(shareUrl, filePath) {
+  const cacheKey = `thumb::${shareUrl}::${filePath}`;
+  const cached = getCachedResult(cacheKey);
+  if (cached !== null) return Promise.resolve(cached);
+  if (pendingRequests.has(cacheKey)) return pendingRequests.get(cacheKey);
+
+  const promise = new Promise((resolve) => {
+    thumbQueue.push(async () => {
+      try {
+        const res = await api.functions.invoke('getDeliveryMediaFeed', {
+          action: 'get_thumbnail',
+          share_url: shareUrl,
+          file_path: filePath.startsWith('/') ? filePath : `/${filePath}`,
+        });
+        const thumb = res?.data?.thumbnail || null;
+        setCachedResult(cacheKey, thumb || '');
+        resolve(thumb);
+      } catch (err) {
+        console.warn('[LazyThumb] fetch failed:', filePath, err?.message);
+        setCachedResult(cacheKey, '');
+        resolve(null);
+      }
+    });
+    processThumbQueue();
+  });
+  pendingRequests.set(cacheKey, promise);
+  promise.finally(() => pendingRequests.delete(cacheKey));
+  return promise;
+}
+
+/**
+ * Hook: lazily fetches a thumbnail when the element is visible in the viewport.
+ * Only fetches for image-type files that have no existing thumbnail.
+ * Returns { ref, thumbnail, loading }.
+ */
+function useLazyThumbnail(file, shareUrl, folderName) {
+  const elRef = useRef(null);
+  const [thumbnail, setThumbnail] = useState(file.thumbnail || null);
+  const [loading, setLoading] = useState(false);
+  const fetchedRef = useRef(false);
+
+  const shouldFetch = !thumbnail && file.type === 'image' && !!shareUrl;
+
+  useEffect(() => {
+    if (!shouldFetch || fetchedRef.current) return;
+    const el = elRef.current;
+    if (!el) return;
+
+    // Check if already cached
+    const filePath = file.path || `/${folderName}/${file.name}`;
+    const cacheKey = `thumb::${shareUrl}::${filePath}`;
+    const cached = getCachedResult(cacheKey);
+    if (cached !== null) {
+      if (cached) setThumbnail(cached);
+      fetchedRef.current = true;
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting || fetchedRef.current) return;
+        fetchedRef.current = true;
+        observer.disconnect();
+        setLoading(true);
+        fetchSingleThumbnail(shareUrl, filePath).then((thumb) => {
+          if (thumb) setThumbnail(thumb);
+          setLoading(false);
+        });
+      },
+      { rootMargin: '200px' }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [shouldFetch, file.path, file.name, shareUrl, folderName]);
+
+  return { ref: elRef, thumbnail, loading };
+}
+
 let dropboxFailCount = 0;
 
 /**
@@ -288,6 +381,73 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl }) {
   );
 }
 
+// ─── LazyThumbFileCard: a single file card with on-demand thumbnail loading ──
+function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox }) {
+  const { ref: cardRef, thumbnail, loading } = useLazyThumbnail(file, shareUrl, folder.name);
+  const isVideo = file.type === 'video';
+  const isDoc = file.type === 'document';
+  const previewUrl = buildDropboxPreviewUrl(shareUrl, file.path);
+  const cfg = TYPE_CONFIG[file.type] || TYPE_CONFIG.image;
+  const Icon = cfg.icon;
+
+  return (
+    <button
+      ref={cardRef}
+      onClick={() => {
+        if (thumbnail || file.thumbnail) {
+          onOpenLightbox(folder.files, index);
+        } else {
+          window.open(previewUrl, '_blank');
+        }
+      }}
+      className="group relative aspect-[4/3] rounded-lg overflow-hidden bg-muted border border-border/30 hover:ring-2 hover:ring-primary/30 transition-all"
+      title={file.name}
+    >
+      {(thumbnail || file.thumbnail) ? (
+        <img
+          src={`data:image/jpeg;base64,${thumbnail || file.thumbnail}`}
+          alt={file.name}
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+          loading="lazy"
+        />
+      ) : loading ? (
+        /* Shimmer / pulse placeholder while thumbnail is being fetched */
+        <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 animate-pulse">
+          <div className="w-10 h-10 rounded-lg bg-muted-foreground/10" />
+          <div className="w-16 h-2 rounded bg-muted-foreground/10" />
+        </div>
+      ) : (
+        <div className="w-full h-full flex flex-col items-center justify-center gap-1.5">
+          <Icon className="h-8 w-8 text-muted-foreground/30" />
+          <span className="text-[9px] text-muted-foreground/50 px-1 truncate max-w-full">{file.ext?.toUpperCase()}</span>
+        </div>
+      )}
+
+      {/* Video play overlay */}
+      {isVideo && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="bg-black/40 rounded-full p-2 group-hover:bg-black/60 transition-colors">
+            <Play className="h-4 w-4 text-white fill-white" />
+          </div>
+        </div>
+      )}
+
+      {/* Document badge overlay */}
+      {isDoc && (
+        <div className="absolute top-1.5 right-1.5">
+          <Badge className="text-[8px] bg-amber-500/80 text-white border-0 px-1 py-0">{file.ext?.toUpperCase()}</Badge>
+        </div>
+      )}
+
+      {/* Hover filename overlay */}
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <p className="text-[10px] text-white truncate">{file.name}</p>
+        {file.size > 0 && <p className="text-[8px] text-white/60">{fmtFileSize(file.size)}</p>}
+      </div>
+    </button>
+  );
+}
+
 // ─── FolderGallery: renders a subfolder's files as a thumbnail grid ─────────
 function FolderGallery({ folder, shareUrl, onOpenLightbox }) {
   const style = getFolderStyle(folder.name);
@@ -321,64 +481,16 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox }) {
 
       {/* Thumbnail grid */}
       <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-        {folder.files.map((file, i) => {
-          const isVideo = file.type === 'video';
-          const isDoc = file.type === 'document';
-          const previewUrl = buildDropboxPreviewUrl(shareUrl, file.path);
-          const cfg = TYPE_CONFIG[file.type] || TYPE_CONFIG.image;
-          const Icon = cfg.icon;
-
-          return (
-            <button
-              key={file.path || i}
-              onClick={() => {
-                if (file.thumbnail) {
-                  onOpenLightbox(folder.files, i);
-                } else {
-                  window.open(previewUrl, '_blank');
-                }
-              }}
-              className="group relative aspect-[4/3] rounded-lg overflow-hidden bg-muted border border-border/30 hover:ring-2 hover:ring-primary/30 transition-all"
-              title={file.name}
-            >
-              {file.thumbnail ? (
-                <img
-                  src={`data:image/jpeg;base64,${file.thumbnail}`}
-                  alt={file.name}
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                  loading="lazy"
-                />
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center gap-1.5">
-                  <Icon className="h-8 w-8 text-muted-foreground/30" />
-                  <span className="text-[9px] text-muted-foreground/50 px-1 truncate max-w-full">{file.ext?.toUpperCase()}</span>
-                </div>
-              )}
-
-              {/* Video play overlay */}
-              {isVideo && (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="bg-black/40 rounded-full p-2 group-hover:bg-black/60 transition-colors">
-                    <Play className="h-4 w-4 text-white fill-white" />
-                  </div>
-                </div>
-              )}
-
-              {/* Document badge overlay */}
-              {isDoc && (
-                <div className="absolute top-1.5 right-1.5">
-                  <Badge className="text-[8px] bg-amber-500/80 text-white border-0 px-1 py-0">{file.ext?.toUpperCase()}</Badge>
-                </div>
-              )}
-
-              {/* Hover filename overlay */}
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <p className="text-[10px] text-white truncate">{file.name}</p>
-                {file.size > 0 && <p className="text-[8px] text-white/60">{fmtFileSize(file.size)}</p>}
-              </div>
-            </button>
-          );
-        })}
+        {folder.files.map((file, i) => (
+          <LazyThumbFileCard
+            key={file.path || i}
+            file={file}
+            index={i}
+            folder={folder}
+            shareUrl={shareUrl}
+            onOpenLightbox={onOpenLightbox}
+          />
+        ))}
       </div>
     </div>
   );

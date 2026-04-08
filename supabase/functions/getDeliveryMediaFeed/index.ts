@@ -2,9 +2,20 @@ import { getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_sha
 
 const DROPBOX_API = 'https://api.dropboxapi.com/2';
 const SKIP_EXTS = new Set(['dng','cr2','cr3','arw','nef','orf','raf','rw2','raw','nrw']);
+const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','tiff','tif','heic','heif']);
+const VIDEO_EXTS = new Set(['mp4','mov','avi','webm','mkv','m4v','wmv']);
+const DOC_EXTS   = new Set(['pdf','ai','eps','svg','dwg']);
 
 function getExt(name: string): string {
   return (name.split('.').pop() || '').toLowerCase();
+}
+
+function classifyFile(name: string): string {
+  const ext = getExt(name);
+  if (IMAGE_EXTS.has(ext)) return 'image';
+  if (VIDEO_EXTS.has(ext)) return 'video';
+  if (DOC_EXTS.has(ext))   return 'document';
+  return 'other';
 }
 
 async function dbxPost(token: string, endpoint: string, body: Record<string, unknown>) {
@@ -35,22 +46,61 @@ async function listAll(token: string, path: string, sharedLink?: string) {
   return entries;
 }
 
-function buildPreviewUrl(shareUrl: string, fileName: string): string {
+/**
+ * Build a Dropbox preview URL for a file within a shared folder.
+ * Also builds a raw content URL for image display in <img> tags.
+ */
+function buildFileUrls(shareUrl: string, subfolderName: string | null, fileName: string) {
   const base = shareUrl.split('?')[0];
   const rlMatch = shareUrl.match(/rlkey=([^&]+)/);
-  if (!rlMatch) return shareUrl;
-  return `${base}?rlkey=${rlMatch[1]}&preview=${encodeURIComponent(fileName)}&subfolder_nav_tracking=1`;
+  const rlkey = rlMatch?.[1] || '';
+
+  // Preview URL — opens Dropbox preview page
+  const preview_url = rlkey
+    ? `${base}?rlkey=${rlkey}&preview=${encodeURIComponent(fileName)}&subfolder_nav_tracking=1`
+    : shareUrl;
+
+  // Raw content URL — for <img> tags. Dropbox serves raw content from this URL pattern.
+  // Pattern: base/subfolder/file?rlkey=xxx&raw=1
+  const pathPart = subfolderName ? `/${encodeURIComponent(subfolderName)}/${encodeURIComponent(fileName)}` : `/${encodeURIComponent(fileName)}`;
+  const raw_url = rlkey
+    ? `${base}${pathPart}?rlkey=${rlkey}&raw=1`
+    : null;
+
+  return { preview_url, raw_url };
 }
 
-function fileEntry(f: Record<string, unknown>, folderName: string, shareUrl?: string) {
+interface FileEntry {
+  name: string;
+  size: number;
+  ext: string;
+  type: string;
+  preview_url: string | null;
+  raw_url: string | null;
+  path: string;
+  dbx_id?: string;
+  modified: string | null;
+}
+
+function fileEntry(f: Record<string, unknown>, folderName: string, shareUrl?: string): FileEntry {
   const name = f.name as string;
+  const ext = getExt(name);
+  const type = classifyFile(name);
+  const relativePath = (f.path_display as string) || `/${folderName}/${name}`;
+  const urls = shareUrl
+    ? buildFileUrls(shareUrl, folderName === 'Root' ? null : folderName, name)
+    : { preview_url: null, raw_url: null };
+
   return {
     name,
     size: f.size as number,
-    ext: getExt(name),
-    preview_url: shareUrl ? buildPreviewUrl(shareUrl, name) : null,
-    path: f.path_display || `/${folderName}/${name}`,
-    modified: f.client_modified || null,
+    ext,
+    type,
+    preview_url: urls.preview_url,
+    raw_url: urls.raw_url,
+    path: relativePath,
+    dbx_id: (f.id as string) || undefined,
+    modified: (f.client_modified as string) || null,
   };
 }
 
@@ -58,7 +108,6 @@ Deno.serve(async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 
-  // Health check
   if (req.method === 'GET') {
     return jsonResponse({ status: 'ok', function: 'getDeliveryMediaFeed' }, 200, req);
   }
@@ -67,33 +116,31 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}));
 
-    // Debug endpoint — check token status
     if (body?._debug) {
       const t = Deno.env.get('DROPBOX_API_TOKEN') || '';
       return jsonResponse({ token_length: t.length, token_starts: t.substring(0, 10), token_set: t.length > 100 });
     }
 
-    // Auth check relaxed — this function only reads from Dropbox, no sensitive DB operations
-    // getUserFromReq can fail for various JWT/session reasons; don't block media loading
-    const user = await getUserFromReq(req).catch(() => null);
+    // Relaxed auth
+    await getUserFromReq(req).catch(() => null);
 
     const token = Deno.env.get('DROPBOX_API_TOKEN');
     if (!token) return errorResponse('DROPBOX_API_TOKEN not configured', 500, req);
 
     const { share_url, path, action } = body;
 
-    // Single file temp link
+    // ─── Action: get_temp_link ──────────────────────────────────────────
     if (action === 'get_temp_link' && path) {
       const data = await dbxPost(token, '/files/get_temporary_link', { path });
       return jsonResponse({ url: data.link }, 200, req);
     }
 
+    // ─── Main: list folder contents ─────────────────────────────────────
     if (!share_url && !path) return errorResponse('share_url or path required', 400, req);
 
     const useShared = !!share_url;
     const listPath = useShared ? '' : (path.startsWith('/') ? path : '/' + path);
 
-    // List top-level entries
     const topEntries = await listAll(token, listPath, useShared ? share_url : undefined);
 
     const subfolders: Record<string, unknown>[] = [];
@@ -104,9 +151,8 @@ Deno.serve(async (req) => {
       else if (e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name))) rootFiles.push(e);
     }
 
-    const folders: { name: string; files: ReturnType<typeof fileEntry>[] }[] = [];
+    const folders: { name: string; files: FileEntry[] }[] = [];
 
-    // Root files
     if (rootFiles.length > 0) {
       folders.push({
         name: 'Root',
@@ -114,7 +160,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Subfolders
     for (const sf of subfolders) {
       try {
         const subPath = useShared ? `/${sf.name}` : `${listPath}/${sf.name}`;
@@ -130,7 +175,10 @@ Deno.serve(async (req) => {
       }
     }
 
-    return jsonResponse({ folders, total_files: folders.reduce((s, f) => s + f.files.length, 0) }, 200, req);
+    return jsonResponse({
+      folders,
+      total_files: folders.reduce((s, f) => s + f.files.length, 0),
+    }, 200, req);
 
   } catch (err) {
     console.error('getDeliveryMediaFeed error:', err);
