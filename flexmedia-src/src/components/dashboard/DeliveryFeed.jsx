@@ -1150,7 +1150,14 @@ export default function DeliveryFeed() {
         return false;
       })
       .filter(p => p.tonomo_delivered_at || p.tonomo_deliverable_link || p.tonomo_delivered_files || p.tonomo_deliverable_path)
-      .filter(p => { if (days === 0) return true; const delivered = p.tonomo_delivered_at || p.updated_date; if (!delivered) return false; return differenceInDays(now, new Date(fixTimestamp(delivered))) <= days; })
+      .filter(p => {
+        if (days === 0) return true;
+        // Partial deliveries with a Dropbox link always show (media may be uploading now)
+        if (PARTIAL_STAGES.includes(p.status) && p.tonomo_deliverable_link) return true;
+        const delivered = p.tonomo_delivered_at || p.updated_date;
+        if (!delivered) return false;
+        return differenceInDays(now, new Date(fixTimestamp(delivered))) <= days;
+      })
       .filter(p => agencyFilter === 'all' || p.agency_id === agencyFilter)
       .filter(p => {
         if (!search.trim()) return true;
