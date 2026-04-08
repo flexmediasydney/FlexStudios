@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Plus, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { format, isToday, isTomorrow, parseISO, subDays, subWeeks, differenceInDays, addDays } from "date-fns";
 import { fixTimestamp } from "@/components/utils/dateUtils";
@@ -40,10 +40,33 @@ const TeamWorkloadChart = React.lazy(() => import('@/components/dashboard/TeamWo
 const RevenueComparisonChart = React.lazy(() => import('@/components/dashboard/RevenueComparisonChart'));
 import ErrorBoundary from '@/components/common/ErrorBoundary';
 
+const VALID_DASHBOARD_TABS = new Set([
+  'overview', 'deadlines', 'tasks', 'files', 'today',
+  'pipeline', 'territory', 'deliveries', 'revenue'
+]);
+
 export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Tab persistence via URL — defaults to "overview", survives navigation
+  const activeTab = VALID_DASHBOARD_TABS.has(searchParams.get('tab'))
+    ? searchParams.get('tab')
+    : 'overview';
+
+  const handleDashboardTabChange = useCallback((tab) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (tab === 'overview') {
+        next.delete('tab'); // keep URL clean for the default tab
+      } else {
+        next.set('tab', tab);
+      }
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   // Keyboard shortcuts
   useEffect(() => {

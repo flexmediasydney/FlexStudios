@@ -166,12 +166,12 @@ function MediaLightbox({ files, initialIndex, onClose }) {
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft' && index > 0) setIndex(i => i - 1);
-      if (e.key === 'ArrowRight' && index < files.length - 1) setIndex(i => i + 1);
+      if (e.key === 'ArrowLeft') setIndex(i => Math.max(0, i - 1));
+      if (e.key === 'ArrowRight') setIndex(i => Math.min(files.length - 1, i + 1));
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [index, files.length, onClose]);
+  }, [files.length, onClose]);
 
   // Use canonical cache key (mode::path) to look up the thumbnail blob
   const imgBlobUrl = isImage && proxyPath ? blobCache.get(blobCacheKey(proxyPath, 'thumb')) : null;
@@ -183,7 +183,7 @@ function MediaLightbox({ files, initialIndex, onClose }) {
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium truncate max-w-md">{file?.name}</span>
           {file?.size > 0 && <span className="text-xs text-white/50">{formatSize(file.size)}</span>}
-          <span className="text-xs text-white/50">{index + 1} / {files.length}</span>
+          <span className="text-xs text-white/50">{safeIndex + 1} / {files.length}</span>
         </div>
         <div className="flex items-center gap-2">
           {file?.projectName && (
@@ -203,13 +203,13 @@ function MediaLightbox({ files, initialIndex, onClose }) {
       {/* Main content */}
       <div className="flex-1 flex items-center justify-center relative min-h-0 px-16" onClick={e => e.stopPropagation()}>
         {/* Nav arrows */}
-        {index > 0 && (
-          <button onClick={() => setIndex(i => i - 1)} className="absolute left-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+        {safeIndex > 0 && (
+          <button onClick={() => setIndex(i => Math.max(0, i - 1))} className="absolute left-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
             <ChevronLeft className="h-6 w-6" />
           </button>
         )}
-        {index < files.length - 1 && (
-          <button onClick={() => setIndex(i => i + 1)} className="absolute right-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+        {safeIndex < files.length - 1 && (
+          <button onClick={() => setIndex(i => Math.min(files.length - 1, i + 1))} className="absolute right-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
             <ChevronRight className="h-6 w-6" />
           </button>
         )}
@@ -262,27 +262,37 @@ function MediaLightbox({ files, initialIndex, onClose }) {
         )}
       </div>
 
-      {/* Filmstrip */}
+      {/* Filmstrip -- show window of thumbnails around current index */}
       <div className="flex gap-1.5 p-3 overflow-x-auto justify-center" onClick={e => e.stopPropagation()}>
-        {files.slice(0, 40).map((f, i) => {
-          const thumbUrl = f.proxyPath ? blobCache.get(f.proxyPath) : null;
-          return (
-            <button
-              key={f.proxyPath || f.path || i}
-              onClick={() => setIndex(i)}
-              className={cn("w-14 h-10 rounded overflow-hidden shrink-0 border-2 transition-all",
-                i === index ? "border-white ring-1 ring-white/50" : "border-transparent opacity-60 hover:opacity-100")}
-            >
-              {thumbUrl ? (
-                <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full bg-white/10 flex items-center justify-center">
-                  <FileIcon type={f.type} className="h-3 w-3 text-white/40" />
-                </div>
-              )}
-            </button>
-          );
-        })}
+        {(() => {
+          // Show a sliding window of up to 40 items centered on current index
+          const STRIP_SIZE = 40;
+          const half = Math.floor(STRIP_SIZE / 2);
+          let start = Math.max(0, safeIndex - half);
+          let end = Math.min(files.length, start + STRIP_SIZE);
+          if (end - start < STRIP_SIZE) start = Math.max(0, end - STRIP_SIZE);
+          return files.slice(start, end).map((f, localI) => {
+            const globalI = start + localI;
+            // Use canonical cache key (mode::path) for lookup
+            const thumbUrl = f.proxyPath ? blobCache.get(blobCacheKey(f.proxyPath, 'thumb')) : null;
+            return (
+              <button
+                key={f.proxyPath || f.path || globalI}
+                onClick={() => setIndex(globalI)}
+                className={cn("w-14 h-10 rounded overflow-hidden shrink-0 border-2 transition-all",
+                  globalI === safeIndex ? "border-white ring-1 ring-white/50" : "border-transparent opacity-60 hover:opacity-100")}
+              >
+                {thumbUrl ? (
+                  <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-white/10 flex items-center justify-center">
+                    <FileIcon type={f.type} className="h-3 w-3 text-white/40" />
+                  </div>
+                )}
+              </button>
+            );
+          });
+        })()}
       </div>
     </div>
   );
@@ -301,7 +311,7 @@ function FeedCard({ item, isVisible, onClick, getTagsForFile }) {
   // Only load thumbnails once visible (IntersectionObserver)
   useEffect(() => {
     if (!canThumb || !item.proxyPath || started.current) return;
-    const cached = blobCache.get(item.proxyPath);
+    const cached = blobCache.get(blobCacheKey(item.proxyPath, 'thumb'));
     if (cached) { setBlobUrl(cached); return; }
 
     if (!isVisible) return;
@@ -476,9 +486,11 @@ export default function LiveMediaFeed() {
     return allProjects
       .filter(p => p?.tonomo_deliverable_link && p?.tonomo_deliverable_path)
       .sort((a, b) => {
-        const aDate = a.tonomo_delivered_at || a.updated_date || a.created_date || '';
-        const bDate = b.tonomo_delivered_at || b.updated_date || b.created_date || '';
-        try { return new Date(fixTimestamp(bDate)) - new Date(fixTimestamp(aDate)); } catch { return 0; }
+        const aStr = a.tonomo_delivered_at || a.updated_date || a.created_date || '';
+        const bStr = b.tonomo_delivered_at || b.updated_date || b.created_date || '';
+        const aTime = aStr ? new Date(fixTimestamp(aStr)).getTime() : 0;
+        const bTime = bStr ? new Date(fixTimestamp(bStr)).getTime() : 0;
+        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
       })
       .slice(0, 20);
   }, [allProjects]);
@@ -517,9 +529,9 @@ export default function LiveMediaFeed() {
                 folderName: folder.name,
                 photographerName: userMap.get(project.photographer_id) || userMap.get(project.project_owner_id) || project.agent_name || null,
                 agentName: project.agent_name || null,
-                // Build proxy path for image loading
-                proxyPath: project.tonomo_deliverable_path
-                  ? `${project.tonomo_deliverable_path}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
+                // Build proxy path for image loading (guard against null file.path)
+                proxyPath: (project.tonomo_deliverable_path && file.path)
+                  ? `${project.tonomo_deliverable_path}${file.path.startsWith('/') ? file.path : '/' + file.path}`
                   : null,
               }))
             );
@@ -547,11 +559,13 @@ export default function LiveMediaFeed() {
 
     return projectFiles
       .filter(f => {
-        // Date range filter
-        if (days > 0 && f.uploaded_at) {
+        // Date range filter -- when a range is active, exclude files with no timestamp
+        if (days > 0) {
+          if (!f.uploaded_at) return false;
           try {
-            if (differenceInDays(now, new Date(f.uploaded_at)) > days) return false;
-          } catch { /* keep it */ }
+            // Use Math.abs to handle future timestamps from clock skew
+            if (Math.abs(differenceInDays(now, new Date(f.uploaded_at))) > days) return false;
+          } catch { return false; }
         }
         // Type filter
         if (typeFilter !== 'all' && f.type !== typeFilter) return false;
@@ -569,9 +583,15 @@ export default function LiveMediaFeed() {
         return true;
       })
       .sort((a, b) => {
-        const aDate = a.uploaded_at || a.modified || '';
-        const bDate = b.uploaded_at || b.modified || '';
-        try { return new Date(bDate) - new Date(aDate); } catch { return 0; }
+        const aStr = a.uploaded_at || a.modified || '';
+        const bStr = b.uploaded_at || b.modified || '';
+        // Guard against null/empty/invalid timestamps -- push undated items to end
+        const aTime = aStr ? new Date(aStr).getTime() : 0;
+        const bTime = bStr ? new Date(bStr).getTime() : 0;
+        // If either timestamp parsed to NaN, treat as 0 (oldest)
+        const aVal = Number.isNaN(aTime) ? 0 : aTime;
+        const bVal = Number.isNaN(bTime) ? 0 : bTime;
+        return bVal - aVal;
       });
   }, [projectFiles, dateRange, typeFilter, search]);
 
@@ -585,8 +605,22 @@ export default function LiveMediaFeed() {
   }, [feedItems]);
 
   // IntersectionObserver for lazy-loading images only when cards are visible
+  // Re-run when feedItems change (new cards) or gridSize changes (layout shift moves cards)
   useEffect(() => {
     if (!gridRef.current) return;
+
+    // Build set of current feed IDs to prune stale entries from visibleCards
+    const currentIds = new Set(
+      feedItems.map((item, idx) => `${item.projectId}-${item.path || item.name}-${idx}`)
+    );
+    setVisibleCards(prev => {
+      const pruned = new Set();
+      for (const id of prev) {
+        if (currentIds.has(id)) pruned.add(id);
+      }
+      return pruned.size === prev.size ? prev : pruned;
+    });
+
     const observer = new IntersectionObserver(
       (entries) => {
         setVisibleCards(prev => {
@@ -608,14 +642,15 @@ export default function LiveMediaFeed() {
     cards.forEach(el => observer.observe(el));
 
     return () => observer.disconnect();
-  }, [feedItems]);
+  }, [feedItems, gridSize]);
 
   const handleRefresh = useCallback(() => {
     // Clear blob cache for all eligible projects
+    // Cache keys are in format "mode::/base/path/file" so match on the path portion
     eligibleProjects.forEach(p => {
       if (p.tonomo_deliverable_path) {
         for (const [k, v] of blobCache.entries()) {
-          if (k.startsWith(p.tonomo_deliverable_path)) {
+          if (k.includes(p.tonomo_deliverable_path)) {
             URL.revokeObjectURL(v);
             blobCache.delete(k);
           }
@@ -624,6 +659,16 @@ export default function LiveMediaFeed() {
     });
     refetch();
   }, [refetch, eligibleProjects]);
+
+  // Cleanup: revoke blob URLs on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      for (const [k, v] of blobCache.entries()) {
+        URL.revokeObjectURL(v);
+      }
+      blobCache.clear();
+    };
+  }, []);
 
   const isLoading = projectsLoading || filesLoading;
 

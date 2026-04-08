@@ -83,11 +83,21 @@ if (typeof document !== 'undefined' && !document.getElementById(STYLE_ID)) {
 }
 
 
-// ---- Image proxy with concurrency limiter + blob cache ----
+// ---- Image proxy with concurrency limiter + LRU blob cache ----
+const MAX_BLOB_CACHE = 400;
 const blobCache = new Map();
 const pending = new Set();
 let activeLoads = 0;
 const loadQueue = [];
+
+function evictBlobCache() {
+  while (blobCache.size > MAX_BLOB_CACHE) {
+    const oldestKey = blobCache.keys().next().value;
+    const oldUrl = blobCache.get(oldestKey);
+    if (oldUrl) URL.revokeObjectURL(oldUrl);
+    blobCache.delete(oldestKey);
+  }
+}
 
 function processQueue() {
   while (activeLoads < 8 && loadQueue.length > 0) {
@@ -98,7 +108,7 @@ function processQueue() {
 }
 
 async function fetchProxyImage(filePath, mode = 'thumb') {
-  const cacheKey = `thumb::${filePath}`;
+  const cacheKey = `${mode}::${filePath}`;
   if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
   if (pending.has(cacheKey)) return null;
   pending.add(cacheKey);
@@ -106,13 +116,14 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: 'thumb', file_path: filePath }),
+      body: JSON.stringify({ action: mode, file_path: filePath }),
     });
     if (!res.ok) return null;
     const blob = await res.blob();
     if (blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
     blobCache.set(cacheKey, url);
+    evictBlobCache();
     return url;
   } catch { return null; }
   finally { pending.delete(cacheKey); }
@@ -536,9 +547,9 @@ function TimelineEntry({ entry, index }) {
   const addedTags = details.added_tags || [];
   const removedTags = details.removed_tags || [];
 
-  const thumbPath = details.tonomo_base_path && details.file_path
-    ? `${details.tonomo_base_path}${details.file_path.startsWith('/') ? details.file_path : '/' + details.file_path}`
-    : null;
+  // file_path in audit details is already the full proxy path (basePath + relative).
+  // Do NOT re-prepend tonomo_base_path.
+  const thumbPath = details.file_path || null;
 
   const [thumbUrl, setThumbUrl] = useState(null);
   const thumbStarted = useRef(false);
@@ -908,10 +919,38 @@ function TagManagementTab() {
   }, [newTagName, newTagColor, mediaTags, user]);
 
   const deleteTag = useCallback(async (tagId) => {
+    // Find the tag name before deleting so we can clean up favorites
+    const tagRecord = mediaTags.find(t => t.id === tagId);
+    const tagName = tagRecord?.name;
+
     await api.entities.MediaTag.delete(tagId);
-    await refetchEntityList('MediaTag');
+
+    // Remove this tag from all favorites that reference it.
+    // Without this, favorites keep ghost tag names in their tags[] array.
+    if (tagName) {
+      try {
+        const { data: allFavs } = await api.entities.MediaFavorite.list();
+        const affectedFavs = (allFavs || []).filter(f =>
+          Array.isArray(f.tags) && f.tags.includes(tagName)
+        );
+        await Promise.all(
+          affectedFavs.map(f =>
+            api.entities.MediaFavorite.update(f.id, {
+              tags: f.tags.filter(t => t !== tagName),
+            })
+          )
+        );
+      } catch (e) {
+        console.error('Failed to clean up tag references from favorites:', e);
+      }
+    }
+
+    await Promise.all([
+      refetchEntityList('MediaTag'),
+      refetchEntityList('MediaFavorite'),
+    ]);
     setDeleteConfirm(null);
-  }, []);
+  }, [mediaTags]);
 
   if (tagsLoading) {
     return (

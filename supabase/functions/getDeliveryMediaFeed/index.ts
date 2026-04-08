@@ -32,8 +32,11 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = DBX_
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+  } catch (err: unknown) {
+    if (
+      (err instanceof DOMException && err.name === 'AbortError') ||
+      (err instanceof Error && err.message.includes('aborted'))
+    ) {
       throw new Error(`Dropbox API timeout after ${timeoutMs}ms`);
     }
     throw err;
@@ -64,24 +67,42 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
+    // Surface token expiry as a distinct error so callers can show a clear message
+    if (res.status === 401 || txt.includes('expired_access_token') || txt.includes('invalid_access_token')) {
+      throw new Error(`expired_access_token: Dropbox ${endpoint} ${res.status}`);
+    }
+    // Surface rate limiting with Retry-After hint
+    if (res.status === 429) {
+      const retryAfter = res.headers?.get('Retry-After') || '60';
+      throw new Error(`Dropbox rate limited on ${endpoint} — retry after ${retryAfter}s`);
+    }
     throw new Error(`Dropbox ${endpoint} ${res.status}: ${txt.slice(0, 300)}`);
   }
   return res.json();
 }
 
-async function listAll(token: string, path: string, sharedLink?: string) {
+const MAX_LIST_ENTRIES = 5000;
+
+async function listAll(token: string, path: string, sharedLink?: string): Promise<{ entries: Record<string, unknown>[]; truncated: boolean }> {
   const body: Record<string, unknown> = { path, include_deleted: false, limit: 2000 };
   if (sharedLink) body.shared_link = { url: sharedLink };
   const data = await dbxPost(token, '/files/list_folder', body);
-  let entries = data.entries || [];
-  let cursor = data.cursor;
-  while (data.has_more && cursor) {
+  let entries: Record<string, unknown>[] = data.entries || [];
+  let hasMore = !!data.has_more;
+  let cursor: string | undefined = data.cursor;
+  let truncated = false;
+
+  while (hasMore && cursor) {
     const more = await dbxPost(token, '/files/list_folder/continue', { cursor });
     entries = entries.concat(more.entries || []);
-    cursor = more.has_more ? more.cursor : null;
-    if (entries.length > 2000) break;
+    hasMore = !!more.has_more;
+    cursor = more.cursor;
+    if (entries.length >= MAX_LIST_ENTRIES) {
+      truncated = true;
+      break;
+    }
   }
-  return entries;
+  return { entries, truncated };
 }
 
 // ─── Parallel with concurrency limit ─────────────────────────────────────────
@@ -99,7 +120,9 @@ async function mapWithConcurrency<T, R>(
       const idx = next++;
       try {
         results[idx] = await fn(items[idx]);
-      } catch {
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`mapWithConcurrency: item ${idx} failed: ${msg}`);
         results[idx] = null;
       }
     }
@@ -159,10 +182,22 @@ function fileEntry(f: Record<string, unknown>, folderName: string, parentShareUr
 
 function stripPrefix(filePath: string, pathPrefix: string): string {
   let rel = filePath;
-  if (pathPrefix && rel.startsWith(pathPrefix)) {
-    rel = rel.slice(pathPrefix.length);
+  // Try matching the prefix as-is first, then try URL-decoded comparison
+  if (pathPrefix) {
+    if (rel.startsWith(pathPrefix)) {
+      rel = rel.slice(pathPrefix.length);
+    } else {
+      try {
+        const decoded = decodeURIComponent(rel);
+        if (decoded.startsWith(pathPrefix)) {
+          rel = decoded.slice(pathPrefix.length);
+        }
+      } catch { /* not URL-encoded, leave as-is */ }
+    }
   }
   if (!rel.startsWith('/')) rel = '/' + rel;
+  // Collapse any double (or more) slashes into single slashes
+  rel = rel.replace(/\/\/+/g, '/');
   return rel;
 }
 
@@ -383,17 +418,18 @@ Deno.serve(async (req) => {
     const useShared = !!share_url;
     const listPath = useShared ? '' : (path.startsWith('/') ? path : '/' + path);
 
-    const topEntries = await listAll(token, listPath, useShared ? share_url : undefined);
+    const { entries: topEntries, truncated: topTruncated } = await listAll(token, listPath, useShared ? share_url : undefined);
 
     const subfolders: Record<string, unknown>[] = [];
     const rootFiles: Record<string, unknown>[] = [];
 
     for (const e of topEntries) {
       if (e['.tag'] === 'folder') subfolders.push(e);
-      else if (e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name))) rootFiles.push(e);
+      else if (e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string))) rootFiles.push(e);
     }
 
     const folders: { name: string; files: FileEntry[] }[] = [];
+    let anyTruncated = topTruncated;
 
     if (rootFiles.length > 0) {
       folders.push({
@@ -403,9 +439,14 @@ Deno.serve(async (req) => {
     }
 
     // List all subfolders in parallel (concurrency limit of 5)
+    // Use path_display (or path_lower) when available for correct Dropbox path resolution
     const subResults = await mapWithConcurrency(subfolders, SUBFOLDER_CONCURRENCY, async (sf) => {
-      const subPath = useShared ? `/${sf.name}` : `${listPath}/${sf.name}`;
-      const subEntries = await listAll(token, subPath, useShared ? share_url : undefined);
+      const sfPath = (sf.path_display as string) || (sf.path_lower as string) || '';
+      const subPath = useShared
+        ? (sfPath ? sfPath : `/${sf.name}`)
+        : (sfPath ? sfPath : `${listPath}/${sf.name}`);
+      const { entries: subEntries, truncated: subTruncated } = await listAll(token, subPath, useShared ? share_url : undefined);
+      if (subTruncated) anyTruncated = true;
       const files = subEntries
         .filter((e: Record<string, unknown>) => e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string)))
         .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, parentShareUrl, pathPrefix, base_path));
@@ -417,11 +458,17 @@ Deno.serve(async (req) => {
       if (result) folders.push(result);
     }
 
-    const listing = {
+    const totalFiles = folders.reduce((s, f) => s + f.files.length, 0);
+    const listing: Record<string, unknown> = {
       folders,
-      total_files: folders.reduce((s, f) => s + f.files.length, 0),
+      total_files: totalFiles,
       fetched_at: new Date().toISOString(),
     };
+    // Warn the client when results were capped so they know files may be missing
+    if (anyTruncated) {
+      listing.truncated = true;
+      listing.truncated_message = `Results were capped at ${MAX_LIST_ENTRIES} entries per folder. Some files may not be shown.`;
+    }
 
     return new Response(JSON.stringify(listing), {
       status: 200,

@@ -162,7 +162,7 @@ export function useFavorites() {
             property_address: propertyAddress || null,
             tonomo_base_path: tonomoBasePath || null,
           },
-        }); // fire-and-forget audit log
+        }).catch(() => {}); // fire-and-forget audit log — swallow rejection to avoid unhandled promise
       } catch (err) {
         // Revert optimistic state on failure
         if (toggleVersionRef.current === version) {
@@ -225,7 +225,7 @@ export function useFavorites() {
             property_address: propertyAddress || null,
             tonomo_base_path: tonomoBasePath || null,
           },
-        }); // fire-and-forget audit log
+        }).catch(() => {}); // fire-and-forget audit log — swallow rejection to avoid unhandled promise
       } catch (err) {
         // Revert optimistic state on failure
         if (toggleVersionRef.current === version) {

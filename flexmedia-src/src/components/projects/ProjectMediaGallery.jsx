@@ -16,17 +16,14 @@ import { formatDistanceToNow, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
 import TagManager from "@/components/favorites/TagManager";
 import { useFavorites } from "@/components/favorites/useFavorites";
+import {
+  blobCache, fetchProxyImage, enqueueLoad, clearCacheForPath, decodeImage
+} from "@/lib/mediaProxyCache";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// ─── Image proxy ────────────────────────────────────────────────────
-const blobCache = new Map();
-const pending = new Set();
-let activeLoads = 0;
-const loadQueue = [];
-
-/** Canonical cache key — must be used everywhere instead of raw path */
+/** Canonical cache key -- must be used everywhere instead of raw path */
 function cacheKey(filePath, mode = 'thumb') {
   return `${mode}::${filePath}`;
 }
@@ -37,42 +34,13 @@ function buildProxyPath(basePath, file) {
   return `${basePath}${file.path.startsWith('/') ? file.path : '/' + file.path}`;
 }
 
-// Observable load-progress counter
+// Observable load-progress counter (local to this component tree)
 let _loadedCount = 0;
 let _totalQueued = 0;
 const _progressListeners = new Set();
 function notifyProgress() { _progressListeners.forEach(fn => fn({ loaded: _loadedCount, total: _totalQueued })); }
 function subscribeProgress(fn) { _progressListeners.add(fn); return () => _progressListeners.delete(fn); }
 function resetProgress() { _loadedCount = 0; _totalQueued = 0; notifyProgress(); }
-
-function processQueue() {
-  while (activeLoads < 8 && loadQueue.length > 0) {
-    const job = loadQueue.shift();
-    activeLoads++;
-    job().finally(() => { activeLoads--; _loadedCount++; notifyProgress(); processQueue(); });
-  }
-}
-
-async function fetchProxyImage(filePath, mode = 'thumb') {
-  const cacheKey = `${mode}::${filePath}`;
-  if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
-  if (pending.has(cacheKey)) return null;
-  pending.add(cacheKey);
-  try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: mode, file_path: filePath }),
-    });
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    if (blob.size < 500) return null;
-    const url = URL.createObjectURL(blob);
-    blobCache.set(cacheKey, url);
-    return url;
-  } catch { return null; }
-  finally { pending.delete(cacheKey); }
-}
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -209,6 +177,26 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
   const [videoLoading, setVideoLoading] = useState(false);
   const [fullResUrl, setFullResUrl] = useState(null);
   const [imageLoading, setImageLoading] = useState(false);
+
+  // Back-navigation fix: push a history entry when the lightbox opens so the
+  // browser back button closes the lightbox instead of navigating away from the page.
+  const closedViaPopstate = useRef(false);
+  useEffect(() => {
+    window.history.pushState({ lightbox: true }, '');
+    const handlePop = () => {
+      closedViaPopstate.current = true;
+      onClose();
+    };
+    window.addEventListener('popstate', handlePop);
+    return () => {
+      window.removeEventListener('popstate', handlePop);
+      // If the lightbox closed via Escape / X button (not via back-button),
+      // pop the extra history entry so the history stack stays clean.
+      if (!closedViaPopstate.current && window.history.state?.lightbox) {
+        window.history.back();
+      }
+    };
+  }, [onClose]);
 
   // Clamp index to valid range (Bug 5c: guard against out-of-bounds)
   const safeIndex = files.length > 0 ? Math.max(0, Math.min(index, files.length - 1)) : 0;
@@ -406,13 +394,16 @@ function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile }) {
     if (cached) { setBlobUrl(cached); return; }
     started.current = true;
     setLoading(true);
-    loadQueue.push(async () => {
+    enqueueLoad(async () => {
       const url = await fetchProxyImage(proxyPath);
-      if (url) setBlobUrl(url);
-      else setError(true);
+      if (url) {
+        await decodeImage(url); // decode off main thread to prevent jank
+        setBlobUrl(url);
+      } else {
+        setError(true);
+      }
       setLoading(false);
     });
-    processQueue();
   }, [canThumb, proxyPath]);
 
   const handleClick = () => {
@@ -426,7 +417,7 @@ function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile }) {
     <button
       type="button"
       onClick={handleClick}
-      className="group relative rounded-lg border bg-card overflow-hidden transition-all hover:shadow-md hover:-translate-y-0.5 text-left w-full"
+      className="group relative rounded-lg border bg-card overflow-hidden transition-all hover:shadow-md hover:-translate-y-0.5 text-left w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       <div className="aspect-[4/3] bg-muted flex items-center justify-center overflow-hidden">
         {blobUrl ? (
@@ -521,7 +512,7 @@ function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox
 
   return (
     <div className="space-y-3">
-      <button type="button" onClick={() => setCollapsed(!collapsed)} className="flex items-center gap-2 group cursor-pointer">
+      <button type="button" onClick={() => setCollapsed(!collapsed)} className="flex items-center gap-2 group cursor-pointer rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary px-1 -mx-1" aria-expanded={!collapsed}>
         <FolderOpen className="h-4 w-4 text-muted-foreground" />
         <h3 className="text-sm font-semibold text-foreground">{folder.name}</h3>
         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal">{folder.files.length}</Badge>
@@ -668,7 +659,9 @@ export default function ProjectMediaGallery({ project }) {
                 key={key}
                 onClick={() => setGridSize(key)}
                 title={title}
-                className={cn("p-1.5 transition-colors", gridSize === key ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}
+                aria-label={`${title} grid`}
+                aria-pressed={gridSize === key}
+                className={cn("p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset", gridSize === key ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}
               >
                 <Icon className="h-3.5 w-3.5" />
               </button>
