@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import {
   RefreshCw, FolderOpen, Image, Film, FileText, File,
   ExternalLink, AlertCircle, ImageOff, Camera, Play, Clock,
-  Grid2x2, Grid3x3, LayoutGrid
+  Grid2x2, Grid3x3, LayoutGrid, X, ChevronLeft, ChevronRight,
+  Download, Loader2
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
@@ -74,9 +75,147 @@ function timeAgo(dateStr) {
   try { return formatDistanceToNow(new Date(dateStr), { addSuffix: true }); } catch { return null; }
 }
 
+// ─── MediaLightbox — fullscreen image/video viewer ──────────────────
+
+function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
+  const [index, setIndex] = useState(initialIndex);
+  const [videoUrl, setVideoUrl] = useState(null);
+  const [videoLoading, setVideoLoading] = useState(false);
+  const file = files[index];
+
+  const isVideo = file?.type === 'video';
+  const isImage = file?.type === 'image';
+  const proxyPath = tonomoBasePath && file?.name
+    ? `${tonomoBasePath}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
+    : null;
+
+  // Load video blob when a video file is selected
+  useEffect(() => {
+    if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
+    setVideoLoading(true);
+    setVideoUrl(null);
+    fetchProxyImage(proxyPath).then(url => {
+      setVideoUrl(url);
+      setVideoLoading(false);
+    });
+  }, [isVideo, proxyPath]);
+
+  // Keyboard nav
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowLeft' && index > 0) setIndex(i => i - 1);
+      if (e.key === 'ArrowRight' && index < files.length - 1) setIndex(i => i + 1);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [index, files.length, onClose]);
+
+  const imgBlobUrl = isImage ? blobCache.get(proxyPath) : null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose}>
+      {/* Header */}
+      <div className="flex items-center justify-between p-3 text-white" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium truncate max-w-md">{file?.name}</span>
+          <span className="text-xs text-white/50">{formatSize(file?.size)}</span>
+          <span className="text-xs text-white/50">{index + 1} / {files.length}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {file?.preview_url && (
+            <button onClick={() => safeWindowOpen(file.preview_url)} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Open in Dropbox">
+              <ExternalLink className="h-4 w-4" />
+            </button>
+          )}
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 flex items-center justify-center relative min-h-0 px-16" onClick={e => e.stopPropagation()}>
+        {/* Nav arrows */}
+        {index > 0 && (
+          <button onClick={() => setIndex(i => i - 1)} className="absolute left-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+        )}
+        {index < files.length - 1 && (
+          <button onClick={() => setIndex(i => i + 1)} className="absolute right-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+            <ChevronRight className="h-6 w-6" />
+          </button>
+        )}
+
+        {/* Image */}
+        {isImage && imgBlobUrl && (
+          <img src={imgBlobUrl} alt={file.name} className="max-w-full max-h-full object-contain rounded-lg" />
+        )}
+
+        {/* Video */}
+        {isVideo && (
+          videoLoading ? (
+            <div className="flex flex-col items-center gap-3 text-white/60">
+              <Loader2 className="h-10 w-10 animate-spin" />
+              <span className="text-sm">Loading video...</span>
+            </div>
+          ) : videoUrl ? (
+            <video
+              src={videoUrl}
+              controls
+              autoPlay
+              className="max-w-full max-h-full rounded-lg"
+              style={{ maxHeight: 'calc(100vh - 120px)' }}
+            />
+          ) : (
+            <div className="text-white/60 text-sm">Video unavailable</div>
+          )
+        )}
+
+        {/* Document / other */}
+        {!isImage && !isVideo && (
+          <div className="flex flex-col items-center gap-3 text-white/60">
+            <FileIcon type={file?.type} className="h-16 w-16" />
+            <span className="text-sm">{file?.name}</span>
+            {file?.preview_url && (
+              <Button variant="outline" size="sm" onClick={() => safeWindowOpen(file.preview_url)} className="text-white border-white/30 hover:bg-white/10">
+                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />Open in Dropbox
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Filmstrip */}
+      <div className="flex gap-1.5 p-3 overflow-x-auto justify-center" onClick={e => e.stopPropagation()}>
+        {files.map((f, i) => {
+          const thumbUrl = blobCache.get(tonomoBasePath + (f.path?.startsWith('/') ? f.path : '/' + f.path));
+          return (
+            <button
+              key={f.path || i}
+              onClick={() => setIndex(i)}
+              className={cn("w-14 h-10 rounded overflow-hidden shrink-0 border-2 transition-all",
+                i === index ? "border-white ring-1 ring-white/50" : "border-transparent opacity-60 hover:opacity-100")}
+            >
+              {thumbUrl ? (
+                <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full bg-white/10 flex items-center justify-center">
+                  <FileIcon type={f.type} className="h-3 w-3 text-white/40" />
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── MediaThumbnail ─────────────────────────────────────────────────
 
-function MediaThumbnail({ file, tonomoBasePath }) {
+function MediaThumbnail({ file, tonomoBasePath, onClick }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -103,7 +242,8 @@ function MediaThumbnail({ file, tonomoBasePath }) {
   }, [isImage, proxyPath]);
 
   const handleClick = () => {
-    if (file.preview_url) safeWindowOpen(file.preview_url);
+    if (onClick) onClick();
+    else if (file.preview_url) safeWindowOpen(file.preview_url);
   };
 
   const uploadTime = timeAgo(file.uploaded_at);
@@ -174,7 +314,7 @@ const GRID_SIZES = {
   lg: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4',
 };
 
-function FolderSection({ folder, tonomoBasePath, gridSize = 'md' }) {
+function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox }) {
   const [collapsed, setCollapsed] = useState(false);
   const imageCount = folder.files.filter(f => f.type === 'image').length;
   const videoCount = folder.files.filter(f => f.type === 'video').length;
@@ -196,7 +336,7 @@ function FolderSection({ folder, tonomoBasePath, gridSize = 'md' }) {
       {!collapsed && (
         <div className={cn("grid", GRID_SIZES[gridSize])}>
           {folder.files.map((file) => (
-            <MediaThumbnail key={file.path || file.name} file={file} tonomoBasePath={tonomoBasePath} />
+            <MediaThumbnail key={file.path || file.name} file={file} tonomoBasePath={tonomoBasePath} onClick={() => onOpenLightbox(folder.files, folder.files.indexOf(file))} />
           ))}
         </div>
       )}
@@ -224,6 +364,7 @@ export default function ProjectMediaGallery({ project }) {
   const deliverableLink = project?.tonomo_deliverable_link;
   const tonomoBasePath = project?.tonomo_deliverable_path;
   const [gridSize, setGridSize] = useState('md');
+  const [lightbox, setLightbox] = useState(null); // { files, index }
 
   const { data: mediaData, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ["projectMedia", deliverableLink],
@@ -332,8 +473,18 @@ export default function ProjectMediaGallery({ project }) {
 
       {/* Folders */}
       {folders.map((folder) => (
-        <FolderSection key={folder.name} folder={folder} tonomoBasePath={tonomoBasePath} gridSize={gridSize} />
+        <FolderSection key={folder.name} folder={folder} tonomoBasePath={tonomoBasePath} gridSize={gridSize} onOpenLightbox={(files, idx) => setLightbox({ files, index: idx })} />
       ))}
+
+      {/* Lightbox */}
+      {lightbox && (
+        <MediaLightbox
+          files={lightbox.files}
+          initialIndex={lightbox.index}
+          tonomoBasePath={tonomoBasePath}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </div>
   );
 }
