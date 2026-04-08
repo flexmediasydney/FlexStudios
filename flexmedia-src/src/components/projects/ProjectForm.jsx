@@ -539,16 +539,19 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         }
       }
 
-      // Await task sync so tasks exist before user navigates away
+      // 1. Apply role defaults FIRST — fills empty staff slots from Settings config
+      try {
+        await api.functions.invoke('applyProjectRoleDefaults', { project_id: projectId });
+      } catch (err) { console.warn('Role defaults skipped:', err?.message); }
+
+      // 2. Sync tasks SECOND — tasks get assigned to the now-populated roles
       try {
         await api.functions.invoke('syncProjectTasksFromProducts', { project_id: projectId });
       } catch (err) { console.warn('Task sync skipped:', err?.message); }
 
-      // Sync onsite effort tasks + role defaults (parallel, non-blocking)
-      Promise.all([
-        api.functions.invoke('syncOnsiteEffortTasks', { project_id: projectId }).catch(err => console.warn('Onsite effort sync skipped:', err?.message)),
-        api.functions.invoke('applyProjectRoleDefaults', { project_id: projectId }).catch(err => console.warn('Role defaults skipped:', err?.message)),
-      ]).catch(() => {});
+      // 3. Onsite effort tasks (parallel, non-blocking — depends on roles being set)
+      api.functions.invoke('syncOnsiteEffortTasks', { project_id: projectId })
+        .catch(err => console.warn('Onsite effort sync skipped:', err?.message));
 
       // FIX #1: Agent/agency change triggers repricing recalculation
       if (project?.id) {
