@@ -7,17 +7,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
   RefreshCw, FolderOpen, Image, Film, FileText, File,
-  ExternalLink, AlertCircle, ImageOff, Camera, Play, Maximize2, Minimize2
+  ExternalLink, AlertCircle, ImageOff, Camera, Play, Clock
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
+import { formatDistanceToNow, format } from "date-fns";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// ─── Image proxy infrastructure ─────────────────────────────────────
-// Fetches images through our edge function proxy which uses the parent
-// Tonomo share link (user's own) for full Dropbox API access.
+// ─── Image proxy ────────────────────────────────────────────────────
 const blobCache = new Map();
 const pending = new Set();
 let activeLoads = 0;
@@ -43,7 +42,7 @@ async function fetchProxyImage(filePath) {
     });
     if (!res.ok) return null;
     const blob = await res.blob();
-    if (blob.size < 500) return null; // Too small, probably error JSON
+    if (blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
     blobCache.set(filePath, url);
     return url;
@@ -51,7 +50,7 @@ async function fetchProxyImage(filePath) {
   finally { pending.delete(filePath); }
 }
 
-// ─── Components ─────────────────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────
 
 function FileIcon({ type, className }) {
   switch (type) {
@@ -69,7 +68,14 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
+function timeAgo(dateStr) {
+  if (!dateStr) return null;
+  try { return formatDistanceToNow(new Date(dateStr), { addSuffix: true }); } catch { return null; }
+}
+
+// ─── MediaThumbnail ─────────────────────────────────────────────────
+
+function MediaThumbnail({ file, tonomoBasePath }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -80,7 +86,6 @@ function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
     ? `${tonomoBasePath}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
     : null;
 
-  // Fetch image on mount — no IntersectionObserver complexity
   useEffect(() => {
     if (!isImage || !proxyPath || started.current) return;
     const cached = blobCache.get(proxyPath);
@@ -96,16 +101,15 @@ function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
     processQueue();
   }, [isImage, proxyPath]);
 
-  const cardRef = null; // no ref needed
-
   const handleClick = () => {
-    const url = file.preview_url || deliverableLink;
-    if (url) safeWindowOpen(url);
+    // Use the parent-share-based preview URL (accessible without auth issues)
+    if (file.preview_url) safeWindowOpen(file.preview_url);
   };
+
+  const uploadTime = timeAgo(file.uploaded_at);
 
   return (
     <button
-      ref={cardRef}
       type="button"
       onClick={handleClick}
       className="group relative rounded-lg border bg-card overflow-hidden transition-all hover:shadow-md hover:-translate-y-0.5 text-left w-full"
@@ -136,6 +140,13 @@ function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
         <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
           {file.size > 0 && <span>{formatSize(file.size)}</span>}
           <span className="uppercase">{file.ext}</span>
+          {uploadTime && (
+            <>
+              <span className="text-muted-foreground/30">|</span>
+              <Clock className="h-2.5 w-2.5 opacity-50" />
+              <span className="opacity-70">{uploadTime}</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -155,7 +166,9 @@ function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
   );
 }
 
-function FolderSection({ folder, deliverableLink, tonomoBasePath }) {
+// ─── FolderSection ──────────────────────────────────────────────────
+
+function FolderSection({ folder, tonomoBasePath }) {
   const [collapsed, setCollapsed] = useState(false);
   const imageCount = folder.files.filter(f => f.type === 'image').length;
   const videoCount = folder.files.filter(f => f.type === 'video').length;
@@ -177,13 +190,15 @@ function FolderSection({ folder, deliverableLink, tonomoBasePath }) {
       {!collapsed && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {folder.files.map((file) => (
-            <MediaThumbnail key={file.path || file.name} file={file} deliverableLink={deliverableLink} tonomoBasePath={tonomoBasePath} />
+            <MediaThumbnail key={file.path || file.name} file={file} tonomoBasePath={tonomoBasePath} />
           ))}
         </div>
       )}
     </div>
   );
 }
+
+// ─── Skeletons & empty states ───────────────────────────────────────
 
 function MediaSkeleton() {
   return (
@@ -197,12 +212,13 @@ function MediaSkeleton() {
   );
 }
 
+// ─── Main component ─────────────────────────────────────────────────
+
 export default function ProjectMediaGallery({ project }) {
   const deliverableLink = project?.tonomo_deliverable_link;
-  // The path within the parent Tonomo folder, e.g. /agent/address
   const tonomoBasePath = project?.tonomo_deliverable_path;
 
-  const { data: mediaData, isLoading, isError, error, refetch, isFetching } = useQuery({
+  const { data: mediaData, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ["projectMedia", deliverableLink],
     queryFn: async () => {
       const res = await api.functions.invoke("getDeliveryMediaFeed", { share_url: deliverableLink });
@@ -211,17 +227,7 @@ export default function ProjectMediaGallery({ project }) {
       let folders = [];
       if (data?.folders && Array.isArray(data.folders)) folders = data.folders;
       else if (data?.files && Array.isArray(data.files)) folders = [{ name: "All Files", files: data.files }];
-
-      // Attach proxy paths: combine tonomo_deliverable_path + folder/file for the parent share link
-      if (tonomoBasePath) {
-        for (const folder of folders) {
-          for (const file of folder.files) {
-            const folderPart = folder.name === 'Root' ? '' : `/${folder.name}`;
-            file._proxyPath = `${tonomoBasePath}${folderPart}/${file.name}`;
-          }
-        }
-      }
-      return { folders };
+      return { folders, fetched_at: data?.fetched_at || new Date().toISOString() };
     },
     enabled: !!deliverableLink,
     staleTime: 120_000,
@@ -230,7 +236,6 @@ export default function ProjectMediaGallery({ project }) {
   });
 
   const handleRefresh = useCallback(() => {
-    // Clear blob cache for this project
     if (tonomoBasePath) {
       for (const [k, v] of blobCache.entries()) {
         if (k.startsWith(tonomoBasePath)) { URL.revokeObjectURL(v); blobCache.delete(k); }
@@ -266,6 +271,7 @@ export default function ProjectMediaGallery({ project }) {
 
   const folders = mediaData?.folders || [];
   const totalFiles = folders.reduce((sum, f) => sum + (f.files?.length || 0), 0);
+  const fetchedAt = mediaData?.fetched_at;
 
   if (totalFiles === 0) {
     return (
@@ -279,12 +285,19 @@ export default function ProjectMediaGallery({ project }) {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">{totalFiles} file{totalFiles !== 1 ? "s" : ""}</h3>
           <span className="text-xs text-muted-foreground">across {folders.length} folder{folders.length !== 1 ? "s" : ""}</span>
         </div>
         <div className="flex items-center gap-2">
+          {fetchedAt && (
+            <span className="text-[10px] text-muted-foreground/60 flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              Fetched {timeAgo(fetchedAt)}
+            </span>
+          )}
           <Button variant="ghost" size="sm" onClick={() => safeWindowOpen(deliverableLink)} className="text-xs h-7 px-2">
             <ExternalLink className="h-3.5 w-3.5 mr-1" />Open in Dropbox
           </Button>
@@ -293,8 +306,10 @@ export default function ProjectMediaGallery({ project }) {
           </Button>
         </div>
       </div>
+
+      {/* Folders */}
       {folders.map((folder) => (
-        <FolderSection key={folder.name} folder={folder} deliverableLink={deliverableLink} tonomoBasePath={tonomoBasePath} />
+        <FolderSection key={folder.name} folder={folder} tonomoBasePath={tonomoBasePath} />
       ))}
     </div>
   );

@@ -47,28 +47,19 @@ async function listAll(token: string, path: string, sharedLink?: string) {
   return entries;
 }
 
-/**
- * Build a Dropbox preview URL for a file within a shared folder.
- * Also builds a raw content URL for image display in <img> tags.
- */
-function buildFileUrls(shareUrl: string, subfolderName: string | null, fileName: string) {
-  const base = shareUrl.split('?')[0];
-  const rlMatch = shareUrl.match(/rlkey=([^&]+)/);
-  const rlkey = rlMatch?.[1] || '';
-
-  // Preview URL — opens Dropbox preview page
-  const preview_url = rlkey
-    ? `${base}?rlkey=${rlkey}&preview=${encodeURIComponent(fileName)}&subfolder_nav_tracking=1`
-    : shareUrl;
-
-  // Raw content URL — for <img> tags. Dropbox serves raw content from this URL pattern.
-  // Pattern: base/subfolder/file?rlkey=xxx&raw=1
-  const pathPart = subfolderName ? `/${encodeURIComponent(subfolderName)}/${encodeURIComponent(fileName)}` : `/${encodeURIComponent(fileName)}`;
-  const raw_url = rlkey
-    ? `${base}${pathPart}?rlkey=${rlkey}&raw=1`
-    : null;
-
-  return { preview_url, raw_url };
+/** Build a preview URL using the PARENT share link (user-owned, always accessible). */
+function buildParentPreviewUrl(parentShareUrl: string, prefix: string, filePath: string, fileName: string): string | null {
+  if (!parentShareUrl) return null;
+  const base = parentShareUrl.split('?')[0];
+  const rlMatch = parentShareUrl.match(/rlkey=([^&]+)/);
+  if (!rlMatch) return null;
+  // Strip prefix to get path relative to parent share, then encode for URL
+  let relPath = filePath;
+  if (prefix && relPath.startsWith(prefix)) relPath = relPath.slice(prefix.length);
+  if (!relPath.startsWith('/')) relPath = '/' + relPath;
+  const pathParts = relPath.split('/').filter(Boolean);
+  const encodedPath = pathParts.map(encodeURIComponent).join('/');
+  return `${base}/${encodedPath}?rlkey=${rlMatch[1]}&dl=0`;
 }
 
 interface FileEntry {
@@ -77,31 +68,28 @@ interface FileEntry {
   ext: string;
   type: string;
   preview_url: string | null;
-  raw_url: string | null;
   path: string;
   dbx_id?: string;
-  modified: string | null;
+  modified: string | null;    // client_modified — when file was last changed
+  uploaded_at: string | null; // server_modified — when uploaded to Dropbox
 }
 
-function fileEntry(f: Record<string, unknown>, folderName: string, shareUrl?: string): FileEntry {
+function fileEntry(f: Record<string, unknown>, folderName: string, parentShareUrl?: string, pathPrefix?: string): FileEntry {
   const name = f.name as string;
   const ext = getExt(name);
   const type = classifyFile(name);
   const relativePath = (f.path_display as string) || `/${folderName}/${name}`;
-  const urls = shareUrl
-    ? buildFileUrls(shareUrl, folderName === 'Root' ? null : folderName, name)
-    : { preview_url: null, raw_url: null };
 
   return {
     name,
     size: f.size as number,
     ext,
     type,
-    preview_url: urls.preview_url,
-    raw_url: urls.raw_url,
+    preview_url: parentShareUrl ? buildParentPreviewUrl(parentShareUrl, pathPrefix || '', relativePath, name) : null,
     path: relativePath,
     dbx_id: (f.id as string) || undefined,
     modified: (f.client_modified as string) || null,
+    uploaded_at: (f.server_modified as string) || null,
   };
 }
 
@@ -122,36 +110,30 @@ Deno.serve(async (req) => {
       return jsonResponse({ token_length: t.length, token_starts: t.substring(0, 10), token_set: t.length > 100 });
     }
 
-    // Relaxed auth
     await getUserFromReq(req).catch(() => null);
 
     const token = Deno.env.get('DROPBOX_API_TOKEN');
     if (!token) return errorResponse('DROPBOX_API_TOKEN not configured', 500, req);
 
+    const parentShareUrl = Deno.env.get('DROPBOX_PARENT_SHARE_URL') || '';
+    const pathPrefix = Deno.env.get('DROPBOX_PARENT_PATH_PREFIX') || '';
+
     const { share_url, path, action } = body;
 
-    // ─── Action: proxy — serve a file from the parent Tonomo shared folder ─
-    // Uses the PARENT_SHARE_URL (user's own share link) which has full API access.
-    // file_path is relative to the parent share root, e.g. /agent/address/Subfolder/file.jpg
+    // ─── Action: proxy — serve a file via parent Tonomo share link ──────
     if (action === 'proxy' && body.file_path) {
-      const parentUrl = Deno.env.get('DROPBOX_PARENT_SHARE_URL') || body.parent_url;
-      if (!parentUrl) return errorResponse('DROPBOX_PARENT_SHARE_URL not configured', 500, req);
+      if (!parentShareUrl) return errorResponse('DROPBOX_PARENT_SHARE_URL not configured', 500, req);
 
-      // Strip the parent path prefix to get the path relative to the share root
-      const prefix = Deno.env.get('DROPBOX_PARENT_PATH_PREFIX') || '';
       let relPath = body.file_path;
-      if (prefix && relPath.startsWith(prefix)) {
-        relPath = relPath.slice(prefix.length);
+      if (pathPrefix && relPath.startsWith(pathPrefix)) {
+        relPath = relPath.slice(pathPrefix.length);
         if (!relPath.startsWith('/')) relPath = '/' + relPath;
       }
 
-      const arg = JSON.stringify({ url: parentUrl, path: relPath });
+      const arg = JSON.stringify({ url: parentShareUrl, path: relPath });
       const dbxRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Dropbox-API-Arg': arg,
-        },
+        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
       });
       if (!dbxRes.ok) {
         const errText = await dbxRes.text().catch(() => '');
@@ -191,7 +173,7 @@ Deno.serve(async (req) => {
     if (rootFiles.length > 0) {
       folders.push({
         name: 'Root',
-        files: rootFiles.map(f => fileEntry(f, 'Root', useShared ? share_url : undefined)),
+        files: rootFiles.map(f => fileEntry(f, 'Root', parentShareUrl, pathPrefix)),
       });
     }
 
@@ -201,7 +183,7 @@ Deno.serve(async (req) => {
         const subEntries = await listAll(token, subPath, useShared ? share_url : undefined);
         const files = subEntries
           .filter((e: Record<string, unknown>) => e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string)))
-          .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, useShared ? share_url : undefined));
+          .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, parentShareUrl, pathPrefix));
         if (files.length > 0) {
           folders.push({ name: sf.name as string, files });
         }
@@ -213,6 +195,7 @@ Deno.serve(async (req) => {
     return jsonResponse({
       folders,
       total_files: folders.reduce((s, f) => s + f.files.length, 0),
+      fetched_at: new Date().toISOString(),
     }, 200, req);
 
   } catch (err) {
