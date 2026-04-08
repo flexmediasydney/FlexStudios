@@ -28,31 +28,32 @@ let activeLoads = 0;
 const loadQueue = [];
 
 function processQueue() {
-  while (activeLoads < 4 && loadQueue.length > 0) {
+  while (activeLoads < 8 && loadQueue.length > 0) {
     const job = loadQueue.shift();
     activeLoads++;
     job().finally(() => { activeLoads--; processQueue(); });
   }
 }
 
-async function fetchProxyImage(filePath) {
-  if (blobCache.has(filePath)) return blobCache.get(filePath);
-  if (pending.has(filePath)) return null;
-  pending.add(filePath);
+async function fetchProxyImage(filePath, mode = 'thumb') {
+  const cacheKey = `${mode}::${filePath}`;
+  if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
+  if (pending.has(cacheKey)) return null;
+  pending.add(cacheKey);
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: 'proxy', file_path: filePath }),
+      body: JSON.stringify({ action: mode, file_path: filePath }),
     });
     if (!res.ok) return null;
     const blob = await res.blob();
     if (blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
-    blobCache.set(filePath, url);
+    blobCache.set(cacheKey, url);
     return url;
   } catch { return null; }
-  finally { pending.delete(filePath); }
+  finally { pending.delete(cacheKey); }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -97,7 +98,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
     if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
     setVideoLoading(true);
     setVideoUrl(null);
-    fetchProxyImage(proxyPath).then(url => {
+    fetchProxyImage(proxyPath, 'proxy').then(url => {
       setVideoUrl(url);
       setVideoLoading(false);
     });

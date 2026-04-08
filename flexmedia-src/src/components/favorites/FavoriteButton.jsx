@@ -5,7 +5,7 @@
  * Filled yellow star when favorited, outline when not.
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useFavorites } from './useFavorites';
@@ -34,11 +34,32 @@ export default function FavoriteButton({
   className,
 }) {
   const { isFavorited, toggleFavorite } = useFavorites();
-  const active = isFavorited(filePath, projectId);
+  const serverActive = isFavorited(filePath, projectId);
+
+  // Local optimistic state: null means "follow server", boolean means "override"
+  const [optimistic, setOptimistic] = useState(null);
+  const togglingRef = useRef(false);
+
+  // Sync local optimistic state back to server truth once the hook data catches up
+  useEffect(() => {
+    if (optimistic !== null && optimistic === serverActive) {
+      setOptimistic(null);
+    }
+  }, [serverActive, optimistic]);
+
+  const active = optimistic !== null ? optimistic : serverActive;
 
   const handleClick = useCallback((e) => {
     e.stopPropagation();
     e.preventDefault();
+
+    // Prevent double-click while a toggle is in flight
+    if (togglingRef.current) return;
+    togglingRef.current = true;
+
+    // Flip the star instantly
+    setOptimistic(!active);
+
     toggleFavorite({
       filePath,
       projectId,
@@ -47,8 +68,13 @@ export default function FavoriteButton({
       projectTitle,
       propertyAddress,
       tonomoBasePath,
+    }).catch(() => {
+      // On failure, revert to server state
+      setOptimistic(null);
+    }).finally(() => {
+      togglingRef.current = false;
     });
-  }, [filePath, projectId, fileName, fileType, projectTitle, propertyAddress, tonomoBasePath, toggleFavorite]);
+  }, [active, filePath, projectId, fileName, fileType, projectTitle, propertyAddress, tonomoBasePath, toggleFavorite]);
 
   return (
     <button

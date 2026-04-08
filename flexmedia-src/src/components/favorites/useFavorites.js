@@ -7,7 +7,7 @@
  * via Supabase Realtime.
  */
 
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useState, useRef } from 'react';
 import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { api } from '@/api/supabaseClient';
@@ -20,11 +20,47 @@ export function useFavorites() {
   const { data: allFavorites, loading: favLoading } = useEntityList('MediaFavorite', '-created_date');
   const { data: allTags, loading: tagsLoading } = useEntityList('MediaTag', 'name');
 
-  // Filter to current user's favorites
+  // Optimistic state: tracks pending toggles before the cache round-trip completes.
+  // Keys are "file:<path>" or "project:<id>", values are true (added) or false (removed).
+  const [optimisticToggles, setOptimisticToggles] = useState({});
+  const toggleVersionRef = useRef(0); // monotonic counter to discard stale reconciliations
+
+  // Filter to current user's favorites, then overlay optimistic state
   const favorites = useMemo(() => {
     if (!userId || !allFavorites) return [];
-    return allFavorites.filter(f => f.user_id === userId);
-  }, [allFavorites, userId]);
+    let result = allFavorites.filter(f => f.user_id === userId);
+
+    // Apply optimistic removals and additions
+    const toggleEntries = Object.entries(optimisticToggles);
+    if (toggleEntries.length > 0) {
+      // Remove items that were optimistically unfavorited
+      result = result.filter(f => {
+        const fileKey = f.file_path ? `file:${f.file_path}` : null;
+        const projKey = f.project_id ? `project:${f.project_id}` : null;
+        if (fileKey && optimisticToggles[fileKey] === false) return false;
+        if (projKey && optimisticToggles[projKey] === false) return false;
+        return true;
+      });
+
+      // Add placeholder items for optimistic additions (if not already in list).
+      // Optimistic additions are stored as record objects (not false).
+      for (const [key, value] of toggleEntries) {
+        if (value === false) continue; // skip removals
+        if (typeof value === 'object' && value !== null) {
+          // Check the item isn't already present (by file_path or project_id match)
+          const alreadyPresent = result.some(f =>
+            (value.file_path && f.file_path === value.file_path) ||
+            (value.project_id && f.project_id === value.project_id)
+          );
+          if (!alreadyPresent) {
+            result = [...result, { ...value, _optimisticKey: key }];
+          }
+        }
+      }
+    }
+
+    return result;
+  }, [allFavorites, userId, optimisticToggles]);
 
   /**
    * Check if a file or project is favorited by the current user.
@@ -52,6 +88,11 @@ export function useFavorites() {
   /**
    * Toggle a favorite on/off. Creates or deletes the MediaFavorite record
    * and writes an AuditLog entry.
+   *
+   * Uses optimistic updates: the UI reflects the new state instantly,
+   * then reconciles once the API + cache round-trip completes.
+   *
+   * @returns {boolean} The new favorited state (true = now favorited, false = removed)
    */
   const toggleFavorite = useCallback(async ({
     filePath,
@@ -62,26 +103,44 @@ export function useFavorites() {
     propertyAddress,
     tonomoBasePath,
   }) => {
-    if (!userId) return;
+    if (!userId) return false;
 
     const existing = getFavorite(filePath, projectId);
+    const optimisticKey = filePath ? `file:${filePath}` : `project:${projectId}`;
+    const version = ++toggleVersionRef.current;
 
     if (existing) {
-      // Remove favorite
-      await api.entities.MediaFavorite.delete(existing.id);
-      await api.entities.AuditLog.create({
-        entity_type: 'media_favorite',
-        entity_id: existing.id,
-        action: 'unfavorited',
-        user_id: userId,
-        user_name: user?.full_name || user?.email || 'Unknown',
-        details: filePath
-          ? `Removed favorite: ${fileName || filePath}`
-          : `Removed favorite: ${projectTitle || projectId}`,
-      });
+      // ── Optimistic removal ──
+      setOptimisticToggles(prev => ({ ...prev, [optimisticKey]: false }));
+
+      try {
+        await api.entities.MediaFavorite.delete(existing.id);
+        api.entities.AuditLog.create({
+          entity_type: 'media_favorite',
+          entity_id: existing.id,
+          action: 'unfavorited',
+          user_id: userId,
+          user_name: user?.full_name || user?.email || 'Unknown',
+          details: filePath
+            ? `Removed favorite: ${fileName || filePath}`
+            : `Removed favorite: ${projectTitle || projectId}`,
+        }); // fire-and-forget audit log
+      } catch (err) {
+        // Revert optimistic state on failure
+        if (toggleVersionRef.current === version) {
+          setOptimisticToggles(prev => {
+            const next = { ...prev };
+            delete next[optimisticKey];
+            return next;
+          });
+        }
+        console.warn('[useFavorites] toggleFavorite delete failed:', err?.message);
+        return true; // still favorited
+      }
     } else {
-      // Create favorite
-      const record = await api.entities.MediaFavorite.create({
+      // ── Optimistic addition ──
+      const optimisticRecord = {
+        id: `_optimistic_${Date.now()}`,
         user_id: userId,
         file_path: filePath || null,
         project_id: projectId || null,
@@ -91,21 +150,58 @@ export function useFavorites() {
         property_address: propertyAddress || null,
         tonomo_base_path: tonomoBasePath || null,
         tags: [],
-      });
-      await api.entities.AuditLog.create({
-        entity_type: 'media_favorite',
-        entity_id: record.id,
-        action: 'favorited',
-        user_id: userId,
-        user_name: user?.full_name || user?.email || 'Unknown',
-        details: filePath
-          ? `Favorited file: ${fileName || filePath}`
-          : `Favorited project: ${projectTitle || projectId}`,
+        created_date: new Date().toISOString(),
+      };
+      setOptimisticToggles(prev => ({ ...prev, [optimisticKey]: optimisticRecord }));
+
+      try {
+        const record = await api.entities.MediaFavorite.create({
+          user_id: userId,
+          file_path: filePath || null,
+          project_id: projectId || null,
+          file_name: fileName || null,
+          file_type: fileType || null,
+          project_title: projectTitle || null,
+          property_address: propertyAddress || null,
+          tonomo_base_path: tonomoBasePath || null,
+          tags: [],
+        });
+        api.entities.AuditLog.create({
+          entity_type: 'media_favorite',
+          entity_id: record.id,
+          action: 'favorited',
+          user_id: userId,
+          user_name: user?.full_name || user?.email || 'Unknown',
+          details: filePath
+            ? `Favorited file: ${fileName || filePath}`
+            : `Favorited project: ${projectTitle || projectId}`,
+        }); // fire-and-forget audit log
+      } catch (err) {
+        // Revert optimistic state on failure
+        if (toggleVersionRef.current === version) {
+          setOptimisticToggles(prev => {
+            const next = { ...prev };
+            delete next[optimisticKey];
+            return next;
+          });
+        }
+        console.warn('[useFavorites] toggleFavorite create failed:', err?.message);
+        return false; // still not favorited
+      }
+    }
+
+    // Refresh the shared cache so all components update, then clear optimistic state
+    await refetchEntityList('MediaFavorite');
+    // Only clear if no newer toggle has been issued (prevents stale reconciliation)
+    if (toggleVersionRef.current === version) {
+      setOptimisticToggles(prev => {
+        const next = { ...prev };
+        delete next[optimisticKey];
+        return next;
       });
     }
 
-    // Refresh the shared cache so all components update
-    await refetchEntityList('MediaFavorite');
+    return !existing;
   }, [userId, user, getFavorite]);
 
   /**

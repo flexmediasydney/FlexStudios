@@ -123,8 +123,50 @@ Deno.serve(async (req) => {
 
     const { share_url, path, action, base_path } = body;
 
-    // ─── Action: proxy — serve a file via parent Tonomo share link ──────
-    if (action === 'proxy' && body.file_path) {
+    // ─── Action: thumb — fast thumbnail via Dropbox API (~10KB vs 25MB full) ─
+    if (action === 'thumb' && body.file_path) {
+      if (!parentShareUrl) return errorResponse('DROPBOX_PARENT_SHARE_URL not configured', 500, req);
+
+      let relPath = body.file_path;
+      if (pathPrefix && relPath.startsWith(pathPrefix)) {
+        relPath = relPath.slice(pathPrefix.length);
+        if (!relPath.startsWith('/')) relPath = '/' + relPath;
+      }
+
+      const size = body.size || 'w480h320'; // w128h128, w256h256, w480h320, w640h480
+      const arg = JSON.stringify({
+        resource: { '.tag': 'link', url: parentShareUrl, path: relPath },
+        format: 'jpeg',
+        size,
+        mode: 'bestfit',
+      });
+
+      const dbxRes = await fetch(`${DROPBOX_CONTENT}/files/get_thumbnail_v2`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
+      });
+
+      if (!dbxRes.ok) {
+        // Fallback to full proxy if thumbnail fails
+        const errText = await dbxRes.text().catch(() => '');
+        console.warn(`Thumbnail failed (${dbxRes.status}), falling back to proxy: ${errText.slice(0, 100)}`);
+        // Fall through to proxy action below
+      } else {
+        const origin = req.headers.get('origin') || '*';
+        return new Response(dbxRes.body, {
+          status: 200,
+          headers: {
+            'Access-Control-Allow-Origin': origin,
+            'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+            'Content-Type': 'image/jpeg',
+            'Cache-Control': 'public, max-age=86400', // Cache thumbnails for 24h
+          },
+        });
+      }
+    }
+
+    // ─── Action: proxy — serve full file via parent Tonomo share link ───
+    if ((action === 'proxy' || action === 'thumb') && body.file_path) {
       if (!parentShareUrl) return errorResponse('DROPBOX_PARENT_SHARE_URL not configured', 500, req);
 
       let relPath = body.file_path;

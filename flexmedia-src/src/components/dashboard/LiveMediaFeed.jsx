@@ -12,7 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   RefreshCw, Camera, Film, FileText, File, ExternalLink,
   ImageOff, Play, Clock, Search, Building2, User, Loader2,
-  AlertCircle, FolderOpen, Grid2x2, Grid3x3, LayoutGrid
+  AlertCircle, FolderOpen, Grid2x2, Grid3x3, LayoutGrid,
+  X, ChevronLeft, ChevronRight
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
@@ -28,31 +29,32 @@ let activeLoads = 0;
 const loadQueue = [];
 
 function processQueue() {
-  while (activeLoads < 4 && loadQueue.length > 0) {
+  while (activeLoads < 8 && loadQueue.length > 0) {
     const job = loadQueue.shift();
     activeLoads++;
     job().finally(() => { activeLoads--; processQueue(); });
   }
 }
 
-async function fetchProxyImage(filePath) {
-  if (blobCache.has(filePath)) return blobCache.get(filePath);
-  if (pending.has(filePath)) return null;
-  pending.add(filePath);
+async function fetchProxyImage(filePath, mode = 'thumb') {
+  const cacheKey = `${mode}::${filePath}`;
+  if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
+  if (pending.has(cacheKey)) return null;
+  pending.add(cacheKey);
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: 'proxy', file_path: filePath }),
+      body: JSON.stringify({ action: mode, file_path: filePath }),
     });
     if (!res.ok) return null;
     const blob = await res.blob();
     if (blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
-    blobCache.set(filePath, url);
+    blobCache.set(cacheKey, url);
     return url;
   } catch { return null; }
-  finally { pending.delete(filePath); }
+  finally { pending.delete(cacheKey); }
 }
 
 // ---- Constants ----
@@ -99,8 +101,157 @@ const TYPE_BADGE_STYLES = {
   other:    'bg-slate-50 text-slate-600 border-slate-200',
 };
 
+// ---- MediaLightbox: fullscreen image/video viewer ----
+function MediaLightbox({ files, initialIndex, onClose }) {
+  const [index, setIndex] = useState(initialIndex);
+  const [videoUrl, setVideoUrl] = useState(null);
+  const [videoLoading, setVideoLoading] = useState(false);
+  const file = files[index];
+
+  const isVideo = file?.type === 'video';
+  const isImage = file?.type === 'image';
+  const proxyPath = file?.proxyPath || null;
+
+  // Load video blob when a video file is selected
+  useEffect(() => {
+    if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
+    setVideoLoading(true);
+    setVideoUrl(null);
+    const cached = blobCache.get(proxyPath);
+    if (cached) { setVideoUrl(cached); setVideoLoading(false); return; }
+    fetchProxyImage(proxyPath).then(url => {
+      setVideoUrl(url);
+      setVideoLoading(false);
+    });
+  }, [isVideo, proxyPath]);
+
+  // Keyboard nav
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowLeft' && index > 0) setIndex(i => i - 1);
+      if (e.key === 'ArrowRight' && index < files.length - 1) setIndex(i => i + 1);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [index, files.length, onClose]);
+
+  const imgBlobUrl = isImage ? blobCache.get(proxyPath) : null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose}>
+      {/* Header */}
+      <div className="flex items-center justify-between p-3 text-white" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium truncate max-w-md">{file?.name}</span>
+          {file?.size > 0 && <span className="text-xs text-white/50">{formatSize(file.size)}</span>}
+          <span className="text-xs text-white/50">{index + 1} / {files.length}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {file?.projectName && (
+            <span className="text-xs text-white/40 truncate max-w-[200px]">{file.projectName}</span>
+          )}
+          {file?.preview_url && (
+            <button onClick={() => safeWindowOpen(file.preview_url)} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Open in Dropbox">
+              <ExternalLink className="h-4 w-4" />
+            </button>
+          )}
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 flex items-center justify-center relative min-h-0 px-16" onClick={e => e.stopPropagation()}>
+        {/* Nav arrows */}
+        {index > 0 && (
+          <button onClick={() => setIndex(i => i - 1)} className="absolute left-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+        )}
+        {index < files.length - 1 && (
+          <button onClick={() => setIndex(i => i + 1)} className="absolute right-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+            <ChevronRight className="h-6 w-6" />
+          </button>
+        )}
+
+        {/* Image */}
+        {isImage && imgBlobUrl && (
+          <img src={imgBlobUrl} alt={file.name} className="max-w-full max-h-full object-contain rounded-lg" />
+        )}
+        {isImage && !imgBlobUrl && (
+          <div className="flex flex-col items-center gap-3 text-white/60">
+            <Loader2 className="h-10 w-10 animate-spin" />
+            <span className="text-sm">Loading image...</span>
+          </div>
+        )}
+
+        {/* Video */}
+        {isVideo && (
+          videoLoading ? (
+            <div className="flex flex-col items-center gap-3 text-white/60">
+              <Loader2 className="h-10 w-10 animate-spin" />
+              <span className="text-sm">Loading video...</span>
+            </div>
+          ) : videoUrl ? (
+            <video
+              src={videoUrl}
+              controls
+              autoPlay
+              className="max-w-full max-h-full rounded-lg"
+              style={{ maxHeight: 'calc(100vh - 120px)' }}
+            />
+          ) : (
+            <div className="text-white/60 text-sm">Video unavailable</div>
+          )
+        )}
+
+        {/* Document / other */}
+        {!isImage && !isVideo && (
+          <div className="flex flex-col items-center gap-3 text-white/60">
+            <FileIcon type={file?.type} className="h-16 w-16" />
+            <span className="text-sm">{file?.name}</span>
+            {file?.preview_url && (
+              <button
+                onClick={() => safeWindowOpen(file.preview_url)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors text-xs"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />Open in Dropbox
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Filmstrip */}
+      <div className="flex gap-1.5 p-3 overflow-x-auto justify-center" onClick={e => e.stopPropagation()}>
+        {files.slice(0, 40).map((f, i) => {
+          const thumbUrl = f.proxyPath ? blobCache.get(f.proxyPath) : null;
+          return (
+            <button
+              key={f.proxyPath || f.path || i}
+              onClick={() => setIndex(i)}
+              className={cn("w-14 h-10 rounded overflow-hidden shrink-0 border-2 transition-all",
+                i === index ? "border-white ring-1 ring-white/50" : "border-transparent opacity-60 hover:opacity-100")}
+            >
+              {thumbUrl ? (
+                <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full bg-white/10 flex items-center justify-center">
+                  <FileIcon type={f.type} className="h-3 w-3 text-white/40" />
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ---- FeedCard: single media card in the grid ----
-function FeedCard({ item, isVisible }) {
+function FeedCard({ item, isVisible, onClick }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -128,7 +279,8 @@ function FeedCard({ item, isVisible }) {
   }, [isImage, item.proxyPath, isVisible]);
 
   const handleClick = () => {
-    if (item.preview_url) safeWindowOpen(item.preview_url);
+    if (onClick) onClick();
+    else if (item.preview_url) safeWindowOpen(item.preview_url);
   };
 
   const uploadTime = timeAgo(item.uploaded_at);
@@ -237,6 +389,7 @@ export default function LiveMediaFeed() {
   const [search, setSearch] = useState('');
   const [gridSize, setGridSize] = useState('md');
   const [visibleCards, setVisibleCards] = useState(new Set());
+  const [lightbox, setLightbox] = useState(null); // { files, index }
   const gridRef = useRef(null);
 
   // Load projects
@@ -546,11 +699,21 @@ export default function LiveMediaFeed() {
                 <FeedCard
                   item={item}
                   isVisible={visibleCards.has(feedId)}
+                  onClick={() => setLightbox({ files: feedItems, index: idx })}
                 />
               </div>
             );
           })}
         </div>
+      )}
+
+      {/* Fullscreen lightbox */}
+      {lightbox && (
+        <MediaLightbox
+          files={lightbox.files}
+          initialIndex={lightbox.index}
+          onClose={() => setLightbox(null)}
+        />
       )}
     </div>
   );

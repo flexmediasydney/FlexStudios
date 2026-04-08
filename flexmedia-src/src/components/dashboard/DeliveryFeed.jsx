@@ -29,31 +29,32 @@ let imgActiveLoads = 0;
 const imgLoadQueue = [];
 
 function processImgQueue() {
-  while (imgActiveLoads < 4 && imgLoadQueue.length > 0) {
+  while (imgActiveLoads < 8 && imgLoadQueue.length > 0) {
     const job = imgLoadQueue.shift();
     imgActiveLoads++;
     job().finally(() => { imgActiveLoads--; processImgQueue(); });
   }
 }
 
-async function fetchProxyImage(filePath) {
-  if (imgBlobCache.has(filePath)) return imgBlobCache.get(filePath);
-  if (imgPending.has(filePath)) return null;
-  imgPending.add(filePath);
+async function fetchProxyImage(filePath, mode = 'thumb') {
+  const cacheKey = `${mode}::${filePath}`;
+  if (imgBlobCache.has(cacheKey)) return imgBlobCache.get(cacheKey);
+  if (imgPending.has(cacheKey)) return null;
+  imgPending.add(cacheKey);
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: 'proxy', file_path: filePath }),
+      body: JSON.stringify({ action: mode, file_path: filePath }),
     });
     if (!res.ok) return null;
     const blob = await res.blob();
     if (blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
-    imgBlobCache.set(filePath, url);
+    imgBlobCache.set(cacheKey, url);
     return url;
   } catch { return null; }
-  finally { imgPending.delete(filePath); }
+  finally { imgPending.delete(cacheKey); }
 }
 
 const TYPE_CONFIG = {
@@ -195,7 +196,7 @@ function processThumbnailQueue() {
 }
 
 // ─── Lazy thumbnail fetching (on-demand per file card) ──────────────────────
-const THUMB_MAX_CONCURRENT = 4;
+const THUMB_MAX_CONCURRENT = 8;
 let thumbActiveCount = 0;
 const thumbQueue = [];
 
@@ -370,16 +371,19 @@ function SkeletonGrid() {
 }
 
 // ─── LightboxImage: loads proxy blob for a single lightbox slide ─────────────
-function LightboxImage({ file, tonomoBase }) {
+function LightboxImage({ file, tonomoBase, shareUrl }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const started = useRef(false);
 
   const isImage = file.type === 'image';
+  const isVideo = file.type === 'video';
+  const proxyPath = tonomoBase && file.path
+    ? tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path)
+    : null;
 
   useEffect(() => {
-    if (!isImage || !tonomoBase || started.current) return;
-    const proxyPath = tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path);
+    if ((!isImage && !isVideo) || !proxyPath || started.current) return;
     const cached = imgBlobCache.get(proxyPath);
     if (cached) { setBlobUrl(cached); return; }
     started.current = true;
@@ -390,11 +394,50 @@ function LightboxImage({ file, tonomoBase }) {
       setLoading(false);
     });
     processImgQueue();
-  }, [isImage, tonomoBase, file.path]);
+  }, [isImage, isVideo, proxyPath]);
+
+  // Reset when file changes
+  useEffect(() => {
+    started.current = false;
+    const cached = proxyPath ? imgBlobCache.get(proxyPath) : null;
+    setBlobUrl(cached || null);
+    setLoading(false);
+  }, [file.path, proxyPath]);
 
   const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
 
-  if (imgSrc) {
+  // Video playback
+  if (isVideo) {
+    if (loading) {
+      return (
+        <div className="flex flex-col items-center gap-3 text-white/40">
+          <Loader2 className="h-10 w-10 animate-spin" />
+          <p className="text-sm">Loading video...</p>
+        </div>
+      );
+    }
+    if (blobUrl) {
+      return (
+        <video
+          src={blobUrl}
+          controls
+          autoPlay
+          className="max-w-full max-h-full rounded-lg"
+          style={{ maxHeight: 'calc(100vh - 120px)' }}
+        />
+      );
+    }
+    return (
+      <div className="flex flex-col items-center gap-3 text-white/60">
+        <Film className="h-16 w-16" />
+        <p className="text-sm">{file.name}</p>
+        <p className="text-xs text-white/40">Video unavailable</p>
+      </div>
+    );
+  }
+
+  // Image display
+  if (isImage && imgSrc) {
     return <img src={imgSrc} alt={file.name} className="max-w-full max-h-full object-contain p-4" />;
   }
   if (loading) {
@@ -405,10 +448,19 @@ function LightboxImage({ file, tonomoBase }) {
       </div>
     );
   }
+
+  // Document / other — show placeholder with Open in Dropbox
+  const previewUrl = shareUrl && file.path ? buildDropboxPreviewUrl(shareUrl, file.path) : file.preview_url;
   return (
-    <div className="flex flex-col items-center gap-3 text-white/40">
-      {file.type === 'video' ? <Film className="h-16 w-16" /> : <FileText className="h-16 w-16" />}
+    <div className="flex flex-col items-center gap-3 text-white/60">
+      <FileText className="h-16 w-16" />
       <p className="text-sm">{file.name}</p>
+      {previewUrl && previewUrl !== '#' && (
+        <a href={previewUrl} target="_blank" rel="noopener noreferrer"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors text-xs">
+          <ExternalLink className="h-3.5 w-3.5" /> Open in Dropbox
+        </a>
+      )}
     </div>
   );
 }
@@ -443,7 +495,7 @@ function LightboxThumb({ file, tonomoBase }) {
   );
 }
 
-// ─── MiniLightbox ────────────────────────────────────────────────────────────
+// ─── MiniLightbox (fullscreen image/video viewer) ───────────────────────────
 function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
   const [index, setIndex] = useState(initialIndex);
   const file = files[index];
@@ -461,27 +513,46 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
   if (!file) return null;
   const previewUrl = buildDropboxPreviewUrl(shareUrl, file.path);
   return (
-    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 shrink-0">
-        <span className="text-white/70 text-sm truncate mr-4">{file.name}</span>
+    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose}>
+      {/* Header */}
+      <div className="flex items-center justify-between p-3 text-white" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3">
+          <span className="text-sm font-medium truncate max-w-md">{file.name}</span>
+          {file.size > 0 && <span className="text-xs text-white/50">{fmtFileSize(file.size)}</span>}
+          <span className="text-xs text-white/50">{index + 1} / {files.length}</span>
+        </div>
+        <div className="flex items-center gap-2">
           {previewUrl && previewUrl !== '#' && (
-            <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="text-white/50 hover:text-white text-xs flex items-center gap-1">
-              <ExternalLink className="h-3.5 w-3.5" /> Open in Dropbox
-            </a>
+            <button onClick={() => window.open(previewUrl, '_blank')} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Open in Dropbox">
+              <ExternalLink className="h-4 w-4" />
+            </button>
           )}
-          <span className="text-white/40 text-xs">{index + 1}/{files.length}</span>
-          <button onClick={onClose} className="text-white/60 hover:text-white p-1"><X className="h-5 w-5" /></button>
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+            <X className="h-5 w-5" />
+          </button>
         </div>
       </div>
-      <div className="flex-1 flex items-center justify-center relative min-h-0">
-        {index > 0 && <button onClick={() => setIndex(i => i - 1)} className="absolute left-3 z-10 p-2 rounded-full bg-black/50 text-white hover:bg-black/80"><ChevronLeft className="h-5 w-5" /></button>}
-        <LightboxImage key={file.path || index} file={file} tonomoBase={tonomoBase} />
-        {index < files.length - 1 && <button onClick={() => setIndex(i => i + 1)} className="absolute right-3 z-10 p-2 rounded-full bg-black/50 text-white hover:bg-black/80"><ChevronRight className="h-5 w-5" /></button>}
+
+      {/* Main content */}
+      <div className="flex-1 flex items-center justify-center relative min-h-0 px-16" onClick={e => e.stopPropagation()}>
+        {/* Nav arrows */}
+        {index > 0 && (
+          <button onClick={() => setIndex(i => i - 1)} className="absolute left-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+        )}
+        {index < files.length - 1 && (
+          <button onClick={() => setIndex(i => i + 1)} className="absolute right-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+            <ChevronRight className="h-6 w-6" />
+          </button>
+        )}
+        <LightboxImage key={`${file.path}-${index}`} file={file} tonomoBase={tonomoBase} shareUrl={shareUrl} />
       </div>
-      <div className="flex gap-1 px-4 py-2 overflow-x-auto border-t border-white/10 shrink-0">
-        {files.slice(0, 30).map((f, i) => (
-          <button key={f.path || i} onClick={() => setIndex(i)} className={cn('shrink-0 w-10 h-10 rounded overflow-hidden border-2 transition-all', i === index ? 'border-white' : 'border-transparent opacity-40 hover:opacity-70')}>
+
+      {/* Filmstrip */}
+      <div className="flex gap-1.5 p-3 overflow-x-auto justify-center" onClick={e => e.stopPropagation()}>
+        {files.slice(0, 40).map((f, i) => (
+          <button key={f.path || i} onClick={() => setIndex(i)} className={cn('shrink-0 w-14 h-10 rounded overflow-hidden border-2 transition-all', i === index ? 'border-white ring-1 ring-white/50' : 'border-transparent opacity-60 hover:opacity-100')}>
             <LightboxThumb file={f} tonomoBase={tonomoBase} />
           </button>
         ))}
@@ -530,11 +601,7 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
     <button
       ref={cardRef}
       onClick={() => {
-        if (hasVisual) {
-          onOpenLightbox(folder.files, index);
-        } else {
-          window.open(previewUrl, '_blank');
-        }
+        onOpenLightbox(folder.files, index);
       }}
       className="group relative aspect-[4/3] rounded-lg overflow-hidden bg-muted border border-border/30 hover:ring-2 hover:ring-primary/30 transition-all"
       title={file.name}
@@ -951,14 +1018,13 @@ function DeliveryCard({ project, isNew, onFileCountKnown }) {
                 </div>
               </div>
               {mediaResult.folders.map((folder, fi) => (
-                <div key={fi}>
-                  <p className="text-xs font-semibold text-muted-foreground mb-2">{folder.name} ({folder.files?.length || 0})</p>
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                    {(folder.files || []).map((file, fii) => (
-                      <ProxyFileCard key={fii} file={file} project={project} />
-                    ))}
-                  </div>
-                </div>
+                <FolderGallery
+                  key={folder.name || fi}
+                  folder={folder}
+                  shareUrl={deliverableLink}
+                  onOpenLightbox={(files, index) => setLightbox({ files, index })}
+                  project={project}
+                />
               ))}
             </div>
           ) : hasDeliveredFiles ? (
