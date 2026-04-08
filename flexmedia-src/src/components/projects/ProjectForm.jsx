@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
-import { validateProjectReadiness } from "@/components/lib/validateProjectReadiness";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
 import { sydneyInputToUtc } from "@/components/utils/dateUtils";
 import { announceToScreenReader } from "@/components/utils/a11yUtils";
@@ -125,6 +124,34 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
   const staffUsers = useMemo(() => allUsers.filter(u => u.role !== undefined), [allUsers]);
   const { data: internalTeams = [] } = useEntityList("InternalTeam");
   const { mappings: roleMappings } = useRoleMappings();
+  const { data: roleDefaultsList = [] } = useEntityList("TonomoRoleDefaults");
+  const roleDefaults = roleDefaultsList[0] || {};
+
+  // Resolve default name for a role from TonomoRoleDefaults config
+  const getDefaultForRole = (roleKey) => {
+    const userField = `${roleKey}_default_user_id`;
+    const teamFields = {
+      photographer: 'photographer_fallback_team_id',
+      videographer: 'videographer_fallback_team_id',
+      project_owner: 'owner_fallback_team_id',
+      image_editor: 'editing_fallback_team_id',
+      video_editor: 'editing_fallback_team_id',
+      floorplan_editor: 'editing_fallback_team_id',
+      drone_editor: 'editing_fallback_team_id',
+    };
+    const defaultUserId = roleDefaults[userField];
+    if (defaultUserId) {
+      const user = staffUsers.find(u => u.id === defaultUserId);
+      if (user) return { name: user.full_name, type: 'user' };
+    }
+    const teamField = teamFields[roleKey];
+    const defaultTeamId = teamField ? roleDefaults[teamField] : null;
+    if (defaultTeamId) {
+      const team = internalTeams.find(t => t.id === defaultTeamId);
+      if (team) return { name: team.name, type: 'team' };
+    }
+    return null;
+  };
 
   // Track whether form has been initialized for this dialog session.
   // Prevents re-initialization when entity subscriptions or data loading
@@ -362,19 +389,13 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
     if (saving) return;
     const hasItems = formData.products.length > 0 || formData.packages.length > 0;
     
-    // Run shared readiness validation
-    const readiness = validateProjectReadiness(formData, allProducts, allPackagesList);
-
     const newErrors = {
       property_address: validateField("property_address", formData.property_address),
       pricing_tier: !formData.pricing_tier ? "Please select a pricing tier" : null,
       agent_id: !formData.agent_id ? "Agent is required" : null,
       project_type_id: !formData.project_type_id ? "Project type is required" : null,
       items: !hasItems ? "At least one product or package is required" : null,
-      // Role errors from shared validation
-      photographer: readiness.errors.find(e => e.includes('Photographer')) || null,
-      videographer: readiness.errors.find(e => e.includes('Videographer')) || null,
-      project_owner: readiness.errors.find(e => e.includes('owner')) || null,
+      // Staff roles are OPTIONAL — applyProjectRoleDefaults auto-fills after save
     };
     setErrors(newErrors);
     const activeErrors = Object.entries(newErrors).filter(([, v]) => v);
@@ -1180,26 +1201,15 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
             </>
           )}
 
-          {/* Role validation errors */}
-          {(errors.project_owner || errors.photographer || errors.videographer) && (
-            <div className="space-y-1">
-              {errors.project_owner && (
-                <p className="text-xs text-red-600">• {errors.project_owner}</p>
-              )}
-              {errors.photographer && (
-                <p className="text-xs text-red-600">• {errors.photographer}</p>
-              )}
-              {errors.videographer && (
-                <p className="text-xs text-red-600">• {errors.videographer}</p>
-              )}
-            </div>
-          )}
-
           {/* Staff Assignments — dynamic roles based on products/packages */}
           <div>
-            <Label className="text-sm font-medium mb-3 block">
-              Staff <span className="text-xs font-normal text-muted-foreground ml-1">(owner + relevant roles required)</span>
+            <Label className="text-sm font-medium mb-1 block">
+              Staff <span className="text-xs font-normal text-muted-foreground ml-1">(optional)</span>
             </Label>
+            <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
+              <Info className="h-3 w-3 shrink-0" />
+              Staff will be auto-assigned from Project Staff Defaults if left empty.
+            </p>
             <div className="grid grid-cols-2 gap-3">
               {(() => {
                 const userOptions = staffUsers.map(u => ({ id: u.id, label: u.full_name, type: "user" }));
@@ -1230,20 +1240,28 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
                     : null;
 
                   if (isDisabled) {
+                    const defaultInfo = getDefaultForRole(role.key);
                     const reason = !hasAnyItems
                       ? "Add products/packages first"
-                      : `No ${(mapping.categories || []).join('/') || ''} services selected`;
+                      : defaultInfo
+                        ? `Will use default: ${defaultInfo.name}`
+                        : "No default configured";
                     return (
                       <div key={role.key}>
                         <Label className="text-xs text-muted-foreground/60 block mb-1 line-through">{role.label}</Label>
-                        <div className="flex items-center gap-2 p-3 rounded-lg border-2 border-dashed border-muted bg-muted/20 text-muted-foreground/60 text-xs h-[60px] select-none cursor-not-allowed" title={reason}>
-                          <AlertCircle className="h-3.5 w-3.5 shrink-0 opacity-40" />
+                        <div className={`flex items-center gap-2 p-3 rounded-lg border-2 border-dashed ${defaultInfo && hasAnyItems ? 'border-muted bg-muted/10 text-muted-foreground/70' : 'border-muted bg-muted/20 text-muted-foreground/60'} text-xs h-[60px] select-none cursor-not-allowed`} title={reason}>
+                          {defaultInfo && hasAnyItems ? (
+                            <CheckCircle className="h-3.5 w-3.5 shrink-0 opacity-50 text-green-600" />
+                          ) : (
+                            <AlertCircle className="h-3.5 w-3.5 shrink-0 opacity-40" />
+                          )}
                           <span>{reason}</span>
                         </div>
                       </div>
                     );
                   }
 
+                  const defaultInfo = getDefaultForRole(role.key);
                   return (
                     <div key={role.key}>
                       <Label className="text-xs text-muted-foreground block mb-1">{role.label}</Label>
@@ -1251,7 +1269,8 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
                         label={role.label}
                         value={selectedValue}
                         onChange={(opt) => {
-                          if (!opt) {
+                          if (!opt || opt.id === '__use_default__') {
+                            // "Use Default" or clear: set to empty, applyProjectRoleDefaults fills it
                             setFormData(prev => ({ ...prev, [idField]: "", [nameField]: "", [typeField]: "" }));
                           } else {
                             setFormData(prev => ({
@@ -1260,16 +1279,15 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
                               [nameField]: opt.label,
                               [typeField]: opt.type,
                             }));
-                            // Clear the role error when user assigns staff (prevents deadlock)
-                            const clearedErrors = { ...errors };
-                            if (role.key === "project_owner") clearedErrors.project_owner = null;
-                            if (role.key === "photographer") clearedErrors.photographer = null;
-                            if (role.key === "videographer") clearedErrors.videographer = null;
-                            setErrors(clearedErrors);
                           }
                         }}
                         options={allOptions}
-                        placeholder={`Select ${role.label}...`}
+                        placeholder={defaultInfo ? `Default: ${defaultInfo.name}` : `Select ${role.label}...`}
+                        defaultOption={defaultInfo ? {
+                          id: '__use_default__',
+                          label: `Use Default (${defaultInfo.name})`,
+                          type: defaultInfo.type,
+                        } : null}
                       />
                     </div>
                   );

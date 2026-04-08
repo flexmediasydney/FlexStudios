@@ -10,7 +10,8 @@ export default function StaffAssignmentField({
   value,
   onChange,
   options, // Array of { id, label, type: "user" | "team" }
-  placeholder = "Assign staff..."
+  placeholder = "Assign staff...",
+  defaultOption = null, // { id: '__use_default__', label: 'Use Default (Name)', type: 'user'|'team' }
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -75,6 +76,30 @@ export default function StaffAssignmentField({
             />
           </div>
           <div className="max-h-56 overflow-y-auto">
+            {/* "Use Default" option — always shown at top when available */}
+            {defaultOption && !query && (
+              <button
+                key="__use_default__"
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange(defaultOption);
+                  setQuery("");
+                  setOpen(false);
+                }}
+                className="w-full text-left px-4 py-3 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors border-b group bg-blue-50/50 dark:bg-blue-900/10"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm text-blue-700 dark:text-blue-400">{defaultOption.label}</div>
+                    <div className="text-xs text-blue-600/70 dark:text-blue-400/70 mt-0.5">
+                      Auto-assigned on save
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-blue-400 group-hover:text-blue-600 transition-colors flex-shrink-0" />
+                </div>
+              </button>
+            )}
             {filtered.length > 0 ? (
               filtered.map((opt) => (
                 <button

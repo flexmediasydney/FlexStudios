@@ -28,9 +28,9 @@ export function validateProjectReadiness(project, allProducts = [], allPackages 
     errors.push('Agent is required');
   }
 
-  // 3. Project owner required
+  // 3. Project owner — warning only (auto-filled by applyProjectRoleDefaults after save)
   if (!project.project_owner_id) {
-    errors.push('Project owner must be assigned');
+    warnings.push('Project owner not assigned — will use default if configured');
   }
 
   // 3a. Project type required
@@ -65,10 +65,10 @@ export function validateProjectReadiness(project, allProducts = [], allPackages 
     const hasVideographer = !!(project.videographer_id || project.onsite_staff_2_id);
 
     if (needsPhotographer && !hasPhotographer) {
-      errors.push('Photographer required — booking includes photography, drone, or virtual staging services');
+      warnings.push('Photographer not assigned — will use default if configured');
     }
     if (needsVideographer && !hasVideographer) {
-      errors.push('Videographer required — booking includes video services');
+      warnings.push('Videographer not assigned — will use default if configured');
     }
   }
 
