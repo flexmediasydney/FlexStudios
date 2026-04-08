@@ -690,7 +690,6 @@ export default function ProjectDetails() {
         agent_id: agentId || null,
         agent_name: selectedAgent?.name || null,
         agency_id: selectedAgent?.current_agency_id || null,
-        agency_name: selectedAgent?.current_agency_name || null,
       });
     },
     onSuccess: (_, agentId) => {
