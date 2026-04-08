@@ -43,10 +43,15 @@ export default function InternalTeamsManagement() {
 
   const saveMutation = useMutation({
     mutationFn: (data) => {
+      // Normalize empty strings to null for optional fields
+      const cleaned = { ...data };
+      if (cleaned.team_function === '') cleaned.team_function = null;
+      if (cleaned.description === '') cleaned.description = null;
+
       if (editingTeam) {
-        return api.entities.InternalTeam.update(editingTeam.id, data);
+        return api.entities.InternalTeam.update(editingTeam.id, cleaned);
       }
-      return api.entities.InternalTeam.create(data);
+      return api.entities.InternalTeam.create(cleaned);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["internal_teams"] });
@@ -54,7 +59,10 @@ export default function InternalTeamsManagement() {
       toast.success(editingTeam ? "Team updated" : "Team created");
       handleClose();
     },
-    onError: (err) => toast.error(err?.message || 'Failed to save team'),
+    onError: (err) => {
+      console.error('Team save failed:', err);
+      toast.error(err?.message || 'Failed to save team');
+    },
   });
 
   const deleteMutation = useMutation({
@@ -66,7 +74,10 @@ export default function InternalTeamsManagement() {
       toast.success("Team deleted");
       setDeletingTeam(null);
     },
-    onError: (err) => toast.error(err?.message || 'Failed to delete team'),
+    onError: (err) => {
+      console.error('Team delete failed:', err);
+      toast.error(err?.message || 'Failed to delete team');
+    },
   });
 
   const handleOpen = (team = null) => {

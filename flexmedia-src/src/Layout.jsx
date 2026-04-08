@@ -259,7 +259,6 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsNotifications") && { name: "Notifications", href: "SettingsNotifications" },
           can("BusinessRequirementsDocument") && { name: "BRD", href: "BusinessRequirementsDocument" },
           can("SettingsSystemHealth") && { name: "System Diagnostics", href: "SettingsSystemHealth" },
-          can("SettingsStaffDefaults") && { name: "Staff Defaults", href: "SettingsStaffDefaults" },
           can("SettingsTeamsUsers") && { name: "Teams & Users", href: "SettingsTeamsUsers" },
         ].filter(Boolean)
       },

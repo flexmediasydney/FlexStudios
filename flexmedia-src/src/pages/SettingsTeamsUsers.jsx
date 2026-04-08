@@ -3,8 +3,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import InternalTeamsManagement from "@/components/settings/InternalTeamsManagement";
 import UsersManagement from "@/components/settings/UsersManagement";
+import StaffDefaultsPanel from "@/components/settings/StaffDefaultsPanel";
 import CalendarIntegration from "@/components/calendar/CalendarIntegration";
-import { Shield, Calendar, Users, ChevronDown, ChevronRight, Clock } from "lucide-react";
+import { Shield, Calendar, Users, ChevronDown, ChevronRight, Clock, UserCog } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,10 @@ export default function SettingsTeamsUsers() {
               <Clock className="h-4 w-4 mr-1.5" />
               Working Hours
             </TabsTrigger>
+            <TabsTrigger value="staff-defaults">
+              <UserCog className="h-4 w-4 mr-1.5" />
+              Project Staff Defaults
+            </TabsTrigger>
             <TabsTrigger value="security">
               <Shield className="h-4 w-4 mr-1.5" />
               Roles & Security
@@ -48,6 +53,9 @@ export default function SettingsTeamsUsers() {
           </TabsContent>
           <TabsContent value="calendars">
             <AdminCalendarManagement />
+          </TabsContent>
+          <TabsContent value="staff-defaults">
+            <StaffDefaultsPanel />
           </TabsContent>
           <TabsContent value="security">
             <RolesSecurityPanel />

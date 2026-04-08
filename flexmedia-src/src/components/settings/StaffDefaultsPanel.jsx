@@ -426,7 +426,7 @@ export default function StaffDefaultsPanel() {
                 <UserCog className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <CardTitle className="text-lg">Staff Defaults</CardTitle>
+                <CardTitle className="text-lg">Project Staff Defaults</CardTitle>
                 <p className="text-sm text-muted-foreground mt-0.5">
                   Configure which person or team is automatically assigned to each role when a new project is created.
                 </p>

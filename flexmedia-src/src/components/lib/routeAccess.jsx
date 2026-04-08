@@ -74,7 +74,7 @@ export const ROUTE_ACCESS = {
   BusinessRequirementsDocument: ADMIN_EMPLOYEE,
   HierarchyVisualization: ADMIN_EMPLOYEE,
 
-  SettingsStaffDefaults: ADMIN_ONLY,
+  // SettingsStaffDefaults removed — now a subtab in SettingsTeamsUsers
   SettingsSystemHealth: ADMIN_ONLY,
 
   // ── ADMIN ONLY ────────────────────────────────────────────
