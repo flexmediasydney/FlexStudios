@@ -30,6 +30,26 @@ const roleConfig = {
 
 const providerLabel = { email: "Email/Password", google: "Google", phone: "Phone OTP" };
 
+const STAFF_ROLE_OPTIONS = [
+  { value: "photographer", label: "Photographer" },
+  { value: "videographer", label: "Videographer" },
+  { value: "drone_operator", label: "Drone Operator" },
+  { value: "image_editor", label: "Image Editor" },
+  { value: "video_editor", label: "Video Editor" },
+  { value: "floorplan_editor", label: "Floorplan Editor" },
+  { value: "drone_editor", label: "Drone Editor" },
+];
+
+const STAFF_ROLE_COLORS = {
+  photographer:     "bg-blue-100 text-blue-700 border-blue-200",
+  videographer:     "bg-purple-100 text-purple-700 border-purple-200",
+  drone_operator:   "bg-pink-100 text-pink-700 border-pink-200",
+  image_editor:     "bg-green-100 text-green-700 border-green-200",
+  video_editor:     "bg-indigo-100 text-indigo-700 border-indigo-200",
+  floorplan_editor: "bg-amber-100 text-amber-700 border-amber-200",
+  drone_editor:     "bg-cyan-100 text-cyan-700 border-cyan-200",
+};
+
 export default function UsersManagement() {
   const { canEdit, canView } = useEntityAccess('users');
   const queryClient = useQueryClient();
@@ -228,6 +248,7 @@ export default function UsersManagement() {
                   <TableHead className="font-semibold">Contact</TableHead>
                   <TableHead className="font-semibold">Role</TableHead>
                   <TableHead className="font-semibold">Team</TableHead>
+                  <TableHead className="font-semibold">Default Role</TableHead>
                   <TableHead className="font-semibold">Last Login</TableHead>
                   <TableHead className="font-semibold">Status</TableHead>
                   <TableHead className="text-right font-semibold">Actions</TableHead>
@@ -235,9 +256,9 @@ export default function UsersManagement() {
               </TableHeader>
               <TableBody>
                 {isLoading ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
                 ) : filteredUsers.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No users found</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No users found</TableCell></TableRow>
                 ) : (
                   filteredUsers.map(user => {
                     const config = roleConfig[user.role] || roleConfig.employee;
@@ -283,6 +304,32 @@ export default function UsersManagement() {
                             <SelectContent>
                               <SelectItem value="none">No team</SelectItem>
                               {teams.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                        <TableCell>
+                          <Select
+                            value={user.default_staff_role || "none"}
+                            onValueChange={(v) => updateUserMutation.mutate({ userId: user.id, updates: { default_staff_role: v === "none" ? null : v } })}
+                          >
+                            <SelectTrigger className="h-8 text-xs w-36 border-0 shadow-none hover:bg-muted/50 px-1.5">
+                              <SelectValue>
+                                {user.default_staff_role ? (
+                                  <Badge variant="outline" className={`${STAFF_ROLE_COLORS[user.default_staff_role] || "bg-muted text-muted-foreground"} border text-[10px] px-1.5 py-0`}>
+                                    {STAFF_ROLE_OPTIONS.find(o => o.value === user.default_staff_role)?.label || user.default_staff_role}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted-foreground/50">None</span>
+                                )}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">None</SelectItem>
+                              {STAFF_ROLE_OPTIONS.map(o => (
+                                <SelectItem key={o.value} value={o.value}>
+                                  <Badge variant="outline" className={`${STAFF_ROLE_COLORS[o.value]} border text-[10px] px-1.5 py-0`}>{o.label}</Badge>
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         </TableCell>
@@ -388,6 +435,17 @@ export default function UsersManagement() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label>Default Staff Role</Label>
+                <Select value={editingUser.default_staff_role || "none"} onValueChange={(v) => setEditingUser(p => ({ ...p, default_staff_role: v === "none" ? null : v }))}>
+                  <SelectTrigger className="h-11"><SelectValue placeholder="None" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {STAFF_ROLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">Used by Tonomo webhooks to assign the correct project role</p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
@@ -400,6 +458,7 @@ export default function UsersManagement() {
                     role: editingUser.role,
                     internal_team_id: editingUser.internal_team_id || null,
                     internal_team_name: editingUser.internal_team_name || null,
+                    default_staff_role: editingUser.default_staff_role || null,
                   },
                 })}
                 disabled={updateUserMutation.isPending}

@@ -452,6 +452,11 @@ export async function resolveMappingsMulti(entities: any, { agent, photographers
   let resolvedCount = 0;
   let totalCount = 0;
 
+  // Load all users once so we can look up default_staff_role for resolved photographers
+  const allUsers: any[] = photographers.length > 0
+    ? await entities.User.list('-created_date', 500).catch(() => [])
+    : [];
+
   if (agent) {
     totalCount++;
     const result = await resolveEntity(entities, agent.uid, agent.email, agent.displayName, 'agent', 'Agent', allMappings);
@@ -463,16 +468,20 @@ export async function resolveMappingsMulti(entities: any, { agent, photographers
     totalCount++;
     const result = await resolveEntity(entities, photographer.id, photographer.email, photographer.name, 'photographer', 'User', allMappings);
     if (result.entityId) {
-      const confirmedMapping = allMappings.find(
-        (m: any) => m.tonomo_id === photographer.id && m.mapping_type === 'photographer' && m.is_confirmed
-      );
+      // Look up the user's default_staff_role from the users table
+      const userRecord = allUsers.find((u: any) => u.id === result.entityId);
+      const role = userRecord?.default_staff_role || null;
+
       resolvedPhotographers.push({
         name: photographer.name,
         userId: result.entityId,
-        role: confirmedMapping?.primary_role || null,
+        role,
       });
       resolvedCount++;
 
+      const confirmedMapping = allMappings.find(
+        (m: any) => m.tonomo_id === photographer.id && m.mapping_type === 'photographer' && m.is_confirmed
+      );
       if (confirmedMapping) {
         try {
           await entities.TonomoMappingTable.update(confirmedMapping.id, {
