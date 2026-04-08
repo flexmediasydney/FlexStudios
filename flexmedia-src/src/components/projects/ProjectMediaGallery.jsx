@@ -76,7 +76,10 @@ function MediaThumbnail({ file, deliverableLink, tonomoBasePath }) {
   const ref = useRef(null);
 
   const isImage = file.type === 'image';
-  const proxyPath = file._proxyPath; // Set during data processing
+  // Build proxy path: tonomoBasePath + folder/filename relative to parent Tonomo share
+  const proxyPath = tonomoBasePath && file.name
+    ? `${tonomoBasePath}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
+    : null;
 
   // Lazy load when card enters viewport
   useEffect(() => {
