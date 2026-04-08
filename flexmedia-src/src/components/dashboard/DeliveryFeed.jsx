@@ -14,7 +14,7 @@ import {
   Search, Building2, ChevronDown, ChevronUp, Clock,
   CheckCircle2, Package, Play, Zap, X, ChevronLeft, ChevronRight,
   ArrowRight, Eye, RefreshCw, DollarSign, Timer, AlertTriangle, CreditCard,
-  FolderOpen, Download, Map as MapIcon, Video
+  FolderOpen, Download, Map as MapIcon, Video, Folder
 } from 'lucide-react';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
@@ -31,6 +31,24 @@ const TYPE_CONFIG = {
   'floor plan': { label: 'Floor Plan', icon: MapIcon, color: 'bg-amber-100 text-amber-700' },
   drone: { label: 'Drone', icon: Camera, color: 'bg-sky-100 text-sky-700' },
 };
+
+// Folder-specific icons and colors for the grouped gallery
+const FOLDER_STYLE = {
+  'sales images': { icon: ImageIcon, color: 'text-blue-600', bg: 'bg-blue-50' },
+  'drone images': { icon: Camera, color: 'text-sky-600', bg: 'bg-sky-50' },
+  'floorplan': { icon: MapIcon, color: 'text-amber-600', bg: 'bg-amber-50' },
+  'floor plan': { icon: MapIcon, color: 'text-amber-600', bg: 'bg-amber-50' },
+  'video': { icon: Film, color: 'text-purple-600', bg: 'bg-purple-50' },
+  'videos': { icon: Film, color: 'text-purple-600', bg: 'bg-purple-50' },
+};
+
+function getFolderStyle(folderName) {
+  const lower = (folderName || '').toLowerCase();
+  for (const [key, style] of Object.entries(FOLDER_STYLE)) {
+    if (lower.includes(key)) return style;
+  }
+  return { icon: Folder, color: 'text-gray-600', bg: 'bg-gray-50' };
+}
 
 function classifyUrl(url) {
   if (!url || typeof url !== 'string') return 'image';
@@ -49,26 +67,17 @@ function normalizeDeliveredType(typeStr) {
   if (lower === 'video' || lower === 'videos') return 'video';
   if (lower === 'floor plan' || lower === 'floorplan') return 'floorplan';
   if (lower === 'drone' || lower.includes('drone')) return 'drone';
-  // Fallback — try classifying from the URL
   return 'photos';
 }
 
 /** Get the best link for a delivered file object (prefers Firebase PDF URLs) */
 function getDeliveredFileUrl(item) {
   if (!item) return null;
-  // For PDFs, prefer pdfUrl (Firebase-hosted) over Dropbox
   if (item.pdfUrl) return item.pdfUrl;
   return item.url || null;
 }
 
-/** Get icon component for a delivered file object */
-function getDeliveredFileIcon(item) {
-  const typeKey = normalizeDeliveredType(item?.type);
-  const cfg = TYPE_CONFIG[typeKey];
-  return cfg?.icon || FileText;
-}
-
-/** Parse delivered_files safely — handles both string JSON and already-parsed arrays */
+/** Parse delivered_files safely */
 function parseDeliveredFiles(raw) {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
@@ -109,19 +118,35 @@ function fmtRevenue(amount) {
   return `$${Math.round(amount).toLocaleString()}`;
 }
 
+function fmtFileSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Build a Dropbox preview URL from shared link + filename */
+function buildDropboxPreviewUrl(shareUrl, filePath) {
+  if (!shareUrl || !filePath) return shareUrl || '#';
+  const fileName = filePath.split('/').pop();
+  // Remove query params from share URL, then add preview param
+  const base = shareUrl.split('?')[0];
+  return `${base}?preview=${encodeURIComponent(fileName)}`;
+}
+
 // ─── Thumbnail fetching ──────────────────────────────────────────────────────
 const thumbCache = new Map();
 const pendingRequests = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_CONCURRENT = 3;
 
-function getCachedThumbnails(path) {
-  const entry = thumbCache.get(path);
+function getCachedResult(key) {
+  const entry = thumbCache.get(key);
   if (!entry) return null;
-  if (Date.now() - entry.timestamp > CACHE_TTL_MS) { thumbCache.delete(path); return null; }
-  return entry.files;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) { thumbCache.delete(key); return null; }
+  return entry.data;
 }
-function setCachedThumbnails(path, files) { thumbCache.set(path, { files, timestamp: Date.now() }); }
+function setCachedResult(key, data) { thumbCache.set(key, { data, timestamp: Date.now() }); }
 
 let activeCount = 0;
 const queue = [];
@@ -135,9 +160,15 @@ function processThumbnailQueue() {
 
 let dropboxFailCount = 0;
 
-async function fetchThumbnails(pathOrUrl, isShareUrl = false) {
+/**
+ * Fetch media feed for a delivery.
+ * Returns either:
+ *   { folders: [{ name, files: [...] }] }  -- grouped (shared link mode)
+ *   { files: [...] }                        -- flat (direct path mode)
+ */
+async function fetchMediaFeed(pathOrUrl, isShareUrl = false) {
   const cacheKey = pathOrUrl;
-  const cached = getCachedThumbnails(cacheKey);
+  const cached = getCachedResult(cacheKey);
   if (cached) return cached;
   if (pendingRequests.has(cacheKey)) return pendingRequests.get(cacheKey);
   const promise = new Promise((resolve) => {
@@ -146,27 +177,55 @@ async function fetchThumbnails(pathOrUrl, isShareUrl = false) {
         const params = isShareUrl ? { share_url: pathOrUrl } : { path: pathOrUrl };
         const res = await api.functions.invoke('getDeliveryMediaFeed', params);
         const data = res?.data || res;
-        const files = data?.files || [];
-        if (files.length === 0) dropboxFailCount++;
-        setCachedThumbnails(cacheKey, files);
-        resolve(files);
+
+        // Normalize response: if it has folders, use grouped; else wrap files in a single group
+        let result;
+        if (data?.folders && Array.isArray(data.folders)) {
+          result = { folders: data.folders };
+        } else if (data?.files && Array.isArray(data.files)) {
+          result = { folders: [{ name: 'All Files', files: data.files }] };
+        } else {
+          result = { folders: [] };
+          dropboxFailCount++;
+        }
+
+        setCachedResult(cacheKey, result);
+        resolve(result);
       } catch (err) {
         dropboxFailCount++;
         console.warn('Dropbox fetch failed:', err?.message);
-        setCachedThumbnails(cacheKey, []);
-        resolve([]);
+        const empty = { folders: [] };
+        setCachedResult(cacheKey, empty);
+        resolve(empty);
       }
     });
     processThumbnailQueue();
   });
   pendingRequests.set(cacheKey, promise);
-  // Clean up pending entry once resolved to prevent memory leak
   promise.then(() => pendingRequests.delete(cacheKey));
   return promise;
 }
 
+// ─── SkeletonGrid ───────────────────────────────────────────────────────────
+function SkeletonGrid() {
+  return (
+    <div className="space-y-4 animate-pulse">
+      {[1, 2].map(g => (
+        <div key={g}>
+          <div className="h-4 w-32 bg-muted rounded mb-3" />
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="aspect-[4/3] rounded-lg bg-muted" />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── MiniLightbox ────────────────────────────────────────────────────────────
-function MiniLightbox({ files, initialIndex, onClose }) {
+function MiniLightbox({ files, initialIndex, onClose, shareUrl }) {
   const [index, setIndex] = useState(initialIndex);
   const file = files[index];
   useEffect(() => {
@@ -179,11 +238,17 @@ function MiniLightbox({ files, initialIndex, onClose }) {
     return () => window.removeEventListener('keydown', handler);
   }, [files.length, onClose]);
   if (!file) return null;
+  const previewUrl = buildDropboxPreviewUrl(shareUrl, file.path);
   return (
     <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 shrink-0">
-        <span className="text-white/70 text-sm">{file.name}</span>
-        <div className="flex items-center gap-2">
+        <span className="text-white/70 text-sm truncate mr-4">{file.name}</span>
+        <div className="flex items-center gap-3">
+          {previewUrl && previewUrl !== '#' && (
+            <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="text-white/50 hover:text-white text-xs flex items-center gap-1">
+              <ExternalLink className="h-3.5 w-3.5" /> Open in Dropbox
+            </a>
+          )}
           <span className="text-white/40 text-xs">{index + 1}/{files.length}</span>
           <button onClick={onClose} className="text-white/60 hover:text-white p-1"><X className="h-5 w-5" /></button>
         </div>
@@ -211,12 +276,110 @@ function MiniLightbox({ files, initialIndex, onClose }) {
   );
 }
 
+// ─── FolderGallery: renders a subfolder's files as a thumbnail grid ─────────
+function FolderGallery({ folder, shareUrl, onOpenLightbox }) {
+  const style = getFolderStyle(folder.name);
+  const FolderIcon = style.icon;
+  const totalSize = folder.files.reduce((s, f) => s + (f.size || 0), 0);
+  const imageCount = folder.files.filter(f => f.type === 'image').length;
+  const videoCount = folder.files.filter(f => f.type === 'video').length;
+  const docCount = folder.files.filter(f => f.type === 'document').length;
+
+  return (
+    <div>
+      {/* Subfolder heading */}
+      <div className="flex items-center gap-2 mb-2">
+        <div className={cn('w-6 h-6 rounded flex items-center justify-center', style.bg)}>
+          <FolderIcon className={cn('h-3.5 w-3.5', style.color)} />
+        </div>
+        <span className="text-sm font-semibold">{folder.name}</span>
+        <span className="text-xs text-muted-foreground">
+          {folder.files.length} file{folder.files.length !== 1 ? 's' : ''}
+        </span>
+        {totalSize > 0 && (
+          <span className="text-[10px] text-muted-foreground/60">{fmtFileSize(totalSize)}</span>
+        )}
+        <div className="flex-1" />
+        <div className="flex gap-1.5">
+          {imageCount > 0 && <Badge className="text-[10px] bg-blue-50 text-blue-600 border-blue-200">{imageCount} photos</Badge>}
+          {videoCount > 0 && <Badge className="text-[10px] bg-purple-50 text-purple-600 border-purple-200">{videoCount} video</Badge>}
+          {docCount > 0 && <Badge className="text-[10px] bg-amber-50 text-amber-600 border-amber-200">{docCount} doc</Badge>}
+        </div>
+      </div>
+
+      {/* Thumbnail grid */}
+      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+        {folder.files.map((file, i) => {
+          const isVideo = file.type === 'video';
+          const isDoc = file.type === 'document';
+          const previewUrl = buildDropboxPreviewUrl(shareUrl, file.path);
+          const cfg = TYPE_CONFIG[file.type] || TYPE_CONFIG.image;
+          const Icon = cfg.icon;
+
+          return (
+            <button
+              key={file.path || i}
+              onClick={() => {
+                if (file.thumbnail) {
+                  onOpenLightbox(folder.files, i);
+                } else {
+                  window.open(previewUrl, '_blank');
+                }
+              }}
+              className="group relative aspect-[4/3] rounded-lg overflow-hidden bg-muted border border-border/30 hover:ring-2 hover:ring-primary/30 transition-all"
+              title={file.name}
+            >
+              {file.thumbnail ? (
+                <img
+                  src={`data:image/jpeg;base64,${file.thumbnail}`}
+                  alt={file.name}
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-1.5">
+                  <Icon className="h-8 w-8 text-muted-foreground/30" />
+                  <span className="text-[9px] text-muted-foreground/50 px-1 truncate max-w-full">{file.ext?.toUpperCase()}</span>
+                </div>
+              )}
+
+              {/* Video play overlay */}
+              {isVideo && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="bg-black/40 rounded-full p-2 group-hover:bg-black/60 transition-colors">
+                    <Play className="h-4 w-4 text-white fill-white" />
+                  </div>
+                </div>
+              )}
+
+              {/* Document badge overlay */}
+              {isDoc && (
+                <div className="absolute top-1.5 right-1.5">
+                  <Badge className="text-[8px] bg-amber-500/80 text-white border-0 px-1 py-0">{file.ext?.toUpperCase()}</Badge>
+                </div>
+              )}
+
+              {/* Hover filename overlay */}
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <p className="text-[10px] text-white truncate">{file.name}</p>
+                {file.size > 0 && <p className="text-[8px] text-white/60">{fmtFileSize(file.size)}</p>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
 function DeliveryCard({ project, isNew }) {
   const [expanded, setExpanded] = useState(false);
-  const [files, setFiles] = useState([]);
-  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [mediaResult, setMediaResult] = useState(null); // { folders: [...] } or null
+  const [flatFiles, setFlatFiles] = useState([]); // backward compat for flat response
+  const [loadingMedia, setLoadingMedia] = useState(false);
   const [lightbox, setLightbox] = useState(null);
+  const hasFetchedRef = useRef(false);
 
   const deliveredAt = project.tonomo_delivered_at || project.updated_date || project.created_date;
   const deliverableLink = project.tonomo_deliverable_link;
@@ -237,41 +400,58 @@ function DeliveryCard({ project, isNew }) {
     } catch { return null; }
   }, [project.shoot_date, deliveredAt]);
 
-  // Skip Dropbox API entirely when we have delivered_files data
-  const dropboxSource = hasDeliveredFiles ? null : (deliverablePath || deliverableLink || null);
-  const isShareUrl = !deliverablePath && !!deliverableLink;
+  // Determine Dropbox source -- prefer share_url for the grouped gallery experience
+  const dropboxSource = hasDeliveredFiles ? null : (deliverableLink || deliverablePath || null);
+  const isShareUrl = !!deliverableLink && !deliverablePath;
 
+  // Lazy load: fetch only when card is expanded
   useEffect(() => {
-    // Don't fetch from Dropbox if we already have delivered_files objects
-    if (hasDeliveredFiles || !dropboxSource || files.length > 0) return;
-    let mounted = true;
-    setLoadingFiles(true);
-    fetchThumbnails(dropboxSource, isShareUrl).then(result => {
-      if (mounted) { setFiles(result); setLoadingFiles(false); }
+    if (!expanded || hasDeliveredFiles || !dropboxSource || hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+    setLoadingMedia(true);
+    fetchMediaFeed(dropboxSource, isShareUrl).then(result => {
+      setMediaResult(result);
+      // Also extract flat files for the collapsed preview thumbnails
+      const allFiles = (result?.folders || []).flatMap(f => f.files);
+      setFlatFiles(allFiles);
+      setLoadingMedia(false);
     });
-    return () => { mounted = false; };
-  }, [dropboxSource, isShareUrl, hasDeliveredFiles]);
+  }, [expanded, dropboxSource, isShareUrl, hasDeliveredFiles]);
 
-  const fileTypeCounts = useMemo(() => {
+  const handleRefresh = async (e) => {
+    e.stopPropagation();
+    if (!dropboxSource) return;
+    setLoadingMedia(true);
+    thumbCache.delete(dropboxSource);
+    pendingRequests.delete(dropboxSource);
+    const result = await fetchMediaFeed(dropboxSource, isShareUrl);
+    setMediaResult(result);
+    setFlatFiles((result?.folders || []).flatMap(f => f.files));
+    setLoadingMedia(false);
+  };
+
+  // Compute total file count and type counts for the badges
+  const { totalFileCount, fileTypeCounts } = useMemo(() => {
     const c = { image: 0, video: 0, document: 0, photos: 0, pdf: 0, floorplan: 0, drone: 0 };
     if (hasDeliveredFiles) {
-      // Count from delivered_files objects using their type field
       deliveredFiles.forEach(item => {
         if (typeof item === 'object' && item !== null) {
           const typeKey = normalizeDeliveredType(item.type);
           if (c[typeKey] !== undefined) c[typeKey]++;
-          else c.photos++; // fallback
+          else c.photos++;
         } else if (typeof item === 'string') {
           c[classifyUrl(item)]++;
         }
       });
-    } else if (files.length > 0) {
-      files.forEach(f => { if (c[f.type] !== undefined) c[f.type]++; });
+    } else if (flatFiles.length > 0) {
+      flatFiles.forEach(f => { if (c[f.type] !== undefined) c[f.type]++; });
     }
-    return c;
-  }, [files, deliveredFiles, hasDeliveredFiles]);
+    const total = hasDeliveredFiles ? deliveredFiles.length : flatFiles.length;
+    return { totalFileCount: total, fileTypeCounts: c };
+  }, [flatFiles, deliveredFiles, hasDeliveredFiles]);
 
-  const totalFileCount = hasDeliveredFiles ? deliveredFiles.length : files.length;
+  const folderCount = mediaResult?.folders?.length || 0;
+  const allGalleryFiles = useMemo(() => (mediaResult?.folders || []).flatMap(f => f.files), [mediaResult]);
 
   return (
     <div className={cn('border rounded-xl overflow-hidden transition-all hover:shadow-md bg-card', isNew && 'ring-2 ring-green-300 ring-opacity-50')}>
@@ -311,21 +491,21 @@ function DeliveryCard({ project, isNew }) {
                   return <Badge key={type} className={cn('text-[10px] gap-1', cfg.color)}><Icon className="h-2.5 w-2.5" />{count} {cfg.label}</Badge>;
                 })}
                 <span className="text-[10px] text-muted-foreground">{totalFileCount} files</span>
-                {loadingFiles && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                {loadingMedia && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
               </div>
             )}
           </div>
 
-          {/* Collapsed preview: Dropbox thumbnails or delivered_files type icons */}
-          {!expanded && (files.length > 0 ? (
+          {/* Collapsed preview: thumbnails from gallery or delivered_files icons */}
+          {!expanded && (flatFiles.length > 0 ? (
             <div className="hidden sm:flex gap-1 shrink-0 mr-1">
-              {files.filter(f => f.thumbnail).slice(0, 5).map((file, i) => (
+              {flatFiles.filter(f => f.thumbnail).slice(0, 5).map((file, i) => (
                 <div key={file.path || i} className="w-11 h-11 rounded-md overflow-hidden bg-muted border border-border/40 shrink-0">
                   <img src={`data:image/jpeg;base64,${file.thumbnail}`} alt="" className="w-full h-full object-cover" loading="lazy" />
                 </div>
               ))}
-              {files.length > 5 && (
-                <div className="w-11 h-11 rounded-md bg-muted/60 border border-border/40 flex items-center justify-center text-[10px] text-muted-foreground font-semibold shrink-0">+{files.length - 5}</div>
+              {flatFiles.length > 5 && (
+                <div className="w-11 h-11 rounded-md bg-muted/60 border border-border/40 flex items-center justify-center text-[10px] text-muted-foreground font-semibold shrink-0">+{flatFiles.length - 5}</div>
               )}
             </div>
           ) : hasDeliveredFiles && (
@@ -357,7 +537,7 @@ function DeliveryCard({ project, isNew }) {
 
       {expanded && (
         <div className="border-t px-4 py-3">
-          {/* Case 1: We have delivered_files objects — render as a deliverables list */}
+          {/* Case 1: delivered_files objects fallback -- render as before */}
           {hasDeliveredFiles ? (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between mb-2">
@@ -372,7 +552,6 @@ function DeliveryCard({ project, isNew }) {
                 )}
               </div>
               {deliveredFiles.map((item, i) => {
-                // Handle both object and legacy string formats
                 if (typeof item === 'string') {
                   return (
                     <a key={i} href={item} target="_blank" rel="noopener noreferrer"
@@ -397,25 +576,18 @@ function DeliveryCard({ project, isNew }) {
                       fileUrl ? 'bg-muted/30 hover:bg-muted/60 cursor-pointer' : 'bg-muted/20 cursor-default'
                     )}
                     onClick={fileUrl ? undefined : (e) => e.preventDefault()}>
-                    {/* Icon */}
                     <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', cfg.color)}>
                       {isFolder ? <FolderOpen className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
                     </div>
-
-                    {/* Name + type */}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{itemName}</p>
                       {item.path_lower && (
                         <p className="text-[10px] text-muted-foreground truncate">{item.path_lower}</p>
                       )}
                     </div>
-
-                    {/* Type badge */}
                     <Badge className={cn('text-[10px] shrink-0', cfg.color)}>
                       {item.type || 'File'}
                     </Badge>
-
-                    {/* Actions */}
                     <div className="flex items-center gap-1 shrink-0">
                       {fileUrl && (
                         <span className="text-muted-foreground group-hover:text-primary transition-colors">
@@ -433,44 +605,43 @@ function DeliveryCard({ project, isNew }) {
                 );
               })}
             </div>
-          ) : loadingFiles ? (
-            /* Case 2: Loading from Dropbox API */
-            <div className="flex items-center justify-center gap-2 py-6 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-xs">Loading media from Dropbox...</span>
-            </div>
-          ) : files.length > 0 ? (
-            /* Case 3: Dropbox API returned files with thumbnails */
+          ) : loadingMedia ? (
+            /* Case 2: Loading skeleton */
+            <SkeletonGrid />
+          ) : mediaResult && allGalleryFiles.length > 0 ? (
+            /* Case 3: Visual gallery grouped by subfolder */
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-muted-foreground">{files.length} files from Dropbox</span>
-                <button onClick={async (e) => {
-                  e.stopPropagation();
-                  setLoadingFiles(true);
-                  thumbCache.delete(dropboxSource);
-                  pendingRequests.delete(dropboxSource);
-                  const result = await fetchThumbnails(dropboxSource, isShareUrl);
-                  setFiles(result);
-                  setLoadingFiles(false);
-                }} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
-                  <RefreshCw className="h-3 w-3" /> Refresh
-                </button>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {allGalleryFiles.length} files across {folderCount} folder{folderCount !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {deliverableLink && (
+                    <a href={deliverableLink} target="_blank" rel="noopener noreferrer"
+                      className="text-[10px] text-primary hover:underline flex items-center gap-1">
+                      <FolderOpen className="h-3 w-3" /> Open in Dropbox
+                    </a>
+                  )}
+                  <button onClick={handleRefresh} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
+                    <RefreshCw className="h-3 w-3" /> Refresh
+                  </button>
+                </div>
               </div>
-              <div className="grid grid-cols-5 sm:grid-cols-8 lg:grid-cols-10 gap-1.5">
-                {files.slice(0, 60).map((file, i) => {
-                  const cfg = TYPE_CONFIG[file.type] || TYPE_CONFIG.image; const Icon = cfg.icon;
-                  return (
-                    <button key={file.path || i} onClick={() => setLightbox({ files, index: i })} className="relative aspect-square rounded-lg overflow-hidden bg-muted border border-border/30 group hover:ring-2 hover:ring-primary/30 transition-all">
-                      {file.thumbnail ? <img src={`data:image/jpeg;base64,${file.thumbnail}`} alt={file.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" loading="lazy" /> : <div className="w-full h-full flex items-center justify-center"><Icon className="h-5 w-5 text-muted-foreground/40" /></div>}
-                      {file.type === 'video' && <div className="absolute inset-0 flex items-center justify-center"><div className="bg-black/40 rounded-full p-1.5"><Play className="h-3 w-3 text-white fill-white" /></div></div>}
-                    </button>
-                  );
-                })}
-                {files.length > 60 && <div className="aspect-square rounded-lg bg-muted/50 flex items-center justify-center text-xs text-muted-foreground font-medium">+{files.length - 60}</div>}
+              <div className="space-y-5">
+                {mediaResult.folders.filter(f => f.files.length > 0).map((folder, fi) => (
+                  <FolderGallery
+                    key={folder.name || fi}
+                    folder={folder}
+                    shareUrl={deliverableLink}
+                    onOpenLightbox={(files, index) => setLightbox({ files, index })}
+                  />
+                ))}
               </div>
             </div>
           ) : dropboxSource ? (
-            /* Case 4: Dropbox source exists but API returned nothing */
+            /* Case 4: Dropbox source exists but nothing returned */
             <div className="text-center py-4 text-xs text-muted-foreground">
               No files found in Dropbox — <a href={deliverableLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">open in Dropbox</a>
             </div>
@@ -480,7 +651,7 @@ function DeliveryCard({ project, isNew }) {
           )}
         </div>
       )}
-      {lightbox && <MiniLightbox files={lightbox.files} initialIndex={lightbox.index} onClose={() => setLightbox(null)} />}
+      {lightbox && <MiniLightbox files={lightbox.files} initialIndex={lightbox.index} shareUrl={deliverableLink} onClose={() => setLightbox(null)} />}
     </div>
   );
 }
@@ -502,10 +673,6 @@ export default function DeliveryFeed() {
     return () => clearTimeout(timer);
   }, []);
 
-  // BUG FIX: setTimeout inside subscribe callback was not cleaned up on unmount.
-  // Each delivery event scheduled a 60-second timeout. If the component unmounted
-  // before those 60s elapsed, setNewDeliveryIds would fire on an unmounted component.
-  // Now all highlight timers are tracked and cleared alongside the subscription.
   useEffect(() => {
     const highlightTimers = new Set();
     const unsub = api.entities.Project.subscribe((event) => {
