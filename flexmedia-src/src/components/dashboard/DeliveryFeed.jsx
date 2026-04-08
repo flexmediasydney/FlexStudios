@@ -169,22 +169,22 @@ let dropboxFailCount = 0;
 async function fetchMediaFeed(pathOrUrl, isShareUrl = false) {
   const cacheKey = pathOrUrl;
   const cached = getCachedResult(cacheKey);
-  if (cached) return cached;
+  // Only return cached result if it had actual content (don't cache failures)
+  if (cached && cached.folders?.length > 0) return cached;
   if (pendingRequests.has(cacheKey)) return pendingRequests.get(cacheKey);
   const promise = new Promise((resolve) => {
     queue.push(async () => {
       try {
         const params = isShareUrl ? { share_url: pathOrUrl } : { path: pathOrUrl };
         const res = await api.functions.invoke('getDeliveryMediaFeed', params);
+        // invokeFunction wraps response: { data: <edge_fn_body> }
         const data = res?.data || res;
 
         // Check for error in response body
         if (data?.error) {
-          console.warn('Dropbox edge function error:', data.error);
+          console.error('[DeliveryFeed] Dropbox edge function error:', data.error, '| URL/path:', pathOrUrl);
           dropboxFailCount++;
-          const empty = { folders: [] };
-          setCachedResult(cacheKey, empty);
-          resolve(empty);
+          resolve({ folders: [], _error: data.error });
           return;
         }
 
@@ -195,18 +195,20 @@ async function fetchMediaFeed(pathOrUrl, isShareUrl = false) {
         } else if (data?.files && Array.isArray(data.files)) {
           result = { folders: [{ name: 'All Files', files: data.files }] };
         } else {
+          console.error('[DeliveryFeed] Unexpected response shape from getDeliveryMediaFeed:', JSON.stringify(data)?.slice(0, 200), '| URL/path:', pathOrUrl);
           result = { folders: [] };
           dropboxFailCount++;
         }
 
-        setCachedResult(cacheKey, result);
+        // Only cache successful results with actual content
+        if (result.folders.length > 0) {
+          setCachedResult(cacheKey, result);
+        }
         resolve(result);
       } catch (err) {
         dropboxFailCount++;
-        console.warn('Dropbox fetch failed:', err?.message);
-        const empty = { folders: [] };
-        setCachedResult(cacheKey, empty);
-        resolve(empty);
+        console.error('[DeliveryFeed] Dropbox fetch failed:', err?.message, '| URL/path:', pathOrUrl);
+        resolve({ folders: [], _error: err?.message });
       }
     });
     processThumbnailQueue();
@@ -416,7 +418,9 @@ function DeliveryCard({ project, isNew }) {
 
   // Lazy load: fetch only when card is expanded
   useEffect(() => {
-    if (!expanded || !dropboxSource || hasFetchedRef.current) return;
+    if (!expanded || !dropboxSource) return;
+    // Allow retry if previous fetch returned empty (error/no data)
+    if (hasFetchedRef.current && mediaResult?.folders?.length > 0) return;
     hasFetchedRef.current = true;
     setLoadingMedia(true);
     fetchMediaFeed(dropboxSource, isShareUrl).then(result => {
@@ -556,6 +560,22 @@ function DeliveryCard({ project, isNew }) {
             </div>
           ) : mediaResult?.folders?.length > 0 ? (
             <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-muted-foreground">
+                  {mediaResult.folders.reduce((s, f) => s + (f.files?.length || 0), 0)} files across {mediaResult.folders.length} folder{mediaResult.folders.length !== 1 ? 's' : ''}
+                </span>
+                <div className="flex items-center gap-2">
+                  {deliverableLink && (
+                    <a href={deliverableLink} target="_blank" rel="noopener noreferrer"
+                      className="text-[10px] text-primary hover:underline flex items-center gap-1">
+                      <FolderOpen className="h-3 w-3" /> Open in Dropbox
+                    </a>
+                  )}
+                  <button onClick={handleRefresh} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
+                    <RefreshCw className="h-3 w-3" /> Refresh
+                  </button>
+                </div>
+              </div>
               {mediaResult.folders.map((folder, fi) => (
                 <div key={fi}>
                   <p className="text-xs font-semibold text-muted-foreground mb-2">{folder.name} ({folder.files?.length || 0})</p>
@@ -582,16 +602,33 @@ function DeliveryCard({ project, isNew }) {
             </div>
           ) : hasDeliveredFiles ? (
             <div className="space-y-1.5">
+              {/* Show Dropbox error hint + retry when API failed but we have fallback data */}
+              {mediaResult?._error && dropboxSource && (
+                <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-md bg-amber-50 border border-amber-200 text-amber-700">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  <span className="text-[10px] flex-1 truncate">Dropbox gallery unavailable: {mediaResult._error}</span>
+                  <button onClick={handleRefresh} className="text-[10px] font-medium hover:underline flex items-center gap-1 shrink-0">
+                    <RefreshCw className="h-3 w-3" /> Retry
+                  </button>
+                </div>
+              )}
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
                   {deliveredFiles.length} deliverable{deliveredFiles.length !== 1 ? 's' : ''}
                 </span>
-                {deliverableLink && (
-                  <a href={deliverableLink} target="_blank" rel="noopener noreferrer"
-                    className="text-[10px] text-primary hover:underline flex items-center gap-1">
-                    <FolderOpen className="h-3 w-3" /> Open in Dropbox
-                  </a>
-                )}
+                <div className="flex items-center gap-2">
+                  {dropboxSource && (
+                    <button onClick={handleRefresh} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1">
+                      <RefreshCw className="h-3 w-3" /> Refresh
+                    </button>
+                  )}
+                  {deliverableLink && (
+                    <a href={deliverableLink} target="_blank" rel="noopener noreferrer"
+                      className="text-[10px] text-primary hover:underline flex items-center gap-1">
+                      <FolderOpen className="h-3 w-3" /> Open in Dropbox
+                    </a>
+                  )}
+                </div>
               </div>
               {deliveredFiles.map((item, i) => {
                 if (typeof item === 'string') {

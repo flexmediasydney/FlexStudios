@@ -115,9 +115,11 @@ function Lightbox({ files, initialIndex, projectName, onClose }) {
       const res = await api.functions.invoke('getDeliveryMediaFeed', {
         action: 'get_temp_link', path
       });
+      // invokeFunction wraps response: { data: <edge_fn_body> }
+      const data = res?.data || res;
       // BUG FIX: guard setState with mounted check so navigating away
       // mid-fetch doesn't trigger a memory leak / React warning.
-      if (mountedRef.current) setTempUrl(res?.url || null);
+      if (mountedRef.current) setTempUrl(data?.url || null);
     } catch { if (mountedRef.current) setTempUrl(null); }
     finally { if (mountedRef.current) setLoadingUrl(false); }
   }, []);
@@ -393,7 +395,11 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
         path: project.tonomo_deliverable_path
       });
       if (!blockMountedRef.current) return;
-      const apiFiles = res?.files || [];
+      // invokeFunction wraps response: { data: <edge_fn_body> }
+      const resData = res?.data || res;
+      // Edge function returns { folders: [...] } for shared links, { files: [...] } for paths
+      // Also handle folder-grouped response by flattening
+      const apiFiles = resData?.files || (resData?.folders || []).flatMap(f => f.files || []) || [];
       if (apiFiles.length > 0) {
         setFiles(apiFiles);
         setStatus('done');
@@ -405,6 +411,7 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
         setStatus('done');
       }
     } catch (e) {
+      console.error('[DropboxFileFeed] Dropbox fetch failed:', e?.message, '| path:', project.tonomo_deliverable_path);
       if (!blockMountedRef.current) return;
       // On Dropbox API error, fall back to delivered_files if available
       if (hasDeliveredFiles) {

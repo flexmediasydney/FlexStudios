@@ -219,6 +219,7 @@ export default function ProjectMediaGallery({ project }) {
 
       // Check for error in response body (edge function may return { error: "..." })
       if (data?.error) {
+        console.error('[ProjectMediaGallery] Dropbox edge function error:', data.error, '| share_url:', deliverableLink);
         throw new Error(data.error);
       }
 
