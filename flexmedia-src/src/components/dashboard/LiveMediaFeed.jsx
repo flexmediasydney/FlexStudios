@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useFavorites } from "@/components/favorites/useFavorites";
@@ -14,36 +14,21 @@ import {
   RefreshCw, Camera, Film, FileText, File, ExternalLink,
   ImageOff, Play, Clock, Search, Building2, User, Loader2,
   AlertCircle, FolderOpen, Grid2x2, Grid3x3, LayoutGrid,
-  X, ChevronLeft, ChevronRight
+  X, ChevronLeft, ChevronRight, Star, ZoomIn, ZoomOut,
+  Filter, Hash, TrendingUp, Bell, ArrowUp
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
-import { formatDistanceToNow, differenceInDays } from "date-fns";
+import { formatDistanceToNow, differenceInDays, format } from "date-fns";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// ---- Image proxy with concurrency limiter + LRU blob cache ----
-const MAX_BLOB_CACHE = 400;
+// ---- Image proxy with concurrency limiter + blob cache ----
 const blobCache = new Map();
 const pending = new Set();
 let activeLoads = 0;
 const loadQueue = [];
-
-/** Build the canonical cache key used everywhere (mode::filePath) */
-function blobCacheKey(filePath, mode = 'thumb') {
-  return `${mode}::${filePath}`;
-}
-
-/** Evict oldest blob URLs when cache exceeds MAX_BLOB_CACHE */
-function evictBlobCache() {
-  while (blobCache.size > MAX_BLOB_CACHE) {
-    const oldestKey = blobCache.keys().next().value;
-    const oldUrl = blobCache.get(oldestKey);
-    if (oldUrl) URL.revokeObjectURL(oldUrl);
-    blobCache.delete(oldestKey);
-  }
-}
 
 function processQueue() {
   while (activeLoads < 8 && loadQueue.length > 0) {
@@ -69,7 +54,6 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
     if (blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
     blobCache.set(cacheKey, url);
-    evictBlobCache();
     return url;
   } catch { return null; }
   finally { pending.delete(cacheKey); }
@@ -84,11 +68,19 @@ const DATE_RANGES = [
 ];
 
 const TYPE_FILTERS = [
-  { value: 'all',      label: 'All types' },
-  { value: 'image',    label: 'Photos' },
-  { value: 'video',    label: 'Videos' },
-  { value: 'document', label: 'Documents' },
+  { value: 'all',      label: 'All types',  icon: FolderOpen },
+  { value: 'image',    label: 'Photos',     icon: Camera },
+  { value: 'video',    label: 'Videos',     icon: Film },
+  { value: 'document', label: 'Documents',  icon: FileText },
 ];
+
+const GRID_CONFIGS = {
+  sm: 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2',
+  md: 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3',
+  lg: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4',
+};
+
+const PAGE_SIZE = 60;
 
 // ---- Helpers ----
 function FileIcon({ type, className }) {
@@ -112,6 +104,11 @@ function timeAgo(dateStr) {
   try { return formatDistanceToNow(new Date(dateStr), { addSuffix: true }); } catch { return null; }
 }
 
+function formatUploadTime(dateStr) {
+  if (!dateStr) return null;
+  try { return format(new Date(dateStr), 'MMM d, h:mm a'); } catch { return null; }
+}
+
 const TYPE_BADGE_STYLES = {
   image:    'bg-blue-50 text-blue-600 border-blue-200',
   video:    'bg-purple-50 text-purple-600 border-purple-200',
@@ -119,104 +116,327 @@ const TYPE_BADGE_STYLES = {
   other:    'bg-slate-50 text-slate-600 border-slate-200',
 };
 
-// ---- MediaLightbox: fullscreen image/video viewer ----
+
+// =====================================================================
+// AnimatedCounter: ease-out cubic count-up for stat numbers
+// =====================================================================
+function AnimatedCounter({ value, duration = 800 }) {
+  const [display, setDisplay] = useState(0);
+  const prevValue = useRef(0);
+
+  useEffect(() => {
+    if (value === prevValue.current) return;
+    const start = prevValue.current;
+    const end = value;
+    const diff = end - start;
+    const startTime = performance.now();
+
+    function tick(now) {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setDisplay(Math.round(start + diff * eased));
+      if (progress < 1) requestAnimationFrame(tick);
+      else prevValue.current = end;
+    }
+    requestAnimationFrame(tick);
+  }, [value, duration]);
+
+  return <span>{display.toLocaleString()}</span>;
+}
+
+
+// =====================================================================
+// StatCard: single animated stat card with icon
+// =====================================================================
+function StatCard({ icon: Icon, label, value, color, delay = 0 }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setVisible(true), delay);
+    return () => clearTimeout(t);
+  }, [delay]);
+
+  const colorMap = {
+    blue:    'from-blue-500/10 to-blue-600/5 border-blue-200/60',
+    purple:  'from-purple-500/10 to-purple-600/5 border-purple-200/60',
+    amber:   'from-amber-500/10 to-amber-600/5 border-amber-200/60',
+    emerald: 'from-emerald-500/10 to-emerald-600/5 border-emerald-200/60',
+    slate:   'from-slate-500/10 to-slate-600/5 border-slate-200/60',
+  };
+
+  const iconBgMap = {
+    blue:    'bg-blue-100 text-blue-600',
+    purple:  'bg-purple-100 text-purple-600',
+    amber:   'bg-amber-100 text-amber-600',
+    emerald: 'bg-emerald-100 text-emerald-600',
+    slate:   'bg-slate-100 text-slate-600',
+  };
+
+  return (
+    <div
+      className={cn(
+        "relative rounded-xl border bg-gradient-to-br p-3.5 transition-all duration-500",
+        colorMap[color] || colorMap.slate,
+        visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"
+      )}
+    >
+      <div className="flex items-center gap-3">
+        <div className={cn("rounded-lg p-2 shrink-0", iconBgMap[color] || iconBgMap.slate)}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-xl font-bold tracking-tight leading-none">
+            <AnimatedCounter value={value} />
+          </div>
+          <div className="text-[11px] text-muted-foreground mt-0.5 font-medium">{label}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// =====================================================================
+// StatsHeader: row of animated stat cards
+// =====================================================================
+function StatsHeader({ stats, newestUpload, isLoading }) {
+  if (isLoading || stats.total === 0) return null;
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <StatCard icon={Hash}      label="Total Files"      value={stats.total}    color="slate"   delay={0} />
+      <StatCard icon={Building2} label="Projects Scanned" value={stats.projects} color="emerald" delay={80} />
+      <StatCard icon={Camera}    label="Photos"           value={stats.photos}   color="blue"    delay={160} />
+      <StatCard icon={Film}      label="Videos"           value={stats.videos}   color="purple"  delay={240} />
+      {stats.docs > 0 ? (
+        <StatCard icon={FileText} label="Documents" value={stats.docs} color="amber" delay={320} />
+      ) : newestUpload ? (
+        <div
+          className="relative rounded-xl border bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border-emerald-200/60 p-3.5"
+          style={{ animation: 'fadeSlideIn 0.5s ease-out 320ms both' }}
+        >
+          <div className="flex items-center gap-3">
+            <div className="rounded-lg p-2 bg-emerald-100 text-emerald-600 shrink-0">
+              <Clock className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-semibold leading-tight truncate">{formatUploadTime(newestUpload)}</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5 font-medium">Newest Upload</div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <StatCard icon={FileText} label="Documents" value={stats.docs} color="amber" delay={320} />
+      )}
+    </div>
+  );
+}
+
+
+// =====================================================================
+// FeedCardSkeleton: realistic placeholder matching actual card layout
+// =====================================================================
+function FeedCardSkeleton() {
+  return (
+    <div className="rounded-xl overflow-hidden border bg-card">
+      <div className="aspect-[4/3] bg-muted relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full animate-[shimmer_2s_infinite]" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Camera className="h-8 w-8 text-muted-foreground/10" />
+        </div>
+        <div className="absolute top-2.5 left-2.5">
+          <Skeleton className="h-4 w-12 rounded-full" />
+        </div>
+      </div>
+      <div className="p-2.5 space-y-2">
+        <Skeleton className="h-3.5 w-[75%] rounded" />
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-2.5 w-12 rounded" />
+          <Skeleton className="h-2.5 w-8 rounded" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Skeleton className="h-2.5 w-2.5 rounded-full shrink-0" />
+          <Skeleton className="h-2.5 w-[60%] rounded" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Skeleton className="h-2.5 w-2.5 rounded-full shrink-0" />
+          <Skeleton className="h-2.5 w-[40%] rounded" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FeedSkeleton({ count = 12, gridSize = 'md', scanProgress = null }) {
+  return (
+    <div className="space-y-4">
+      {scanProgress !== null && (
+        <div className="flex items-center gap-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <Loader2 className="h-4 w-4 text-blue-600 animate-spin shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-blue-900">
+              Scanning {scanProgress.current} of {scanProgress.total} projects...
+            </p>
+            <div className="mt-1.5 h-1.5 bg-blue-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-blue-600 rounded-full transition-all duration-500 ease-out"
+                style={{ width: `${Math.max(5, (scanProgress.current / Math.max(1, scanProgress.total)) * 100)}%` }}
+              />
+            </div>
+          </div>
+          <span className="text-xs text-blue-600 font-medium shrink-0">
+            {Math.round((scanProgress.current / Math.max(1, scanProgress.total)) * 100)}%
+          </span>
+        </div>
+      )}
+      <div className={cn("grid", GRID_CONFIGS[gridSize])}>
+        {Array.from({ length: count }).map((_, i) => (
+          <FeedCardSkeleton key={i} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+// =====================================================================
+// MediaLightbox: fullscreen viewer with zoom, animations, filmstrip
+// =====================================================================
 function MediaLightbox({ files, initialIndex, onClose }) {
   const [index, setIndex] = useState(initialIndex);
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
-
-  // Clamp index to valid bounds if files array shrinks (e.g. filters change while open)
-  useEffect(() => {
-    if (files.length > 0 && index >= files.length) {
-      setIndex(files.length - 1);
-    }
-  }, [files.length, index]);
-
-  // Close lightbox if the files list becomes empty
-  useEffect(() => {
-    if (files.length === 0) onClose();
-  }, [files.length, onClose]);
-
-  const safeIndex = files.length === 0 ? 0 : Math.min(index, files.length - 1);
-  const file = files[safeIndex];
+  const [zoomed, setZoomed] = useState(false);
+  const [entering, setEntering] = useState(true);
+  const [exiting, setExiting] = useState(false);
+  const filmstripRef = useRef(null);
+  const file = files[index];
 
   const isVideo = file?.type === 'video';
   const isImage = file?.type === 'image';
   const proxyPath = file?.proxyPath || null;
 
-  // Load video blob when a video file is selected
+  useEffect(() => {
+    requestAnimationFrame(() => setEntering(false));
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setExiting(true);
+    setTimeout(() => onClose(), 200);
+  }, [onClose]);
+
   useEffect(() => {
     if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
-    let cancelled = false;
     setVideoLoading(true);
     setVideoUrl(null);
-    // Use canonical cache key (mode::path) -- not bare proxyPath
-    const cached = blobCache.get(blobCacheKey(proxyPath, 'thumb'));
+    const cached = blobCache.get(proxyPath);
     if (cached) { setVideoUrl(cached); setVideoLoading(false); return; }
-    fetchProxyImage(proxyPath, 'thumb').then(url => {
-      if (!cancelled) {
-        setVideoUrl(url);
-        setVideoLoading(false);
-      }
+    fetchProxyImage(proxyPath).then(url => {
+      setVideoUrl(url);
+      setVideoLoading(false);
     });
-    return () => { cancelled = true; };
   }, [isVideo, proxyPath]);
 
-  // Keyboard nav
+  useEffect(() => { setZoomed(false); }, [index]);
+
+  useEffect(() => {
+    if (!filmstripRef.current) return;
+    const active = filmstripRef.current.querySelector('[data-active="true"]');
+    if (active) active.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, [index]);
+
   useEffect(() => {
     const handler = (e) => {
-      if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft') setIndex(i => Math.max(0, i - 1));
-      if (e.key === 'ArrowRight') setIndex(i => Math.min(files.length - 1, i + 1));
+      if (e.key === 'Escape') handleClose();
+      if (e.key === 'ArrowLeft' && index > 0) setIndex(i => i - 1);
+      if (e.key === 'ArrowRight' && index < files.length - 1) setIndex(i => i + 1);
+      if (e.key === ' ' || e.key === 'z') { e.preventDefault(); setZoomed(z => !z); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [files.length, onClose]);
+  }, [index, files.length, handleClose]);
 
-  // Use canonical cache key (mode::path) to look up the thumbnail blob
-  const imgBlobUrl = isImage && proxyPath ? blobCache.get(blobCacheKey(proxyPath, 'thumb')) : null;
+  const imgBlobUrl = isImage ? blobCache.get(proxyPath) : null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose}>
-      {/* Header */}
-      <div className="flex items-center justify-between p-3 text-white" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-3">
+    <div
+      className={cn(
+        "fixed inset-0 z-50 flex flex-col transition-all duration-200",
+        entering || exiting ? "bg-black/0" : "bg-black/90"
+      )}
+      onClick={handleClose}
+    >
+      <div
+        className={cn(
+          "flex items-center justify-between p-3 text-white transition-all duration-300",
+          entering || exiting ? "opacity-0 -translate-y-4" : "opacity-100 translate-y-0"
+        )}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 min-w-0">
           <span className="text-sm font-medium truncate max-w-md">{file?.name}</span>
-          {file?.size > 0 && <span className="text-xs text-white/50">{formatSize(file.size)}</span>}
-          <span className="text-xs text-white/50">{safeIndex + 1} / {files.length}</span>
+          {file?.size > 0 && <span className="text-xs text-white/50 shrink-0">{formatSize(file.size)}</span>}
+          <span className="text-xs text-white/50 shrink-0">{index + 1} / {files.length}</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 shrink-0">
           {file?.projectName && (
             <span className="text-xs text-white/40 truncate max-w-[200px]">{file.projectName}</span>
+          )}
+          {isImage && imgBlobUrl && (
+            <button
+              onClick={() => setZoomed(z => !z)}
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              title={zoomed ? "Zoom out (Z)" : "Zoom in (Z)"}
+            >
+              {zoomed ? <ZoomOut className="h-4 w-4" /> : <ZoomIn className="h-4 w-4" />}
+            </button>
           )}
           {file?.preview_url && (
             <button onClick={() => safeWindowOpen(file.preview_url)} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Open in Dropbox">
               <ExternalLink className="h-4 w-4" />
             </button>
           )}
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+          <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
             <X className="h-5 w-5" />
           </button>
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="flex-1 flex items-center justify-center relative min-h-0 px-16" onClick={e => e.stopPropagation()}>
-        {/* Nav arrows */}
-        {safeIndex > 0 && (
-          <button onClick={() => setIndex(i => Math.max(0, i - 1))} className="absolute left-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+      <div
+        className={cn(
+          "flex-1 flex items-center justify-center relative min-h-0 px-16 transition-all duration-300",
+          entering || exiting ? "opacity-0 scale-95" : "opacity-100 scale-100"
+        )}
+        onClick={e => e.stopPropagation()}
+      >
+        {index > 0 && (
+          <button
+            onClick={() => setIndex(i => i - 1)}
+            className="absolute left-3 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-all z-10 hover:scale-110 active:scale-95"
+          >
             <ChevronLeft className="h-6 w-6" />
           </button>
         )}
-        {safeIndex < files.length - 1 && (
-          <button onClick={() => setIndex(i => Math.min(files.length - 1, i + 1))} className="absolute right-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors z-10">
+        {index < files.length - 1 && (
+          <button
+            onClick={() => setIndex(i => i + 1)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-all z-10 hover:scale-110 active:scale-95"
+          >
             <ChevronRight className="h-6 w-6" />
           </button>
         )}
 
-        {/* Image */}
         {isImage && imgBlobUrl && (
-          <img src={imgBlobUrl} alt={file.name} className="max-w-full max-h-full object-contain rounded-lg" />
+          <img
+            src={imgBlobUrl}
+            alt={file.name}
+            onClick={() => setZoomed(z => !z)}
+            className={cn(
+              "max-h-full rounded-lg transition-all duration-300 select-none",
+              zoomed ? "max-w-none scale-150 cursor-zoom-out" : "max-w-full object-contain cursor-zoom-in"
+            )}
+            draggable={false}
+          />
         )}
         {isImage && !imgBlobUrl && (
           <div className="flex flex-col items-center gap-3 text-white/60">
@@ -225,7 +445,6 @@ function MediaLightbox({ files, initialIndex, onClose }) {
           </div>
         )}
 
-        {/* Video */}
         {isVideo && (
           videoLoading ? (
             <div className="flex flex-col items-center gap-3 text-white/60">
@@ -238,22 +457,23 @@ function MediaLightbox({ files, initialIndex, onClose }) {
               controls
               autoPlay
               className="max-w-full max-h-full rounded-lg"
-              style={{ maxHeight: 'calc(100vh - 120px)' }}
+              style={{ maxHeight: 'calc(100vh - 140px)' }}
             />
           ) : (
             <div className="text-white/60 text-sm">Video unavailable</div>
           )
         )}
 
-        {/* Document / other */}
         {!isImage && !isVideo && (
-          <div className="flex flex-col items-center gap-3 text-white/60">
-            <FileIcon type={file?.type} className="h-16 w-16" />
-            <span className="text-sm">{file?.name}</span>
+          <div className="flex flex-col items-center gap-4 text-white/60">
+            <div className="rounded-2xl bg-white/5 p-8 border border-white/10">
+              <FileIcon type={file?.type} className="h-16 w-16" />
+            </div>
+            <span className="text-sm font-medium">{file?.name}</span>
             {file?.preview_url && (
               <button
                 onClick={() => safeWindowOpen(file.preview_url)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors text-xs"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors text-sm"
               >
                 <ExternalLink className="h-3.5 w-3.5" />Open in Dropbox
               </button>
@@ -262,58 +482,62 @@ function MediaLightbox({ files, initialIndex, onClose }) {
         )}
       </div>
 
-      {/* Filmstrip -- show window of thumbnails around current index */}
-      <div className="flex gap-1.5 p-3 overflow-x-auto justify-center" onClick={e => e.stopPropagation()}>
-        {(() => {
-          // Show a sliding window of up to 40 items centered on current index
-          const STRIP_SIZE = 40;
-          const half = Math.floor(STRIP_SIZE / 2);
-          let start = Math.max(0, safeIndex - half);
-          let end = Math.min(files.length, start + STRIP_SIZE);
-          if (end - start < STRIP_SIZE) start = Math.max(0, end - STRIP_SIZE);
-          return files.slice(start, end).map((f, localI) => {
-            const globalI = start + localI;
-            // Use canonical cache key (mode::path) for lookup
-            const thumbUrl = f.proxyPath ? blobCache.get(blobCacheKey(f.proxyPath, 'thumb')) : null;
-            return (
-              <button
-                key={f.proxyPath || f.path || globalI}
-                onClick={() => setIndex(globalI)}
-                className={cn("w-14 h-10 rounded overflow-hidden shrink-0 border-2 transition-all",
-                  globalI === safeIndex ? "border-white ring-1 ring-white/50" : "border-transparent opacity-60 hover:opacity-100")}
-              >
-                {thumbUrl ? (
-                  <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full bg-white/10 flex items-center justify-center">
-                    <FileIcon type={f.type} className="h-3 w-3 text-white/40" />
-                  </div>
-                )}
-              </button>
-            );
-          });
-        })()}
+      <div
+        ref={filmstripRef}
+        className={cn(
+          "flex gap-1.5 p-3 overflow-x-auto justify-center transition-all duration-300",
+          entering || exiting ? "opacity-0 translate-y-4" : "opacity-100 translate-y-0"
+        )}
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {files.slice(0, 60).map((f, i) => {
+          const thumbUrl = f.proxyPath ? blobCache.get(f.proxyPath) : null;
+          const isActive = i === index;
+          return (
+            <button
+              key={f.proxyPath || f.path || i}
+              data-active={isActive ? "true" : undefined}
+              onClick={() => setIndex(i)}
+              className={cn(
+                "w-14 h-10 rounded-md overflow-hidden shrink-0 border-2 transition-all duration-200",
+                isActive
+                  ? "border-white ring-2 ring-white/30 scale-110"
+                  : "border-transparent opacity-50 hover:opacity-90 hover:border-white/30"
+              )}
+            >
+              {thumbUrl ? (
+                <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full bg-white/10 flex items-center justify-center">
+                  <FileIcon type={f.type} className="h-3 w-3 text-white/40" />
+                </div>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-// ---- FeedCard: single media card in the grid ----
-function FeedCard({ item, isVisible, onClick, getTagsForFile }) {
+
+// =====================================================================
+// FeedCard: media card with hover lift, fade-in, overlays, tag pills
+// =====================================================================
+const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFile }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [imgLoaded, setImgLoaded] = useState(false);
   const started = useRef(false);
-  const cardRef = useRef(null);
 
   const canThumb = item.type === 'image' || item.type === 'video' || item.type === 'document';
 
-  // Only load thumbnails once visible (IntersectionObserver)
   useEffect(() => {
     if (!canThumb || !item.proxyPath || started.current) return;
-    const cached = blobCache.get(blobCacheKey(item.proxyPath, 'thumb'));
+    const cached = blobCache.get(item.proxyPath);
     if (cached) { setBlobUrl(cached); return; }
-
     if (!isVisible) return;
     started.current = true;
     setLoading(true);
@@ -333,130 +557,260 @@ function FeedCard({ item, isVisible, onClick, getTagsForFile }) {
 
   const uploadTime = timeAgo(item.uploaded_at);
   const badgeStyle = TYPE_BADGE_STYLES[item.type] || TYPE_BADGE_STYLES.other;
+  const tags = getTagsForFile ? getTagsForFile(item.proxyPath) : [];
 
   return (
-    <button
-      ref={cardRef}
-      type="button"
-      onClick={handleClick}
-      className="group relative rounded-xl overflow-hidden border bg-card transition-all hover:shadow-lg hover:-translate-y-0.5 text-left w-full focus:outline-none focus:ring-2 focus:ring-primary"
+    <div
+      className="group relative rounded-xl overflow-hidden border bg-card text-left w-full transition-all duration-200 hover:shadow-xl hover:shadow-black/5 hover:-translate-y-1"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '0 280px' }}
     >
-      {/* Thumbnail area */}
-      <div className="aspect-[4/3] bg-muted flex items-center justify-center overflow-hidden relative">
-        {blobUrl ? (
-          <img
-            src={blobUrl}
-            alt={item.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-            loading="lazy"
-          />
-        ) : loading ? (
-          <div className="w-full h-full animate-pulse bg-muted flex items-center justify-center">
-            <Camera className="h-6 w-6 text-muted-foreground/20 animate-pulse" />
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-1.5 text-muted-foreground p-4">
-            <FileIcon type={item.type} className="h-8 w-8 opacity-40" />
-            <span className="text-[10px] font-medium uppercase tracking-wider opacity-50">{item.ext || item.type}</span>
-          </div>
-        )}
+      <button
+        type="button"
+        onClick={handleClick}
+        className="w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-xl"
+      >
+        <div className="aspect-[4/3] bg-muted flex items-center justify-center overflow-hidden relative">
+          {blobUrl ? (
+            <img
+              src={blobUrl}
+              alt={item.name}
+              onLoad={() => setImgLoaded(true)}
+              className={cn(
+                "w-full h-full object-cover group-hover:scale-105 transition-all duration-500",
+                imgLoaded ? "opacity-100" : "opacity-0"
+              )}
+              loading="lazy"
+            />
+          ) : loading ? (
+            <div className="w-full h-full bg-muted flex items-center justify-center relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-foreground/[0.03] to-transparent -translate-x-full animate-[shimmer_2s_infinite]" />
+              <Camera className="h-6 w-6 text-muted-foreground/15" />
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-1.5 text-muted-foreground p-4">
+              <FileIcon type={item.type} className="h-8 w-8 opacity-40" />
+              <span className="text-[10px] font-medium uppercase tracking-wider opacity-50">{item.ext || item.type}</span>
+            </div>
+          )}
 
-        {/* Video play overlay */}
-        {item.type === 'video' && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="bg-black/40 rounded-full p-2.5"><Play className="h-5 w-5 text-white fill-white" /></div>
+          {item.type === 'video' && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="bg-black/50 rounded-full p-3 backdrop-blur-sm group-hover:scale-110 transition-transform duration-300">
+                <Play className="h-6 w-6 text-white fill-white" />
+              </div>
+            </div>
+          )}
+
+          {item.type === 'document' && (
+            <div className="absolute top-0 right-0 pointer-events-none">
+              <div className="w-0 h-0 border-t-[28px] border-t-amber-500 border-l-[28px] border-l-transparent" />
+              <FileText className="absolute top-0.5 right-0.5 h-3 w-3 text-white" />
+            </div>
+          )}
+
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 pt-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+            <p className="text-white text-xs font-semibold truncate leading-tight">{item.projectName}</p>
+            {item.photographerName && (
+              <p className="text-white/70 text-[10px] mt-0.5 truncate">
+                <User className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />{item.photographerName}
+              </p>
+            )}
+            {uploadTime && <p className="text-white/50 text-[10px] mt-0.5">{uploadTime}</p>}
           </div>
-        )}
 
-        {/* Project overlay at bottom of thumbnail */}
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent p-2.5 pt-6 opacity-0 group-hover:opacity-100 transition-opacity">
-          <p className="text-white text-[11px] font-medium truncate leading-tight">{item.projectName}</p>
-          {uploadTime && <p className="text-white/60 text-[10px]">{uploadTime}</p>}
-        </div>
+          {item.type !== 'image' && item.type !== 'document' && (
+            <div className="absolute top-2 left-2">
+              <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 h-4 backdrop-blur-sm border ${badgeStyle}`}>
+                {item.type === 'video' ? 'Video' : item.ext?.toUpperCase() || item.type}
+              </Badge>
+            </div>
+          )}
 
-        {/* Type badge */}
-        {item.type !== 'image' && (
-          <div className="absolute top-2 left-2">
-            <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 h-4 backdrop-blur-sm ${badgeStyle}`}>
-              {item.type === 'video' ? 'Video' : item.ext?.toUpperCase() || item.type}
-            </Badge>
+          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+            {item.type !== 'document' && <ExternalLink className="h-3.5 w-3.5 text-white drop-shadow-md" />}
           </div>
-        )}
 
-        {/* Tag pills at bottom-left of thumbnail */}
-        {(() => {
-          const tags = getTagsForFile ? getTagsForFile(item.proxyPath) : [];
-          if (!tags.length) return null;
-          return (
-            <div className="absolute bottom-2 left-2 flex items-center gap-0.5 pointer-events-none z-10">
+          {tags.length > 0 && (
+            <div className="absolute bottom-2 left-2 flex gap-1 z-10 group-hover:opacity-0 transition-opacity">
               {tags.slice(0, 2).map(tag => (
-                <span key={tag.name} className="text-[8px] px-1 py-0.5 rounded-full text-white backdrop-blur-sm" style={{ backgroundColor: `${tag.color}cc` }}>
-                  #{tag.name}
+                <span
+                  key={tag.name}
+                  className="inline-flex items-center gap-0.5 text-[9px] font-medium px-1.5 py-0.5 rounded-full backdrop-blur-sm bg-black/40 text-white border border-white/10"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tag.color }} />
+                  {tag.name}
                 </span>
               ))}
-              {tags.length > 2 && <span className="text-[8px] text-white/70">+{tags.length - 2}</span>}
+              {tags.length > 2 && (
+                <span className="text-[9px] font-medium px-1 py-0.5 rounded-full backdrop-blur-sm bg-black/40 text-white/70">
+                  +{tags.length - 2}
+                </span>
+              )}
             </div>
-          );
-        })()}
+          )}
+        </div>
 
-        {/* External link icon on hover */}
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-          <ExternalLink className="h-3.5 w-3.5 text-white drop-shadow-md" />
-        </div>
-      </div>
-
-      {/* Info below thumbnail */}
-      <div className="p-2.5 space-y-1">
-        <p className="text-xs font-medium truncate leading-tight" title={item.name}>{item.name}</p>
-        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-          {item.size > 0 && <span>{formatSize(item.size)}</span>}
-          {item.size > 0 && <span className="text-muted-foreground/30">|</span>}
-          <span className="uppercase">{item.ext}</span>
-        </div>
-        <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70 truncate">
-          <Building2 className="h-2.5 w-2.5 shrink-0" />
-          <span className="truncate">{item.projectName}</span>
-        </div>
-        {item.photographerName && (
-          <div className="flex items-center gap-1 text-[10px] text-muted-foreground/60 truncate">
-            <User className="h-2.5 w-2.5 shrink-0" />
-            <span className="truncate">{item.photographerName}</span>
+        <div className="p-2.5 space-y-1">
+          <p className="text-xs font-medium truncate leading-tight" title={item.name}>{item.name}</p>
+          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            {item.size > 0 && <span>{formatSize(item.size)}</span>}
+            {item.size > 0 && <span className="text-muted-foreground/30">|</span>}
+            <span className="uppercase">{item.ext}</span>
           </div>
-        )}
-      </div>
-    </button>
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70 truncate">
+            <Building2 className="h-2.5 w-2.5 shrink-0" />
+            <span className="truncate">{item.projectName}</span>
+          </div>
+          {item.photographerName && (
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground/60 truncate">
+              <User className="h-2.5 w-2.5 shrink-0" />
+              <span className="truncate">{item.photographerName}</span>
+            </div>
+          )}
+        </div>
+      </button>
+    </div>
   );
-}
+});
 
-// ---- Shimmer loading skeleton ----
-function FeedSkeleton({ count = 12 }) {
+
+// =====================================================================
+// NewFilesToast: realtime update banner
+// =====================================================================
+function NewFilesToast({ count, onRefresh, onDismiss }) {
+  if (!count) return null;
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-      {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="rounded-xl overflow-hidden border bg-card">
-          <Skeleton className="aspect-[4/3] w-full" />
-          <div className="p-2.5 space-y-1.5">
-            <Skeleton className="h-3 w-3/4" />
-            <Skeleton className="h-2.5 w-1/2" />
-            <Skeleton className="h-2.5 w-2/3" />
-          </div>
+    <div className="sticky top-0 z-30" style={{ animation: 'fadeSlideIn 0.3s ease-out' }}>
+      <div className="mx-auto max-w-md">
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-600/20 border border-blue-500">
+          <Bell className="h-4 w-4 shrink-0 animate-pulse" />
+          <span className="text-sm font-medium flex-1">
+            {count} new file{count !== 1 ? 's' : ''} available
+          </span>
+          <button
+            onClick={onRefresh}
+            className="text-xs font-semibold px-3 py-1 rounded-lg bg-white/20 hover:bg-white/30 transition-colors"
+          >
+            Refresh
+          </button>
+          <button onClick={onDismiss} className="p-0.5 hover:bg-white/20 rounded transition-colors">
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
-      ))}
+      </div>
     </div>
   );
 }
 
-// ---- Main component ----
+
+// =====================================================================
+// ScrollToTop
+// =====================================================================
+function ScrollToTop() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setShow(window.scrollY > 600);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  if (!show) return null;
+  return (
+    <button
+      onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+      className="fixed bottom-6 right-6 z-40 p-3 rounded-full bg-primary text-primary-foreground shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-105 active:scale-95"
+      title="Back to top"
+    >
+      <ArrowUp className="h-4 w-4" />
+    </button>
+  );
+}
+
+
+// =====================================================================
+// EmptyState
+// =====================================================================
+function EmptyState({ hasFiles, onClearFilters }) {
+  if (hasFiles) {
+    return (
+      <Card className="border-dashed border-2">
+        <CardContent className="flex flex-col items-center justify-center py-20 text-center">
+          <div className="rounded-2xl bg-muted/50 p-6 mb-5 relative">
+            <Search className="h-10 w-10 text-muted-foreground/40" />
+            <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-orange-100 flex items-center justify-center">
+              <X className="h-3 w-3 text-orange-500" />
+            </div>
+          </div>
+          <h3 className="text-sm font-semibold mb-1.5">No files match your filters</h3>
+          <p className="text-xs text-muted-foreground max-w-sm mb-4">
+            Try adjusting the date range, type filter, or search query to find what you are looking for.
+          </p>
+          <Button variant="outline" size="sm" onClick={onClearFilters} className="text-xs gap-1.5">
+            <X className="h-3 w-3" />Clear all filters
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="border-dashed border-2">
+      <CardContent className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="rounded-2xl bg-muted/50 p-6 mb-5 relative">
+          <FolderOpen className="h-12 w-12 text-muted-foreground/30" />
+          <div className="absolute -bottom-1 -right-1 rounded-full bg-blue-100 p-1.5">
+            <Camera className="h-3.5 w-3.5 text-blue-500" />
+          </div>
+        </div>
+        <h3 className="text-sm font-semibold mb-1.5">No delivered media found</h3>
+        <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
+          Files appear here once projects have Dropbox delivery folders linked.
+          Delivered photos, videos, and documents will show up automatically.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+
+// =====================================================================
+// ErrorState
+// =====================================================================
+function ErrorState({ error, onRetry }) {
+  return (
+    <Card className="border-dashed border-2 border-red-200">
+      <CardContent className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="rounded-2xl bg-red-50 p-6 mb-5">
+          <AlertCircle className="h-10 w-10 text-red-400" />
+        </div>
+        <h3 className="text-sm font-semibold text-red-700 mb-1.5">Failed to load media feed</h3>
+        <p className="text-xs text-muted-foreground max-w-sm mb-4">
+          {error?.message || "Something went wrong while scanning project files."}
+        </p>
+        <Button variant="outline" size="sm" onClick={onRetry} className="text-xs border-red-200 text-red-600 hover:bg-red-50 gap-1.5">
+          <RefreshCw className="h-3 w-3" />Try again
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+
+// =====================================================================
+// Main component
+// =====================================================================
 export default function LiveMediaFeed() {
   const [dateRange, setDateRange] = useState('30');
   const [typeFilter, setTypeFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [gridSize, setGridSize] = useState('md');
   const [visibleCards, setVisibleCards] = useState(new Set());
-  const [lightbox, setLightbox] = useState(null); // { files, index }
+  const [lightbox, setLightbox] = useState(null);
+  const [page, setPage] = useState(1);
+  const [newFilesCount, setNewFilesCount] = useState(0);
+  const [scanProgress, setScanProgress] = useState(null);
   const gridRef = useRef(null);
 
-  // Favorites + tags: call once at parent level, pass helper down
+  // Favorites + tags
   const { favorites, allTags: tagRegistry } = useFavorites();
 
   const getTagsForFile = useCallback((filePath) => {
@@ -473,35 +827,32 @@ export default function LiveMediaFeed() {
   const { data: allProjects = [], loading: projectsLoading } = useEntityList('Project', '-created_date', 500);
   const { data: allUsers = [] } = useEntityList('User');
 
-  // Build a user lookup for photographer names
   const userMap = useMemo(() => {
     const m = new Map();
     allUsers.forEach(u => { if (u.id) m.set(u.id, u.full_name || u.email || 'Unknown'); });
     return m;
   }, [allUsers]);
 
-  // Filter projects that have deliverable links (up to 20 most recent)
   const eligibleProjects = useMemo(() => {
     if (!Array.isArray(allProjects)) return [];
     return allProjects
       .filter(p => p?.tonomo_deliverable_link && p?.tonomo_deliverable_path)
       .sort((a, b) => {
-        const aStr = a.tonomo_delivered_at || a.updated_date || a.created_date || '';
-        const bStr = b.tonomo_delivered_at || b.updated_date || b.created_date || '';
-        const aTime = aStr ? new Date(fixTimestamp(aStr)).getTime() : 0;
-        const bTime = bStr ? new Date(fixTimestamp(bStr)).getTime() : 0;
-        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
+        const aDate = a.tonomo_delivered_at || a.updated_date || a.created_date || '';
+        const bDate = b.tonomo_delivered_at || b.updated_date || b.created_date || '';
+        try { return new Date(fixTimestamp(bDate)) - new Date(fixTimestamp(aDate)); } catch { return 0; }
       })
       .slice(0, 20);
   }, [allProjects]);
 
-  // Fetch file listings for all eligible projects (batched in one react-query)
-  const { data: projectFiles, isLoading: filesLoading, isFetching, refetch } = useQuery({
+  // Fetch file listings
+  const { data: projectFiles, isLoading: filesLoading, isError, error: fetchError, isFetching, refetch } = useQuery({
     queryKey: ['liveMediaFeed', eligibleProjects.map(p => p.id).join(',')],
     queryFn: async () => {
       if (eligibleProjects.length === 0) return [];
+      setScanProgress({ current: 0, total: eligibleProjects.length });
 
-      // Fetch up to 4 projects concurrently
+      let completed = 0;
       const results = [];
       const queue = [...eligibleProjects];
       const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
@@ -510,15 +861,17 @@ export default function LiveMediaFeed() {
           try {
             const res = await api.functions.invoke("getDeliveryMediaFeed", {
               share_url: project.tonomo_deliverable_link,
-              base_path: project.tonomo_deliverable_path || '',
             });
             const data = res?.data || res;
-            if (data?.error) continue;
+            if (data?.error) {
+              completed++;
+              setScanProgress({ current: completed, total: eligibleProjects.length });
+              continue;
+            }
             let folders = [];
             if (data?.folders && Array.isArray(data.folders)) folders = data.folders;
             else if (data?.files && Array.isArray(data.files)) folders = [{ name: "All Files", files: data.files }];
 
-            // Flatten files and attach project metadata
             const files = folders.flatMap(folder =>
               (folder.files || []).map(file => ({
                 ...file,
@@ -529,9 +882,8 @@ export default function LiveMediaFeed() {
                 folderName: folder.name,
                 photographerName: userMap.get(project.photographer_id) || userMap.get(project.project_owner_id) || project.agent_name || null,
                 agentName: project.agent_name || null,
-                // Build proxy path for image loading (guard against null file.path)
-                proxyPath: (project.tonomo_deliverable_path && file.path)
-                  ? `${project.tonomo_deliverable_path}${file.path.startsWith('/') ? file.path : '/' + file.path}`
+                proxyPath: project.tonomo_deliverable_path
+                  ? `${project.tonomo_deliverable_path}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
                   : null,
               }))
             );
@@ -539,19 +891,47 @@ export default function LiveMediaFeed() {
           } catch (err) {
             console.warn('[LiveMediaFeed] Failed to load project:', project.property_address, err?.message);
           }
+          completed++;
+          setScanProgress({ current: completed, total: eligibleProjects.length });
         }
       });
 
       await Promise.all(workers);
+      setScanProgress(null);
       return results;
     },
     enabled: eligibleProjects.length > 0,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     retry: 1,
   });
 
-  // Merge, filter, and sort all files into a unified feed
+  // Supabase realtime: watch for project updates
+  useEffect(() => {
+    if (!eligibleProjects.length) return;
+    const projectIds = new Set(eligibleProjects.map(p => p.id));
+
+    const unsub = api.entities.Project.subscribe((event) => {
+      if (event.type === 'update' && projectIds.has(event.id)) {
+        const proj = event.data;
+        if (proj?.tonomo_deliverable_link && proj?.tonomo_deliverable_path) {
+          setNewFilesCount(prev => prev + 1);
+        }
+      }
+    });
+
+    return () => { if (typeof unsub === 'function') unsub(); };
+  }, [eligibleProjects]);
+
+  const hasActiveFilters = dateRange !== '30' || typeFilter !== 'all' || search.trim() !== '';
+
+  const clearFilters = useCallback(() => {
+    setDateRange('30');
+    setTypeFilter('all');
+    setSearch('');
+    setPage(1);
+  }, []);
+
   const feedItems = useMemo(() => {
     if (!projectFiles || !Array.isArray(projectFiles)) return [];
     const now = new Date();
@@ -559,17 +939,12 @@ export default function LiveMediaFeed() {
 
     return projectFiles
       .filter(f => {
-        // Date range filter -- when a range is active, exclude files with no timestamp
-        if (days > 0) {
-          if (!f.uploaded_at) return false;
+        if (days > 0 && f.uploaded_at) {
           try {
-            // Use Math.abs to handle future timestamps from clock skew
-            if (Math.abs(differenceInDays(now, new Date(f.uploaded_at))) > days) return false;
-          } catch { return false; }
+            if (differenceInDays(now, new Date(f.uploaded_at)) > days) return false;
+          } catch { /* keep it */ }
         }
-        // Type filter
         if (typeFilter !== 'all' && f.type !== typeFilter) return false;
-        // Search filter
         if (search.trim()) {
           const q = search.toLowerCase();
           const matches = (
@@ -583,44 +958,35 @@ export default function LiveMediaFeed() {
         return true;
       })
       .sort((a, b) => {
-        const aStr = a.uploaded_at || a.modified || '';
-        const bStr = b.uploaded_at || b.modified || '';
-        // Guard against null/empty/invalid timestamps -- push undated items to end
-        const aTime = aStr ? new Date(aStr).getTime() : 0;
-        const bTime = bStr ? new Date(bStr).getTime() : 0;
-        // If either timestamp parsed to NaN, treat as 0 (oldest)
-        const aVal = Number.isNaN(aTime) ? 0 : aTime;
-        const bVal = Number.isNaN(bTime) ? 0 : bTime;
-        return bVal - aVal;
+        const aDate = a.uploaded_at || a.modified || '';
+        const bDate = b.uploaded_at || b.modified || '';
+        try { return new Date(bDate) - new Date(aDate); } catch { return 0; }
       });
   }, [projectFiles, dateRange, typeFilter, search]);
 
-  // Stats
-  const stats = useMemo(() => {
-    const photos = feedItems.filter(f => f.type === 'image').length;
-    const videos = feedItems.filter(f => f.type === 'video').length;
-    const docs = feedItems.filter(f => f.type === 'document').length;
-    const projects = new Set(feedItems.map(f => f.projectId)).size;
-    return { photos, videos, docs, projects, total: feedItems.length };
-  }, [feedItems]);
+  // Paginated items
+  const paginatedItems = useMemo(() => feedItems.slice(0, page * PAGE_SIZE), [feedItems, page]);
+  const hasMore = paginatedItems.length < feedItems.length;
 
-  // IntersectionObserver for lazy-loading images only when cards are visible
-  // Re-run when feedItems change (new cards) or gridSize changes (layout shift moves cards)
+  useEffect(() => { setPage(1); }, [dateRange, typeFilter, search]);
+
+  // Stats over ALL files
+  const stats = useMemo(() => {
+    const all = projectFiles || [];
+    const photos = all.filter(f => f.type === 'image').length;
+    const videos = all.filter(f => f.type === 'video').length;
+    const docs = all.filter(f => f.type === 'document').length;
+    const projects = new Set(all.map(f => f.projectId)).size;
+    const newest = all.reduce((latest, f) => {
+      if (!f.uploaded_at) return latest;
+      return (!latest || new Date(f.uploaded_at) > new Date(latest)) ? f.uploaded_at : latest;
+    }, null);
+    return { photos, videos, docs, projects, total: all.length, newest };
+  }, [projectFiles]);
+
+  // IntersectionObserver for lazy-loading
   useEffect(() => {
     if (!gridRef.current) return;
-
-    // Build set of current feed IDs to prune stale entries from visibleCards
-    const currentIds = new Set(
-      feedItems.map((item, idx) => `${item.projectId}-${item.path || item.name}-${idx}`)
-    );
-    setVisibleCards(prev => {
-      const pruned = new Set();
-      for (const id of prev) {
-        if (currentIds.has(id)) pruned.add(id);
-      }
-      return pruned.size === prev.size ? prev : pruned;
-    });
-
     const observer = new IntersectionObserver(
       (entries) => {
         setVisibleCards(prev => {
@@ -629,62 +995,63 @@ export default function LiveMediaFeed() {
             const id = entry.target.dataset.feedId;
             if (!id) return;
             if (entry.isIntersecting) next.add(id);
-            // Do NOT remove -- once loaded we keep the blob
           });
           if (next.size === prev.size) return prev;
           return next;
         });
       },
-      { root: null, rootMargin: '200px', threshold: 0 }
+      { root: null, rootMargin: '300px', threshold: 0 }
     );
 
     const cards = gridRef.current.querySelectorAll('[data-feed-id]');
     cards.forEach(el => observer.observe(el));
 
     return () => observer.disconnect();
-  }, [feedItems, gridSize]);
+  }, [paginatedItems]);
 
   const handleRefresh = useCallback(() => {
-    // Clear blob cache for all eligible projects
-    // Cache keys are in format "mode::/base/path/file" so match on the path portion
     eligibleProjects.forEach(p => {
       if (p.tonomo_deliverable_path) {
         for (const [k, v] of blobCache.entries()) {
-          if (k.includes(p.tonomo_deliverable_path)) {
+          if (k.startsWith(p.tonomo_deliverable_path)) {
             URL.revokeObjectURL(v);
             blobCache.delete(k);
           }
         }
       }
     });
+    setNewFilesCount(0);
     refetch();
   }, [refetch, eligibleProjects]);
-
-  // Cleanup: revoke blob URLs on unmount to prevent memory leaks
-  useEffect(() => {
-    return () => {
-      for (const [k, v] of blobCache.entries()) {
-        URL.revokeObjectURL(v);
-      }
-      blobCache.clear();
-    };
-  }, []);
 
   const isLoading = projectsLoading || filesLoading;
 
   return (
     <div className="space-y-5">
-      {/* ---- Header ---- */}
+      {/* Keyframes */}
+      <style>{`
+        @keyframes shimmer { 100% { transform: translateX(100%); } }
+        @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
+
+      {/* New files toast */}
+      <NewFilesToast
+        count={newFilesCount}
+        onRefresh={handleRefresh}
+        onDismiss={() => setNewFilesCount(0)}
+      />
+
+      {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
             Live Media Feed
-            {isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            {isFetching && !isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             {isLoading
-              ? 'Loading files across projects...'
-              : `${stats.total} files across ${stats.projects} project${stats.projects !== 1 ? 's' : ''}`}
+              ? 'Scanning delivery folders across projects...'
+              : `${stats.total.toLocaleString()} files across ${stats.projects} project${stats.projects !== 1 ? 's' : ''}`}
           </p>
         </div>
         <Button
@@ -692,48 +1059,39 @@ export default function LiveMediaFeed() {
           size="sm"
           onClick={handleRefresh}
           disabled={isFetching}
-          className="text-xs h-7 px-2.5"
+          className="text-xs h-8 px-3 gap-1.5"
         >
-          <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", isFetching && "animate-spin")} />
+          <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
           Refresh
         </Button>
       </div>
 
-      {/* ---- Stat badges ---- */}
-      {!isLoading && stats.total > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {stats.photos > 0 && (
-            <Badge variant="outline" className="text-[11px] bg-blue-50 text-blue-600 border-blue-200 gap-1">
-              <Camera className="h-3 w-3" /> {stats.photos} photos
-            </Badge>
-          )}
-          {stats.videos > 0 && (
-            <Badge variant="outline" className="text-[11px] bg-purple-50 text-purple-600 border-purple-200 gap-1">
-              <Film className="h-3 w-3" /> {stats.videos} videos
-            </Badge>
-          )}
-          {stats.docs > 0 && (
-            <Badge variant="outline" className="text-[11px] bg-amber-50 text-amber-600 border-amber-200 gap-1">
-              <FileText className="h-3 w-3" /> {stats.docs} documents
-            </Badge>
-          )}
-        </div>
-      )}
+      {/* Animated stat cards */}
+      <StatsHeader stats={stats} newestUpload={stats.newest} isLoading={isLoading} />
 
-      {/* ---- Filters ---- */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <div className="relative flex-1 min-w-[200px]">
+      {/* Compact filter bar */}
+      <div className="flex flex-wrap gap-2 items-center bg-muted/30 rounded-xl p-2 border">
+        <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
-            placeholder="Search by project, file name, photographer..."
+            placeholder="Search files, projects, photographers..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="pl-8 h-8 text-sm"
+            className="pl-8 h-8 text-sm bg-background border-0 shadow-sm"
           />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 hover:bg-muted rounded"
+            >
+              <X className="h-3 w-3 text-muted-foreground" />
+            </button>
+          )}
         </div>
 
-        <Select value={dateRange} onValueChange={setDateRange}>
-          <SelectTrigger className="w-36 h-8 text-xs">
+        <Select value={dateRange} onValueChange={v => { setDateRange(v); setPage(1); }}>
+          <SelectTrigger className="w-36 h-8 text-xs bg-background border-0 shadow-sm">
+            <Clock className="h-3 w-3 mr-1 text-muted-foreground shrink-0" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -743,85 +1101,124 @@ export default function LiveMediaFeed() {
           </SelectContent>
         </Select>
 
-        <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-32 h-8 text-xs">
+        <Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setPage(1); }}>
+          <SelectTrigger className="w-32 h-8 text-xs bg-background border-0 shadow-sm">
+            <Filter className="h-3 w-3 mr-1 text-muted-foreground shrink-0" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {TYPE_FILTERS.map(t => (
-              <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-            ))}
+            {TYPE_FILTERS.map(t => {
+              const TIcon = t.icon;
+              return (
+                <SelectItem key={t.value} value={t.value}>
+                  <span className="flex items-center gap-1.5">
+                    <TIcon className="h-3 w-3" />{t.label}
+                  </span>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
 
-        <div className="flex items-center border rounded-md overflow-hidden shrink-0">
+        <div className="flex items-center bg-background rounded-lg overflow-hidden shadow-sm shrink-0">
           {[
-            { key: 'sm', icon: Grid3x3, title: 'Small' },
-            { key: 'md', icon: Grid2x2, title: 'Medium' },
-            { key: 'lg', icon: LayoutGrid, title: 'Large' },
-          ].map(({ key, icon: Icon, title }) => (
+            { key: 'sm', icon: Grid3x3, title: 'Small grid' },
+            { key: 'md', icon: Grid2x2, title: 'Medium grid' },
+            { key: 'lg', icon: LayoutGrid, title: 'Large grid' },
+          ].map(({ key, icon: GIcon, title }) => (
             <button
               key={key}
               onClick={() => setGridSize(key)}
               title={title}
-              className={`p-1.5 transition-colors ${gridSize === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'}`}
+              className={cn(
+                "p-1.5 transition-all duration-200",
+                gridSize === key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'hover:bg-muted text-muted-foreground'
+              )}
             >
-              <Icon className="h-3.5 w-3.5" />
+              <GIcon className="h-3.5 w-3.5" />
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-muted-foreground shrink-0">
-          {feedItems.length} result{feedItems.length !== 1 ? 's' : ''}
+
+        {hasActiveFilters && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearFilters}
+            className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground gap-1"
+          >
+            <X className="h-3 w-3" />Clear
+          </Button>
+        )}
+
+        <span className="text-[11px] text-muted-foreground shrink-0 ml-auto">
+          {feedItems.length === stats.total
+            ? `${feedItems.length.toLocaleString()} file${feedItems.length !== 1 ? 's' : ''}`
+            : `${feedItems.length.toLocaleString()} of ${stats.total.toLocaleString()}`}
         </span>
       </div>
 
-      {/* ---- Content ---- */}
+      {/* Content */}
       {isLoading ? (
-        <FeedSkeleton />
+        <FeedSkeleton gridSize={gridSize} scanProgress={scanProgress} />
+      ) : isError ? (
+        <ErrorState error={fetchError} onRetry={handleRefresh} />
       ) : feedItems.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="rounded-full bg-muted p-4 mb-4">
-              {projectFiles && projectFiles.length > 0 ? (
-                <Search className="h-8 w-8 text-muted-foreground" />
-              ) : (
-                <ImageOff className="h-8 w-8 text-muted-foreground" />
-              )}
-            </div>
-            <h3 className="text-sm font-semibold mb-1">
-              {projectFiles && projectFiles.length > 0
-                ? 'No files match your filters'
-                : 'No delivered media found'}
-            </h3>
-            <p className="text-xs text-muted-foreground max-w-sm">
-              {projectFiles && projectFiles.length > 0
-                ? 'Try adjusting the date range, type filter, or search query.'
-                : 'Files appear here once projects have Dropbox delivery folders linked.'}
-            </p>
-          </CardContent>
-        </Card>
+        <EmptyState hasFiles={projectFiles && projectFiles.length > 0} onClearFilters={clearFilters} />
       ) : (
-        <div
-          ref={gridRef}
-          className={`grid ${gridSize === 'sm' ? 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2' : gridSize === 'lg' ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4' : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3'}`}
-        >
-          {feedItems.map((item, idx) => {
-            const feedId = `${item.projectId}-${item.path || item.name}-${idx}`;
-            return (
-              <div key={feedId} data-feed-id={feedId}>
-                <FeedCard
-                  item={item}
-                  isVisible={visibleCards.has(feedId)}
-                  onClick={() => setLightbox({ files: feedItems, index: idx })}
-                  getTagsForFile={getTagsForFile}
-                />
+        <>
+          <div
+            ref={gridRef}
+            className={cn("grid transition-all duration-300 ease-in-out", GRID_CONFIGS[gridSize])}
+          >
+            {paginatedItems.map((item, idx) => {
+              const feedId = `${item.projectId}-${item.path || item.name}-${idx}`;
+              return (
+                <div key={feedId} data-feed-id={feedId}>
+                  <FeedCard
+                    item={item}
+                    isVisible={visibleCards.has(feedId)}
+                    onClick={() => setLightbox({ files: feedItems, index: idx })}
+                    getTagsForFile={getTagsForFile}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          {hasMore && (
+            <div className="flex flex-col items-center gap-3 py-6">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="h-px w-12 bg-border" />
+                Showing {paginatedItems.length.toLocaleString()} of {feedItems.length.toLocaleString()}
+                <div className="h-px w-12 bg-border" />
               </div>
-            );
-          })}
-        </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage(p => p + 1)}
+                className="text-xs h-9 px-6 gap-2"
+              >
+                <TrendingUp className="h-3.5 w-3.5" />
+                Load {Math.min(PAGE_SIZE, feedItems.length - paginatedItems.length).toLocaleString()} more
+              </Button>
+            </div>
+          )}
+
+          {!hasMore && feedItems.length > PAGE_SIZE && (
+            <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+              <div className="h-px w-12 bg-border" />
+              All {feedItems.length.toLocaleString()} files loaded
+              <div className="h-px w-12 bg-border" />
+            </div>
+          )}
+        </>
       )}
 
-      {/* Fullscreen lightbox */}
+      <ScrollToTop />
+
       {lightbox && (
         <MediaLightbox
           files={lightbox.files}

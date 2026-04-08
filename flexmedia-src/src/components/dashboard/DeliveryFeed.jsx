@@ -370,9 +370,10 @@ async function fetchMediaFeed(pathOrUrl, isShareUrl = false, basePath = null) {
 
         // Check for error in response body
         if (data?.error) {
-          console.error('[DeliveryFeed] Dropbox edge function error:', data.error, '| URL/path:', pathOrUrl);
+          const errMsg = typeof data.error === 'object' ? (data.error.message || data.error.code || JSON.stringify(data.error)) : String(data.error);
+          console.error('[DeliveryFeed] Dropbox edge function error:', errMsg, '| URL/path:', pathOrUrl);
           dropboxFailCount++;
-          resolve({ folders: [], _error: data.error });
+          resolve({ folders: [], _error: errMsg });
           return;
         }
 
@@ -887,9 +888,14 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFi
   );
 }
 
-const FULL_DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
+// Stages where delivery is fully complete (not still in progress)
+const FULL_DELIVERY_STAGES = ['delivered'];
+// All stages that appear in the delivery feed
+const ALL_DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
 
 function isPartialDelivery(project) {
+  // A partial delivery is any project with a deliverable link whose status
+  // is NOT yet fully delivered (includes ready_for_partial, in_revision, etc.)
   return !FULL_DELIVERY_STAGES.includes(project.status) && !!project.tonomo_deliverable_link;
 }
 
@@ -901,6 +907,12 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
   const [loadingMedia, setLoadingMedia] = useState(false);
   const [lightbox, setLightbox] = useState(null);
   const hasFetchedRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const isPartial = isPartialDelivery(project);
   const deliveredAt = project.tonomo_delivered_at || project.updated_date || project.created_date;
@@ -933,6 +945,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
     hasFetchedRef.current = true;
     setLoadingMedia(true);
     fetchMediaFeed(dropboxSource, isShareUrl, deliverablePath).then(result => {
+      if (!mountedRef.current) return;
       setMediaResult(result);
       const allFiles = (result?.folders || []).flatMap(f => f.files);
       setFlatFiles(allFiles);
@@ -949,6 +962,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
     thumbCache.delete(dropboxSource);
     pendingRequests.delete(dropboxSource);
     const result = await fetchMediaFeed(dropboxSource, isShareUrl, deliverablePath);
+    if (!mountedRef.current) return;
     setMediaResult(result);
     const refreshedFiles = (result?.folders || []).flatMap(f => f.files);
     setFlatFiles(refreshedFiles);
@@ -1365,11 +1379,11 @@ export default function DeliveryFeed() {
   const deliveries = useMemo(() => {
     const days = parseInt(dateFilter, 10);
     const now = new Date();
-    const DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
+    // Use the module-level ALL_DELIVERY_STAGES constant for consistency
     return allProjects
       .filter(p => {
         // Fully delivered projects
-        if (DELIVERY_STAGES.includes(p.status)) return true;
+        if (ALL_DELIVERY_STAGES.includes(p.status)) return true;
         // ANY project with a Dropbox link is a partial delivery (media exists)
         if (p.tonomo_deliverable_link) return true;
         return false;
@@ -1378,7 +1392,7 @@ export default function DeliveryFeed() {
       .filter(p => {
         if (days === 0) return true;
         // Partial deliveries always show (media may be uploading right now)
-        if (!DELIVERY_STAGES.includes(p.status) && p.tonomo_deliverable_link) return true;
+        if (!ALL_DELIVERY_STAGES.includes(p.status) && p.tonomo_deliverable_link) return true;
         const delivered = p.tonomo_delivered_at || p.updated_date;
         if (!delivered) return false;
         return differenceInDays(now, new Date(fixTimestamp(delivered))) <= days;
@@ -1394,12 +1408,15 @@ export default function DeliveryFeed() {
       })
       .sort((a, b) => {
         // Sort fully delivered projects before partial deliveries
-        const aDelivered = DELIVERY_STAGES.includes(a.status);
-        const bDelivered = DELIVERY_STAGES.includes(b.status);
+        const aDelivered = ALL_DELIVERY_STAGES.includes(a.status);
+        const bDelivered = ALL_DELIVERY_STAGES.includes(b.status);
         if (aDelivered && !bDelivered) return -1;
         if (!aDelivered && bDelivered) return 1;
-        // Within the same group, sort by date descending
-        return new Date(fixTimestamp(b.tonomo_delivered_at || b.updated_date || '')) - new Date(fixTimestamp(a.tonomo_delivered_at || a.updated_date || ''));
+        // Within the same group, sort by date descending, then by id for stability
+        const dateDiff = new Date(fixTimestamp(b.tonomo_delivered_at || b.updated_date || '')) - new Date(fixTimestamp(a.tonomo_delivered_at || a.updated_date || ''));
+        if (dateDiff !== 0) return dateDiff;
+        // Stable tiebreaker: compare by id so order is deterministic across re-renders
+        return (a.id || '').localeCompare(b.id || '');
       });
   }, [allProjects, dateFilter, agencyFilter, search]);
 
@@ -1407,13 +1424,17 @@ export default function DeliveryFeed() {
     const groups = {};
     deliveries.forEach(p => {
       const raw = p.tonomo_delivered_at || p.updated_date;
-      if (!raw) return;
-      const d = new Date(fixTimestamp(raw));
       let label;
-      if (isToday(d)) label = 'Today';
-      else if (isYesterday(d)) label = 'Yesterday';
-      else if (differenceInDays(new Date(), d) < 7) label = format(d, 'EEEE');
-      else label = format(d, 'd MMMM yyyy');
+      if (!raw) {
+        // Projects with no date still need to appear
+        label = 'No Date';
+      } else {
+        const d = new Date(fixTimestamp(raw));
+        if (isToday(d)) label = 'Today';
+        else if (isYesterday(d)) label = 'Yesterday';
+        else if (differenceInDays(new Date(), d) < 7) label = format(d, 'EEEE');
+        else label = format(d, 'd MMMM yyyy');
+      }
       if (!groups[label]) groups[label] = [];
       groups[label].push(p);
     });
@@ -1461,19 +1482,21 @@ export default function DeliveryFeed() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { label: 'Delivered today', value: stats.today, icon: Zap, accent: 'text-green-600' },
-          { label: 'Total deliveries', value: stats.total, icon: Package, accent: '' },
-          { label: 'Total files', value: stats.totalFiles.toLocaleString(), icon: Camera, accent: '' },
-          { label: 'Revenue', value: fmtRevenue(stats.totalRevenue), icon: DollarSign, accent: 'text-emerald-600' },
-          { label: 'Paid', value: `${stats.paidCount}/${stats.total}`, icon: CreditCard, accent: stats.paidCount === stats.total ? 'text-green-600' : 'text-orange-500' },
-          { label: 'Avg turnaround', value: stats.avgTurnaroundHrs != null ? (stats.avgTurnaroundHrs < 24 ? `${stats.avgTurnaroundHrs}h` : `${Math.round(stats.avgTurnaroundHrs / 24)}d`) : '—', icon: Timer, accent: 'text-blue-600' },
+          { label: 'Delivered today', value: stats.today, icon: Zap, accent: 'text-green-600', bg: 'bg-green-50' },
+          { label: 'Total deliveries', value: stats.total, icon: Package, accent: 'text-foreground', bg: 'bg-muted/50' },
+          { label: 'Total files', value: stats.totalFiles.toLocaleString(), icon: Camera, accent: 'text-foreground', bg: 'bg-blue-50' },
+          { label: 'Revenue', value: fmtRevenue(stats.totalRevenue), icon: DollarSign, accent: 'text-emerald-600', bg: 'bg-emerald-50' },
+          { label: 'Paid', value: `${stats.paidCount}/${stats.total}`, icon: CreditCard, accent: stats.paidCount === stats.total ? 'text-green-600' : 'text-orange-500', bg: stats.paidCount === stats.total ? 'bg-green-50' : 'bg-orange-50' },
+          { label: 'Avg turnaround', value: stats.avgTurnaroundHrs != null ? (stats.avgTurnaroundHrs < 24 ? `${stats.avgTurnaroundHrs}h` : `${Math.round(stats.avgTurnaroundHrs / 24)}d`) : '—', icon: Timer, accent: 'text-blue-600', bg: 'bg-blue-50' },
         ].map((s, i) => (
-          <Card key={i} className="p-3">
-            <div className="flex items-center gap-2">
-              <s.icon className={cn('h-4 w-4 text-muted-foreground', s.accent)} />
+          <Card key={i} className="df-stat-enter p-3 hover:shadow-md transition-shadow duration-200">
+            <div className="flex items-center gap-2.5">
+              <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', s.bg)}>
+                <s.icon className={cn('h-4 w-4', s.accent || 'text-muted-foreground')} />
+              </div>
               <div>
-                <div className={cn('text-lg font-bold', s.accent)}>{s.value}</div>
-                <div className="text-[9px] text-muted-foreground uppercase">{s.label}</div>
+                <div className={cn('text-lg font-bold leading-tight tabular-nums', s.accent)}>{s.value}</div>
+                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">{s.label}</div>
               </div>
             </div>
           </Card>
@@ -1483,38 +1506,80 @@ export default function DeliveryFeed() {
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-48">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input placeholder="Search project, agent, or agency..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-8 text-sm" />
+          <Input
+            placeholder="Search project, agent, or agency..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-8 pr-8 h-9 text-sm rounded-lg"
+            aria-label="Search deliveries"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" aria-label="Clear search">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
         <Select value={dateFilter} onValueChange={setDateFilter}>
-          <SelectTrigger className="w-36 h-8 text-xs"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-36 h-9 text-xs rounded-lg"><SelectValue /></SelectTrigger>
           <SelectContent>
             {[{ v: '7', l: 'Last 7 days' }, { v: '30', l: 'Last 30 days' }, { v: '90', l: 'Last 3 months' }, { v: '0', l: 'All time' }].map(d => <SelectItem key={d.v} value={d.v}>{d.l}</SelectItem>)}
           </SelectContent>
         </Select>
         {agencyOptions.length > 0 && (
           <Select value={agencyFilter} onValueChange={setAgencyFilter}>
-            <SelectTrigger className="w-44 h-8 text-xs"><SelectValue placeholder="All agencies" /></SelectTrigger>
+            <SelectTrigger className="w-44 h-9 text-xs rounded-lg"><SelectValue placeholder="All agencies" /></SelectTrigger>
             <SelectContent><SelectItem value="all">All agencies</SelectItem>{agencyOptions.map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}</SelectContent>
           </Select>
+        )}
+        {(search || dateFilter !== '30' || agencyFilter !== 'all') && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setSearch(''); setDateFilter('30'); setAgencyFilter('all'); }}
+            className="h-9 px-3 text-xs text-muted-foreground hover:text-foreground gap-1.5"
+          >
+            <FilterX className="h-3.5 w-3.5" />
+            Clear filters
+          </Button>
         )}
       </div>
 
       {loading ? (
-        <div className="space-y-3">{[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-muted animate-pulse rounded-xl" />)}</div>
+        <div className="space-y-3">{[...Array(4)].map((_, i) => <div key={i} className="h-24 rounded-xl border border-border/30 df-skeleton-pill" style={{ animationDelay: `${i * 0.1}s`, borderRadius: '0.75rem' }} />)}</div>
       ) : deliveries.length === 0 ? (
-        <Card className="p-12 text-center">
-          <Package className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">No deliveries match your filters</p>
-          <p className="text-xs text-muted-foreground/60 mt-1">Deliveries appear here when Tonomo marks a booking as complete</p>
+        <Card className="p-16 text-center border-dashed">
+          <div className="w-14 h-14 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto mb-4">
+            <Inbox className="h-7 w-7 text-muted-foreground/40" />
+          </div>
+          <p className="text-sm font-medium text-muted-foreground">No deliveries found</p>
+          <p className="text-xs text-muted-foreground/60 mt-1.5 max-w-xs mx-auto">
+            {search || agencyFilter !== 'all'
+              ? 'Try adjusting your search terms or filters to find what you are looking for.'
+              : 'Deliveries will appear here automatically when Tonomo marks a booking as delivered.'}
+          </p>
+          {(search || dateFilter !== '30' || agencyFilter !== 'all') && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setSearch(''); setDateFilter('30'); setAgencyFilter('all'); }}
+              className="mt-4 text-xs gap-1.5"
+            >
+              <FilterX className="h-3.5 w-3.5" />
+              Clear all filters
+            </Button>
+          )}
         </Card>
       ) : (
         <div className="space-y-6">
           {grouped.map(([dateLabel, projects]) => (
             <div key={dateLabel}>
-              <div className="flex items-center gap-3 mb-3">
-                <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">{dateLabel}</span>
-                <div className="flex-1 h-px bg-border" />
-                <span className="text-xs text-muted-foreground">{projects.length} deliver{projects.length !== 1 ? 'ies' : 'y'}</span>
+              <div className="flex items-center gap-3 mb-3 py-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary/40" />
+                  <span className="text-xs font-bold text-foreground/70 uppercase tracking-widest">{dateLabel}</span>
+                </div>
+                <div className="flex-1 h-px bg-border/60" />
+                <span className="text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">{projects.length} deliver{projects.length !== 1 ? 'ies' : 'y'}</span>
               </div>
               <div className="space-y-2">
                 {projects.filter(p => !emptyProjectIds.has(p.id)).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} />)}

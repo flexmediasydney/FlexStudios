@@ -17,7 +17,7 @@ import {
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, format } from "date-fns";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -143,8 +143,9 @@ function buildDropboxPreviewUrl(fullPath) {
     relativePath = fullPath.slice(TONOMO_PREFIX.length);
   }
   if (!relativePath.startsWith('/')) relativePath = '/' + relativePath;
-  const encodedPath = relativePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
-  return `${DROPBOX_SHARE_BASE}${encodedPath}?rlkey=${DROPBOX_RLKEY}&dl=0`;
+  // Filter out empty segments to avoid double slashes from trailing/consecutive slashes in paths
+  const encodedPath = relativePath.split('/').filter(seg => seg.length > 0).map(seg => encodeURIComponent(seg)).join('/');
+  return `${DROPBOX_SHARE_BASE}/${encodedPath}?rlkey=${DROPBOX_RLKEY}&dl=0`;
 }
 
 // ---- Helpers ----
@@ -856,7 +857,7 @@ function TagManagementTab() {
   }, []);
 
   const saveEdit = useCallback(async (tag) => {
-    const trimmed = editName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '');
+    const trimmed = editName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, ' ').trim();
     if (!trimmed || trimmed === tag.name) {
       setEditingId(null);
       return;
@@ -901,7 +902,7 @@ function TagManagementTab() {
   }, []);
 
   const createTag = useCallback(async () => {
-    const trimmed = newTagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '');
+    const trimmed = newTagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, ' ').trim();
     if (!trimmed) return;
     const existing = mediaTags.find(t => t.name === trimmed);
     if (existing) return;
@@ -1259,11 +1260,19 @@ function FavoritesHeader({ stats, isLoading }) {
 // ================ MAIN COMPONENT ================
 
 export default function SocialMedia() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState('favorites');
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [search, setSearch] = useState(() => searchParams.get('q') || '');
+  const [typeFilter, setTypeFilter] = useState(() => {
+    const t = searchParams.get('type');
+    return t === 'file' || t === 'project' ? t : 'all';
+  });
   const [gridSize, setGridSize] = useState('md');
-  const [selectedTags, setSelectedTags] = useState([]);
+  // URL param pre-filtering: ?tag=hero-shot or ?tag=hero-shot&tag=portfolio
+  const [selectedTags, setSelectedTags] = useState(() => {
+    const tags = searchParams.getAll('tag');
+    return tags.length > 0 ? tags : [];
+  });
   const [visibleCards, setVisibleCards] = useState(new Set());
   const gridRef = useRef(null);
 
@@ -1294,6 +1303,19 @@ export default function SocialMedia() {
     setTypeFilter('all');
     setSelectedTags([]);
   }, []);
+
+  // Sync filter state back to URL so bookmarking/sharing links works
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (search.trim()) params.set('q', search.trim());
+    if (typeFilter !== 'all') params.set('type', typeFilter);
+    selectedTags.forEach(t => params.append('tag', t));
+    const str = params.toString();
+    const current = new URLSearchParams(window.location.search).toString();
+    if (str !== current) {
+      window.history.replaceState(null, '', str ? `${window.location.pathname}?${str}` : window.location.pathname);
+    }
+  }, [search, typeFilter, selectedTags]);
 
   // Unfavorite handler
   const handleUnfavorite = useCallback(async (fav) => {

@@ -443,7 +443,7 @@ export default function Dashboard() {
 
       {/* Dashboard Tabs */}
       <React.Suspense fallback={<DashboardSkeleton />}>
-      <Tabs defaultValue="overview" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={handleDashboardTabChange} className="space-y-4">
        <div className="sticky top-0 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
          <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap -webkit-overflow-scrolling-touch" style={{ WebkitOverflowScrolling: 'touch' }}>
            <TabsTrigger 

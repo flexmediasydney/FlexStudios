@@ -110,8 +110,8 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
   }, [allTags, currentTags]);
 
   const addTag = useCallback(async (tagName) => {
-    const trimmed = tagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '');
-    if (!trimmed || currentTags.includes(trimmed)) return;
+    const trimmed = tagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, ' ').trim();
+    if (!trimmed || currentTags.some(t => t.toLowerCase() === trimmed)) return;
 
     const newTags = [...currentTags, trimmed];
     setInput('');

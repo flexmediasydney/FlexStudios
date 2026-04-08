@@ -1,4 +1,4 @@
-import { getUserFromReq, handleCors, getCorsHeaders, jsonResponse } from '../_shared/supabase.ts';
+import { handleCors, getCorsHeaders, jsonResponse } from '../_shared/supabase.ts';
 
 const DROPBOX_API = 'https://api.dropboxapi.com/2';
 const DROPBOX_CONTENT = 'https://content.dropboxapi.com/2';
@@ -8,6 +8,7 @@ const VIDEO_EXTS = new Set(['mp4','mov','avi','webm','mkv','m4v','wmv']);
 const DOC_EXTS   = new Set(['pdf','ai','eps','svg','dwg']);
 
 const DBX_TIMEOUT_MS = 10_000;
+const DBX_CONTENT_TIMEOUT_MS = 30_000; // longer timeout for binary content downloads
 const SUBFOLDER_CONCURRENCY = 5;
 const MAX_PROXY_BYTES = 100 * 1024 * 1024; // 100 MB cap on proxied files
 
@@ -79,6 +80,15 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
     throw new Error(`Dropbox ${endpoint} ${res.status}: ${txt.slice(0, 300)}`);
   }
   return res.json();
+}
+
+/** Check if a failed Dropbox response indicates an expired/invalid token. */
+async function checkTokenExpiry(res: Response, req: Request): Promise<Response | null> {
+  if (res.status === 401) {
+    await res.body?.cancel();
+    return errResponse('TOKEN_EXPIRED', 'Dropbox token expired — contact admin', 502, req);
+  }
+  return null;
 }
 
 const MAX_LIST_ENTRIES = 5000;
@@ -260,10 +270,9 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
 
-    // Attempt to resolve the authenticated user (logged for audit; not blocking
-    // because the delivery feed may be viewed by anon-key-authenticated clients
-    // such as public delivery pages).
-    const appUser = await getUserFromReq(req).catch(() => null);
+    // Note: getUserFromReq is available if audit logging is needed in the future,
+    // but is intentionally not called here to avoid a wasted Supabase RPC round-trip
+    // on every media feed request (including unauthenticated public delivery pages).
 
     const token = Deno.env.get('DROPBOX_API_TOKEN');
     if (!token) return errResponse('CONFIG_ERROR', 'Dropbox integration not configured', 500, req);
@@ -304,7 +313,7 @@ Deno.serve(async (req) => {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
         });
-      } catch (err) {
+      } catch (_err: unknown) {
         return errResponse('DROPBOX_TIMEOUT', 'Thumbnail request timed out', 504, req);
       }
 
@@ -319,6 +328,10 @@ Deno.serve(async (req) => {
         });
       }
 
+      // Check if the thumbnail failure is a token issue before falling back
+      const tokenErr = await checkTokenExpiry(dbxRes, req);
+      if (tokenErr) return tokenErr;
+
       // Explicit fallback: thumbnail failed, proxy the full file instead.
       console.warn(`Thumbnail failed (${dbxRes.status}), falling back to proxy`);
       await dbxRes.body?.cancel();
@@ -327,8 +340,11 @@ Deno.serve(async (req) => {
       const proxyRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': proxyArg },
-      });
+      }, DBX_CONTENT_TIMEOUT_MS);
       if (!proxyRes.ok) {
+        const proxyTokenErr = await checkTokenExpiry(proxyRes, req);
+        if (proxyTokenErr) return proxyTokenErr;
+        await proxyRes.body?.cancel();
         return errResponse('PROXY_FAILED', 'Could not retrieve file from Dropbox', 502, req);
       }
 
@@ -356,12 +372,16 @@ Deno.serve(async (req) => {
       const relPath = stripPrefix(body.file_path, pathPrefix);
       const arg = JSON.stringify({ url: parentShareUrl, path: relPath });
 
+      // Use longer timeout for video content which can be large
       const dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
-      });
+      }, DBX_CONTENT_TIMEOUT_MS);
 
       if (!dbxRes.ok) {
+        const tokenErr = await checkTokenExpiry(dbxRes, req);
+        if (tokenErr) return tokenErr;
+        await dbxRes.body?.cancel();
         return errResponse('STREAM_FAILED', 'Could not stream file from Dropbox', 502, req);
       }
 
@@ -371,7 +391,8 @@ Deno.serve(async (req) => {
         ...getCorsHeaders(req),
         'Content-Type': ct,
         'Content-Disposition': 'inline',
-        'Accept-Ranges': 'bytes',
+        // Note: Accept-Ranges not advertised because this proxy does not support
+        // Range requests. Video players should use the full download.
         'Cache-Control': 'public, max-age=7200',
       };
       if (cl) hdrs['Content-Length'] = cl;
@@ -389,8 +410,11 @@ Deno.serve(async (req) => {
       const dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
-      });
+      }, DBX_CONTENT_TIMEOUT_MS);
       if (!dbxRes.ok) {
+        const tokenErr = await checkTokenExpiry(dbxRes, req);
+        if (tokenErr) return tokenErr;
+        await dbxRes.body?.cancel();
         return errResponse('PROXY_FAILED', 'Could not retrieve file from Dropbox', 502, req);
       }
 
@@ -479,16 +503,19 @@ Deno.serve(async (req) => {
       },
     });
 
-  } catch (err) {
+  } catch (err: unknown) {
     // Log full error server-side but never expose Dropbox details to the client
     console.error('getDeliveryMediaFeed error:', err);
-    const msg = (err.message || '') as string;
+    const msg = err instanceof Error ? err.message : String(err);
 
     if (msg.includes('timeout')) {
       return errResponse('DROPBOX_TIMEOUT', 'Dropbox request timed out', 504, req);
     }
     if (msg.includes('invalid_access_token') || msg.includes('expired_access_token')) {
       return errResponse('TOKEN_EXPIRED', 'Dropbox token expired — contact admin', 502, req);
+    }
+    if (msg.includes('rate limited')) {
+      return errResponse('RATE_LIMITED', 'Dropbox API rate limit reached — try again shortly', 429, req);
     }
     // Generic message — never echo raw err.message to the client
     return errResponse('INTERNAL_ERROR', 'An internal error occurred while processing the media request', 500, req);
