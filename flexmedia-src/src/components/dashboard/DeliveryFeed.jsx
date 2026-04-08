@@ -295,7 +295,7 @@ let dropboxFailCount = 0;
  *   { folders: [{ name, files: [...] }] }  -- grouped (shared link mode)
  *   { files: [...] }                        -- flat (direct path mode)
  */
-async function fetchMediaFeed(pathOrUrl, isShareUrl = false) {
+async function fetchMediaFeed(pathOrUrl, isShareUrl = false, basePath = null) {
   const cacheKey = pathOrUrl;
   const cached = getCachedResult(cacheKey);
   // Only return cached result if it had actual content (don't cache failures)
@@ -305,6 +305,7 @@ async function fetchMediaFeed(pathOrUrl, isShareUrl = false) {
     queue.push(async () => {
       try {
         const params = isShareUrl ? { share_url: pathOrUrl } : { path: pathOrUrl };
+        if (basePath) params.base_path = basePath;
         const res = await api.functions.invoke('getDeliveryMediaFeed', params);
         // invokeFunction wraps response: { data: <edge_fn_body> }
         const data = res?.data || res;
@@ -712,7 +713,7 @@ function isPartialDelivery(project) {
 }
 
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
-function DeliveryCard({ project, isNew }) {
+function DeliveryCard({ project, isNew, onFileCountKnown }) {
   const [expanded, setExpanded] = useState(false);
   const [mediaResult, setMediaResult] = useState(null); // { folders: [...] } or null
   const [flatFiles, setFlatFiles] = useState([]); // backward compat for flat response
@@ -744,21 +745,21 @@ function DeliveryCard({ project, isNew }) {
   const dropboxSource = deliverableLink || deliverablePath || null;
   const isShareUrl = !!deliverableLink;
 
-  // Lazy load: fetch only when card is expanded
+  // Eager fetch: scan Dropbox immediately for ALL cards with a link (not just on expand)
+  // This lets us detect empty folders and report file counts to parent
   useEffect(() => {
-    if (!expanded || !dropboxSource) return;
-    // Allow retry if previous fetch returned empty (error/no data)
-    if (hasFetchedRef.current && mediaResult?.folders?.length > 0) return;
+    if (!dropboxSource || hasFetchedRef.current) return;
     hasFetchedRef.current = true;
     setLoadingMedia(true);
-    fetchMediaFeed(dropboxSource, isShareUrl).then(result => {
+    fetchMediaFeed(dropboxSource, isShareUrl, deliverablePath).then(result => {
       setMediaResult(result);
-      // Also extract flat files for the collapsed preview thumbnails
       const allFiles = (result?.folders || []).flatMap(f => f.files);
       setFlatFiles(allFiles);
       setLoadingMedia(false);
+      // Report file count to parent — used to hide empty cards
+      if (onFileCountKnown) onFileCountKnown(project.id, allFiles.length);
     });
-  }, [expanded, dropboxSource, isShareUrl]);
+  }, [dropboxSource, isShareUrl]);
 
   const handleRefresh = async (e) => {
     e.stopPropagation();
@@ -766,7 +767,7 @@ function DeliveryCard({ project, isNew }) {
     setLoadingMedia(true);
     thumbCache.delete(dropboxSource);
     pendingRequests.delete(dropboxSource);
-    const result = await fetchMediaFeed(dropboxSource, isShareUrl);
+    const result = await fetchMediaFeed(dropboxSource, isShareUrl, deliverablePath);
     setMediaResult(result);
     setFlatFiles((result?.folders || []).flatMap(f => f.files));
     setLoadingMedia(false);
@@ -1108,6 +1109,16 @@ export default function DeliveryFeed() {
   const [search, setSearch] = useState('');
   const [newDeliveryIds, setNewDeliveryIds] = useState(new Set());
   const [dropboxWarning, setDropboxWarning] = useState(false);
+  const [emptyProjectIds, setEmptyProjectIds] = useState(new Set()); // Projects with 0 Dropbox files
+
+  // Callback from DeliveryCard when file count is known
+  const handleFileCountKnown = useCallback((projectId, count) => {
+    if (count === 0) {
+      setEmptyProjectIds(prev => { const next = new Set(prev); next.add(projectId); return next; });
+    } else {
+      setEmptyProjectIds(prev => { if (!prev.has(projectId)) return prev; const next = new Set(prev); next.delete(projectId); return next; });
+    }
+  }, []);
 
   const { data: allProjects = [], loading } = useEntityList('Project', '-tonomo_delivered_at');
 
@@ -1291,7 +1302,7 @@ export default function DeliveryFeed() {
                 <span className="text-xs text-muted-foreground">{projects.length} deliver{projects.length !== 1 ? 'ies' : 'y'}</span>
               </div>
               <div className="space-y-2">
-                {projects.map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} />)}
+                {projects.filter(p => !emptyProjectIds.has(p.id)).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} />)}
               </div>
             </div>
           ))}
