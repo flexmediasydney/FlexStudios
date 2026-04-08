@@ -88,11 +88,23 @@ async function fetchSingleThumbnail(
     });
 
     if (!res.ok) {
-      console.warn(`Thumbnail failed for ${filePath}: ${res.status}`);
+      // Only log first failure for shared links (they'll all fail the same way)
+      if (!shareUrl || filePath.endsWith('.jpg')) {
+        const errText = await res.text().catch(() => '');
+        console.warn(`Thumbnail failed for ${filePath}: ${res.status} ${errText.slice(0, 100)}`);
+      }
       return null;
     }
 
     const buffer = await res.arrayBuffer();
+    // Guard against empty or error responses disguised as 200
+    if (buffer.byteLength < 100) {
+      const text = new TextDecoder().decode(buffer);
+      if (text.includes('error') || text.includes('access_denied')) {
+        console.warn(`Thumbnail returned error body for ${filePath}: ${text.slice(0, 100)}`);
+        return null;
+      }
+    }
     const bytes = new Uint8Array(buffer);
     let binary = '';
     for (let i = 0; i < bytes.length; i++) {
@@ -120,22 +132,32 @@ async function fetchThumbnailsBatch(
   const BATCH_SIZE = 25;
 
   if (shareUrl) {
-    // Shared link: use individual get_thumbnail_v2 with link resource
-    // Process in parallel batches of BATCH_SIZE
-    for (let i = 0; i < thumbnailable.length; i += BATCH_SIZE) {
-      const batch = thumbnailable.slice(i, i + BATCH_SIZE);
-      const results = await Promise.allSettled(
-        batch.map(async (f: any) => {
-          const thumb = await fetchSingleThumbnail(token, f.path_display, shareUrl);
-          if (thumb) thumbMap[f.path_display] = thumb;
-        })
-      );
-      // Log failures but don't break
-      results.forEach((r, idx) => {
-        if (r.status === 'rejected') {
-          console.warn(`Thumb failed: ${batch[idx]?.name}`, r.reason);
+    // Shared link: use individual get_thumbnail_v2 with link resource.
+    // The Dropbox API may return access_denied for shared link thumbnails
+    // depending on token scopes. Try the first file; if it fails, skip the rest.
+    if (thumbnailable.length > 0) {
+      const probe = await fetchSingleThumbnail(token, thumbnailable[0].path_display, shareUrl);
+      if (probe) {
+        thumbMap[thumbnailable[0].path_display] = probe;
+        // First one worked -- fetch the rest in parallel batches
+        const remaining = thumbnailable.slice(1);
+        for (let i = 0; i < remaining.length; i += BATCH_SIZE) {
+          const batch = remaining.slice(i, i + BATCH_SIZE);
+          const results = await Promise.allSettled(
+            batch.map(async (f: any) => {
+              const thumb = await fetchSingleThumbnail(token, f.path_display, shareUrl);
+              if (thumb) thumbMap[f.path_display] = thumb;
+            })
+          );
+          results.forEach((r, idx) => {
+            if (r.status === 'rejected') {
+              console.warn(`Thumb failed: ${batch[idx]?.name}`, r.reason);
+            }
+          });
         }
-      });
+      } else {
+        console.warn('Shared link thumbnails unavailable (probe failed) — skipping all thumbnails');
+      }
     }
   } else {
     // Direct path: use batch endpoint
@@ -168,12 +190,16 @@ async function fetchThumbnailsBatch(
 /**
  * List all entries in a folder, handling pagination.
  * For shared links, pass shareUrl and use relative paths.
+ *
+ * IMPORTANT: When listing via shared links, Dropbox entries do NOT include
+ * path_display or path_lower. We must synthesize them from parentPath + name.
  */
 async function listFolder(
   token: string,
   path: string,
   shareUrl?: string,
-  recursive = false
+  recursive = false,
+  parentPath = ''
 ): Promise<any[]> {
   let allEntries: any[] = [];
   let cursor: string | null = null;
@@ -184,18 +210,33 @@ async function listFolder(
     if (!cursor) {
       const listBody: any = {
         path,
-        recursive,
         include_media_info: true,
         include_deleted: false,
         limit: 300,
       };
       if (shareUrl) {
+        // Shared links do NOT support recursive listing.
+        // Omit the recursive parameter entirely for shared links.
         listBody.shared_link = { url: shareUrl };
+      } else if (recursive) {
+        listBody.recursive = true;
       }
       data = await dropboxPost(token, '/files/list_folder', listBody);
     } else {
       data = await dropboxPost(token, '/files/list_folder/continue', { cursor });
     }
+
+    // When listing via shared link, entries lack path_display.
+    // Synthesize it from parentPath + entry name so downstream code works.
+    if (shareUrl) {
+      for (const entry of (data.entries || [])) {
+        if (!entry.path_display) {
+          const prefix = parentPath || path || '';
+          entry.path_display = prefix ? `${prefix}/${entry.name}` : `/${entry.name}`;
+        }
+      }
+    }
+
     allEntries = allEntries.concat(data.entries || []);
     cursor = data.cursor || null;
     hasMore = data.has_more && allEntries.length < 500;
@@ -233,7 +274,7 @@ Deno.serve(async (req) => {
     // ── SHARED LINK MODE: list subfolders individually, return grouped ──
     if (useSharedLink) {
       // Step 1: List top-level to find subfolders
-      const topLevel = await listFolder(token, '', share_url, false);
+      const topLevel = await listFolder(token, '', share_url, false, '');
 
       const folders: any[] = [];
       const topLevelFiles: any[] = [];
@@ -252,11 +293,14 @@ Deno.serve(async (req) => {
 
       for (const folder of folders) {
         try {
+          // For shared links, use /<folder_name> as path (entries lack path_display)
+          const subPath = `/${folder.name}`;
           const subEntries = await listFolder(
             token,
-            folder.path_display,
+            subPath,
             share_url,
-            false
+            false,
+            subPath
           );
 
           const subFiles = subEntries
@@ -285,20 +329,34 @@ Deno.serve(async (req) => {
       const thumbMap = await fetchThumbnailsBatch(token, allFiles, share_url);
 
       // Step 4: Assemble grouped response
+      // Build a clean shared link base for preview URL construction
+      const shareBase = share_url.split('?')[0];
+      const rlkeyMatch = share_url.match(/rlkey=([^&]+)/);
+      const rlkey = rlkeyMatch ? rlkeyMatch[1] : '';
+
       const grouped = folderResults.map(group => ({
         name: group.name,
-        files: group.files.map((f: any) => ({
-          name:      f.name,
-          path:      f.path_display,
-          size:      f.size,
-          modified:  f.client_modified,
-          type:      classifyFile(f.name),
-          ext:       (f.name.split('.').pop() || '').toLowerCase(),
-          thumbnail: thumbMap[f.path_display] || null,
-          duration:  f.media_info?.metadata?.duration || null,
-          width:     f.media_info?.metadata?.dimensions?.width || null,
-          height:    f.media_info?.metadata?.dimensions?.height || null,
-        })),
+        files: group.files.map((f: any) => {
+          // Construct a Dropbox preview URL for opening the file in Dropbox's viewer
+          const encodedPath = encodeURIComponent(f.path_display?.replace(/^\//, '') || `${group.name}/${f.name}`);
+          const previewUrl = rlkey
+            ? `${shareBase}?rlkey=${rlkey}&preview=${encodeURIComponent(f.name)}&subfolder_nav_tracking=1`
+            : share_url;
+
+          return {
+            name:        f.name,
+            path:        f.path_display || `/${group.name}/${f.name}`,
+            size:        f.size,
+            modified:    f.client_modified,
+            type:        classifyFile(f.name),
+            ext:         (f.name.split('.').pop() || '').toLowerCase(),
+            thumbnail:   thumbMap[f.path_display] || null,
+            preview_url: previewUrl,
+            duration:    f.media_info?.metadata?.duration || null,
+            width:       f.media_info?.metadata?.dimensions?.width || null,
+            height:      f.media_info?.metadata?.dimensions?.height || null,
+          };
+        }),
       }));
 
       return jsonResponse({ folders: grouped });
@@ -339,6 +397,12 @@ Deno.serve(async (req) => {
 
   } catch (err: any) {
     console.error('getDeliveryMediaFeed error:', err);
-    return errorResponse(err.message);
+    // Include context in error to help frontend debugging
+    const msg = err.message || 'Unknown error';
+    const isTokenError = msg.includes('invalid_access_token') || msg.includes('expired_access_token');
+    if (isTokenError) {
+      return errorResponse('Dropbox token expired — please refresh in settings', 502);
+    }
+    return errorResponse(msg);
   }
 });

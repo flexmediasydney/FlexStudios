@@ -178,6 +178,16 @@ async function fetchMediaFeed(pathOrUrl, isShareUrl = false) {
         const res = await api.functions.invoke('getDeliveryMediaFeed', params);
         const data = res?.data || res;
 
+        // Check for error in response body
+        if (data?.error) {
+          console.warn('Dropbox edge function error:', data.error);
+          dropboxFailCount++;
+          const empty = { folders: [] };
+          setCachedResult(cacheKey, empty);
+          resolve(empty);
+          return;
+        }
+
         // Normalize response: if it has folders, use grouped; else wrap files in a single group
         let result;
         if (data?.folders && Array.isArray(data.folders)) {

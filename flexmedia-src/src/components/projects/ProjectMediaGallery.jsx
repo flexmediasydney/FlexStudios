@@ -36,8 +36,10 @@ function MediaThumbnail({ file, deliverableLink }) {
   const hasThumbnail = file.thumbnail && !imgError;
 
   const handleClick = () => {
-    if (deliverableLink) {
-      safeWindowOpen(deliverableLink);
+    // Prefer the file-specific preview URL from the edge function
+    const url = file.preview_url || deliverableLink;
+    if (url) {
+      safeWindowOpen(url);
     }
   };
 
@@ -214,6 +216,11 @@ export default function ProjectMediaGallery({ project }) {
         share_url: deliverableLink,
       });
       const data = res?.data || res;
+
+      // Check for error in response body (edge function may return { error: "..." })
+      if (data?.error) {
+        throw new Error(data.error);
+      }
 
       // Normalize: shared link returns { folders }, direct path returns { files }
       if (data?.folders && Array.isArray(data.folders)) {
