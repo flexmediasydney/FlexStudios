@@ -1,6 +1,7 @@
 import { getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 const DROPBOX_API = 'https://api.dropboxapi.com/2';
+const DROPBOX_CONTENT = 'https://content.dropboxapi.com/2';
 const SKIP_EXTS = new Set(['dng','cr2','cr3','arw','nef','orf','raf','rw2','raw','nrw']);
 const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','tiff','tif','heic','heif']);
 const VIDEO_EXTS = new Set(['mp4','mov','avi','webm','mkv','m4v','wmv']);
@@ -129,10 +130,36 @@ Deno.serve(async (req) => {
 
     const { share_url, path, action } = body;
 
-    // ─── Action: get_temp_link ──────────────────────────────────────────
-    if (action === 'get_temp_link' && path) {
-      const data = await dbxPost(token, '/files/get_temporary_link', { path });
-      return jsonResponse({ url: data.link }, 200, req);
+    // ─── Action: proxy — serve a file from the parent Tonomo shared folder ─
+    // Uses the PARENT_SHARE_URL (user's own share link) which has full API access.
+    // file_path is relative to the parent share root, e.g. /agent/address/Subfolder/file.jpg
+    if (action === 'proxy' && body.file_path) {
+      const parentUrl = Deno.env.get('DROPBOX_PARENT_SHARE_URL') || body.parent_url;
+      if (!parentUrl) return errorResponse('DROPBOX_PARENT_SHARE_URL not configured', 500, req);
+
+      const arg = JSON.stringify({ url: parentUrl, path: body.file_path });
+      const dbxRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Dropbox-API-Arg': arg,
+        },
+      });
+      if (!dbxRes.ok) {
+        const errText = await dbxRes.text().catch(() => '');
+        return jsonResponse({ error: `Dropbox ${dbxRes.status}`, detail: errText.slice(0, 200) }, 400, req);
+      }
+      const ct = dbxRes.headers.get('content-type') || 'application/octet-stream';
+      const origin = req.headers.get('origin') || '*';
+      return new Response(dbxRes.body, {
+        status: 200,
+        headers: {
+          'Access-Control-Allow-Origin': origin,
+          'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+          'Content-Type': ct,
+          'Cache-Control': 'public, max-age=7200',
+        },
+      });
     }
 
     // ─── Main: list folder contents ─────────────────────────────────────
