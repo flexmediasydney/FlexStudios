@@ -24,7 +24,7 @@ import { fmtDate, fixTimestamp } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import ProjectForm from "@/components/projects/ProjectForm";
 import TaskManagement from "@/components/projects/TaskManagement";
-// MediaDeliveryManager removed — media tab no longer used
+import ProjectMediaGallery from "@/components/projects/ProjectMediaGallery";
 import EffortLoggingTab from "@/components/projects/EffortLoggingTab";
 import ProjectCalendarEvents from "@/components/projects/ProjectCalendarEvents";
 import ProjectActivityHub from "@/components/projects/ProjectActivityHub";
@@ -52,7 +52,7 @@ import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
 // creating a new Set on every render. Since it's a constant, it belongs here.
-const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'tonomo']);
+const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'tonomo']);
 
 const serviceLabels = {
   photography: "📷 Photography",
@@ -1272,12 +1272,12 @@ export default function ProjectDetails() {
 
           <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <div className="overflow-x-auto border-b bg-muted/30">
-              <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${project.source === 'tonomo' ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} h-auto bg-transparent`}>
+              <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${project.source === 'tonomo' ? 'sm:grid-cols-7' : 'sm:grid-cols-6'} h-auto bg-transparent`}>
                 <TabsTrigger value="tasks"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tasks</TabsTrigger>
                 <TabsTrigger value="revisions" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Requests</TabsTrigger>
                 <TabsTrigger value="effort"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Effort</TabsTrigger>
                 <TabsTrigger value="calendar"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Calendar</TabsTrigger>
-                {/* Media tab removed */}
+                <TabsTrigger value="media"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Media</TabsTrigger>
                 {project.source === 'tonomo' && (
                   <TabsTrigger value="tonomo"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tonomo</TabsTrigger>
                 )}
@@ -1314,7 +1314,13 @@ export default function ProjectDetails() {
               )}
             </TabsContent>
 
-            {/* Media tab content removed */}
+            <TabsContent value="media" className="mt-4">
+              {mountedTabs.has("media") ? (
+                <ErrorBoundary><ProjectMediaGallery project={project} /></ErrorBoundary>
+              ) : (
+                <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
+              )}
+            </TabsContent>
 
             {project.source === 'tonomo' && (
               <TabsContent value="tonomo" className="mt-4">
