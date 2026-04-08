@@ -47,17 +47,20 @@ async function listAll(token: string, path: string, sharedLink?: string) {
   return entries;
 }
 
-/** Build a preview URL using the PARENT share link (user-owned, always accessible). */
-function buildParentPreviewUrl(parentShareUrl: string, prefix: string, filePath: string, fileName: string): string | null {
+/** Build a preview URL using the PARENT share link (user-owned, always accessible).
+ *  basePath = project's tonomo_deliverable_path (e.g. /flex media team folder/tonomo/agent/address)
+ *  filePath = relative path within project folder (e.g. /Drone Images/file.jpg)
+ */
+function buildParentPreviewUrl(parentShareUrl: string, prefix: string, basePath: string, filePath: string): string | null {
   if (!parentShareUrl) return null;
   const base = parentShareUrl.split('?')[0];
   const rlMatch = parentShareUrl.match(/rlkey=([^&]+)/);
   if (!rlMatch) return null;
-  // Strip prefix to get path relative to parent share, then encode for URL
-  let relPath = filePath;
-  if (prefix && relPath.startsWith(prefix)) relPath = relPath.slice(prefix.length);
-  if (!relPath.startsWith('/')) relPath = '/' + relPath;
-  const pathParts = relPath.split('/').filter(Boolean);
+  // Combine basePath + filePath to get full absolute path, then strip prefix
+  let fullPath = basePath ? `${basePath}${filePath}` : filePath;
+  if (prefix && fullPath.startsWith(prefix)) fullPath = fullPath.slice(prefix.length);
+  if (!fullPath.startsWith('/')) fullPath = '/' + fullPath;
+  const pathParts = fullPath.split('/').filter(Boolean);
   const encodedPath = pathParts.map(encodeURIComponent).join('/');
   return `${base}/${encodedPath}?rlkey=${rlMatch[1]}&dl=0`;
 }
@@ -74,7 +77,7 @@ interface FileEntry {
   uploaded_at: string | null; // server_modified — when uploaded to Dropbox
 }
 
-function fileEntry(f: Record<string, unknown>, folderName: string, parentShareUrl?: string, pathPrefix?: string): FileEntry {
+function fileEntry(f: Record<string, unknown>, folderName: string, parentShareUrl?: string, pathPrefix?: string, basePath?: string): FileEntry {
   const name = f.name as string;
   const ext = getExt(name);
   const type = classifyFile(name);
@@ -85,7 +88,7 @@ function fileEntry(f: Record<string, unknown>, folderName: string, parentShareUr
     size: f.size as number,
     ext,
     type,
-    preview_url: parentShareUrl ? buildParentPreviewUrl(parentShareUrl, pathPrefix || '', relativePath, name) : null,
+    preview_url: parentShareUrl ? buildParentPreviewUrl(parentShareUrl, pathPrefix || '', basePath || '', relativePath) : null,
     path: relativePath,
     dbx_id: (f.id as string) || undefined,
     modified: (f.client_modified as string) || null,
@@ -118,7 +121,7 @@ Deno.serve(async (req) => {
     const parentShareUrl = Deno.env.get('DROPBOX_PARENT_SHARE_URL') || '';
     const pathPrefix = Deno.env.get('DROPBOX_PARENT_PATH_PREFIX') || '';
 
-    const { share_url, path, action } = body;
+    const { share_url, path, action, base_path } = body;
 
     // ─── Action: proxy — serve a file via parent Tonomo share link ──────
     if (action === 'proxy' && body.file_path) {
@@ -173,7 +176,7 @@ Deno.serve(async (req) => {
     if (rootFiles.length > 0) {
       folders.push({
         name: 'Root',
-        files: rootFiles.map(f => fileEntry(f, 'Root', parentShareUrl, pathPrefix)),
+        files: rootFiles.map(f => fileEntry(f, 'Root', parentShareUrl, pathPrefix, base_path)),
       });
     }
 
@@ -183,7 +186,7 @@ Deno.serve(async (req) => {
         const subEntries = await listAll(token, subPath, useShared ? share_url : undefined);
         const files = subEntries
           .filter((e: Record<string, unknown>) => e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string)))
-          .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, parentShareUrl, pathPrefix));
+          .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, parentShareUrl, pathPrefix, base_path));
         if (files.length > 0) {
           folders.push({ name: sf.name as string, files });
         }

@@ -103,7 +103,6 @@ function MediaThumbnail({ file, tonomoBasePath }) {
   }, [isImage, proxyPath]);
 
   const handleClick = () => {
-    // Use the parent-share-based preview URL (accessible without auth issues)
     if (file.preview_url) safeWindowOpen(file.preview_url);
   };
 
@@ -229,7 +228,7 @@ export default function ProjectMediaGallery({ project }) {
   const { data: mediaData, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ["projectMedia", deliverableLink],
     queryFn: async () => {
-      const res = await api.functions.invoke("getDeliveryMediaFeed", { share_url: deliverableLink });
+      const res = await api.functions.invoke("getDeliveryMediaFeed", { share_url: deliverableLink, base_path: tonomoBasePath });
       const data = res?.data || res;
       if (data?.error) throw new Error(data.error);
       let folders = [];
