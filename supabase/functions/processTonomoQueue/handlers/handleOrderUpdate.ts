@@ -15,9 +15,12 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
   const project = await findProjectByOrderId(entities, orderId);
 
   if (!project) {
-    // GUARD: If orderId matches the event/appointment ID, refuse to create
+    // GUARD: If orderId matches the event/appointment ID, refuse to create.
+    // BUT: On order-level payloads, p.id is the invoiceId (same as orderId), NOT an event ID.
+    // Only skip when p.id is genuinely a calendar event ID, not an invoice/order ID.
     const eventId = p.id;
-    if (eventId && orderId === eventId) {
+    const isInvoiceId = eventId && (eventId === p.invoiceId || p.entityTypeName === 'OrderEntity' || p.orderId === eventId);
+    if (eventId && orderId === eventId && !isInvoiceId) {
       await writeAudit(entities, {
         action: 'booking_created_or_changed', entity_type: 'Project', entity_id: null,
         operation: 'skipped', tonomo_order_id: orderId,

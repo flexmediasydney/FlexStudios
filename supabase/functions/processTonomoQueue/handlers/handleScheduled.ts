@@ -57,7 +57,10 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   // GUARD: If orderId matches the event/appointment ID (p.id), it's not a real order ID.
   // This is a defensive check — the receiver should never pass p.id as orderId anymore,
   // but if it does (e.g. from old queue items), refuse to create a new project.
-  if (!existing && eventId && orderId === eventId) {
+  // HOWEVER: On order-level payloads, p.id is the invoiceId (same as orderId), NOT an event ID.
+  // Only skip when p.id is genuinely a calendar event ID, not an invoice/order ID.
+  const isInvoiceId = eventId && (eventId === p.invoiceId || p.entityTypeName === 'OrderEntity' || p.orderId === eventId);
+  if (!existing && eventId && orderId === eventId && !isInvoiceId) {
     await writeAudit(entities, {
       action: originAction, entity_type: 'Project', entity_id: null,
       operation: 'skipped', tonomo_order_id: orderId,
