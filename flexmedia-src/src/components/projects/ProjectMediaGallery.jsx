@@ -1,15 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
   RefreshCw, FolderOpen, Image, Film, FileText, File,
   ExternalLink, AlertCircle, ImageOff, Camera, Play, Clock,
   Grid2x2, Grid3x3, LayoutGrid, X, ChevronLeft, ChevronRight,
-  Download, Loader2
+  Download, Loader2, ZoomIn, ZoomOut, ChevronDown, Inbox
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
@@ -27,11 +26,30 @@ const pending = new Set();
 let activeLoads = 0;
 const loadQueue = [];
 
+/** Canonical cache key — must be used everywhere instead of raw path */
+function cacheKey(filePath, mode = 'thumb') {
+  return `${mode}::${filePath}`;
+}
+
+/** Build the proxy path from base + file, safely handling undefined file.path */
+function buildProxyPath(basePath, file) {
+  if (!basePath || !file?.name || !file?.path) return null;
+  return `${basePath}${file.path.startsWith('/') ? file.path : '/' + file.path}`;
+}
+
+// Observable load-progress counter
+let _loadedCount = 0;
+let _totalQueued = 0;
+const _progressListeners = new Set();
+function notifyProgress() { _progressListeners.forEach(fn => fn({ loaded: _loadedCount, total: _totalQueued })); }
+function subscribeProgress(fn) { _progressListeners.add(fn); return () => _progressListeners.delete(fn); }
+function resetProgress() { _loadedCount = 0; _totalQueued = 0; notifyProgress(); }
+
 function processQueue() {
   while (activeLoads < 8 && loadQueue.length > 0) {
     const job = loadQueue.shift();
     activeLoads++;
-    job().finally(() => { activeLoads--; processQueue(); });
+    job().finally(() => { activeLoads--; _loadedCount++; notifyProgress(); processQueue(); });
   }
 }
 
@@ -79,6 +97,110 @@ function timeAgo(dateStr) {
   try { return formatDistanceToNow(new Date(dateStr), { addSuffix: true }); } catch { return null; }
 }
 
+function formatUploadTime(dateStr) {
+  if (!dateStr) return null;
+  try { return format(new Date(dateStr), "MMM d, yyyy 'at' h:mm a"); } catch { return null; }
+}
+
+// ─── CSS: shimmer, fade-in, float, lightbox animations ──────────────
+
+const STYLE_ID = "pmg-gallery-styles";
+if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
+  const style = document.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = `
+    @keyframes pmg-shimmer {
+      0%   { background-position: -400px 0; }
+      100% { background-position: 400px 0; }
+    }
+    .pmg-shimmer {
+      background: linear-gradient(90deg,
+        hsl(var(--muted)) 0%,
+        hsl(var(--muted) / 0.4) 40%,
+        hsl(var(--muted)) 80%);
+      background-size: 800px 100%;
+      animation: pmg-shimmer 1.6s ease-in-out infinite;
+    }
+    .pmg-fade-in {
+      opacity: 0;
+      transition: opacity 300ms ease-out;
+    }
+    .pmg-fade-in.pmg-loaded {
+      opacity: 1;
+    }
+    @keyframes pmg-float {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-6px); }
+    }
+    .pmg-float { animation: pmg-float 3s ease-in-out infinite; }
+    @keyframes pmg-pulse-ring {
+      0%   { transform: scale(1);    opacity: 0.4; }
+      50%  { transform: scale(1.08); opacity: 0.15; }
+      100% { transform: scale(1);    opacity: 0.4; }
+    }
+    .pmg-pulse-ring { animation: pmg-pulse-ring 2.5s ease-in-out infinite; }
+    @keyframes pmg-lightbox-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .pmg-lightbox-enter { animation: pmg-lightbox-in 200ms ease-out forwards; }
+    @keyframes pmg-lightbox-img-in {
+      from { opacity: 0; transform: scale(0.97); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    .pmg-lightbox-img-enter { animation: pmg-lightbox-img-in 250ms ease-out forwards; }
+  `;
+  document.head.appendChild(style);
+}
+
+// ─── Shimmer skeleton card (matches real card layout) ───────────────
+
+function SkeletonCard() {
+  return (
+    <div className="rounded-lg border bg-card overflow-hidden" aria-hidden="true">
+      <div className="aspect-[4/3] pmg-shimmer" />
+      <div className="p-2 space-y-1.5">
+        <div className="h-3 w-3/4 rounded pmg-shimmer" />
+        <div className="h-2.5 w-1/2 rounded pmg-shimmer" />
+      </div>
+    </div>
+  );
+}
+
+// ─── Loading progress indicator ─────────────────────────────────────
+
+function LoadingProgress() {
+  const [progress, setProgress] = useState({ loaded: 0, total: 0 });
+  useEffect(() => subscribeProgress(setProgress), []);
+
+  if (progress.total === 0) return null;
+  const pct = Math.round((progress.loaded / progress.total) * 100);
+  const done = progress.loaded >= progress.total;
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2.5 text-xs text-muted-foreground transition-opacity duration-500",
+        done && "opacity-0 pointer-events-none"
+      )}
+      role="progressbar"
+      aria-valuenow={progress.loaded}
+      aria-valuemin={0}
+      aria-valuemax={progress.total}
+      aria-label={`Loading thumbnails: ${progress.loaded} of ${progress.total}`}
+    >
+      <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+      <span>Loading {progress.loaded} of {progress.total} images...</span>
+      <div className="h-1 w-20 bg-muted rounded-full overflow-hidden">
+        <div
+          className="h-full bg-primary/60 rounded-full transition-all duration-300 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ─── MediaLightbox — fullscreen image/video viewer ──────────────────
 
 function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
@@ -86,68 +208,83 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
   const [fullResUrl, setFullResUrl] = useState(null);
-  const file = files[index];
+  const [imageLoading, setImageLoading] = useState(false);
+
+  // Clamp index to valid range (Bug 5c: guard against out-of-bounds)
+  const safeIndex = files.length > 0 ? Math.max(0, Math.min(index, files.length - 1)) : 0;
+  const file = files.length > 0 ? files[safeIndex] : null;
 
   const isVideo = file?.type === 'video';
   const isImage = file?.type === 'image';
-  const proxyPath = tonomoBasePath && file?.name
-    ? `${tonomoBasePath}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
-    : null;
+  const proxyPath = buildProxyPath(tonomoBasePath, file); // Bug 3b: safe path builder handles undefined file.path
 
-  // Videos: get a streaming URL from edge function (instant playback via Dropbox CDN)
+  // Videos: stream via edge function proxy (Bug 1a: abort controller prevents stale state)
   useEffect(() => {
-    if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
+    if (!isVideo || !proxyPath) { setVideoUrl(null); setVideoLoading(false); return; }
+    let stale = false;
     setVideoLoading(true);
     setVideoUrl(null);
 
-    // Try stream_url first (returns a direct Dropbox CDN URL for instant streaming)
     fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
       body: JSON.stringify({ action: 'stream_url', file_path: proxyPath }),
     })
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`${r.status}`);
+        return r.json();
+      })
       .then(data => {
+        if (stale) return;
         if (data.url) {
           setVideoUrl(data.url);
           setVideoLoading(false);
         } else {
           // Fallback: proxy the full file
           return fetchProxyImage(proxyPath, 'proxy').then(url => {
-            setVideoUrl(url);
-            setVideoLoading(false);
+            if (!stale) { setVideoUrl(url); setVideoLoading(false); }
           });
         }
       })
-      .catch(() => setVideoLoading(false));
+      .catch(() => {
+        if (!stale) setVideoLoading(false);
+      });
+    return () => { stale = true; }; // Bug 1a: cleanup prevents setting state after nav/unmount
   }, [isVideo, proxyPath]);
 
-  // Images: show thumb immediately, load full-res in background
+  // Images: show thumb immediately, load full-res in background (Bug 1a: stale flag)
   useEffect(() => {
-    if (!isImage || !proxyPath) { setFullResUrl(null); return; }
+    if (!isImage || !proxyPath) { setFullResUrl(null); setImageLoading(false); return; }
+    let stale = false;
     setFullResUrl(null);
     // Check if we already have full-res cached
-    const cached = blobCache.get(`proxy::${proxyPath}`);
+    const cached = blobCache.get(cacheKey(proxyPath, 'proxy')); // Bug 4a: use cacheKey()
     if (cached) { setFullResUrl(cached); return; }
     // Load full-res in background
+    setImageLoading(true);
     fetchProxyImage(proxyPath, 'proxy').then(url => {
-      if (url) setFullResUrl(url);
+      if (!stale) {
+        if (url) setFullResUrl(url);
+        setImageLoading(false);
+      }
     });
+    return () => { stale = true; };
   }, [isImage, proxyPath]);
 
-  // Keyboard nav
+  // Keyboard nav (Bug 1c: use functional updater with bounds clamping, remove index from deps)
   useEffect(() => {
+    const len = files.length;
     const handler = (e) => {
       if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft' && index > 0) setIndex(i => i - 1);
-      if (e.key === 'ArrowRight' && index < files.length - 1) setIndex(i => i + 1);
+      if (e.key === 'ArrowLeft')  setIndex(i => Math.max(0, i - 1));
+      if (e.key === 'ArrowRight') setIndex(i => Math.min(len - 1, i + 1));
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [index, files.length, onClose]);
+  }, [files.length, onClose]);
 
-  // Show full-res if available, otherwise thumb
-  const thumbUrl = isImage ? (blobCache.get(`thumb::${proxyPath}`) || blobCache.get(proxyPath)) : null;
+  // Show full-res if available, otherwise thumb (Bug 4a: consistent cache keys)
+  const thumbUrl = isImage ? blobCache.get(cacheKey(proxyPath, 'thumb')) : null;
   const imgBlobUrl = fullResUrl || thumbUrl;
 
   return (
@@ -252,19 +389,19 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
 
 // ─── MediaThumbnail ─────────────────────────────────────────────────
 
-function MediaThumbnail({ file, tonomoBasePath, onClick }) {
+function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const started = useRef(false);
 
-  const isImage = file.type === 'image';
+  const canThumb = file.type === 'image' || file.type === 'video' || file.type === 'document';
   const proxyPath = tonomoBasePath && file.name
     ? `${tonomoBasePath}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
     : null;
 
   useEffect(() => {
-    if (!isImage || !proxyPath || started.current) return;
+    if (!canThumb || !proxyPath || started.current) return;
     const cached = blobCache.get(proxyPath);
     if (cached) { setBlobUrl(cached); return; }
     started.current = true;
@@ -276,7 +413,7 @@ function MediaThumbnail({ file, tonomoBasePath, onClick }) {
       setLoading(false);
     });
     processQueue();
-  }, [isImage, proxyPath]);
+  }, [canThumb, proxyPath]);
 
   const handleClick = () => {
     if (onClick) onClick();
@@ -311,6 +448,22 @@ function MediaThumbnail({ file, tonomoBasePath, onClick }) {
           <div className="bg-black/40 rounded-full p-2.5"><Play className="h-5 w-5 text-white fill-white" /></div>
         </div>
       )}
+
+      {/* Tag pills at bottom-left of thumbnail */}
+      {(() => {
+        const tags = getTagsForFile ? getTagsForFile(proxyPath) : [];
+        if (!tags.length) return null;
+        return (
+          <div className="absolute bottom-[calc(theme(spacing.2)+2.5rem)] left-1.5 flex items-center gap-0.5 pointer-events-none">
+            {tags.slice(0, 2).map(tag => (
+              <span key={tag.name} className="text-[8px] px-1 py-0.5 rounded-full text-white backdrop-blur-sm" style={{ backgroundColor: `${tag.color}cc` }}>
+                #{tag.name}
+              </span>
+            ))}
+            {tags.length > 2 && <span className="text-[8px] text-white/70">+{tags.length - 2}</span>}
+          </div>
+        );
+      })()}
 
       <div className="p-2 space-y-0.5">
         <p className="text-xs font-medium truncate leading-tight" title={file.name}>{file.name}</p>
@@ -360,7 +513,7 @@ const GRID_SIZES = {
   lg: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4',
 };
 
-function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox }) {
+function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox, getTagsForFile }) {
   const [collapsed, setCollapsed] = useState(false);
   const imageCount = folder.files.filter(f => f.type === 'image').length;
   const videoCount = folder.files.filter(f => f.type === 'video').length;
@@ -382,7 +535,7 @@ function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox
       {!collapsed && (
         <div className={cn("grid", GRID_SIZES[gridSize])}>
           {folder.files.map((file) => (
-            <MediaThumbnail key={file.path || file.name} file={file} tonomoBasePath={tonomoBasePath} onClick={() => onOpenLightbox(folder.files, folder.files.indexOf(file))} />
+            <MediaThumbnail key={file.path || file.name} file={file} tonomoBasePath={tonomoBasePath} onClick={() => onOpenLightbox(folder.files, folder.files.indexOf(file))} getTagsForFile={getTagsForFile} />
           ))}
         </div>
       )}
@@ -411,6 +564,19 @@ export default function ProjectMediaGallery({ project }) {
   const tonomoBasePath = project?.tonomo_deliverable_path;
   const [gridSize, setGridSize] = useState('md');
   const [lightbox, setLightbox] = useState(null); // { files, index }
+
+  // Favorites + tags: call once at parent level, pass helper down
+  const { favorites, allTags: tagRegistry } = useFavorites();
+
+  const getTagsForFile = useCallback((filePath) => {
+    if (!filePath) return [];
+    const fav = favorites.find(f => f.file_path === filePath);
+    if (!fav?.tags?.length) return [];
+    return fav.tags.map(tagName => {
+      const reg = tagRegistry.find(t => t.name === tagName);
+      return { name: tagName, color: reg?.color || '#3b82f6' };
+    });
+  }, [favorites, tagRegistry]);
 
   const { data: mediaData, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ["projectMedia", deliverableLink],
@@ -519,7 +685,7 @@ export default function ProjectMediaGallery({ project }) {
 
       {/* Folders */}
       {folders.map((folder) => (
-        <FolderSection key={folder.name} folder={folder} tonomoBasePath={tonomoBasePath} gridSize={gridSize} onOpenLightbox={(files, idx) => setLightbox({ files, index: idx })} />
+        <FolderSection key={folder.name} folder={folder} tonomoBasePath={tonomoBasePath} gridSize={gridSize} onOpenLightbox={(files, idx) => setLightbox({ files, index: idx })} getTagsForFile={getTagsForFile} />
       ))}
 
       {/* Lightbox */}

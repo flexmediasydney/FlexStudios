@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
+import { useFavorites } from "@/components/favorites/useFavorites";
 import { useQuery } from "@tanstack/react-query";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -22,11 +23,27 @@ import { formatDistanceToNow, differenceInDays } from "date-fns";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// ---- Image proxy with concurrency limiter + blob cache ----
+// ---- Image proxy with concurrency limiter + LRU blob cache ----
+const MAX_BLOB_CACHE = 400;
 const blobCache = new Map();
 const pending = new Set();
 let activeLoads = 0;
 const loadQueue = [];
+
+/** Build the canonical cache key used everywhere (mode::filePath) */
+function blobCacheKey(filePath, mode = 'thumb') {
+  return `${mode}::${filePath}`;
+}
+
+/** Evict oldest blob URLs when cache exceeds MAX_BLOB_CACHE */
+function evictBlobCache() {
+  while (blobCache.size > MAX_BLOB_CACHE) {
+    const oldestKey = blobCache.keys().next().value;
+    const oldUrl = blobCache.get(oldestKey);
+    if (oldUrl) URL.revokeObjectURL(oldUrl);
+    blobCache.delete(oldestKey);
+  }
+}
 
 function processQueue() {
   while (activeLoads < 8 && loadQueue.length > 0) {
@@ -52,6 +69,7 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
     if (blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
     blobCache.set(cacheKey, url);
+    evictBlobCache();
     return url;
   } catch { return null; }
   finally { pending.delete(cacheKey); }
@@ -106,7 +124,21 @@ function MediaLightbox({ files, initialIndex, onClose }) {
   const [index, setIndex] = useState(initialIndex);
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
-  const file = files[index];
+
+  // Clamp index to valid bounds if files array shrinks (e.g. filters change while open)
+  useEffect(() => {
+    if (files.length > 0 && index >= files.length) {
+      setIndex(files.length - 1);
+    }
+  }, [files.length, index]);
+
+  // Close lightbox if the files list becomes empty
+  useEffect(() => {
+    if (files.length === 0) onClose();
+  }, [files.length, onClose]);
+
+  const safeIndex = files.length === 0 ? 0 : Math.min(index, files.length - 1);
+  const file = files[safeIndex];
 
   const isVideo = file?.type === 'video';
   const isImage = file?.type === 'image';
@@ -115,14 +147,19 @@ function MediaLightbox({ files, initialIndex, onClose }) {
   // Load video blob when a video file is selected
   useEffect(() => {
     if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
+    let cancelled = false;
     setVideoLoading(true);
     setVideoUrl(null);
-    const cached = blobCache.get(proxyPath);
+    // Use canonical cache key (mode::path) -- not bare proxyPath
+    const cached = blobCache.get(blobCacheKey(proxyPath, 'thumb'));
     if (cached) { setVideoUrl(cached); setVideoLoading(false); return; }
-    fetchProxyImage(proxyPath).then(url => {
-      setVideoUrl(url);
-      setVideoLoading(false);
+    fetchProxyImage(proxyPath, 'thumb').then(url => {
+      if (!cancelled) {
+        setVideoUrl(url);
+        setVideoLoading(false);
+      }
     });
+    return () => { cancelled = true; };
   }, [isVideo, proxyPath]);
 
   // Keyboard nav
@@ -136,7 +173,8 @@ function MediaLightbox({ files, initialIndex, onClose }) {
     return () => window.removeEventListener('keydown', handler);
   }, [index, files.length, onClose]);
 
-  const imgBlobUrl = isImage ? blobCache.get(proxyPath) : null;
+  // Use canonical cache key (mode::path) to look up the thumbnail blob
+  const imgBlobUrl = isImage && proxyPath ? blobCache.get(blobCacheKey(proxyPath, 'thumb')) : null;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose}>
@@ -251,18 +289,18 @@ function MediaLightbox({ files, initialIndex, onClose }) {
 }
 
 // ---- FeedCard: single media card in the grid ----
-function FeedCard({ item, isVisible, onClick }) {
+function FeedCard({ item, isVisible, onClick, getTagsForFile }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const started = useRef(false);
   const cardRef = useRef(null);
 
-  const isImage = item.type === 'image';
+  const canThumb = item.type === 'image' || item.type === 'video' || item.type === 'document';
 
-  // Only load images once visible (IntersectionObserver)
+  // Only load thumbnails once visible (IntersectionObserver)
   useEffect(() => {
-    if (!isImage || !item.proxyPath || started.current) return;
+    if (!canThumb || !item.proxyPath || started.current) return;
     const cached = blobCache.get(item.proxyPath);
     if (cached) { setBlobUrl(cached); return; }
 
@@ -276,7 +314,7 @@ function FeedCard({ item, isVisible, onClick }) {
       setLoading(false);
     });
     processQueue();
-  }, [isImage, item.proxyPath, isVisible]);
+  }, [canThumb, item.proxyPath, isVisible]);
 
   const handleClick = () => {
     if (onClick) onClick();
@@ -335,6 +373,22 @@ function FeedCard({ item, isVisible, onClick }) {
           </div>
         )}
 
+        {/* Tag pills at bottom-left of thumbnail */}
+        {(() => {
+          const tags = getTagsForFile ? getTagsForFile(item.proxyPath) : [];
+          if (!tags.length) return null;
+          return (
+            <div className="absolute bottom-2 left-2 flex items-center gap-0.5 pointer-events-none z-10">
+              {tags.slice(0, 2).map(tag => (
+                <span key={tag.name} className="text-[8px] px-1 py-0.5 rounded-full text-white backdrop-blur-sm" style={{ backgroundColor: `${tag.color}cc` }}>
+                  #{tag.name}
+                </span>
+              ))}
+              {tags.length > 2 && <span className="text-[8px] text-white/70">+{tags.length - 2}</span>}
+            </div>
+          );
+        })()}
+
         {/* External link icon on hover */}
         <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
           <ExternalLink className="h-3.5 w-3.5 text-white drop-shadow-md" />
@@ -392,6 +446,19 @@ export default function LiveMediaFeed() {
   const [lightbox, setLightbox] = useState(null); // { files, index }
   const gridRef = useRef(null);
 
+  // Favorites + tags: call once at parent level, pass helper down
+  const { favorites, allTags: tagRegistry } = useFavorites();
+
+  const getTagsForFile = useCallback((filePath) => {
+    if (!filePath) return [];
+    const fav = favorites.find(f => f.file_path === filePath);
+    if (!fav?.tags?.length) return [];
+    return fav.tags.map(tagName => {
+      const reg = tagRegistry.find(t => t.name === tagName);
+      return { name: tagName, color: reg?.color || '#3b82f6' };
+    });
+  }, [favorites, tagRegistry]);
+
   // Load projects
   const { data: allProjects = [], loading: projectsLoading } = useEntityList('Project', '-created_date', 500);
   const { data: allUsers = [] } = useEntityList('User');
@@ -431,6 +498,7 @@ export default function LiveMediaFeed() {
           try {
             const res = await api.functions.invoke("getDeliveryMediaFeed", {
               share_url: project.tonomo_deliverable_link,
+              base_path: project.tonomo_deliverable_path || '',
             });
             const data = res?.data || res;
             if (data?.error) continue;
@@ -700,6 +768,7 @@ export default function LiveMediaFeed() {
                   item={item}
                   isVisible={visibleCards.has(feedId)}
                   onClick={() => setLightbox({ files: feedItems, index: idx })}
+                  getTagsForFile={getTagsForFile}
                 />
               </div>
             );

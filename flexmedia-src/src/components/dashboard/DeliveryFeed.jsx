@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
+import { useFavorites } from '@/components/favorites/useFavorites';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -14,11 +15,71 @@ import {
   Search, Building2, ChevronDown, ChevronUp, Clock,
   CheckCircle2, Package, Play, Zap, X, ChevronLeft, ChevronRight,
   ArrowRight, Eye, RefreshCw, DollarSign, Timer, AlertTriangle, CreditCard,
-  FolderOpen, Download, Map as MapIcon, Video, Folder
+  FolderOpen, Download, Map as MapIcon, Video, Folder, Star, Send,
+  Inbox, FilterX
 } from 'lucide-react';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import { format, formatDistanceToNow, differenceInDays, differenceInHours, isToday, isYesterday } from 'date-fns';
+
+// ─── CSS-in-JS animations injected once ──────────────────────────────────────
+const DELIVERY_STYLES_ID = 'delivery-feed-animations';
+if (typeof document !== 'undefined' && !document.getElementById(DELIVERY_STYLES_ID)) {
+  const style = document.createElement('style');
+  style.id = DELIVERY_STYLES_ID;
+  style.textContent = `
+    @keyframes df-fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes df-pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
+    @keyframes df-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    @keyframes df-backdropIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes df-imgFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    .df-stat-enter { animation: df-fadeIn 0.4s ease-out both; }
+    .df-stat-enter:nth-child(1) { animation-delay: 0.00s; }
+    .df-stat-enter:nth-child(2) { animation-delay: 0.06s; }
+    .df-stat-enter:nth-child(3) { animation-delay: 0.12s; }
+    .df-stat-enter:nth-child(4) { animation-delay: 0.18s; }
+    .df-stat-enter:nth-child(5) { animation-delay: 0.24s; }
+    .df-stat-enter:nth-child(6) { animation-delay: 0.30s; }
+
+    .df-skeleton-pill {
+      background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(var(--muted-foreground) / 0.08) 50%, hsl(var(--muted)) 75%);
+      background-size: 200% 100%;
+      animation: df-shimmer 1.5s ease-in-out infinite;
+      border-radius: 9999px;
+    }
+
+    .df-pulse-dot {
+      animation: df-pulse-dot 1.5s ease-in-out infinite;
+    }
+
+    .df-lightbox-backdrop {
+      animation: df-backdropIn 0.2s ease-out forwards;
+    }
+
+    .df-img-loaded {
+      animation: df-imgFadeIn 0.3s ease-out forwards;
+    }
+    .df-img-loading {
+      opacity: 0;
+    }
+
+    .df-expand-panel {
+      display: grid;
+      grid-template-rows: 0fr;
+      transition: grid-template-rows 0.3s ease-out, opacity 0.3s ease-out;
+      opacity: 0;
+    }
+    .df-expand-panel[data-open="true"] {
+      grid-template-rows: 1fr;
+      opacity: 1;
+    }
+    .df-expand-inner {
+      overflow: hidden;
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 // ─── Proxy image loading (mirrors ProjectMediaGallery approach) ─────────────
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -33,6 +94,21 @@ function processImgQueue() {
     const job = imgLoadQueue.shift();
     imgActiveLoads++;
     job().finally(() => { imgActiveLoads--; processImgQueue(); });
+  }
+}
+
+const IMG_BLOB_CACHE_MAX = 200; // Max blob URLs to keep in memory
+
+function evictOldBlobEntries() {
+  if (imgBlobCache.size <= IMG_BLOB_CACHE_MAX) return;
+  // Map preserves insertion order — delete oldest entries first
+  const excess = imgBlobCache.size - IMG_BLOB_CACHE_MAX;
+  let removed = 0;
+  for (const [key, url] of imgBlobCache) {
+    if (removed >= excess) break;
+    URL.revokeObjectURL(url);
+    imgBlobCache.delete(key);
+    removed++;
   }
 }
 
@@ -52,6 +128,7 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
     if (blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
     imgBlobCache.set(cacheKey, url);
+    evictOldBlobEntries();
     return url;
   } catch { return null; }
   finally { imgPending.delete(cacheKey); }
@@ -66,15 +143,16 @@ const TYPE_CONFIG = {
   pdf: { label: 'PDF', icon: FileText, color: 'bg-red-100 text-red-700' },
   floorplan: { label: 'Floor Plan', icon: MapIcon, color: 'bg-amber-100 text-amber-700' },
   'floor plan': { label: 'Floor Plan', icon: MapIcon, color: 'bg-amber-100 text-amber-700' },
-  drone: { label: 'Drone', icon: Camera, color: 'bg-sky-100 text-sky-700' },
+  drone: { label: 'Drone', icon: Send, color: 'bg-sky-100 text-sky-700' },
 };
 
 // Folder-specific icons and colors for the grouped gallery
 const FOLDER_STYLE = {
-  'sales images': { icon: ImageIcon, color: 'text-blue-600', bg: 'bg-blue-50' },
-  'drone images': { icon: Camera, color: 'text-sky-600', bg: 'bg-sky-50' },
-  'floorplan': { icon: MapIcon, color: 'text-amber-600', bg: 'bg-amber-50' },
-  'floor plan': { icon: MapIcon, color: 'text-amber-600', bg: 'bg-amber-50' },
+  'sales images': { icon: Camera, color: 'text-blue-600', bg: 'bg-blue-50' },
+  'drone images': { icon: Send, color: 'text-sky-600', bg: 'bg-sky-50' },
+  'drone': { icon: Send, color: 'text-sky-600', bg: 'bg-sky-50' },
+  'floorplan': { icon: FileText, color: 'text-amber-600', bg: 'bg-amber-50' },
+  'floor plan': { icon: FileText, color: 'text-amber-600', bg: 'bg-amber-50' },
   'video': { icon: Film, color: 'text-purple-600', bg: 'bg-purple-50' },
   'videos': { icon: Film, color: 'text-purple-600', bg: 'bg-purple-50' },
 };
@@ -208,35 +286,14 @@ function processThumbQueue() {
   }
 }
 
-/** Fetch a single file thumbnail via the edge function. Returns base64 string or null. */
-function fetchSingleThumbnail(shareUrl, filePath) {
-  const cacheKey = `thumb::${shareUrl}::${filePath}`;
-  const cached = getCachedResult(cacheKey);
-  if (cached !== null) return Promise.resolve(cached);
-  if (pendingRequests.has(cacheKey)) return pendingRequests.get(cacheKey);
-
-  const promise = new Promise((resolve) => {
-    thumbQueue.push(async () => {
-      try {
-        const res = await api.functions.invoke('getDeliveryMediaFeed', {
-          action: 'get_thumbnail',
-          share_url: shareUrl,
-          file_path: filePath.startsWith('/') ? filePath : `/${filePath}`,
-        });
-        const thumb = res?.data?.thumbnail || null;
-        setCachedResult(cacheKey, thumb || '');
-        resolve(thumb);
-      } catch (err) {
-        console.warn('[LazyThumb] fetch failed:', filePath, err?.message);
-        setCachedResult(cacheKey, '');
-        resolve(null);
-      }
-    });
-    processThumbQueue();
-  });
-  pendingRequests.set(cacheKey, promise);
-  promise.finally(() => pendingRequests.delete(cacheKey));
-  return promise;
+/**
+ * fetchSingleThumbnail is deprecated -- the edge function does not have a
+ * 'get_thumbnail' action (only 'thumb', 'proxy', 'stream_url').  Proxy-based
+ * thumbnails in LazyThumbFileCard/ProxyFileCard handle this correctly.
+ * Kept as a no-op to avoid breaking useLazyThumbnail callers.
+ */
+function fetchSingleThumbnail(_shareUrl, _filePath) {
+  return Promise.resolve(null);
 }
 
 /**
@@ -384,7 +441,7 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
 
   useEffect(() => {
     if ((!isImage && !isVideo) || !proxyPath || started.current) return;
-    const cached = imgBlobCache.get(proxyPath);
+    const cached = imgBlobCache.get(`thumb::${proxyPath}`);
     if (cached) { setBlobUrl(cached); return; }
     started.current = true;
     setLoading(true);
@@ -399,7 +456,7 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
   // Reset when file changes
   useEffect(() => {
     started.current = false;
-    const cached = proxyPath ? imgBlobCache.get(proxyPath) : null;
+    const cached = proxyPath ? imgBlobCache.get(`thumb::${proxyPath}`) : null;
     setBlobUrl(cached || null);
     setLoading(false);
   }, [file.path, proxyPath]);
@@ -470,10 +527,10 @@ function LightboxThumb({ file, tonomoBase }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const started = useRef(false);
 
-  const isImage = file.type === 'image';
+  const canThumb = file.type === 'image' || file.type === 'video' || file.type === 'document';
 
   useEffect(() => {
-    if (!isImage || !tonomoBase || started.current) return;
+    if (!canThumb || !tonomoBase || started.current) return;
     const proxyPath = tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path);
     const cached = imgBlobCache.get(proxyPath);
     if (cached) { setBlobUrl(cached); return; }
@@ -483,7 +540,7 @@ function LightboxThumb({ file, tonomoBase }) {
       if (url) setBlobUrl(url);
     });
     processImgQueue();
-  }, [isImage, tonomoBase, file.path]);
+  }, [canThumb, tonomoBase, file.path]);
 
   const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
 
@@ -562,7 +619,7 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
 }
 
 // ─── LazyThumbFileCard: a single file card with on-demand thumbnail loading ──
-function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, project }) {
+function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, project, getTagsForFile }) {
   const { ref: cardRef, thumbnail, loading } = useLazyThumbnail(file, shareUrl, folder.name);
   const [blobUrl, setBlobUrl] = useState(null);
   const [proxyLoading, setProxyLoading] = useState(false);
@@ -575,10 +632,11 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
   const cfg = TYPE_CONFIG[file.type] || TYPE_CONFIG.image;
   const Icon = cfg.icon;
 
-  // Proxy-based image loading (real Dropbox images)
+  // Proxy-based thumbnail loading (real Dropbox thumbnails for images, videos, and documents)
+  const canThumb = isImage || isVideo || isDoc;
   const tonomoBase = project?.tonomo_deliverable_path;
   useEffect(() => {
-    if (!isImage || !tonomoBase || proxyStarted.current) return;
+    if (!canThumb || !tonomoBase || proxyStarted.current) return;
     const proxyPath = tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path);
     const cached = imgBlobCache.get(proxyPath);
     if (cached) { setBlobUrl(cached); return; }
@@ -590,7 +648,7 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
       setProxyLoading(false);
     });
     processImgQueue();
-  }, [isImage, tonomoBase, file.path]);
+  }, [canThumb, tonomoBase, file.path]);
 
   const hasVisual = blobUrl || thumbnail || file.thumbnail;
   const imgSrc = blobUrl || (thumbnail ? `data:image/jpeg;base64,${thumbnail}` : file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
@@ -610,12 +668,13 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
         <img
           src={imgSrc}
           alt={file.name}
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+          className="df-img-loading w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
           loading="lazy"
+          onLoad={(e) => { e.target.classList.remove('df-img-loading'); e.target.classList.add('df-img-loaded'); }}
         />
       ) : isLoading ? (
-        <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 animate-pulse">
-          <Camera className="h-6 w-6 text-muted-foreground/20 animate-pulse" />
+        <div className="w-full h-full flex flex-col items-center justify-center gap-1.5">
+          <Loader2 className="h-5 w-5 text-muted-foreground/30 animate-spin" />
         </div>
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center gap-1.5">
@@ -627,7 +686,7 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
       {/* Video play overlay */}
       {isVideo && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="bg-black/40 rounded-full p-2 group-hover:bg-black/60 transition-colors">
+          <div className="bg-black/40 rounded-full p-2.5 group-hover:bg-black/60 transition-colors backdrop-blur-[2px]">
             <Play className="h-4 w-4 text-white fill-white" />
           </div>
         </div>
@@ -640,10 +699,29 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
         </div>
       )}
 
+      {/* Tag pills at bottom-left */}
+      {(() => {
+        const fullPath = tonomoBase && file.path
+          ? tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path)
+          : null;
+        const tags = getTagsForFile ? getTagsForFile(fullPath) : [];
+        if (!tags.length) return null;
+        return (
+          <div className="absolute bottom-1.5 left-1.5 flex items-center gap-0.5 pointer-events-none z-10">
+            {tags.slice(0, 2).map(tag => (
+              <span key={tag.name} className="text-[8px] px-1 py-0.5 rounded-full text-white backdrop-blur-sm" style={{ backgroundColor: `${tag.color}cc` }}>
+                #{tag.name}
+              </span>
+            ))}
+            {tags.length > 2 && <span className="text-[8px] text-white/70">+{tags.length - 2}</span>}
+          </div>
+        );
+      })()}
+
       {/* Hover filename overlay */}
-      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <p className="text-[10px] text-white truncate">{file.name}</p>
-        <div className="flex items-center gap-1.5 text-[8px] text-white/60">
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-2 pt-6 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        <p className="text-[10px] text-white font-medium truncate">{file.name}</p>
+        <div className="flex items-center gap-1.5 text-[8px] text-white/60 mt-0.5">
           {file.size > 0 && <span>{fmtFileSize(file.size)}</span>}
           {uploadTime && (
             <>
@@ -654,21 +732,28 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
           )}
         </div>
       </div>
+
+      {/* Hover eye icon top-right */}
+      <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        <div className="bg-black/50 backdrop-blur-sm rounded-full p-1">
+          <Eye className="h-3 w-3 text-white" />
+        </div>
+      </div>
     </button>
   );
 }
 
 // ─── ProxyFileCard: inline file card with proxy image support ───────────────
-function ProxyFileCard({ file, project }) {
+function ProxyFileCard({ file, project, getTagsForFile }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const started = useRef(false);
 
-  const isImage = file.type === 'image';
+  const canThumb = file.type === 'image' || file.type === 'video' || file.type === 'document';
   const tonomoBase = project?.tonomo_deliverable_path;
 
   useEffect(() => {
-    if (!isImage || !tonomoBase || started.current) return;
+    if (!canThumb || !tonomoBase || started.current) return;
     const proxyPath = tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path);
     const cached = imgBlobCache.get(proxyPath);
     if (cached) { setBlobUrl(cached); return; }
@@ -680,7 +765,7 @@ function ProxyFileCard({ file, project }) {
       setLoading(false);
     });
     processImgQueue();
-  }, [isImage, tonomoBase, file.path]);
+  }, [canThumb, tonomoBase, file.path]);
 
   const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
   const uploadTime = file.uploaded_at ? relativeTime(file.uploaded_at) : null;
@@ -691,10 +776,10 @@ function ProxyFileCard({ file, project }) {
     <a href={file.preview_url || file.url || '#'} target="_blank" rel="noopener noreferrer"
       className="aspect-[4/3] rounded-lg border overflow-hidden bg-muted/50 hover:shadow-md transition-shadow flex items-center justify-center group relative">
       {imgSrc ? (
-        <img src={imgSrc} alt={file.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" loading="lazy" />
+        <img src={imgSrc} alt={file.name} className="df-img-loading w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" loading="lazy" onLoad={(e) => { e.target.classList.remove('df-img-loading'); e.target.classList.add('df-img-loaded'); }} />
       ) : loading ? (
-        <div className="w-full h-full flex items-center justify-center animate-pulse">
-          <Camera className="h-6 w-6 text-muted-foreground/20" />
+        <div className="w-full h-full flex items-center justify-center">
+          <Loader2 className="h-5 w-5 text-muted-foreground/30 animate-spin" />
         </div>
       ) : (
         <div className="text-center p-2">
@@ -704,9 +789,27 @@ function ProxyFileCard({ file, project }) {
       )}
       {file.type === 'video' && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="bg-black/40 rounded-full p-2"><Play className="h-4 w-4 text-white fill-white" /></div>
+          <div className="bg-black/40 rounded-full p-2.5 backdrop-blur-[2px]"><Play className="h-4 w-4 text-white fill-white" /></div>
         </div>
       )}
+      {/* Tag pills at bottom-left */}
+      {(() => {
+        const fullPath = tonomoBase && file.path
+          ? tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path)
+          : null;
+        const tags = getTagsForFile ? getTagsForFile(fullPath) : [];
+        if (!tags.length) return null;
+        return (
+          <div className="absolute bottom-1.5 left-1.5 flex items-center gap-0.5 pointer-events-none z-10">
+            {tags.slice(0, 2).map(tag => (
+              <span key={tag.name} className="text-[8px] px-1 py-0.5 rounded-full text-white backdrop-blur-sm" style={{ backgroundColor: `${tag.color}cc` }}>
+                #{tag.name}
+              </span>
+            ))}
+            {tags.length > 2 && <span className="text-[8px] text-white/70">+{tags.length - 2}</span>}
+          </div>
+        );
+      })()}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-colors">
         <p className="text-white text-[9px] truncate">{file.name}</p>
         <div className="flex items-center gap-1.5 text-[7px] text-white/60">
@@ -725,7 +828,7 @@ function ProxyFileCard({ file, project }) {
 }
 
 // ─── FolderGallery: renders a subfolder's files as a thumbnail grid ─────────
-function FolderGallery({ folder, shareUrl, onOpenLightbox, project }) {
+function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFile }) {
   const style = getFolderStyle(folder.name);
   const FolderIcon = style.icon;
   const totalSize = folder.files.reduce((s, f) => s + (f.size || 0), 0);
@@ -766,6 +869,7 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project }) {
             shareUrl={shareUrl}
             onOpenLightbox={onOpenLightbox}
             project={project}
+            getTagsForFile={getTagsForFile}
           />
         ))}
       </div>
@@ -780,7 +884,7 @@ function isPartialDelivery(project) {
 }
 
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
-function DeliveryCard({ project, isNew, onFileCountKnown }) {
+function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
   const [expanded, setExpanded] = useState(false);
   const [mediaResult, setMediaResult] = useState(null); // { folders: [...] } or null
   const [flatFiles, setFlatFiles] = useState([]); // backward compat for flat response
@@ -864,25 +968,38 @@ function DeliveryCard({ project, isNew, onFileCountKnown }) {
   const allGalleryFiles = useMemo(() => (mediaResult?.folders || []).flatMap(f => f.files), [mediaResult]);
 
   return (
-    <div className={cn('border rounded-xl overflow-hidden transition-all hover:shadow-md bg-card', isNew && 'ring-2 ring-green-300 ring-opacity-50')}>
-      <button onClick={() => setExpanded(e => !e)} className="w-full text-left">
+    <div className={cn(
+      'border rounded-xl overflow-hidden transition-all duration-200 bg-card hover:shadow-lg hover:-translate-y-[1px]',
+      'border-l-[3px]',
+      isPartial ? 'border-l-orange-400' : project.status === 'delivered' ? 'border-l-emerald-400' : 'border-l-blue-400',
+      isNew && 'ring-2 ring-green-300 ring-opacity-50'
+    )}>
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset rounded-xl"
+        aria-expanded={expanded}
+        aria-controls={`delivery-panel-${project.id}`}
+      >
         <div className="flex items-start gap-3 p-4">
           <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5', isPartial ? 'bg-orange-100' : project.status === 'delivered' ? 'bg-emerald-100' : 'bg-blue-100')}>
-            {isPartial ? <Loader2 className="h-5 w-5 text-orange-600" /> : project.status === 'delivered' ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Package className="h-5 w-5 text-blue-600" />}
+            {isPartial ? <Loader2 className="h-5 w-5 text-orange-600 animate-spin" /> : project.status === 'delivered' ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Package className="h-5 w-5 text-blue-600" />}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-semibold text-sm">{projectTitle(project)}</span>
+              <span className="font-semibold text-[15px] leading-tight">{projectTitle(project)}</span>
               {isNew && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-200">NEW</Badge>}
               {isPartial ? (
-                <Badge className="text-[9px] bg-orange-100 text-orange-700 border-orange-200">In Progress</Badge>
+                <Badge className="text-[9px] bg-orange-100 text-orange-700 border-orange-200 gap-1.5">
+                  <span className="df-pulse-dot inline-block w-1.5 h-1.5 rounded-full bg-orange-500" />
+                  In Progress
+                </Badge>
               ) : (
                 <Badge variant="outline" className="text-[9px]">{stageLabel(project.status)}</Badge>
               )}
               {packageName && <Badge variant="outline" className="text-[9px] bg-muted/50">{packageName}</Badge>}
             </div>
-            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
-              {project.agent_name && <span>{project.agent_name}</span>}
+            <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground flex-wrap">
+              {project.agent_name && <span className="font-medium text-foreground/70">{project.agent_name}</span>}
               {project.agency_name && <span className="flex items-center gap-1"><Building2 className="h-3 w-3" />{project.agency_name}</span>}
               {deliveredAt && <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{relativeTime(deliveredAt)}</span>}
               {turnaroundHrs != null && (
@@ -903,9 +1020,9 @@ function DeliveryCard({ project, isNew, onFileCountKnown }) {
                 {/* Skeleton pill placeholders while gallery is loading */}
                 {loadingMedia ? (
                   <>
-                    <div className="h-5 w-24 rounded-full bg-muted animate-pulse" />
-                    <div className="h-5 w-20 rounded-full bg-muted animate-pulse" />
-                    <div className="h-5 w-16 rounded-full bg-muted animate-pulse" />
+                    <div className="df-skeleton-pill h-5 w-24" />
+                    <div className="df-skeleton-pill h-5 w-20" style={{ animationDelay: '0.2s' }} />
+                    <div className="df-skeleton-pill h-5 w-16" style={{ animationDelay: '0.4s' }} />
                   </>
                 ) : mediaResult?.folders?.length > 0 ? (
                   /* Folder-based pills from Dropbox gallery (preferred source) */
@@ -978,12 +1095,14 @@ function DeliveryCard({ project, isNew, onFileCountKnown }) {
           <div className="flex items-center gap-2 shrink-0">
             {deliverableLink && <a href={deliverableLink} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-primary transition-colors" title="Open delivery folder"><ExternalLink className="h-4 w-4" /></a>}
             <Link to={createPageUrl('ProjectDetails') + `?id=${project.id}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-primary transition-colors" title="Open project"><ArrowRight className="h-4 w-4" /></Link>
-            {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+            <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform duration-200', expanded && 'rotate-180')} />
           </div>
         </div>
       </button>
 
-      {expanded && (
+      <div className="df-expand-panel" data-open={expanded} id={`delivery-panel-${project.id}`} role="region" aria-labelledby={`delivery-btn-${project.id}`}>
+        <div className="df-expand-inner">
+        {expanded && (
         <div className="border-t px-4 py-3">
           {/* Priority: Dropbox API gallery > delivered_files fallback */}
           {loadingMedia ? (
@@ -1024,6 +1143,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown }) {
                   shareUrl={deliverableLink}
                   onOpenLightbox={(files, index) => setLightbox({ files, index })}
                   project={project}
+                  getTagsForFile={getTagsForFile}
                 />
               ))}
             </div>
@@ -1148,6 +1268,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown }) {
                     shareUrl={deliverableLink}
                     onOpenLightbox={(files, index) => setLightbox({ files, index })}
                     project={project}
+                    getTagsForFile={getTagsForFile}
                   />
                 ))}
               </div>
@@ -1163,6 +1284,8 @@ function DeliveryCard({ project, isNew, onFileCountKnown }) {
           )}
         </div>
       )}
+        </div>
+      </div>
       {lightbox && <MiniLightbox files={lightbox.files} initialIndex={lightbox.index} shareUrl={deliverableLink} onClose={() => setLightbox(null)} project={project} />}
     </div>
   );
@@ -1176,6 +1299,19 @@ export default function DeliveryFeed() {
   const [newDeliveryIds, setNewDeliveryIds] = useState(new Set());
   const [dropboxWarning, setDropboxWarning] = useState(false);
   const [emptyProjectIds, setEmptyProjectIds] = useState(new Set()); // Projects with 0 Dropbox files
+
+  // Favorites + tags: call once at parent level, pass helper down
+  const { favorites, allTags: tagRegistry } = useFavorites();
+
+  const getTagsForFile = useCallback((filePath) => {
+    if (!filePath) return [];
+    const fav = favorites.find(f => f.file_path === filePath);
+    if (!fav?.tags?.length) return [];
+    return fav.tags.map(tagName => {
+      const reg = tagRegistry.find(t => t.name === tagName);
+      return { name: tagName, color: reg?.color || '#3b82f6' };
+    });
+  }, [favorites, tagRegistry]);
 
   // Callback from DeliveryCard when file count is known
   const handleFileCountKnown = useCallback((projectId, count) => {
@@ -1368,7 +1504,7 @@ export default function DeliveryFeed() {
                 <span className="text-xs text-muted-foreground">{projects.length} deliver{projects.length !== 1 ? 'ies' : 'y'}</span>
               </div>
               <div className="space-y-2">
-                {projects.filter(p => !emptyProjectIds.has(p.id)).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} />)}
+                {projects.filter(p => !emptyProjectIds.has(p.id)).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} />)}
               </div>
             </div>
           ))}

@@ -5,12 +5,18 @@
  * the MediaFavorite + MediaTag entities. Uses the shared entity
  * cache (useEntityList) so all mounted components stay in sync
  * via Supabase Realtime.
+ *
+ * Performance notes:
+ * - isFavorited / getFavorite use Map-keyed lookups (O(1)) instead of array.find()
+ * - Errors surface via sonner toast instead of silent console.warn
+ * - toggleMultiple supports bulk favorite/unfavorite operations
  */
 
 import { useMemo, useCallback, useState, useRef } from 'react';
 import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
 import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import { api } from '@/api/supabaseClient';
+import { toast } from 'sonner';
 
 export function useFavorites() {
   const { data: user } = useCurrentUser();
@@ -24,6 +30,7 @@ export function useFavorites() {
   // Keys are "file:<path>" or "project:<id>", values are true (added) or false (removed).
   const [optimisticToggles, setOptimisticToggles] = useState({});
   const toggleVersionRef = useRef(0); // monotonic counter to discard stale reconciliations
+  const optimisticIdCounter = useRef(0); // monotonic ID to avoid Date.now() collisions in rapid toggles
 
   // Filter to current user's favorites, then overlay optimistic state
   const favorites = useMemo(() => {
@@ -62,28 +69,51 @@ export function useFavorites() {
     return result;
   }, [allFavorites, userId, optimisticToggles]);
 
+  // ── Map-based lookup indexes (O(1) per lookup instead of O(n)) ──
+  const favoriteByFilePath = useMemo(() => {
+    const map = new Map();
+    for (const f of favorites) {
+      if (f.file_path) map.set(f.file_path, f);
+    }
+    return map;
+  }, [favorites]);
+
+  const favoriteByProjectId = useMemo(() => {
+    const map = new Map();
+    for (const f of favorites) {
+      if (f.project_id) map.set(f.project_id, f);
+    }
+    return map;
+  }, [favorites]);
+
   /**
    * Check if a file or project is favorited by the current user.
    * Pass filePath for file favorites, projectId for project favorites.
+   * Uses Map lookup for O(1) performance.
    */
   const isFavorited = useCallback((filePath, projectId) => {
     if (!userId) return false;
-    return favorites.some(f =>
-      (filePath && f.file_path === filePath) ||
-      (projectId && f.project_id === projectId)
-    );
-  }, [favorites, userId]);
+    if (filePath && favoriteByFilePath.has(filePath)) return true;
+    if (projectId && favoriteByProjectId.has(projectId)) return true;
+    return false;
+  }, [userId, favoriteByFilePath, favoriteByProjectId]);
 
   /**
    * Get the full favorite record for a file or project, or null.
+   * Uses Map lookup for O(1) performance.
    */
   const getFavorite = useCallback((filePath, projectId) => {
     if (!userId) return null;
-    return favorites.find(f =>
-      (filePath && f.file_path === filePath) ||
-      (projectId && f.project_id === projectId)
-    ) || null;
-  }, [favorites, userId]);
+    if (filePath) {
+      const match = favoriteByFilePath.get(filePath);
+      if (match) return match;
+    }
+    if (projectId) {
+      const match = favoriteByProjectId.get(projectId);
+      if (match) return match;
+    }
+    return null;
+  }, [userId, favoriteByFilePath, favoriteByProjectId]);
 
   /**
    * Toggle a favorite on/off. Creates or deletes the MediaFavorite record
@@ -108,6 +138,7 @@ export function useFavorites() {
     const existing = getFavorite(filePath, projectId);
     const optimisticKey = filePath ? `file:${filePath}` : `project:${projectId}`;
     const version = ++toggleVersionRef.current;
+    const displayName = fileName || projectTitle || 'item';
 
     if (existing) {
       // ── Optimistic removal ──
@@ -141,14 +172,16 @@ export function useFavorites() {
             return next;
           });
         }
-        console.warn('[useFavorites] toggleFavorite delete failed:', err?.message);
+        toast.error('Failed to remove favorite', {
+          description: err?.message || `Could not unfavorite "${displayName}". Please try again.`,
+        });
         return true; // still favorited
       }
     } else {
       // ── Optimistic addition ──
       const favoritedByName = user?.full_name || user?.email || 'Unknown';
       const optimisticRecord = {
-        id: `_optimistic_${Date.now()}`,
+        id: `_optimistic_${Date.now()}_${++optimisticIdCounter.current}`,
         user_id: userId,
         file_path: filePath || null,
         project_id: projectId || null,
@@ -202,7 +235,9 @@ export function useFavorites() {
             return next;
           });
         }
-        console.warn('[useFavorites] toggleFavorite create failed:', err?.message);
+        toast.error('Failed to add favorite', {
+          description: err?.message || `Could not favorite "${displayName}". Please try again.`,
+        });
         return false; // still not favorited
       }
     }
@@ -218,8 +253,75 @@ export function useFavorites() {
       });
     }
 
+    // Success toast for single toggle
+    if (existing) {
+      toast.success('Removed from favorites', {
+        description: `"${displayName}" unfavorited.`,
+        duration: 2000,
+      });
+    } else {
+      toast.success('Added to favorites', {
+        description: `"${displayName}" favorited.`,
+        duration: 2000,
+      });
+    }
+
     return !existing;
   }, [userId, user, getFavorite]);
+
+  /**
+   * Toggle multiple items at once. Accepts an array of item descriptors
+   * and a target state (true = favorite all, false = unfavorite all).
+   * Operations run in parallel with individual optimistic updates.
+   *
+   * @param {Array<{filePath, projectId, fileName, fileType, projectTitle, propertyAddress, tonomoBasePath}>} items
+   * @param {boolean} targetState - true to favorite all, false to unfavorite all
+   * @returns {number} Count of items that were actually toggled
+   */
+  const toggleMultiple = useCallback(async (items, targetState) => {
+    if (!userId || !items?.length) return 0;
+
+    let toggledCount = 0;
+    const itemsToToggle = items.filter(item => {
+      const currentlyFavorited = isFavorited(item.filePath, item.projectId);
+      // Only toggle items that need changing
+      return targetState ? !currentlyFavorited : currentlyFavorited;
+    });
+
+    if (itemsToToggle.length === 0) {
+      toast.info('No changes needed', {
+        description: `All ${items.length} items are already ${targetState ? 'favorited' : 'unfavorited'}.`,
+      });
+      return 0;
+    }
+
+    try {
+      // toggleFavorite never rejects — it catches errors internally and returns a boolean.
+      // Use the return value (new favorited state) to detect whether the toggle succeeded:
+      // - If targetState is true (favoriting), success means the return is true.
+      // - If targetState is false (unfavoriting), success means the return is false.
+      const results = await Promise.all(
+        itemsToToggle.map(item => toggleFavorite(item))
+      );
+
+      toggledCount = results.filter(r => r === targetState).length;
+      const failedCount = results.length - toggledCount;
+
+      if (failedCount > 0) {
+        toast.warning(`${toggledCount} ${targetState ? 'favorited' : 'unfavorited'}, ${failedCount} failed`, {
+          description: 'Some items could not be updated. Please try again.',
+        });
+      } else {
+        toast.success(`${toggledCount} items ${targetState ? 'favorited' : 'unfavorited'}`);
+      }
+    } catch (err) {
+      toast.error('Batch operation failed', {
+        description: err?.message || 'Could not complete the bulk operation.',
+      });
+    }
+
+    return toggledCount;
+  }, [userId, isFavorited, toggleFavorite]);
 
   /**
    * Update tags on a favorite and sync the media_tags registry.
@@ -232,67 +334,94 @@ export function useFavorites() {
     // Get the current favorite to diff tags
     const current = allFavorites?.find(f => f.id === favoriteId);
     const oldTags = current?.tags || [];
+    const displayName = current?.file_name || current?.project_title || 'item';
 
-    // Update the favorite record
-    await api.entities.MediaFavorite.update(favoriteId, { tags: newTags });
+    try {
+      // Update the favorite record
+      await api.entities.MediaFavorite.update(favoriteId, { tags: newTags });
 
-    // Determine added/removed tags for registry updates
-    const added = newTags.filter(t => !oldTags.includes(t));
-    const removed = oldTags.filter(t => !newTags.includes(t));
+      // Determine added/removed tags for registry updates
+      const added = newTags.filter(t => !oldTags.includes(t));
+      const removed = oldTags.filter(t => !newTags.includes(t));
 
-    // Upsert new tags into the registry
-    for (const tagName of added) {
-      const existing = allTags?.find(t => t.name === tagName);
-      if (existing) {
-        await api.entities.MediaTag.update(existing.id, {
-          usage_count: (existing.usage_count || 0) + 1,
+      // Upsert new tags into the registry
+      for (const tagName of added) {
+        const existing = allTags?.find(t => t.name === tagName);
+        if (existing) {
+          await api.entities.MediaTag.update(existing.id, {
+            usage_count: (existing.usage_count || 0) + 1,
+          });
+        } else {
+          await api.entities.MediaTag.create({
+            name: tagName,
+            usage_count: 1,
+            created_by_id: userId,
+            created_by_name: user?.full_name || user?.email || 'Unknown',
+          });
+        }
+      }
+
+      // Decrement usage_count for removed tags
+      for (const tagName of removed) {
+        const existing = allTags?.find(t => t.name === tagName);
+        if (existing && (existing.usage_count || 0) > 0) {
+          await api.entities.MediaTag.update(existing.id, {
+            usage_count: Math.max(0, (existing.usage_count || 0) - 1),
+          });
+        }
+      }
+
+      // Audit log
+      await api.entities.AuditLog.create({
+        entity_type: 'media_favorite',
+        entity_id: favoriteId,
+        action: 'tags_updated',
+        user_id: userId,
+        user_name: user?.full_name || user?.email || 'Unknown',
+        entity_name: current?.file_name || current?.project_title || 'Unknown',
+        details: {
+          file_name: current?.file_name || null,
+          file_path: current?.file_path || null,
+          file_type: current?.file_type || null,
+          project_id: current?.project_id || null,
+          project_title: current?.project_title || null,
+          tonomo_base_path: current?.tonomo_base_path || null,
+          tags: newTags,
+          added_tags: added,
+          removed_tags: removed,
+        },
+      });
+
+      // Refresh caches
+      await Promise.all([
+        refetchEntityList('MediaFavorite'),
+        refetchEntityList('MediaTag'),
+      ]);
+
+      // Success toast for tag updates
+      if (added.length > 0 && removed.length === 0) {
+        toast.success(`Tag${added.length > 1 ? 's' : ''} added`, {
+          description: `Added ${added.map(t => '#' + t).join(', ')} to "${displayName}".`,
+          duration: 2500,
         });
-      } else {
-        await api.entities.MediaTag.create({
-          name: tagName,
-          usage_count: 1,
-          created_by_id: userId,
-          created_by_name: user?.full_name || user?.email || 'Unknown',
+      } else if (removed.length > 0 && added.length === 0) {
+        toast.success(`Tag${removed.length > 1 ? 's' : ''} removed`, {
+          description: `Removed ${removed.map(t => '#' + t).join(', ')} from "${displayName}".`,
+          duration: 2500,
+        });
+      } else if (added.length > 0 && removed.length > 0) {
+        toast.success('Tags updated', {
+          description: `Updated tags on "${displayName}".`,
+          duration: 2500,
         });
       }
+    } catch (err) {
+      toast.error('Failed to update tags', {
+        description: err?.message || `Could not update tags on "${displayName}". Please try again.`,
+      });
+      // Re-throw so callers can handle if needed
+      throw err;
     }
-
-    // Decrement usage_count for removed tags
-    for (const tagName of removed) {
-      const existing = allTags?.find(t => t.name === tagName);
-      if (existing && (existing.usage_count || 0) > 0) {
-        await api.entities.MediaTag.update(existing.id, {
-          usage_count: Math.max(0, (existing.usage_count || 0) - 1),
-        });
-      }
-    }
-
-    // Audit log
-    await api.entities.AuditLog.create({
-      entity_type: 'media_favorite',
-      entity_id: favoriteId,
-      action: 'tags_updated',
-      user_id: userId,
-      user_name: user?.full_name || user?.email || 'Unknown',
-      entity_name: current?.file_name || current?.project_title || 'Unknown',
-      details: {
-        file_name: current?.file_name || null,
-        file_path: current?.file_path || null,
-        file_type: current?.file_type || null,
-        project_id: current?.project_id || null,
-        project_title: current?.project_title || null,
-        tonomo_base_path: current?.tonomo_base_path || null,
-        tags: newTags,
-        added_tags: added,
-        removed_tags: removed,
-      },
-    });
-
-    // Refresh caches
-    await Promise.all([
-      refetchEntityList('MediaFavorite'),
-      refetchEntityList('MediaTag'),
-    ]);
   }, [userId, user, allFavorites, allTags]);
 
   return {
@@ -301,6 +430,7 @@ export function useFavorites() {
     isFavorited,
     getFavorite,
     toggleFavorite,
+    toggleMultiple,
     updateTags,
     loading: favLoading || tagsLoading,
   };

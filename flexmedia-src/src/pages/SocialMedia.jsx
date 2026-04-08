@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
+import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,16 +11,77 @@ import {
   Heart, Star, Search, Camera, Film, FileText, File,
   ExternalLink, Clock, Grid2x2, Grid3x3, LayoutGrid,
   Tag, FolderOpen, Building2, ImageOff, Play, User,
-  Activity, Filter, X
+  Activity, Filter, X, Plus, Trash2, Palette, Check,
+  ArrowUpDown, ChevronDown, Sparkles, StarOff
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// ---- CSS keyframes injected once ----
+const STYLE_ID = '__favorites-page-animations';
+if (typeof document !== 'undefined' && !document.getElementById(STYLE_ID)) {
+  const style = document.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = `
+    @keyframes favFadeInUp {
+      from { opacity: 0; transform: translateY(12px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes favPulse {
+      0%, 100% { transform: scale(1); }
+      50%      { transform: scale(1.15); }
+    }
+    @keyframes favSlideIn {
+      from { opacity: 0; transform: translateX(-16px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes favCountUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes favShimmer {
+      0%   { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    @keyframes favHeartBeat {
+      0%   { transform: scale(1); }
+      14%  { transform: scale(1.2); }
+      28%  { transform: scale(1); }
+      42%  { transform: scale(1.15); }
+      70%  { transform: scale(1); }
+    }
+    @keyframes favImageFadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .fav-card-enter {
+      animation: favFadeInUp 0.4s ease-out both;
+    }
+    .fav-timeline-enter {
+      animation: favSlideIn 0.35s ease-out both;
+    }
+    .fav-stat-enter {
+      animation: favCountUp 0.5s ease-out both;
+    }
+    .fav-heart-beat {
+      animation: favHeartBeat 1.2s ease-in-out;
+    }
+    .fav-image-loaded {
+      animation: favImageFadeIn 0.4s ease-out both;
+    }
+    .fav-grid-transition > * {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 
 // ---- Image proxy with concurrency limiter + blob cache ----
 const blobCache = new Map();
@@ -35,7 +98,7 @@ function processQueue() {
 }
 
 async function fetchProxyImage(filePath, mode = 'thumb') {
-  const cacheKey = `${mode}::${filePath}`;
+  const cacheKey = `thumb::${filePath}`;
   if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
   if (pending.has(cacheKey)) return null;
   pending.add(cacheKey);
@@ -43,7 +106,7 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: mode, file_path: filePath }),
+      body: JSON.stringify({ action: 'thumb', file_path: filePath }),
     });
     if (!res.ok) return null;
     const blob = await res.blob();
@@ -56,23 +119,19 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
 }
 
 // ---- Dropbox preview URL builder ----
-// Parent share link for the Tonomo delivery folder
 const DROPBOX_SHARE_BASE = 'https://www.dropbox.com/scl/fo/7wnvxwd9722243256h33m/ANBWjH-I1_RZbjyWt0n4Agg';
 const DROPBOX_RLKEY = 'jhdry20jttkrn0o1v8bpmcsmf';
 const TONOMO_PREFIX = '/flex media team folder/tonomo';
 
 function buildDropboxPreviewUrl(fullPath) {
   if (!fullPath) return null;
-  // Strip the shared-folder prefix to get the relative path within the share
   const lowerPath = fullPath.toLowerCase();
   const lowerPrefix = TONOMO_PREFIX.toLowerCase();
   let relativePath = fullPath;
   if (lowerPath.startsWith(lowerPrefix)) {
     relativePath = fullPath.slice(TONOMO_PREFIX.length);
   }
-  // Ensure leading slash
   if (!relativePath.startsWith('/')) relativePath = '/' + relativePath;
-  // Encode each path segment individually
   const encodedPath = relativePath.split('/').map(seg => encodeURIComponent(seg)).join('/');
   return `${DROPBOX_SHARE_BASE}${encodedPath}?rlkey=${DROPBOX_RLKEY}&dl=0`;
 }
@@ -92,6 +151,11 @@ function timeAgo(dateStr) {
   try { return formatDistanceToNow(new Date(dateStr), { addSuffix: true }); } catch { return null; }
 }
 
+function getInitials(name) {
+  if (!name) return '?';
+  return name.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+}
+
 // ---- Grid sizes ----
 const GRID_SIZES = {
   sm: 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2',
@@ -106,20 +170,31 @@ const TYPE_FILTERS = [
   { value: 'project',  label: 'Projects' },
 ];
 
-// ---- File Favorite Card ----
-function FileFavoriteCard({ favorite, isVisible }) {
+// ---- Tag color lookup helper ----
+function useTagColorMap(mediaTags) {
+  return useMemo(() => {
+    const map = {};
+    (mediaTags || []).forEach(t => { map[t.name] = t.color || '#3b82f6'; });
+    return map;
+  }, [mediaTags]);
+}
+
+
+// ================ FILE FAVORITE CARD ================
+
+function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, animDelay = 0 }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
   const started = useRef(false);
 
-  const isImage = favorite.file_type === 'image';
-  const proxyPath = favorite.tonomo_base_path && favorite.file_path
-    ? `${favorite.tonomo_base_path}${favorite.file_path.startsWith('/') ? favorite.file_path : '/' + favorite.file_path}`
-    : null;
+  const canThumb = favorite.file_type === 'image' || favorite.file_type === 'video' || favorite.file_type === 'document';
+  // file_path is stored as the full proxy path (basePath + relativePath) at favorite-time.
+  // Do NOT re-prepend tonomo_base_path — it is already baked into file_path.
+  const proxyPath = favorite.file_path || null;
 
   useEffect(() => {
-    if (!isImage || !proxyPath || started.current) return;
-    // fetchProxyImage stores blobs under "thumb::path", so look up with the same key
+    if (!canThumb || !proxyPath || started.current) return;
     const cached = blobCache.get(`thumb::${proxyPath}`);
     if (cached) { setBlobUrl(cached); return; }
     if (!isVisible) return;
@@ -131,11 +206,9 @@ function FileFavoriteCard({ favorite, isVisible }) {
       setLoading(false);
     });
     processQueue();
-  }, [isImage, proxyPath, isVisible]);
+  }, [canThumb, proxyPath, isVisible]);
 
   const handleClick = () => {
-    // Construct Dropbox preview URL on the fly from the share link pattern
-    // The full dropbox path = tonomo_base_path + file_path, minus the shared folder prefix
     if (proxyPath) {
       const dropboxUrl = buildDropboxPreviewUrl(proxyPath);
       if (dropboxUrl) { safeWindowOpen(dropboxUrl); return; }
@@ -143,19 +216,38 @@ function FileFavoriteCard({ favorite, isVisible }) {
     if (favorite.preview_url) safeWindowOpen(favorite.preview_url);
   };
 
+  const handleUnfavorite = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (onUnfavorite) onUnfavorite(favorite);
+  };
+
   return (
     <button
       type="button"
       onClick={handleClick}
-      className="group relative rounded-xl overflow-hidden border bg-card transition-all hover:shadow-lg hover:-translate-y-0.5 text-left w-full focus:outline-none focus:ring-2 focus:ring-primary"
+      className="fav-card-enter group relative rounded-xl overflow-hidden border bg-card text-left w-full focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all duration-300 hover:shadow-xl hover:shadow-primary/5 hover:-translate-y-1"
+      style={{ animationDelay: `${animDelay}ms` }}
     >
       {/* Thumbnail */}
       <div className="aspect-[4/3] bg-muted flex items-center justify-center overflow-hidden relative">
         {blobUrl ? (
-          <img src={blobUrl} alt={favorite.file_name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy" />
+          <img
+            src={blobUrl}
+            alt={favorite.file_name}
+            className={cn(
+              "w-full h-full object-cover transition-transform duration-500 group-hover:scale-110",
+              imageLoaded ? "fav-image-loaded" : "opacity-0"
+            )}
+            loading="lazy"
+            onLoad={() => setImageLoaded(true)}
+          />
         ) : loading ? (
-          <div className="w-full h-full animate-pulse bg-muted flex items-center justify-center">
-            <Camera className="h-6 w-6 text-muted-foreground/20 animate-pulse" />
+          <div className="w-full h-full bg-muted flex items-center justify-center">
+            <div className="relative">
+              <Camera className="h-6 w-6 text-muted-foreground/20" />
+              <div className="absolute inset-0 rounded-full border-2 border-primary/20 border-t-primary/60 animate-spin" style={{ width: 32, height: 32, left: -4, top: -4 }} />
+            </div>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-1.5 text-muted-foreground p-4">
@@ -167,23 +259,65 @@ function FileFavoriteCard({ favorite, isVisible }) {
         {/* Video overlay */}
         {favorite.file_type === 'video' && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="bg-black/40 rounded-full p-2.5"><Play className="h-5 w-5 text-white fill-white" /></div>
+            <div className="bg-black/40 rounded-full p-2.5 backdrop-blur-sm"><Play className="h-5 w-5 text-white fill-white" /></div>
           </div>
         )}
 
-        {/* Favorite star */}
-        <div className="absolute top-2 left-2">
-          <Star className="h-4 w-4 text-yellow-400 fill-yellow-400 drop-shadow-md" />
+        {/* Always-visible star */}
+        <div className="absolute top-2 left-2 drop-shadow-lg">
+          <Star className="h-5 w-5 text-yellow-400 fill-yellow-400 filter drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]" />
         </div>
 
-        {/* External link on hover */}
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-          <ExternalLink className="h-3.5 w-3.5 text-white drop-shadow-md" />
+        {/* Hover overlay with details */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 pointer-events-none">
+          <div className="pointer-events-auto space-y-1.5">
+            <p className="text-white text-xs font-semibold truncate drop-shadow-sm">{favorite.file_name}</p>
+            {favorite.project_title && (
+              <p className="text-white/70 text-[10px] truncate">{favorite.project_title}</p>
+            )}
+            {favorite.tags?.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {favorite.tags.slice(0, 4).map(tag => (
+                  <span
+                    key={tag}
+                    className="text-[9px] px-1.5 py-0.5 rounded-full text-white font-medium"
+                    style={{ backgroundColor: (tagColorMap[tag] || '#3b82f6') + 'cc' }}
+                  >
+                    #{tag}
+                  </span>
+                ))}
+                {favorite.tags.length > 4 && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/20 text-white/80">
+                    +{favorite.tags.length - 4}
+                  </span>
+                )}
+              </div>
+            )}
+            {favorite.created_date && (
+              <p className="text-white/50 text-[9px]">{timeAgo(favorite.created_date)}</p>
+            )}
+            {/* Unfavorite button */}
+            <button
+              type="button"
+              onClick={handleUnfavorite}
+              className="inline-flex items-center gap-1 text-[10px] text-white/70 hover:text-red-300 transition-colors mt-1"
+            >
+              <StarOff className="h-3 w-3" />
+              Unfavorite
+            </button>
+          </div>
+        </div>
+
+        {/* External link hint on hover */}
+        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="bg-black/40 backdrop-blur-sm rounded-full p-1">
+            <ExternalLink className="h-3 w-3 text-white" />
+          </div>
         </div>
 
         {/* Type badge for non-images */}
         {favorite.file_type !== 'image' && (
-          <div className="absolute bottom-2 left-2">
+          <div className="absolute bottom-2 left-2 group-hover:opacity-0 transition-opacity">
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 bg-background/80 backdrop-blur-sm">
               {favorite.file_type === 'video' ? 'Video' : (favorite.file_type || 'File')}
             </Badge>
@@ -191,7 +325,7 @@ function FileFavoriteCard({ favorite, isVisible }) {
         )}
       </div>
 
-      {/* Info */}
+      {/* Info below card */}
       <div className="p-2.5 space-y-1">
         <p className="text-xs font-medium truncate leading-tight" title={favorite.file_name}>{favorite.file_name}</p>
         {favorite.property_address && (
@@ -200,14 +334,27 @@ function FileFavoriteCard({ favorite, isVisible }) {
             <span className="truncate">{favorite.property_address}</span>
           </div>
         )}
-        {/* Tags */}
+        {/* Tag pills with registry colors */}
         {favorite.tags?.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
-            {favorite.tags.map(tag => (
-              <Badge key={tag} variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-primary/5 text-primary border-primary/20">
+            {favorite.tags.slice(0, 3).map(tag => (
+              <span
+                key={tag}
+                className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border"
+                style={{
+                  color: tagColorMap[tag] || '#3b82f6',
+                  borderColor: (tagColorMap[tag] || '#3b82f6') + '40',
+                  backgroundColor: (tagColorMap[tag] || '#3b82f6') + '10',
+                }}
+              >
                 #{tag}
-              </Badge>
+              </span>
             ))}
+            {favorite.tags.length > 3 && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+                +{favorite.tags.length - 3}
+              </span>
+            )}
           </div>
         )}
         <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
@@ -230,8 +377,10 @@ function FileFavoriteCard({ favorite, isVisible }) {
   );
 }
 
-// ---- Project Favorite Card ----
-function ProjectFavoriteCard({ favorite }) {
+
+// ================ PROJECT FAVORITE CARD ================
+
+function ProjectFavoriteCard({ favorite, tagColorMap, onUnfavorite, animDelay = 0 }) {
   const navigate = useNavigate();
 
   const handleClick = () => {
@@ -240,28 +389,54 @@ function ProjectFavoriteCard({ favorite }) {
     }
   };
 
+  const handleUnfavorite = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (onUnfavorite) onUnfavorite(favorite);
+  };
+
   return (
     <button
       type="button"
       onClick={handleClick}
-      className="group relative rounded-xl overflow-hidden border bg-card transition-all hover:shadow-lg hover:-translate-y-0.5 text-left w-full focus:outline-none focus:ring-2 focus:ring-primary"
+      className="fav-card-enter group relative rounded-xl overflow-hidden border bg-card text-left w-full focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all duration-300 hover:shadow-xl hover:shadow-primary/5 hover:-translate-y-1"
+      style={{ animationDelay: `${animDelay}ms` }}
     >
       {/* Project visual */}
-      <div className="aspect-[4/3] bg-gradient-to-br from-primary/10 via-muted to-primary/5 flex items-center justify-center relative">
-        <div className="text-center p-4">
-          <FolderOpen className="h-10 w-10 text-primary/40 mx-auto mb-2" />
+      <div className="aspect-[4/3] bg-gradient-to-br from-primary/10 via-muted to-primary/5 flex items-center justify-center relative overflow-hidden">
+        {/* Decorative pattern */}
+        <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0)', backgroundSize: '20px 20px' }} />
+
+        <div className="text-center p-4 relative z-10">
+          <div className="mx-auto mb-2 w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+            <FolderOpen className="h-6 w-6 text-primary/60" />
+          </div>
           <p className="text-sm font-semibold text-foreground/80 line-clamp-2">{favorite.project_title || 'Untitled Project'}</p>
         </div>
 
-        {/* Favorite star */}
-        <div className="absolute top-2 left-2">
-          <Star className="h-4 w-4 text-yellow-400 fill-yellow-400 drop-shadow-md" />
+        {/* Star */}
+        <div className="absolute top-2 left-2 drop-shadow-lg">
+          <Star className="h-5 w-5 text-yellow-400 fill-yellow-400 filter drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]" />
         </div>
 
         <div className="absolute top-2 right-2">
           <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 bg-background/80 backdrop-blur-sm">
             Project
           </Badge>
+        </div>
+
+        {/* Hover overlay */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 pointer-events-none">
+          <div className="pointer-events-auto">
+            <button
+              type="button"
+              onClick={handleUnfavorite}
+              className="inline-flex items-center gap-1 text-[10px] text-white/70 hover:text-red-300 transition-colors"
+            >
+              <StarOff className="h-3 w-3" />
+              Unfavorite
+            </button>
+          </div>
         </div>
       </div>
 
@@ -277,10 +452,18 @@ function ProjectFavoriteCard({ favorite }) {
         {/* Tags */}
         {favorite.tags?.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
-            {favorite.tags.map(tag => (
-              <Badge key={tag} variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-primary/5 text-primary border-primary/20">
+            {favorite.tags.slice(0, 3).map(tag => (
+              <span
+                key={tag}
+                className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border"
+                style={{
+                  color: tagColorMap[tag] || '#3b82f6',
+                  borderColor: (tagColorMap[tag] || '#3b82f6') + '40',
+                  backgroundColor: (tagColorMap[tag] || '#3b82f6') + '10',
+                }}
+              >
                 #{tag}
-              </Badge>
+              </span>
             ))}
           </div>
         )}
@@ -304,16 +487,22 @@ function ProjectFavoriteCard({ favorite }) {
   );
 }
 
-// ---- Skeleton ----
-function FavoriteSkeleton({ count = 8 }) {
+
+// ================ SKELETON ================
+
+function FavoriteSkeleton({ count = 8, gridSize = 'md' }) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+    <div className={cn("grid", GRID_SIZES[gridSize])}>
       {Array.from({ length: count }).map((_, i) => (
         <div key={i} className="rounded-xl overflow-hidden border bg-card">
           <Skeleton className="aspect-[4/3] w-full" />
           <div className="p-2.5 space-y-1.5">
             <Skeleton className="h-3 w-3/4" />
             <Skeleton className="h-2.5 w-1/2" />
+            <div className="flex gap-1">
+              <Skeleton className="h-3 w-10 rounded-full" />
+              <Skeleton className="h-3 w-12 rounded-full" />
+            </div>
             <Skeleton className="h-2.5 w-2/3" />
           </div>
         </div>
@@ -322,17 +511,18 @@ function FavoriteSkeleton({ count = 8 }) {
   );
 }
 
-// ---- Audit Log Entry (Rich) ----
+
+// ================ ACTIVITY TIMELINE ================
+
 const ACTION_CONFIG = {
-  favorited:    { icon: Star,    color: 'text-yellow-500', bg: 'bg-yellow-50 dark:bg-yellow-900/20', verb: 'favorited' },
-  unfavorited:  { icon: Heart,   color: 'text-red-400',    bg: 'bg-red-50 dark:bg-red-900/20',      verb: 'unfavorited' },
-  tags_updated: { icon: Tag,     color: 'text-blue-500',   bg: 'bg-blue-50 dark:bg-blue-900/20',    verb: 'updated tags on' },
+  favorited:    { icon: Star,    color: 'text-yellow-500', bg: 'bg-yellow-100 dark:bg-yellow-900/30', dotColor: 'bg-yellow-400', lineColor: 'border-yellow-200 dark:border-yellow-800', verb: 'favorited' },
+  unfavorited:  { icon: Heart,   color: 'text-red-400',    bg: 'bg-red-100 dark:bg-red-900/30',      dotColor: 'bg-red-400',    lineColor: 'border-red-200 dark:border-red-800',      verb: 'unfavorited' },
+  tags_updated: { icon: Tag,     color: 'text-blue-500',   bg: 'bg-blue-100 dark:bg-blue-900/30',    dotColor: 'bg-blue-400',   lineColor: 'border-blue-200 dark:border-blue-800',    verb: 'updated tags on' },
 };
 
-function AuditLogEntry({ entry }) {
+function TimelineEntry({ entry, index }) {
   const actor = entry.performed_by_name || entry.user_name || 'Unknown';
   const action = entry.action || 'favorited';
-  // details can be a string (legacy) or an object (new format)
   const details = typeof entry.details === 'object' && entry.details !== null ? entry.details : {};
   const detailStr = typeof entry.details === 'string' ? entry.details : null;
 
@@ -343,11 +533,9 @@ function AuditLogEntry({ entry }) {
   const config = ACTION_CONFIG[action] || ACTION_CONFIG.favorited;
   const ActionIcon = config.icon;
 
-  // Build tag info for tags_updated action
   const addedTags = details.added_tags || [];
   const removedTags = details.removed_tags || [];
 
-  // Build thumbnail proxy path
   const thumbPath = details.tonomo_base_path && details.file_path
     ? `${details.tonomo_base_path}${details.file_path.startsWith('/') ? details.file_path : '/' + details.file_path}`
     : null;
@@ -368,72 +556,103 @@ function AuditLogEntry({ entry }) {
   }, [thumbPath, details.file_type]);
 
   return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-border/40 last:border-0 group">
-      {/* User avatar / action icon */}
-      <div className={cn("w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5", config.bg)}>
-        <ActionIcon className={cn("h-3.5 w-3.5", config.color)} />
-      </div>
+    <div
+      className="fav-timeline-enter relative flex gap-4 pb-6 last:pb-0"
+      style={{ animationDelay: `${index * 60}ms` }}
+    >
+      {/* Vertical line */}
+      <div className="absolute left-[15px] top-9 bottom-0 w-px bg-border/60 last:hidden" />
 
-      {/* Content */}
-      <div className="flex-1 min-w-0 space-y-1">
-        <p className="text-xs text-foreground leading-relaxed">
-          <span className="font-semibold">{actor}</span>
-          {' '}<span className="text-muted-foreground">{config.verb}</span>{' '}
-          <span className="font-medium">{target}</span>
-        </p>
-
-        {/* Tag changes for tags_updated */}
-        {action === 'tags_updated' && (addedTags.length > 0 || removedTags.length > 0) && (
-          <div className="flex flex-wrap gap-1">
-            {addedTags.map(t => (
-              <Badge key={`+${t}`} variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-green-50 text-green-600 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800">
-                +#{t}
-              </Badge>
-            ))}
-            {removedTags.map(t => (
-              <Badge key={`-${t}`} variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-red-50 text-red-600 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800 line-through">
-                #{t}
-              </Badge>
-            ))}
-          </div>
-        )}
-
-        {/* Property address context */}
-        {details.property_address && (
-          <div className="flex items-center gap-1 text-[10px] text-muted-foreground/60">
-            <Building2 className="h-2.5 w-2.5" />
-            <span className="truncate">{details.property_address}</span>
-          </div>
-        )}
-
-        {entry.created_date && (
-          <p className="text-[10px] text-muted-foreground/50">{timeAgo(entry.created_date)}</p>
-        )}
-      </div>
-
-      {/* Thumbnail (for file favorites) */}
-      {isFile && (
-        <div className="w-9 h-9 rounded-md overflow-hidden bg-muted flex-shrink-0 flex items-center justify-center">
-          {thumbUrl ? (
-            <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+      {/* Timeline dot + avatar */}
+      <div className="relative z-10 flex-shrink-0">
+        <div className={cn(
+          "w-8 h-8 rounded-full flex items-center justify-center ring-4 ring-background",
+          config.bg
+        )}>
+          {actor !== 'Unknown' ? (
+            <span className={cn("text-[10px] font-bold", config.color)}>
+              {getInitials(actor)}
+            </span>
           ) : (
-            <FileIcon type={details.file_type} className="h-3.5 w-3.5 text-muted-foreground/30" />
+            <ActionIcon className={cn("h-3.5 w-3.5", config.color)} />
           )}
         </div>
-      )}
+      </div>
 
-      {/* Project icon (for project favorites) */}
-      {isProject && !isFile && (
-        <div className="w-9 h-9 rounded-md overflow-hidden bg-primary/5 flex-shrink-0 flex items-center justify-center">
-          <FolderOpen className="h-3.5 w-3.5 text-primary/40" />
+      {/* Content card */}
+      <div className="flex-1 min-w-0">
+        <div className={cn(
+          "rounded-lg border p-3 transition-colors hover:bg-muted/30",
+          config.lineColor
+        )}>
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0 space-y-1.5">
+              <p className="text-xs text-foreground leading-relaxed">
+                <span className="font-semibold">{actor}</span>
+                {' '}<span className="text-muted-foreground">{config.verb}</span>{' '}
+                <span className="font-medium">{target}</span>
+              </p>
+
+              {/* Tag changes */}
+              {action === 'tags_updated' && (addedTags.length > 0 || removedTags.length > 0) && (
+                <div className="flex flex-wrap gap-1">
+                  {addedTags.map(t => (
+                    <Badge key={`+${t}`} variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-green-50 text-green-600 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800">
+                      +#{t}
+                    </Badge>
+                  ))}
+                  {removedTags.map(t => (
+                    <Badge key={`-${t}`} variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-red-50 text-red-600 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800 line-through">
+                      #{t}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              {/* Property context */}
+              {details.property_address && (
+                <div className="flex items-center gap-1 text-[10px] text-muted-foreground/60">
+                  <Building2 className="h-2.5 w-2.5" />
+                  <span className="truncate">{details.property_address}</span>
+                </div>
+              )}
+
+              {entry.created_date && (
+                <p className="text-[10px] text-muted-foreground/50 flex items-center gap-1">
+                  <Clock className="h-2.5 w-2.5" />
+                  {timeAgo(entry.created_date)}
+                </p>
+              )}
+            </div>
+
+            {/* Thumbnail */}
+            {isFile && (
+              <div className="w-10 h-10 rounded-lg overflow-hidden bg-muted flex-shrink-0 flex items-center justify-center border">
+                {thumbUrl ? (
+                  <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <FileIcon type={details.file_type} className="h-4 w-4 text-muted-foreground/30" />
+                )}
+              </div>
+            )}
+
+            {/* Project icon */}
+            {isProject && !isFile && (
+              <div className="w-10 h-10 rounded-lg overflow-hidden bg-primary/5 flex-shrink-0 flex items-center justify-center border">
+                <FolderOpen className="h-4 w-4 text-primary/40" />
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
-// ---- Tag Filter Multi-Select ----
-function TagFilterSelect({ availableTags, selectedTags, onToggle }) {
+
+// ================ TAG FILTER MULTI-SELECT ================
+
+function TagFilterSelect({ availableTags, selectedTags, onToggle, tagColorMap }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -460,15 +679,17 @@ function TagFilterSelect({ availableTags, selectedTags, onToggle }) {
         {selectedTags.length > 0 && (
           <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4 ml-0.5">{selectedTags.length}</Badge>
         )}
+        <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
       </Button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-50 w-52 bg-popover border rounded-lg shadow-lg p-2 space-y-0.5 max-h-60 overflow-y-auto">
+        <div className="absolute top-full left-0 mt-1 z-50 w-56 bg-popover border rounded-lg shadow-xl p-2 space-y-0.5 max-h-60 overflow-y-auto">
           {selectedTags.length > 0 && (
             <button
               onClick={() => { selectedTags.forEach(t => onToggle(t)); }}
-              className="w-full text-left text-[11px] text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted/50 mb-1"
+              className="w-full text-left text-[11px] text-red-500 hover:text-red-600 px-2 py-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 mb-1 flex items-center gap-1.5 font-medium"
             >
-              Clear all
+              <X className="h-3 w-3" />
+              Clear all filters
             </button>
           )}
           {availableTags.map(tag => (
@@ -476,12 +697,17 @@ function TagFilterSelect({ availableTags, selectedTags, onToggle }) {
               key={tag.name}
               onClick={() => onToggle(tag.name)}
               className={cn(
-                "w-full text-left text-xs px-2 py-1.5 rounded flex items-center gap-2 transition-colors",
+                "w-full text-left text-xs px-2 py-1.5 rounded flex items-center gap-2.5 transition-colors",
                 selectedTags.includes(tag.name) ? "bg-primary/10 text-primary" : "hover:bg-muted/50 text-foreground"
               )}
             >
+              {/* Color dot */}
+              <span
+                className="w-3 h-3 rounded-full shrink-0 border border-black/10"
+                style={{ backgroundColor: tag.color || '#3b82f6' }}
+              />
               <span className={cn(
-                "w-3 h-3 rounded border flex items-center justify-center shrink-0",
+                "w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0",
                 selectedTags.includes(tag.name) ? "bg-primary border-primary" : "border-muted-foreground/30"
               )}>
                 {selectedTags.includes(tag.name) && (
@@ -490,9 +716,9 @@ function TagFilterSelect({ availableTags, selectedTags, onToggle }) {
                   </svg>
                 )}
               </span>
-              <span>#{tag.name}</span>
+              <span className="flex-1 truncate">#{tag.name}</span>
               {tag.usage_count > 0 && (
-                <span className="ml-auto text-[10px] text-muted-foreground/50">{tag.usage_count}</span>
+                <span className="text-[10px] text-muted-foreground/50 tabular-nums">{tag.usage_count}</span>
               )}
             </button>
           ))}
@@ -502,9 +728,499 @@ function TagFilterSelect({ availableTags, selectedTags, onToggle }) {
   );
 }
 
+
+// ================ EMPTY STATE ================
+
+function EmptyFavoritesState({ hasFilters, onClearFilters }) {
+  if (hasFilters) {
+    return (
+      <Card className="border-dashed border-2">
+        <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="rounded-2xl bg-muted/50 p-5 mb-5">
+            <Search className="h-10 w-10 text-muted-foreground/40" />
+          </div>
+          <h3 className="text-base font-semibold mb-2">No favorites match your filters</h3>
+          <p className="text-sm text-muted-foreground max-w-sm mb-4">
+            Try adjusting the type filter, tags, or search query to find what you are looking for.
+          </p>
+          <Button variant="outline" size="sm" onClick={onClearFilters} className="gap-1.5">
+            <X className="h-3.5 w-3.5" />
+            Clear all filters
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="border-dashed border-2">
+      <CardContent className="flex flex-col items-center justify-center py-20 text-center">
+        {/* Illustration-style empty state */}
+        <div className="relative mb-6">
+          {/* Background glow */}
+          <div className="absolute inset-0 blur-2xl opacity-20 bg-gradient-to-br from-yellow-300 via-red-200 to-purple-300 rounded-full scale-150" />
+
+          {/* Layered icons */}
+          <div className="relative">
+            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-muted to-muted/50 flex items-center justify-center border-2 border-dashed border-muted-foreground/20 rotate-3">
+              <Camera className="h-8 w-8 text-muted-foreground/25" />
+            </div>
+            <div className="absolute -bottom-2 -right-3 w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-100 to-amber-100 dark:from-yellow-900/40 dark:to-amber-900/40 flex items-center justify-center border border-yellow-200 dark:border-yellow-800 shadow-sm -rotate-6">
+              <Star className="h-5 w-5 text-yellow-500 fill-yellow-500" />
+            </div>
+            <div className="absolute -top-2 -left-3 w-8 h-8 rounded-lg bg-gradient-to-br from-red-100 to-pink-100 dark:from-red-900/40 dark:to-pink-900/40 flex items-center justify-center border border-red-200 dark:border-red-800 shadow-sm rotate-12">
+              <Heart className="h-4 w-4 text-red-400 fill-red-400" />
+            </div>
+          </div>
+        </div>
+
+        <h3 className="text-lg font-bold mb-2 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
+          No favorites yet
+        </h3>
+        <p className="text-sm text-muted-foreground max-w-md leading-relaxed">
+          Start exploring media from your projects and star your favorites.
+          Your starred files and projects will appear here for quick access.
+        </p>
+        <div className="flex items-center gap-2 mt-6 text-xs text-muted-foreground/60">
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>Tip: Click the star icon on any file or project to add it here</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+
+// ================ TAG COLOR PRESETS ================
+
+const TAG_COLOR_PRESETS = [
+  { name: 'Blue', value: '#3b82f6' },
+  { name: 'Red', value: '#ef4444' },
+  { name: 'Green', value: '#22c55e' },
+  { name: 'Yellow', value: '#eab308' },
+  { name: 'Purple', value: '#8b5cf6' },
+  { name: 'Pink', value: '#ec4899' },
+  { name: 'Orange', value: '#f97316' },
+  { name: 'Cyan', value: '#06b6d4' },
+];
+
+
+// ================ TAG MANAGEMENT SUBTAB ================
+
+function TagManagementTab() {
+  const { data: user } = useCurrentUser();
+  const { data: mediaTags = [], loading: tagsLoading } = useEntityList('MediaTag', 'name', 200);
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [colorPickerOpen, setColorPickerOpen] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#3b82f6');
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [sortBy, setSortBy] = useState('name'); // name | usage | date
+  const [sortDir, setSortDir] = useState('asc');
+
+  const sortedTags = useMemo(() => {
+    const arr = [...mediaTags];
+    arr.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === 'name') cmp = (a.name || '').localeCompare(b.name || '');
+      else if (sortBy === 'usage') cmp = (a.usage_count || 0) - (b.usage_count || 0);
+      else if (sortBy === 'date') cmp = new Date(a.created_date || 0) - new Date(b.created_date || 0);
+      return sortDir === 'desc' ? -cmp : cmp;
+    });
+    return arr;
+  }, [mediaTags, sortBy, sortDir]);
+
+  const maxUsage = useMemo(() => Math.max(1, ...mediaTags.map(t => t.usage_count || 0)), [mediaTags]);
+
+  const toggleSort = (col) => {
+    if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortBy(col); setSortDir('asc'); }
+  };
+
+  const startEdit = useCallback((tag) => {
+    setEditingId(tag.id);
+    setEditName(tag.name);
+  }, []);
+
+  const saveEdit = useCallback(async (tag) => {
+    const trimmed = editName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '');
+    if (!trimmed || trimmed === tag.name) {
+      setEditingId(null);
+      return;
+    }
+    // Check for duplicate name before saving
+    const duplicate = mediaTags.find(t => t.name === trimmed && t.id !== tag.id);
+    if (duplicate) {
+      setEditingId(null);
+      return;
+    }
+    await api.entities.MediaTag.update(tag.id, { name: trimmed });
+
+    // Propagate rename into all media_favorites that reference the old tag name.
+    // Without this, favorites would keep stale tag references in their tags[] array.
+    try {
+      const { data: allFavs } = await api.entities.MediaFavorite.list();
+      const affectedFavs = (allFavs || []).filter(f =>
+        Array.isArray(f.tags) && f.tags.includes(tag.name)
+      );
+      await Promise.all(
+        affectedFavs.map(f =>
+          api.entities.MediaFavorite.update(f.id, {
+            tags: f.tags.map(t => t === tag.name ? trimmed : t),
+          })
+        )
+      );
+    } catch (e) {
+      console.error('Failed to propagate tag rename to favorites:', e);
+    }
+
+    await Promise.all([
+      refetchEntityList('MediaTag'),
+      refetchEntityList('MediaFavorite'),
+    ]);
+    setEditingId(null);
+  }, [editName, mediaTags]);
+
+  const updateColor = useCallback(async (tag, color) => {
+    await api.entities.MediaTag.update(tag.id, { color });
+    await refetchEntityList('MediaTag');
+    setColorPickerOpen(null);
+  }, []);
+
+  const createTag = useCallback(async () => {
+    const trimmed = newTagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '');
+    if (!trimmed) return;
+    const existing = mediaTags.find(t => t.name === trimmed);
+    if (existing) return;
+    await api.entities.MediaTag.create({
+      name: trimmed,
+      color: newTagColor,
+      usage_count: 0,
+      created_by_id: user?.id,
+      created_by_name: user?.full_name || user?.email || 'Unknown',
+    });
+    await refetchEntityList('MediaTag');
+    setNewTagName('');
+    setNewTagColor('#3b82f6');
+    setCreating(false);
+  }, [newTagName, newTagColor, mediaTags, user]);
+
+  const deleteTag = useCallback(async (tagId) => {
+    await api.entities.MediaTag.delete(tagId);
+    await refetchEntityList('MediaTag');
+    setDeleteConfirm(null);
+  }, []);
+
+  if (tagsLoading) {
+    return (
+      <div className="space-y-4">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3">
+            <Skeleton className="h-8 w-8 rounded" />
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-4 w-16 ml-auto" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="p-1.5 rounded-lg bg-primary/10">
+            <Palette className="h-4 w-4 text-primary" />
+          </div>
+          <h2 className="text-sm font-semibold">Tag Registry</h2>
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal">
+            {mediaTags.length}
+          </Badge>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setCreating(true)}
+          className="text-xs h-7 gap-1.5"
+        >
+          <Plus className="h-3 w-3" />
+          Create Tag
+        </Button>
+      </div>
+
+      {/* Create tag inline form */}
+      {creating && (
+        <Card className="border-primary/20 shadow-sm">
+          <CardContent className="p-3 flex items-center gap-3">
+            <div className="relative">
+              <button
+                type="button"
+                className="w-8 h-8 rounded-md border-2 border-border shrink-0 transition-transform hover:scale-110"
+                style={{ backgroundColor: newTagColor }}
+                onClick={() => setColorPickerOpen(colorPickerOpen === 'new' ? null : 'new')}
+              />
+              {colorPickerOpen === 'new' && (
+                <div className="absolute top-full left-0 mt-1 z-50 bg-popover border rounded-lg shadow-lg p-2 grid grid-cols-4 gap-1.5">
+                  {TAG_COLOR_PRESETS.map(c => (
+                    <button
+                      key={c.value}
+                      onClick={() => { setNewTagColor(c.value); setColorPickerOpen(null); }}
+                      className={cn("w-7 h-7 rounded-md transition-all hover:scale-110", newTagColor === c.value && "ring-2 ring-offset-1 ring-primary")}
+                      style={{ backgroundColor: c.value }}
+                      title={c.name}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+            <Input
+              value={newTagName}
+              onChange={e => setNewTagName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') createTag(); if (e.key === 'Escape') setCreating(false); }}
+              placeholder="Tag name..."
+              className="h-8 text-sm flex-1"
+              autoFocus
+            />
+            <Button size="sm" onClick={createTag} disabled={!newTagName.trim()} className="h-8 text-xs gap-1">
+              <Check className="h-3 w-3" /> Save
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setCreating(false)} className="h-8 text-xs">
+              Cancel
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Tag table */}
+      {mediaTags.length === 0 && !creating ? (
+        <Card className="border-dashed border-2">
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <div className="relative mb-4">
+              <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center">
+                <Tag className="h-7 w-7 text-muted-foreground/30" />
+              </div>
+              <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center border">
+                <Plus className="h-3.5 w-3.5 text-primary/60" />
+              </div>
+            </div>
+            <h3 className="text-sm font-semibold mb-1">No tags yet</h3>
+            <p className="text-xs text-muted-foreground max-w-sm">
+              Create tags to categorize and organize your favorited media files.
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="border rounded-lg overflow-hidden">
+          {/* Column headers */}
+          <div className="flex items-center gap-3 px-3 py-2 bg-muted/40 border-b text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span className="w-7" />
+            <button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-foreground transition-colors">
+              Name
+              {sortBy === 'name' && <ArrowUpDown className="h-2.5 w-2.5" />}
+            </button>
+            <div className="flex-1" />
+            <button onClick={() => toggleSort('usage')} className="flex items-center gap-1 hover:text-foreground transition-colors w-28 justify-end">
+              Usage
+              {sortBy === 'usage' && <ArrowUpDown className="h-2.5 w-2.5" />}
+            </button>
+            <span className="hidden sm:inline w-20 text-right">Creator</span>
+            <button onClick={() => toggleSort('date')} className="hidden md:flex items-center gap-1 hover:text-foreground transition-colors w-24 justify-end">
+              Created
+              {sortBy === 'date' && <ArrowUpDown className="h-2.5 w-2.5" />}
+            </button>
+            <span className="w-8" />
+          </div>
+
+          {/* Tag rows */}
+          <div className="divide-y">
+            {sortedTags.map(tag => (
+              <div key={tag.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-muted/30 transition-colors group">
+                {/* Color swatch */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    className="w-7 h-7 rounded-full border-2 border-white dark:border-gray-800 shrink-0 transition-all hover:scale-110 shadow-sm"
+                    style={{ backgroundColor: tag.color || '#3b82f6' }}
+                    onClick={() => setColorPickerOpen(colorPickerOpen === tag.id ? null : tag.id)}
+                    title="Change color"
+                  />
+                  {colorPickerOpen === tag.id && (
+                    <div className="absolute top-full left-0 mt-1 z-50 bg-popover border rounded-lg shadow-xl p-2 grid grid-cols-4 gap-1.5">
+                      {TAG_COLOR_PRESETS.map(c => (
+                        <button
+                          key={c.value}
+                          onClick={() => updateColor(tag, c.value)}
+                          className={cn("w-7 h-7 rounded-full transition-all hover:scale-110", (tag.color || '#3b82f6') === c.value && "ring-2 ring-offset-1 ring-primary")}
+                          style={{ backgroundColor: c.value }}
+                          title={c.name}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Tag name (editable) */}
+                {editingId === tag.id ? (
+                  <Input
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') saveEdit(tag); if (e.key === 'Escape') setEditingId(null); }}
+                    onBlur={() => saveEdit(tag)}
+                    className="h-7 text-sm flex-1 max-w-[200px]"
+                    autoFocus
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => startEdit(tag)}
+                    className="text-sm font-medium text-foreground hover:text-primary transition-colors cursor-text"
+                    title="Click to edit"
+                  >
+                    #{tag.name}
+                  </button>
+                )}
+
+                <div className="flex-1" />
+
+                {/* Usage count with mini bar */}
+                <div className="flex items-center gap-2 w-28 justify-end">
+                  <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden hidden sm:block">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.max(4, ((tag.usage_count || 0) / maxUsage) * 100)}%`,
+                        backgroundColor: tag.color || '#3b82f6',
+                        opacity: 0.7,
+                      }}
+                    />
+                  </div>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal text-muted-foreground tabular-nums">
+                    {tag.usage_count || 0}
+                  </Badge>
+                </div>
+
+                {/* Created by */}
+                {tag.created_by_name && (
+                  <span className="text-[10px] text-muted-foreground/60 hidden sm:inline truncate max-w-[80px] text-right w-20">
+                    {tag.created_by_name}
+                  </span>
+                )}
+
+                {/* Created date */}
+                {tag.created_date && (
+                  <span className="text-[10px] text-muted-foreground/50 hidden md:inline w-24 text-right tabular-nums">
+                    {(() => { try { return format(new Date(tag.created_date), 'd MMM yyyy'); } catch { return ''; } })()}
+                  </span>
+                )}
+
+                {/* Delete button */}
+                {deleteConfirm === tag.id ? (
+                  <div className="flex items-center gap-1 w-8 justify-end">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => deleteTag(tag.id)}
+                      className="h-6 text-[10px] px-2"
+                    >
+                      Yes
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDeleteConfirm(null)}
+                      className="h-6 text-[10px] px-1"
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteConfirm(tag.id)}
+                    className="p-1 rounded-md text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100 w-8 flex justify-end"
+                    title="Delete tag"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ================ PREMIUM HEADER ================
+
+function FavoritesHeader({ stats, isLoading }) {
+  return (
+    <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-background via-background to-muted/30 p-6 sm:p-8">
+      {/* Background decoration */}
+      <div className="absolute top-0 right-0 w-64 h-64 opacity-[0.03] pointer-events-none">
+        <Heart className="w-full h-full" />
+      </div>
+      <div className="absolute -bottom-8 -left-8 w-32 h-32 rounded-full bg-gradient-to-br from-yellow-200/20 to-transparent pointer-events-none" />
+      <div className="absolute top-4 right-4 w-20 h-20 rounded-full bg-gradient-to-br from-red-200/10 to-transparent pointer-events-none" />
+
+      <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <div className="fav-heart-beat">
+              <Heart className="h-7 w-7 text-red-500 fill-red-500" />
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight bg-gradient-to-r from-foreground via-foreground to-foreground/60 bg-clip-text text-transparent">
+              Favorites
+            </h1>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {isLoading
+              ? 'Loading your collection...'
+              : `Your curated collection of ${stats.total} starred item${stats.total !== 1 ? 's' : ''}`}
+          </p>
+        </div>
+
+        {/* Animated stat badges */}
+        {!isLoading && stats.total > 0 && (
+          <div className="flex flex-wrap gap-2 sm:gap-3">
+            <div className="fav-stat-enter flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800" style={{ animationDelay: '0ms' }}>
+              <Camera className="h-4 w-4 text-blue-500" />
+              <div>
+                <span className="text-lg font-bold text-blue-600 dark:text-blue-400 tabular-nums">{stats.files}</span>
+                <span className="text-[10px] text-blue-500/70 block leading-none">file{stats.files !== 1 ? 's' : ''}</span>
+              </div>
+            </div>
+            <div className="fav-stat-enter flex items-center gap-2 px-3 py-2 rounded-xl bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800" style={{ animationDelay: '80ms' }}>
+              <FolderOpen className="h-4 w-4 text-purple-500" />
+              <div>
+                <span className="text-lg font-bold text-purple-600 dark:text-purple-400 tabular-nums">{stats.projects}</span>
+                <span className="text-[10px] text-purple-500/70 block leading-none">project{stats.projects !== 1 ? 's' : ''}</span>
+              </div>
+            </div>
+            <div className="fav-stat-enter flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800" style={{ animationDelay: '160ms' }}>
+              <Tag className="h-4 w-4 text-amber-500" />
+              <div>
+                <span className="text-lg font-bold text-amber-600 dark:text-amber-400 tabular-nums">{stats.tags}</span>
+                <span className="text-[10px] text-amber-500/70 block leading-none">tag{stats.tags !== 1 ? 's' : ''}</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 // ================ MAIN COMPONENT ================
 
 export default function SocialMedia() {
+  const [activeTab, setActiveTab] = useState('favorites');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [gridSize, setGridSize] = useState('md');
@@ -516,6 +1232,8 @@ export default function SocialMedia() {
   const { data: favorites = [], loading: favoritesLoading } = useEntityList('MediaFavorite', '-created_date', 500);
   const { data: mediaTags = [] } = useEntityList('MediaTag', 'name', 200);
   const { data: auditLogs = [], loading: auditLoading } = useEntityList('AuditLog', '-created_date', 200);
+
+  const tagColorMap = useTagColorMap(mediaTags);
 
   // Filter audit logs to media_favorite entity type
   const favoriteAuditLogs = useMemo(() => {
@@ -531,20 +1249,35 @@ export default function SocialMedia() {
     );
   }, []);
 
+  // Clear all filters
+  const clearAllFilters = useCallback(() => {
+    setSearch('');
+    setTypeFilter('all');
+    setSelectedTags([]);
+  }, []);
+
+  // Unfavorite handler
+  const handleUnfavorite = useCallback(async (fav) => {
+    if (!fav.id) return;
+    try {
+      await api.entities.MediaFavorite.delete(fav.id);
+      await refetchEntityList('MediaFavorite');
+    } catch (err) {
+      console.error('Failed to unfavorite:', err);
+    }
+  }, []);
+
   // Filter favorites
   const filteredFavorites = useMemo(() => {
     return favorites.filter(fav => {
-      // Type filter
       if (typeFilter === 'file' && !fav.file_path) return false;
       if (typeFilter === 'project' && !fav.project_id) return false;
 
-      // Tag filter
       if (selectedTags.length > 0) {
         const favTags = fav.tags || [];
         if (!selectedTags.some(t => favTags.includes(t))) return false;
       }
 
-      // Search filter
       if (search.trim()) {
         const q = search.toLowerCase();
         const matches = (
@@ -567,6 +1300,8 @@ export default function SocialMedia() {
     const allTags = new Set(favorites.flatMap(f => f.tags || []));
     return { files, projects, tags: allTags.size, total: favorites.length };
   }, [favorites]);
+
+  const hasActiveFilters = search.trim() || typeFilter !== 'all' || selectedTags.length > 0;
 
   // IntersectionObserver for lazy-loading images
   useEffect(() => {
@@ -600,50 +1335,55 @@ export default function SocialMedia() {
   const isLoading = favoritesLoading;
 
   return (
-    <div className="p-4 lg:p-6 space-y-6 max-w-[1600px] mx-auto">
-      {/* ---- Header ---- */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
-            <Heart className="h-5 w-5 text-red-500" />
-            Favorites
-          </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {isLoading
-              ? 'Loading your favorites...'
-              : `${stats.total} favorited item${stats.total !== 1 ? 's' : ''}`}
-          </p>
-        </div>
+    <div className="p-4 lg:p-6 space-y-5 max-w-[1600px] mx-auto">
 
-        {/* Stat badges */}
-        {!isLoading && stats.total > 0 && (
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="outline" className="text-[11px] bg-blue-50 text-blue-600 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800 gap-1">
-              <Camera className="h-3 w-3" /> {stats.files} file{stats.files !== 1 ? 's' : ''}
+      {/* ---- Premium Header ---- */}
+      <FavoritesHeader stats={stats} isLoading={isLoading} />
+
+      {/* ---- Tab bar ---- */}
+      <div className="flex items-center gap-1 border-b">
+        {[
+          { key: 'favorites', label: 'Favorites', icon: Star, count: stats.total },
+          { key: 'tags', label: 'Tags', icon: Tag, count: mediaTags.length },
+        ].map(({ key, label, icon: TabIcon, count }) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={cn(
+              "flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+              activeTab === key
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
+            )}
+          >
+            <TabIcon className="h-3.5 w-3.5" />
+            {label}
+            <Badge variant={activeTab === key ? "default" : "secondary"} className="text-[10px] px-1.5 py-0 h-4 ml-1">
+              {count}
             </Badge>
-            <Badge variant="outline" className="text-[11px] bg-purple-50 text-purple-600 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800 gap-1">
-              <FolderOpen className="h-3 w-3" /> {stats.projects} project{stats.projects !== 1 ? 's' : ''}
-            </Badge>
-            <Badge variant="outline" className="text-[11px] bg-amber-50 text-amber-600 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800 gap-1">
-              <Tag className="h-3 w-3" /> {stats.tags} tag{stats.tags !== 1 ? 's' : ''}
-            </Badge>
-          </div>
-        )}
+          </button>
+        ))}
       </div>
+
+      {/* ---- Tags subtab ---- */}
+      {activeTab === 'tags' && <TagManagementTab />}
+
+      {/* ---- Favorites subtab ---- */}
+      {activeTab === 'favorites' && (<>
 
       {/* ---- Filter bar ---- */}
       <div className="flex flex-wrap gap-2 items-center">
         {/* Search */}
-        <div className="relative flex-1 min-w-[200px]">
+        <div className="relative flex-1 min-w-[200px] max-w-md">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
-            placeholder="Search by file name, project, address, tags..."
+            placeholder="Search files, projects, addresses, tags..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="pl-8 h-8 text-sm"
           />
           {search && (
-            <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+            <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
               <X className="h-3.5 w-3.5" />
             </button>
           )}
@@ -654,16 +1394,17 @@ export default function SocialMedia() {
           availableTags={mediaTags}
           selectedTags={selectedTags}
           onToggle={toggleTag}
+          tagColorMap={tagColorMap}
         />
 
         {/* Type filter */}
-        <div className="flex items-center border rounded-md overflow-hidden shrink-0">
+        <div className="flex items-center border rounded-lg overflow-hidden shrink-0">
           {TYPE_FILTERS.map(({ value, label }) => (
             <button
               key={value}
               onClick={() => setTypeFilter(value)}
               className={cn(
-                "px-2.5 py-1 text-xs transition-colors",
+                "px-3 py-1.5 text-xs font-medium transition-colors",
                 typeFilter === value
                   ? "bg-primary text-primary-foreground"
                   : "hover:bg-muted text-muted-foreground"
@@ -675,7 +1416,7 @@ export default function SocialMedia() {
         </div>
 
         {/* Grid size toggle */}
-        <div className="flex items-center border rounded-md overflow-hidden shrink-0">
+        <div className="flex items-center border rounded-lg overflow-hidden shrink-0">
           {[
             { key: 'sm', icon: Grid3x3, title: 'Small' },
             { key: 'md', icon: Grid2x2, title: 'Medium' },
@@ -698,58 +1439,51 @@ export default function SocialMedia() {
         </div>
 
         {/* Result count */}
-        <span className="text-[11px] text-muted-foreground shrink-0">
+        <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
           {filteredFavorites.length} result{filteredFavorites.length !== 1 ? 's' : ''}
         </span>
       </div>
 
-      {/* Active tag filters display */}
+      {/* Active tag filters as removable pills */}
       {selectedTags.length > 0 && (
         <div className="flex flex-wrap gap-1.5 items-center">
-          <span className="text-[11px] text-muted-foreground">Filtering by:</span>
+          <span className="text-[11px] text-muted-foreground mr-1">Filtering:</span>
           {selectedTags.map(tag => (
             <Badge
               key={tag}
               variant="secondary"
-              className="text-[11px] gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors"
+              className="text-[11px] gap-1 cursor-pointer hover:bg-destructive/10 hover:text-destructive transition-colors pl-1.5"
               onClick={() => toggleTag(tag)}
             >
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: tagColorMap[tag] || '#3b82f6' }}
+              />
               #{tag}
               <X className="h-2.5 w-2.5" />
             </Badge>
           ))}
+          <button
+            onClick={() => setSelectedTags([])}
+            className="text-[11px] text-red-500 hover:text-red-600 font-medium ml-1 transition-colors"
+          >
+            Clear all
+          </button>
         </div>
       )}
 
       {/* ---- Grid ---- */}
       {isLoading ? (
-        <FavoriteSkeleton />
+        <FavoriteSkeleton gridSize={gridSize} />
       ) : filteredFavorites.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="rounded-full bg-muted p-4 mb-4">
-              {favorites.length > 0 ? (
-                <Search className="h-8 w-8 text-muted-foreground" />
-              ) : (
-                <Heart className="h-8 w-8 text-muted-foreground" />
-              )}
-            </div>
-            <h3 className="text-sm font-semibold mb-1">
-              {favorites.length > 0
-                ? 'No favorites match your filters'
-                : 'No favorites yet'}
-            </h3>
-            <p className="text-xs text-muted-foreground max-w-sm">
-              {favorites.length > 0
-                ? 'Try adjusting the type filter, tags, or search query.'
-                : 'Star files or projects from the Media tab to see them here.'}
-            </p>
-          </CardContent>
-        </Card>
+        <EmptyFavoritesState
+          hasFilters={hasActiveFilters}
+          onClearFilters={clearAllFilters}
+        />
       ) : (
         <div
           ref={gridRef}
-          className={cn("grid", GRID_SIZES[gridSize])}
+          className={cn("grid fav-grid-transition", GRID_SIZES[gridSize])}
         >
           {filteredFavorites.map((fav, idx) => {
             const favId = fav.id || `${fav.file_path || fav.project_id}-${idx}`;
@@ -761,9 +1495,17 @@ export default function SocialMedia() {
                   <FileFavoriteCard
                     favorite={fav}
                     isVisible={visibleCards.has(favId)}
+                    tagColorMap={tagColorMap}
+                    onUnfavorite={handleUnfavorite}
+                    animDelay={Math.min(idx * 40, 400)}
                   />
                 ) : (
-                  <ProjectFavoriteCard favorite={fav} />
+                  <ProjectFavoriteCard
+                    favorite={fav}
+                    tagColorMap={tagColorMap}
+                    onUnfavorite={handleUnfavorite}
+                    animDelay={Math.min(idx * 40, 400)}
+                  />
                 )}
               </div>
             );
@@ -771,11 +1513,13 @@ export default function SocialMedia() {
         </div>
       )}
 
-      {/* ---- Audit Log Section ---- */}
+      {/* ---- Activity Timeline ---- */}
       {!isLoading && (
-        <div className="space-y-3 pt-4 border-t">
-          <div className="flex items-center gap-2">
-            <Activity className="h-4 w-4 text-muted-foreground" />
+        <div className="space-y-4 pt-6">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded-lg bg-primary/10">
+              <Activity className="h-4 w-4 text-primary" />
+            </div>
             <h2 className="text-sm font-semibold">Recent Activity</h2>
             {favoriteAuditLogs.length > 0 && (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal">
@@ -785,30 +1529,36 @@ export default function SocialMedia() {
           </div>
 
           {auditLoading ? (
-            <div className="space-y-2">
+            <div className="space-y-4 pl-4">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-3 py-2">
-                  <Skeleton className="w-6 h-6 rounded-full" />
-                  <div className="flex-1 space-y-1">
-                    <Skeleton className="h-3 w-3/4" />
-                    <Skeleton className="h-2 w-1/4" />
+                <div key={i} className="flex items-start gap-4">
+                  <Skeleton className="w-8 h-8 rounded-full shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-12 w-full rounded-lg" />
                   </div>
                 </div>
               ))}
             </div>
           ) : favoriteAuditLogs.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-4 text-center">
-              No favorite/tag activity recorded yet.
-            </p>
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center justify-center py-8 text-center">
+                <Activity className="h-6 w-6 text-muted-foreground/30 mb-2" />
+                <p className="text-xs text-muted-foreground">
+                  No favorite or tag activity recorded yet.
+                </p>
+              </CardContent>
+            </Card>
           ) : (
-            <div className="divide-y-0">
-              {favoriteAuditLogs.map(entry => (
-                <AuditLogEntry key={entry.id} entry={entry} />
+            <div className="pl-0">
+              {favoriteAuditLogs.map((entry, idx) => (
+                <TimelineEntry key={entry.id} entry={entry} index={idx} />
               ))}
             </div>
           )}
         </div>
       )}
+
+      </>)}
     </div>
   );
 }
