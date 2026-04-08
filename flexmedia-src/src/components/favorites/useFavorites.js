@@ -121,9 +121,16 @@ export function useFavorites() {
           action: 'unfavorited',
           user_id: userId,
           user_name: user?.full_name || user?.email || 'Unknown',
-          details: filePath
-            ? `Removed favorite: ${fileName || filePath}`
-            : `Removed favorite: ${projectTitle || projectId}`,
+          entity_name: fileName || projectTitle || filePath || projectId || 'Unknown',
+          details: {
+            file_name: fileName || null,
+            file_path: filePath || null,
+            file_type: fileType || null,
+            project_id: projectId || null,
+            project_title: projectTitle || null,
+            property_address: propertyAddress || null,
+            tonomo_base_path: tonomoBasePath || null,
+          },
         }); // fire-and-forget audit log
       } catch (err) {
         // Revert optimistic state on failure
@@ -175,9 +182,16 @@ export function useFavorites() {
           action: 'favorited',
           user_id: userId,
           user_name: user?.full_name || user?.email || 'Unknown',
-          details: filePath
-            ? `Favorited file: ${fileName || filePath}`
-            : `Favorited project: ${projectTitle || projectId}`,
+          entity_name: fileName || projectTitle || filePath || projectId || 'Unknown',
+          details: {
+            file_name: fileName || null,
+            file_path: filePath || null,
+            file_type: fileType || null,
+            project_id: projectId || null,
+            project_title: projectTitle || null,
+            property_address: propertyAddress || null,
+            tonomo_base_path: tonomoBasePath || null,
+          },
         }); // fire-and-forget audit log
       } catch (err) {
         // Revert optimistic state on failure
@@ -260,7 +274,18 @@ export function useFavorites() {
       action: 'tags_updated',
       user_id: userId,
       user_name: user?.full_name || user?.email || 'Unknown',
-      details: `Tags: [${newTags.join(', ')}]`,
+      entity_name: current?.file_name || current?.project_title || 'Unknown',
+      details: {
+        file_name: current?.file_name || null,
+        file_path: current?.file_path || null,
+        file_type: current?.file_type || null,
+        project_id: current?.project_id || null,
+        project_title: current?.project_title || null,
+        tonomo_base_path: current?.tonomo_base_path || null,
+        tags: newTags,
+        added_tags: added,
+        removed_tags: removed,
+      },
     });
 
     // Refresh caches
