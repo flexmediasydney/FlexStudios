@@ -34,6 +34,9 @@ export const ROUTE_ACCESS = {
   ProspectDetails: ADMIN_EMPLOYEE,
   ClientMonitor: ADMIN_EMPLOYEE,
 
+  // ── SOCIAL MEDIA ──────────────────────────────────────────
+  SocialMedia: ALL_ROLES,
+
   // ── ANALYTICS ─────────────────────────────────────────────
   Analytics: ADMIN_EMPLOYEE,
   Reports: ADMIN_EMPLOYEE,

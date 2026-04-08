@@ -26,6 +26,7 @@ import {
   UserRound,
   UsersRound,
   Rss,
+  Heart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -145,11 +146,12 @@ function LayoutContent({ currentPageName, children }) {
         bookings: true,
         contacts: true,
         analytics: true,
+        social: true,
         growth: false,
         settings: false
       };
     } catch {
-      return { workspace: true, operations: true, bookings: true, contacts: true, analytics: true, growth: false, settings: false };
+      return { workspace: true, operations: true, bookings: true, contacts: true, analytics: true, social: true, growth: false, settings: false };
     }
   });
 
@@ -231,6 +233,14 @@ function LayoutContent({ currentPageName, children }) {
         collapsible: true,
         items: [
           can("Analytics") && { name: "Analytics", href: "Analytics", icon: BarChart2 },
+        ].filter(Boolean)
+      },
+      can("SocialMedia") && {
+        id: 'social',
+        label: 'Social Media',
+        collapsible: true,
+        items: [
+          can("SocialMedia") && { name: "Favorites", href: "SocialMedia", icon: Heart },
         ].filter(Boolean)
       },
       can("Prospecting") && {

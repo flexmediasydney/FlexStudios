@@ -705,6 +705,12 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project }) {
   );
 }
 
+const PARTIAL_DELIVERY_STAGES = ['in_production', 'in_progress', 'submitted', 'uploaded'];
+
+function isPartialDelivery(project) {
+  return PARTIAL_DELIVERY_STAGES.includes(project.status) && !!project.tonomo_deliverable_link;
+}
+
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
 function DeliveryCard({ project, isNew }) {
   const [expanded, setExpanded] = useState(false);
@@ -714,6 +720,7 @@ function DeliveryCard({ project, isNew }) {
   const [lightbox, setLightbox] = useState(null);
   const hasFetchedRef = useRef(false);
 
+  const isPartial = isPartialDelivery(project);
   const deliveredAt = project.tonomo_delivered_at || project.updated_date || project.created_date;
   const deliverableLink = project.tonomo_deliverable_link;
   const deliverablePath = project.tonomo_deliverable_path;
@@ -792,14 +799,18 @@ function DeliveryCard({ project, isNew }) {
     <div className={cn('border rounded-xl overflow-hidden transition-all hover:shadow-md bg-card', isNew && 'ring-2 ring-green-300 ring-opacity-50')}>
       <button onClick={() => setExpanded(e => !e)} className="w-full text-left">
         <div className="flex items-start gap-3 p-4">
-          <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5', project.status === 'delivered' ? 'bg-emerald-100' : 'bg-blue-100')}>
-            {project.status === 'delivered' ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Package className="h-5 w-5 text-blue-600" />}
+          <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5', isPartial ? 'bg-orange-100' : project.status === 'delivered' ? 'bg-emerald-100' : 'bg-blue-100')}>
+            {isPartial ? <Loader2 className="h-5 w-5 text-orange-600" /> : project.status === 'delivered' ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Package className="h-5 w-5 text-blue-600" />}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-sm">{projectTitle(project)}</span>
               {isNew && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-200">NEW</Badge>}
-              <Badge variant="outline" className="text-[9px]">{stageLabel(project.status)}</Badge>
+              {isPartial ? (
+                <Badge className="text-[9px] bg-orange-100 text-orange-700 border-orange-200">In Progress</Badge>
+              ) : (
+                <Badge variant="outline" className="text-[9px]">{stageLabel(project.status)}</Badge>
+              )}
               {packageName && <Badge variant="outline" className="text-[9px] bg-muted/50">{packageName}</Badge>}
             </div>
             <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
@@ -819,25 +830,48 @@ function DeliveryCard({ project, isNew }) {
                 </span>
               )}
             </div>
-            {(totalFileCount > 0 || mediaResult?.folders?.length > 0) && (
+            {(totalFileCount > 0 || mediaResult?.folders?.length > 0 || loadingMedia) && (
               <div className="flex gap-2 mt-2 flex-wrap items-center">
-                {/* Show folder-based counts when gallery data is available */}
-                {mediaResult?.folders?.length > 0 ? (
-                  mediaResult.folders.map(folder => (
-                    <Badge key={folder.name} className="text-[10px] gap-1 bg-blue-50 text-blue-600 border-blue-200">
-                      <Camera className="h-2.5 w-2.5" />{folder.files.length} {folder.name}
-                    </Badge>
-                  ))
-                ) : (
-                  Object.entries(fileTypeCounts).filter(([_, c]) => c > 0).map(([type, count]) => {
-                    const cfg = TYPE_CONFIG[type]; const Icon = cfg.icon;
-                    return <Badge key={type} className={cn('text-[10px] gap-1', cfg.color)}><Icon className="h-2.5 w-2.5" />{count} {cfg.label}</Badge>;
-                  })
-                )}
-                <span className="text-[10px] text-muted-foreground">
-                  {mediaResult?.folders ? allGalleryFiles.length : totalFileCount} files
-                </span>
-                {loadingMedia && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                {/* Skeleton pill placeholders while gallery is loading */}
+                {loadingMedia ? (
+                  <>
+                    <div className="h-5 w-24 rounded-full bg-muted animate-pulse" />
+                    <div className="h-5 w-20 rounded-full bg-muted animate-pulse" />
+                    <div className="h-5 w-16 rounded-full bg-muted animate-pulse" />
+                  </>
+                ) : mediaResult?.folders?.length > 0 ? (
+                  /* Folder-based pills from Dropbox gallery (preferred source) */
+                  <>
+                    {mediaResult.folders.filter(f => f.files?.length > 0).map(folder => {
+                      const style = getFolderStyle(folder.name);
+                      const FIcon = style.icon;
+                      return (
+                        <Badge key={folder.name} className={cn('text-[10px] gap-1 border', style.bg, style.color)}>
+                          <FIcon className="h-2.5 w-2.5" />{folder.files.length} {folder.name}
+                        </Badge>
+                      );
+                    })}
+                    <span className="text-[10px] text-muted-foreground">
+                      {allGalleryFiles.length} files
+                    </span>
+                  </>
+                ) : !mediaResult && totalFileCount > 0 ? (
+                  /* Fallback: generic type pills from tonomo_delivered_files (only when gallery never loaded) */
+                  <>
+                    {Object.entries(fileTypeCounts).filter(([_, c]) => c > 0).map(([type, count]) => {
+                      const cfg = TYPE_CONFIG[type]; const Icon = cfg.icon;
+                      return <Badge key={type} className={cn('text-[10px] gap-1', cfg.color)}><Icon className="h-2.5 w-2.5" />{count} {cfg.label}</Badge>;
+                    })}
+                    <span className="text-[10px] text-muted-foreground">
+                      {totalFileCount} files
+                    </span>
+                  </>
+                ) : mediaResult && allGalleryFiles.length > 0 ? (
+                  /* Gallery loaded but folders array was empty — show total count */
+                  <span className="text-[10px] text-muted-foreground">
+                    {allGalleryFiles.length} files
+                  </span>
+                ) : null}
               </div>
             )}
           </div>
@@ -1106,8 +1140,15 @@ export default function DeliveryFeed() {
     const days = parseInt(dateFilter, 10);
     const now = new Date();
     const DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
+    const PARTIAL_STAGES = ['in_production', 'in_progress', 'submitted', 'uploaded'];
     return allProjects
-      .filter(p => DELIVERY_STAGES.includes(p.status))
+      .filter(p => {
+        // Fully delivered projects
+        if (DELIVERY_STAGES.includes(p.status)) return true;
+        // Partial deliveries: have a deliverable link but not yet officially delivered
+        if (PARTIAL_STAGES.includes(p.status) && p.tonomo_deliverable_link) return true;
+        return false;
+      })
       .filter(p => p.tonomo_delivered_at || p.tonomo_deliverable_link || p.tonomo_delivered_files || p.tonomo_deliverable_path)
       .filter(p => { if (days === 0) return true; const delivered = p.tonomo_delivered_at || p.updated_date; if (!delivered) return false; return differenceInDays(now, new Date(fixTimestamp(delivered))) <= days; })
       .filter(p => agencyFilter === 'all' || p.agency_id === agencyFilter)
@@ -1119,7 +1160,15 @@ export default function DeliveryFeed() {
           || (p.agency_name || '').toLowerCase().includes(q)
           || (p.agent_name || '').toLowerCase().includes(q);
       })
-      .sort((a, b) => new Date(fixTimestamp(b.tonomo_delivered_at || b.updated_date || '')) - new Date(fixTimestamp(a.tonomo_delivered_at || a.updated_date || '')));
+      .sort((a, b) => {
+        // Sort fully delivered projects before partial deliveries
+        const aDelivered = DELIVERY_STAGES.includes(a.status);
+        const bDelivered = DELIVERY_STAGES.includes(b.status);
+        if (aDelivered && !bDelivered) return -1;
+        if (!aDelivered && bDelivered) return 1;
+        // Within the same group, sort by date descending
+        return new Date(fixTimestamp(b.tonomo_delivered_at || b.updated_date || '')) - new Date(fixTimestamp(a.tonomo_delivered_at || a.updated_date || ''));
+      });
   }, [allProjects, dateFilter, agencyFilter, search]);
 
   const grouped = useMemo(() => {

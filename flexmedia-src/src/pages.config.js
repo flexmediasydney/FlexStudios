@@ -92,6 +92,7 @@ const Projects = React.lazy(() => import('./pages/Projects'));
 const ProspectDetails = React.lazy(() => import('./pages/ProspectDetails'));
 const Prospecting = React.lazy(() => import('./pages/Prospecting'));
 const Reports = React.lazy(() => import('./pages/Reports'));
+const SocialMedia = React.lazy(() => import('./pages/SocialMedia'));
 const SettingsAutomationRules = React.lazy(() => import('./pages/SettingsAutomationRules'));
 const SettingsNotifications = React.lazy(() => import('./pages/SettingsNotifications'));
 const SettingsSystemHealth = React.lazy(() => import('./pages/SettingsSystemHealth'));
@@ -140,6 +141,7 @@ export const PAGES = {
     "Reports": Reports,
     "Settings": Settings,
     "SettingsAutomationRules": SettingsAutomationRules,
+    "SocialMedia": SocialMedia,
     "SettingsClients": SettingsClients,
     "SettingsIntegrations": SettingsIntegrations,
     "SettingsNotifications": SettingsNotifications,

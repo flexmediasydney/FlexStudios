@@ -14,6 +14,9 @@ import {
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, format } from "date-fns";
+import FavoriteButton from "@/components/favorites/FavoriteButton";
+import TagManager from "@/components/favorites/TagManager";
+import { useFavorites } from "@/components/favorites/useFavorites";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -291,12 +294,21 @@ function MediaThumbnail({ file, tonomoBasePath, onClick }) {
       </div>
 
       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors pointer-events-none" />
-      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-        <ExternalLink className="h-3.5 w-3.5 text-white drop-shadow-md" />
+
+      {/* Top-right: star + external link on hover */}
+      <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <FavoriteButton
+          filePath={proxyPath}
+          fileName={file.name}
+          fileType={file.type}
+          tonomoBasePath={tonomoBasePath}
+          size="sm"
+          className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white"
+        />
       </div>
 
       {file.type !== "image" && (
-        <div className="absolute top-2 left-2">
+        <div className="absolute top-1.5 left-1.5">
           <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 bg-background/80 backdrop-blur-sm">
             {file.type === "video" ? "Video" : file.ext?.toUpperCase() || file.type}
           </Badge>

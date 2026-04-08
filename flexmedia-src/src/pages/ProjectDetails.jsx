@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import ProjectForm from "@/components/projects/ProjectForm";
 import TaskManagement from "@/components/projects/TaskManagement";
 import ProjectMediaGallery from "@/components/projects/ProjectMediaGallery";
+import FavoriteButton from "@/components/favorites/FavoriteButton";
 import EffortLoggingTab from "@/components/projects/EffortLoggingTab";
 import ProjectCalendarEvents from "@/components/projects/ProjectCalendarEvents";
 import ProjectActivityHub from "@/components/projects/ProjectActivityHub";
@@ -973,7 +974,17 @@ export default function ProjectDetails() {
           </Button>
         </Link>
         <div className="flex-1 min-w-0">
-          <h1 className="text-xl lg:text-2xl font-bold tracking-tight leading-tight mb-1" title={project?.title || ''}>{project?.title || 'Loading...'}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl lg:text-2xl font-bold tracking-tight leading-tight" title={project?.title || ''}>{project?.title || 'Loading...'}</h1>
+            {project?.id && (
+              <FavoriteButton
+                projectId={project.id}
+                projectTitle={project.title}
+                propertyAddress={project.property_address}
+                size="md"
+              />
+            )}
+          </div>
           <div className="flex items-center gap-1.5 text-muted-foreground text-sm">
             <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
             <button
