@@ -14,10 +14,27 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
   const overriddenFields = safeJsonParse(project.manually_overridden_fields, [] as string[]);
   const hasDeliverables = p.deliverable_link || (p.deliverablesLinks?.length > 0);
 
+  // Map Tonomo payment status to canonical payment_status values
+  const mapTonomoPaymentStatus = (raw: string | undefined | null): string | null => {
+    if (!raw) return null;
+    const lower = raw.toLowerCase().trim();
+    if (lower === 'paid') return 'paid';
+    if (lower === 'unpaid' || lower === 'pending') return 'unpaid';
+    if (lower === 'partial') return 'partial';
+    return null; // unknown value — don't overwrite
+  };
+
   const updates: Record<string, any> = {
     tonomo_order_status: 'complete',
     tonomo_payment_status: p.paymentStatus || project.tonomo_payment_status,
   };
+
+  // Sync Tonomo payment status to main payment_status field
+  const incomingPayment = p.paymentStatus || project.tonomo_payment_status;
+  const mappedPayment = mapTonomoPaymentStatus(incomingPayment);
+  if (mappedPayment && !overriddenFields.includes('payment_status')) {
+    updates.payment_status = mappedPayment;
+  }
 
   if (!overriddenFields.includes('status')) {
     if (hasDeliverables) {

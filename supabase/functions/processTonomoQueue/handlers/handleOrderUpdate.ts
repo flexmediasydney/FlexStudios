@@ -143,6 +143,19 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
   if (!overriddenFields.includes('tonomo_invoice_amount')) updates.tonomo_invoice_amount = p.invoice_amount ? parseFloat(p.invoice_amount) : project.tonomo_invoice_amount;
   if (!overriddenFields.includes('tonomo_payment_status')) updates.tonomo_payment_status = p.paymentStatus || project.tonomo_payment_status;
 
+  // Sync Tonomo payment status to main payment_status field
+  const incomingPaymentRaw = p.paymentStatus || project.tonomo_payment_status;
+  if (incomingPaymentRaw && !overriddenFields.includes('payment_status')) {
+    const lower = incomingPaymentRaw.toLowerCase().trim();
+    const mappedPayment = lower === 'paid' ? 'paid'
+      : (lower === 'unpaid' || lower === 'pending') ? 'unpaid'
+      : lower === 'partial' ? 'partial'
+      : null;
+    if (mappedPayment) {
+      updates.payment_status = mappedPayment;
+    }
+  }
+
   const startTime = p.when?.start_time ? p.when.start_time * 1000 : null;
   if (startTime && !overriddenFields.includes('shoot_date')) {
     updates.shoot_date = new Date(startTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });

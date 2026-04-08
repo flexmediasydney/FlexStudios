@@ -9,8 +9,8 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { 
   ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Users, Phone,
-  ExternalLink, Edit, Trash2, CheckCircle, Building,
-  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera
+  ExternalLink, Edit, Archive, CheckCircle, Building,
+  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera, AlertTriangle
 } from "lucide-react";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import StagePipeline from "@/components/projects/StagePipeline";
@@ -740,31 +740,63 @@ export default function ProjectDetails() {
       }
       });
 
-      const deleteMutation = useMutation({
+      // ── Archive warnings state (for safeguard dialog) ──────────────────────
+      const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+      const [archiveWarnings, setArchiveWarnings] = useState([]);
+
+      // Compute archive warnings when dialog opens
+      const computeArchiveWarnings = useCallback(async () => {
+        const warnings = [];
+        if (project?.payment_status !== 'paid') {
+          warnings.push(`Payment status: ${project?.payment_status || 'unpaid'}`);
+        }
+        // Check incomplete tasks
+        const incompleteTasks = (projectTasks || []).filter(t => !t.is_deleted && !t.is_archived && !t.is_completed);
+        if (incompleteTasks.length > 0) {
+          warnings.push(`${incompleteTasks.length} task${incompleteTasks.length === 1 ? '' : 's'} incomplete`);
+        }
+        // Check running timers
+        try {
+          const runningTimers = await api.entities.TaskTimeLog.filter({ project_id: projectId, is_active: true });
+          const activeTimers = (runningTimers || []).filter(t => t.is_active && !t.end_time);
+          if (activeTimers.length > 0) {
+            warnings.push(`${activeTimers.length} running timer${activeTimers.length === 1 ? '' : 's'}`);
+          }
+        } catch { /* non-fatal */ }
+        setArchiveWarnings(warnings);
+        setShowArchiveDialog(true);
+      }, [project, projectTasks, projectId]);
+
+      const archiveMutation = useMutation({
       mutationFn: async () => {
       if (!project) throw new Error('Project not loaded');
-      // ── Soft-delete children via backend function (batched, efficient) ──────────────────
-      // Must await so children are cleaned up BEFORE the project row is hard-deleted,
-      // otherwise foreign-key-less orphans remain permanently.
+
+      // Stop any running timers before archiving
       try {
-        await api.functions.invoke('cleanupProjectOnDelete', {
-          project_id: projectId
-        });
+        const runningTimers = await api.entities.TaskTimeLog.filter({ project_id: projectId, is_active: true });
+        const activeTimers = (runningTimers || []).filter(t => t.is_active && !t.end_time);
+        await Promise.all(activeTimers.map(timer =>
+          api.entities.TaskTimeLog.update(timer.id, {
+            is_active: false,
+            end_time: new Date().toISOString(),
+            total_seconds: timer.start_time
+              ? Math.floor((Date.now() - new Date(timer.start_time).getTime()) / 1000) + (timer.total_seconds || 0)
+              : timer.total_seconds || 0,
+          }).catch(() => {})
+        ));
       } catch (err) {
-        console.warn('Cleanup before delete failed (proceeding):', err?.message);
+        console.warn('Stopping timers before archive failed (proceeding):', err?.message);
       }
 
-
-
-      // Audit: log deletion to team feed BEFORE the project is deleted
+      // Audit: log archive to team feed
       await api.entities.TeamActivityFeed.create({
-        event_type: 'project_deleted',
+        event_type: 'project_archived',
         category: 'project',
-        severity: 'warning',
+        severity: 'info',
         actor_id: user?.id || null,
         actor_name: user?.full_name || null,
-        title: `Project deleted: ${project?.title || project?.property_address || 'Unknown'}`,
-        description: `${project?.title || project?.property_address} (${project?.status}) was permanently deleted.`,
+        title: `Project archived: ${project?.title || project?.property_address || 'Unknown'}`,
+        description: `${project?.title || project?.property_address} (${project?.status}) was archived by ${user?.full_name || 'Unknown'}.`,
         project_id: projectId,
         project_name: project?.title || project?.property_address || '',
         project_stage: project?.status || '',
@@ -773,20 +805,28 @@ export default function ProjectDetails() {
         created_date: new Date().toISOString(),
       }).catch(() => {});
 
-      return api.entities.Project.delete(projectId);
+      // Log activity on the project itself
+      logActivity('project_archived', `Project archived by ${user?.full_name || 'Unknown'}. Previous status: ${project?.status || 'unknown'}.`);
+
+      // Soft archive instead of hard delete
+      return api.entities.Project.update(projectId, {
+        is_archived: true,
+        archived_at: new Date().toISOString(),
+        archived_by: user?.full_name || 'Unknown',
+      });
     },
     onSuccess: () => {
       refetchEntityList("Project");
-      refetchEntityList("ProjectTask");
-      refetchEntityList("ProjectActivity");
+      refetchEntityList("TaskTimeLog");
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       setErrorMessage(null);
-      toast.success("Project deleted");
+      setShowArchiveDialog(false);
+      toast.success("Project archived");
       navigate(createPageUrl("Projects"));
     },
     onError: (err) => {
-      toast.error(err?.message || "Failed to delete project");
-      setErrorMessage(err?.message || "Failed to delete project");
+      toast.error(err?.message || "Failed to archive project");
+      setErrorMessage(err?.message || "Failed to archive project");
     }
     });
 
@@ -1044,31 +1084,52 @@ export default function ProjectDetails() {
            </Button>
           )}
           {memoizedCanEdit && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10 px-2.5 transition-colors h-9" title="Delete this project" aria-label="Delete project">
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete Project?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will permanently delete <strong>"{project.title}"</strong> and all associated data (tasks, notes, timers). This cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
-                  <AlertDialogAction 
-                    onClick={() => deleteMutation.mutate()} 
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    disabled={deleteMutation.isPending}
-                  >
-                    {deleteMutation.isPending ? "Deleting..." : "Delete"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-orange-600 hover:text-orange-700 hover:bg-orange-50 px-2.5 transition-colors h-9"
+                title="Archive this project"
+                aria-label="Archive project"
+                onClick={computeArchiveWarnings}
+              >
+                <Archive className="h-4 w-4" />
+              </Button>
+              <AlertDialog open={showArchiveDialog} onOpenChange={setShowArchiveDialog}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Archive "{project.title || project.property_address}"?</AlertDialogTitle>
+                    <AlertDialogDescription asChild>
+                      <div className="space-y-3">
+                        {archiveWarnings.length > 0 && (
+                          <div className="space-y-1.5">
+                            {archiveWarnings.map((w, i) => (
+                              <div key={i} className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5 text-sm">
+                                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                                <span>{w}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-muted-foreground text-sm">
+                          This project will be hidden from active views. You can unarchive it later from the project's detail page.
+                        </p>
+                      </div>
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={archiveMutation.isPending}>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => archiveMutation.mutate()}
+                      className="bg-orange-600 text-white hover:bg-orange-700"
+                      disabled={archiveMutation.isPending}
+                    >
+                      {archiveMutation.isPending ? "Archiving..." : "Archive Anyway"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </>
           )}
         </div>
       </div>
