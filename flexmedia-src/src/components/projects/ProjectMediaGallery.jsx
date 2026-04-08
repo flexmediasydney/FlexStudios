@@ -7,7 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
   RefreshCw, FolderOpen, Image, Film, FileText, File,
-  ExternalLink, AlertCircle, ImageOff, Camera, Play, Clock
+  ExternalLink, AlertCircle, ImageOff, Camera, Play, Clock,
+  Grid2x2, Grid3x3, LayoutGrid
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
@@ -168,7 +169,13 @@ function MediaThumbnail({ file, tonomoBasePath }) {
 
 // ─── FolderSection ──────────────────────────────────────────────────
 
-function FolderSection({ folder, tonomoBasePath }) {
+const GRID_SIZES = {
+  sm: 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2',
+  md: 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3',
+  lg: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4',
+};
+
+function FolderSection({ folder, tonomoBasePath, gridSize = 'md' }) {
   const [collapsed, setCollapsed] = useState(false);
   const imageCount = folder.files.filter(f => f.type === 'image').length;
   const videoCount = folder.files.filter(f => f.type === 'video').length;
@@ -188,7 +195,7 @@ function FolderSection({ folder, tonomoBasePath }) {
         <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors ml-auto">{collapsed ? "Show" : "Hide"}</span>
       </button>
       {!collapsed && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        <div className={cn("grid", GRID_SIZES[gridSize])}>
           {folder.files.map((file) => (
             <MediaThumbnail key={file.path || file.name} file={file} tonomoBasePath={tonomoBasePath} />
           ))}
@@ -217,6 +224,7 @@ function MediaSkeleton() {
 export default function ProjectMediaGallery({ project }) {
   const deliverableLink = project?.tonomo_deliverable_link;
   const tonomoBasePath = project?.tonomo_deliverable_path;
+  const [gridSize, setGridSize] = useState('md');
 
   const { data: mediaData, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ["projectMedia", deliverableLink],
@@ -298,6 +306,22 @@ export default function ProjectMediaGallery({ project }) {
               Fetched {timeAgo(fetchedAt)}
             </span>
           )}
+          <div className="flex items-center border rounded-md overflow-hidden">
+            {[
+              { key: 'sm', icon: Grid3x3, title: 'Small' },
+              { key: 'md', icon: Grid2x2, title: 'Medium' },
+              { key: 'lg', icon: LayoutGrid, title: 'Large' },
+            ].map(({ key, icon: Icon, title }) => (
+              <button
+                key={key}
+                onClick={() => setGridSize(key)}
+                title={title}
+                className={cn("p-1.5 transition-colors", gridSize === key ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </button>
+            ))}
+          </div>
           <Button variant="ghost" size="sm" onClick={() => safeWindowOpen(deliverableLink)} className="text-xs h-7 px-2">
             <ExternalLink className="h-3.5 w-3.5 mr-1" />Open in Dropbox
           </Button>
@@ -309,7 +333,7 @@ export default function ProjectMediaGallery({ project }) {
 
       {/* Folders */}
       {folders.map((folder) => (
-        <FolderSection key={folder.name} folder={folder} tonomoBasePath={tonomoBasePath} />
+        <FolderSection key={folder.name} folder={folder} tonomoBasePath={tonomoBasePath} gridSize={gridSize} />
       ))}
     </div>
   );

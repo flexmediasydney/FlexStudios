@@ -12,7 +12,7 @@ import ProjectForm from "@/components/projects/ProjectForm";
 import TaskReportingDashboard from "@/components/dashboard/TaskReportingDashboard";
 import TaskDeadlineDashboard from "@/components/dashboard/TaskDeadlineDashboard";
 // ProjectHeatmap removed — Territory tab covers the same functionality
-import DropboxFileFeed from "@/components/dashboard/DropboxFileFeed";
+import LiveMediaFeed from "@/components/dashboard/LiveMediaFeed";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -447,7 +447,7 @@ export default function Dashboard() {
            {/* Project Map tab removed — Territory tab has all map functionality */}
            <TabsTrigger 
              value="files" 
-             title="Recent Dropbox files (Ctrl+5)" 
+             title="Live media feed across all projects (Ctrl+5)"
              className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent"
            >
              File Feed
@@ -626,7 +626,7 @@ export default function Dashboard() {
 
         <TabsContent value="files" className="space-y-6 mt-0">
           <ErrorBoundary fallbackLabel="File Feed">
-            <DropboxFileFeed />
+            <LiveMediaFeed />
           </ErrorBoundary>
         </TabsContent>
 

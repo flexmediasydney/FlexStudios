@@ -20,6 +20,42 @@ import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import { format, formatDistanceToNow, differenceInDays, differenceInHours, isToday, isYesterday } from 'date-fns';
 
+// ─── Proxy image loading (mirrors ProjectMediaGallery approach) ─────────────
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const imgBlobCache = new Map();
+const imgPending = new Set();
+let imgActiveLoads = 0;
+const imgLoadQueue = [];
+
+function processImgQueue() {
+  while (imgActiveLoads < 4 && imgLoadQueue.length > 0) {
+    const job = imgLoadQueue.shift();
+    imgActiveLoads++;
+    job().finally(() => { imgActiveLoads--; processImgQueue(); });
+  }
+}
+
+async function fetchProxyImage(filePath) {
+  if (imgBlobCache.has(filePath)) return imgBlobCache.get(filePath);
+  if (imgPending.has(filePath)) return null;
+  imgPending.add(filePath);
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+      body: JSON.stringify({ action: 'proxy', file_path: filePath }),
+    });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (blob.size < 500) return null;
+    const url = URL.createObjectURL(blob);
+    imgBlobCache.set(filePath, url);
+    return url;
+  } catch { return null; }
+  finally { imgPending.delete(filePath); }
+}
+
 const TYPE_CONFIG = {
   image: { label: 'Photos', icon: ImageIcon, color: 'bg-blue-100 text-blue-700' },
   video: { label: 'Video', icon: Film, color: 'bg-purple-100 text-purple-700' },
@@ -293,6 +329,9 @@ async function fetchMediaFeed(pathOrUrl, isShareUrl = false) {
           dropboxFailCount++;
         }
 
+        // Attach fetch timestamp (from edge function or local)
+        result._fetched_at = data?.fetched_at || new Date().toISOString();
+
         // Only cache successful results with actual content
         if (result.folders.length > 0) {
           setCachedResult(cacheKey, result);
@@ -329,10 +368,86 @@ function SkeletonGrid() {
   );
 }
 
+// ─── LightboxImage: loads proxy blob for a single lightbox slide ─────────────
+function LightboxImage({ file, tonomoBase }) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const started = useRef(false);
+
+  const isImage = file.type === 'image';
+
+  useEffect(() => {
+    if (!isImage || !tonomoBase || started.current) return;
+    const proxyPath = tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path);
+    const cached = imgBlobCache.get(proxyPath);
+    if (cached) { setBlobUrl(cached); return; }
+    started.current = true;
+    setLoading(true);
+    imgLoadQueue.push(async () => {
+      const url = await fetchProxyImage(proxyPath);
+      if (url) setBlobUrl(url);
+      setLoading(false);
+    });
+    processImgQueue();
+  }, [isImage, tonomoBase, file.path]);
+
+  const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
+
+  if (imgSrc) {
+    return <img src={imgSrc} alt={file.name} className="max-w-full max-h-full object-contain p-4" />;
+  }
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center gap-3 text-white/40">
+        <Loader2 className="h-10 w-10 animate-spin" />
+        <p className="text-sm">Loading image...</p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col items-center gap-3 text-white/40">
+      {file.type === 'video' ? <Film className="h-16 w-16" /> : <FileText className="h-16 w-16" />}
+      <p className="text-sm">{file.name}</p>
+    </div>
+  );
+}
+
+// ─── LightboxThumb: filmstrip thumbnail with proxy support ──────────────────
+function LightboxThumb({ file, tonomoBase }) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const started = useRef(false);
+
+  const isImage = file.type === 'image';
+
+  useEffect(() => {
+    if (!isImage || !tonomoBase || started.current) return;
+    const proxyPath = tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path);
+    const cached = imgBlobCache.get(proxyPath);
+    if (cached) { setBlobUrl(cached); return; }
+    started.current = true;
+    imgLoadQueue.push(async () => {
+      const url = await fetchProxyImage(proxyPath);
+      if (url) setBlobUrl(url);
+    });
+    processImgQueue();
+  }, [isImage, tonomoBase, file.path]);
+
+  const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
+
+  if (imgSrc) return <img src={imgSrc} alt="" className="w-full h-full object-cover" />;
+  return (
+    <div className="w-full h-full bg-white/10 flex items-center justify-center">
+      {file.type === 'video' ? <Film className="h-3 w-3 text-white/40" /> : <FileText className="h-3 w-3 text-white/40" />}
+    </div>
+  );
+}
+
 // ─── MiniLightbox ────────────────────────────────────────────────────────────
-function MiniLightbox({ files, initialIndex, onClose, shareUrl }) {
+function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
   const [index, setIndex] = useState(initialIndex);
   const file = files[index];
+  const tonomoBase = project?.tonomo_deliverable_path;
+
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'ArrowRight') setIndex(i => Math.min(i + 1, files.length - 1));
@@ -360,20 +475,13 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl }) {
       </div>
       <div className="flex-1 flex items-center justify-center relative min-h-0">
         {index > 0 && <button onClick={() => setIndex(i => i - 1)} className="absolute left-3 z-10 p-2 rounded-full bg-black/50 text-white hover:bg-black/80"><ChevronLeft className="h-5 w-5" /></button>}
-        {file.thumbnail ? (
-          <img src={`data:image/jpeg;base64,${file.thumbnail}`} alt={file.name} className="max-w-full max-h-full object-contain p-4" />
-        ) : (
-          <div className="flex flex-col items-center gap-3 text-white/40">
-            {file.type === 'video' ? <Film className="h-16 w-16" /> : <FileText className="h-16 w-16" />}
-            <p className="text-sm">{file.name}</p>
-          </div>
-        )}
+        <LightboxImage key={file.path || index} file={file} tonomoBase={tonomoBase} />
         {index < files.length - 1 && <button onClick={() => setIndex(i => i + 1)} className="absolute right-3 z-10 p-2 rounded-full bg-black/50 text-white hover:bg-black/80"><ChevronRight className="h-5 w-5" /></button>}
       </div>
       <div className="flex gap-1 px-4 py-2 overflow-x-auto border-t border-white/10 shrink-0">
         {files.slice(0, 30).map((f, i) => (
           <button key={f.path || i} onClick={() => setIndex(i)} className={cn('shrink-0 w-10 h-10 rounded overflow-hidden border-2 transition-all', i === index ? 'border-white' : 'border-transparent opacity-40 hover:opacity-70')}>
-            {f.thumbnail ? <img src={`data:image/jpeg;base64,${f.thumbnail}`} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full bg-white/10 flex items-center justify-center">{f.type === 'video' ? <Film className="h-3 w-3 text-white/40" /> : <FileText className="h-3 w-3 text-white/40" />}</div>}
+            <LightboxThumb file={f} tonomoBase={tonomoBase} />
           </button>
         ))}
       </div>
@@ -382,19 +490,46 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl }) {
 }
 
 // ─── LazyThumbFileCard: a single file card with on-demand thumbnail loading ──
-function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox }) {
+function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, project }) {
   const { ref: cardRef, thumbnail, loading } = useLazyThumbnail(file, shareUrl, folder.name);
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [proxyLoading, setProxyLoading] = useState(false);
+  const proxyStarted = useRef(false);
+
+  const isImage = file.type === 'image';
   const isVideo = file.type === 'video';
   const isDoc = file.type === 'document';
   const previewUrl = buildDropboxPreviewUrl(shareUrl, file.path);
   const cfg = TYPE_CONFIG[file.type] || TYPE_CONFIG.image;
   const Icon = cfg.icon;
 
+  // Proxy-based image loading (real Dropbox images)
+  const tonomoBase = project?.tonomo_deliverable_path;
+  useEffect(() => {
+    if (!isImage || !tonomoBase || proxyStarted.current) return;
+    const proxyPath = tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path);
+    const cached = imgBlobCache.get(proxyPath);
+    if (cached) { setBlobUrl(cached); return; }
+    proxyStarted.current = true;
+    setProxyLoading(true);
+    imgLoadQueue.push(async () => {
+      const url = await fetchProxyImage(proxyPath);
+      if (url) setBlobUrl(url);
+      setProxyLoading(false);
+    });
+    processImgQueue();
+  }, [isImage, tonomoBase, file.path]);
+
+  const hasVisual = blobUrl || thumbnail || file.thumbnail;
+  const imgSrc = blobUrl || (thumbnail ? `data:image/jpeg;base64,${thumbnail}` : file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
+  const isLoading = proxyLoading || loading;
+  const uploadTime = file.uploaded_at ? relativeTime(file.uploaded_at) : null;
+
   return (
     <button
       ref={cardRef}
       onClick={() => {
-        if (thumbnail || file.thumbnail) {
+        if (hasVisual) {
           onOpenLightbox(folder.files, index);
         } else {
           window.open(previewUrl, '_blank');
@@ -403,18 +538,16 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox }) {
       className="group relative aspect-[4/3] rounded-lg overflow-hidden bg-muted border border-border/30 hover:ring-2 hover:ring-primary/30 transition-all"
       title={file.name}
     >
-      {(thumbnail || file.thumbnail) ? (
+      {hasVisual ? (
         <img
-          src={`data:image/jpeg;base64,${thumbnail || file.thumbnail}`}
+          src={imgSrc}
           alt={file.name}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
           loading="lazy"
         />
-      ) : loading ? (
-        /* Shimmer / pulse placeholder while thumbnail is being fetched */
+      ) : isLoading ? (
         <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 animate-pulse">
-          <div className="w-10 h-10 rounded-lg bg-muted-foreground/10" />
-          <div className="w-16 h-2 rounded bg-muted-foreground/10" />
+          <Camera className="h-6 w-6 text-muted-foreground/20 animate-pulse" />
         </div>
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center gap-1.5">
@@ -442,14 +575,89 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox }) {
       {/* Hover filename overlay */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <p className="text-[10px] text-white truncate">{file.name}</p>
-        {file.size > 0 && <p className="text-[8px] text-white/60">{fmtFileSize(file.size)}</p>}
+        <div className="flex items-center gap-1.5 text-[8px] text-white/60">
+          {file.size > 0 && <span>{fmtFileSize(file.size)}</span>}
+          {uploadTime && (
+            <>
+              <span className="text-white/30">|</span>
+              <Clock className="h-2 w-2 opacity-60" />
+              <span>{uploadTime}</span>
+            </>
+          )}
+        </div>
       </div>
     </button>
   );
 }
 
+// ─── ProxyFileCard: inline file card with proxy image support ───────────────
+function ProxyFileCard({ file, project }) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const started = useRef(false);
+
+  const isImage = file.type === 'image';
+  const tonomoBase = project?.tonomo_deliverable_path;
+
+  useEffect(() => {
+    if (!isImage || !tonomoBase || started.current) return;
+    const proxyPath = tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path);
+    const cached = imgBlobCache.get(proxyPath);
+    if (cached) { setBlobUrl(cached); return; }
+    started.current = true;
+    setLoading(true);
+    imgLoadQueue.push(async () => {
+      const url = await fetchProxyImage(proxyPath);
+      if (url) setBlobUrl(url);
+      setLoading(false);
+    });
+    processImgQueue();
+  }, [isImage, tonomoBase, file.path]);
+
+  const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
+  const uploadTime = file.uploaded_at ? relativeTime(file.uploaded_at) : null;
+  const cfg = TYPE_CONFIG[file.type] || TYPE_CONFIG.image;
+  const Icon = cfg.icon;
+
+  return (
+    <a href={file.preview_url || file.url || '#'} target="_blank" rel="noopener noreferrer"
+      className="aspect-[4/3] rounded-lg border overflow-hidden bg-muted/50 hover:shadow-md transition-shadow flex items-center justify-center group relative">
+      {imgSrc ? (
+        <img src={imgSrc} alt={file.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" loading="lazy" />
+      ) : loading ? (
+        <div className="w-full h-full flex items-center justify-center animate-pulse">
+          <Camera className="h-6 w-6 text-muted-foreground/20" />
+        </div>
+      ) : (
+        <div className="text-center p-2">
+          <Icon className="h-6 w-6 mx-auto text-muted-foreground/40 mb-1" />
+          <p className="text-[9px] text-muted-foreground truncate">{file.name}</p>
+        </div>
+      )}
+      {file.type === 'video' && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="bg-black/40 rounded-full p-2"><Play className="h-4 w-4 text-white fill-white" /></div>
+        </div>
+      )}
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-colors">
+        <p className="text-white text-[9px] truncate">{file.name}</p>
+        <div className="flex items-center gap-1.5 text-[7px] text-white/60">
+          {file.size > 0 && <span>{fmtFileSize(file.size)}</span>}
+          {uploadTime && (
+            <>
+              <span className="text-white/30">|</span>
+              <Clock className="h-2 w-2 opacity-60" />
+              <span>{uploadTime}</span>
+            </>
+          )}
+        </div>
+      </div>
+    </a>
+  );
+}
+
 // ─── FolderGallery: renders a subfolder's files as a thumbnail grid ─────────
-function FolderGallery({ folder, shareUrl, onOpenLightbox }) {
+function FolderGallery({ folder, shareUrl, onOpenLightbox, project }) {
   const style = getFolderStyle(folder.name);
   const FolderIcon = style.icon;
   const totalSize = folder.files.reduce((s, f) => s + (f.size || 0), 0);
@@ -489,6 +697,7 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox }) {
             folder={folder}
             shareUrl={shareUrl}
             onOpenLightbox={onOpenLightbox}
+            project={project}
           />
         ))}
       </div>
@@ -673,9 +882,16 @@ function DeliveryCard({ project, isNew }) {
           ) : mediaResult?.folders?.length > 0 ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] text-muted-foreground">
-                  {mediaResult.folders.reduce((s, f) => s + (f.files?.length || 0), 0)} files across {mediaResult.folders.length} folder{mediaResult.folders.length !== 1 ? 's' : ''}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground">
+                    {mediaResult.folders.reduce((s, f) => s + (f.files?.length || 0), 0)} files across {mediaResult.folders.length} folder{mediaResult.folders.length !== 1 ? 's' : ''}
+                  </span>
+                  {mediaResult._fetched_at && (
+                    <span className="text-[9px] text-muted-foreground/50 flex items-center gap-1">
+                      <Clock className="h-2.5 w-2.5" /> fetched {relativeTime(mediaResult._fetched_at)}
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
                   {deliverableLink && (
                     <a href={deliverableLink} target="_blank" rel="noopener noreferrer"
@@ -693,20 +909,7 @@ function DeliveryCard({ project, isNew }) {
                   <p className="text-xs font-semibold text-muted-foreground mb-2">{folder.name} ({folder.files?.length || 0})</p>
                   <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                     {(folder.files || []).map((file, fii) => (
-                      <a key={fii} href={file.preview_url || file.url || deliverableLink} target="_blank" rel="noopener noreferrer"
-                        className="aspect-[4/3] rounded-lg border overflow-hidden bg-muted/50 hover:shadow-md transition-shadow flex items-center justify-center group relative">
-                        {file.thumbnail ? (
-                          <img src={`data:image/jpeg;base64,${file.thumbnail}`} alt={file.name} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="text-center p-2">
-                            <FileText className="h-6 w-6 mx-auto text-muted-foreground/40 mb-1" />
-                            <p className="text-[9px] text-muted-foreground truncate">{file.name}</p>
-                          </div>
-                        )}
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-end opacity-0 group-hover:opacity-100">
-                          <p className="text-white text-[9px] p-1.5 truncate w-full">{file.name}</p>
-                        </div>
-                      </a>
+                      <ProxyFileCard key={fii} file={file} project={project} />
                     ))}
                   </div>
                 </div>
@@ -807,6 +1010,11 @@ function DeliveryCard({ project, isNew }) {
                   <span className="text-xs text-muted-foreground">
                     {allGalleryFiles.length} files across {folderCount} folder{folderCount !== 1 ? 's' : ''}
                   </span>
+                  {mediaResult._fetched_at && (
+                    <span className="text-[9px] text-muted-foreground/50 flex items-center gap-1">
+                      <Clock className="h-2.5 w-2.5" /> fetched {relativeTime(mediaResult._fetched_at)}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {deliverableLink && (
@@ -827,6 +1035,7 @@ function DeliveryCard({ project, isNew }) {
                     folder={folder}
                     shareUrl={deliverableLink}
                     onOpenLightbox={(files, index) => setLightbox({ files, index })}
+                    project={project}
                   />
                 ))}
               </div>
@@ -842,7 +1051,7 @@ function DeliveryCard({ project, isNew }) {
           )}
         </div>
       )}
-      {lightbox && <MiniLightbox files={lightbox.files} initialIndex={lightbox.index} shareUrl={deliverableLink} onClose={() => setLightbox(null)} />}
+      {lightbox && <MiniLightbox files={lightbox.files} initialIndex={lightbox.index} shareUrl={deliverableLink} onClose={() => setLightbox(null)} project={project} />}
     </div>
   );
 }
