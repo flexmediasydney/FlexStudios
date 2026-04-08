@@ -211,10 +211,10 @@ function FileFavoriteCard({ favorite, isVisible }) {
           </div>
         )}
         <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
-          {favorite.created_by_name && (
+          {(favorite.favorited_by_name || favorite.created_by_name) && (
             <>
               <User className="h-2.5 w-2.5 shrink-0" />
-              <span className="truncate">{favorite.created_by_name}</span>
+              <span className="truncate">{favorite.favorited_by_name || favorite.created_by_name}</span>
             </>
           )}
           {favorite.created_date && (
@@ -285,10 +285,10 @@ function ProjectFavoriteCard({ favorite }) {
           </div>
         )}
         <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
-          {favorite.created_by_name && (
+          {(favorite.favorited_by_name || favorite.created_by_name) && (
             <>
               <User className="h-2.5 w-2.5 shrink-0" />
-              <span className="truncate">{favorite.created_by_name}</span>
+              <span className="truncate">{favorite.favorited_by_name || favorite.created_by_name}</span>
             </>
           )}
           {favorite.created_date && (
@@ -322,29 +322,112 @@ function FavoriteSkeleton({ count = 8 }) {
   );
 }
 
-// ---- Audit Log Entry ----
+// ---- Audit Log Entry (Rich) ----
+const ACTION_CONFIG = {
+  favorited:    { icon: Star,    color: 'text-yellow-500', bg: 'bg-yellow-50 dark:bg-yellow-900/20', verb: 'favorited' },
+  unfavorited:  { icon: Heart,   color: 'text-red-400',    bg: 'bg-red-50 dark:bg-red-900/20',      verb: 'unfavorited' },
+  tags_updated: { icon: Tag,     color: 'text-blue-500',   bg: 'bg-blue-50 dark:bg-blue-900/20',    verb: 'updated tags on' },
+};
+
 function AuditLogEntry({ entry }) {
   const actor = entry.performed_by_name || entry.user_name || 'Unknown';
   const action = entry.action || 'favorited';
-  const target = entry.entity_name || entry.details?.file_name || entry.details?.project_title || 'an item';
-  const tagInfo = entry.details?.tag ? ` with #${entry.details.tag}` : '';
+  // details can be a string (legacy) or an object (new format)
+  const details = typeof entry.details === 'object' && entry.details !== null ? entry.details : {};
+  const detailStr = typeof entry.details === 'string' ? entry.details : null;
+
+  const target = entry.entity_name || details.file_name || details.project_title || detailStr || 'an item';
+  const isFile = !!(details.file_path || details.file_name);
+  const isProject = !!(details.project_id || details.project_title);
+
+  const config = ACTION_CONFIG[action] || ACTION_CONFIG.favorited;
+  const ActionIcon = config.icon;
+
+  // Build tag info for tags_updated action
+  const addedTags = details.added_tags || [];
+  const removedTags = details.removed_tags || [];
+
+  // Build thumbnail proxy path
+  const thumbPath = details.tonomo_base_path && details.file_path
+    ? `${details.tonomo_base_path}${details.file_path.startsWith('/') ? details.file_path : '/' + details.file_path}`
+    : null;
+
+  const [thumbUrl, setThumbUrl] = useState(null);
+  const thumbStarted = useRef(false);
+
+  useEffect(() => {
+    if (!thumbPath || details.file_type !== 'image' || thumbStarted.current) return;
+    const cached = blobCache.get(`thumb::${thumbPath}`);
+    if (cached) { setThumbUrl(cached); return; }
+    thumbStarted.current = true;
+    loadQueue.push(async () => {
+      const url = await fetchProxyImage(thumbPath, 'thumb');
+      if (url) setThumbUrl(url);
+    });
+    processQueue();
+  }, [thumbPath, details.file_type]);
 
   return (
-    <div className="flex items-start gap-3 py-2 border-b border-border/40 last:border-0">
-      <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-        <Activity className="h-3 w-3 text-primary" />
+    <div className="flex items-start gap-3 py-2.5 border-b border-border/40 last:border-0 group">
+      {/* User avatar / action icon */}
+      <div className={cn("w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5", config.bg)}>
+        <ActionIcon className={cn("h-3.5 w-3.5", config.color)} />
       </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs text-foreground">
-          <span className="font-medium">{actor}</span>
-          {' '}{action}{' '}
+
+      {/* Content */}
+      <div className="flex-1 min-w-0 space-y-1">
+        <p className="text-xs text-foreground leading-relaxed">
+          <span className="font-semibold">{actor}</span>
+          {' '}<span className="text-muted-foreground">{config.verb}</span>{' '}
           <span className="font-medium">{target}</span>
-          {tagInfo}
         </p>
+
+        {/* Tag changes for tags_updated */}
+        {action === 'tags_updated' && (addedTags.length > 0 || removedTags.length > 0) && (
+          <div className="flex flex-wrap gap-1">
+            {addedTags.map(t => (
+              <Badge key={`+${t}`} variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-green-50 text-green-600 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800">
+                +#{t}
+              </Badge>
+            ))}
+            {removedTags.map(t => (
+              <Badge key={`-${t}`} variant="outline" className="text-[9px] px-1 py-0 h-3.5 bg-red-50 text-red-600 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800 line-through">
+                #{t}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {/* Property address context */}
+        {details.property_address && (
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground/60">
+            <Building2 className="h-2.5 w-2.5" />
+            <span className="truncate">{details.property_address}</span>
+          </div>
+        )}
+
         {entry.created_date && (
-          <p className="text-[10px] text-muted-foreground/60 mt-0.5">{timeAgo(entry.created_date)}</p>
+          <p className="text-[10px] text-muted-foreground/50">{timeAgo(entry.created_date)}</p>
         )}
       </div>
+
+      {/* Thumbnail (for file favorites) */}
+      {isFile && (
+        <div className="w-9 h-9 rounded-md overflow-hidden bg-muted flex-shrink-0 flex items-center justify-center">
+          {thumbUrl ? (
+            <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <FileIcon type={details.file_type} className="h-3.5 w-3.5 text-muted-foreground/30" />
+          )}
+        </div>
+      )}
+
+      {/* Project icon (for project favorites) */}
+      {isProject && !isFile && (
+        <div className="w-9 h-9 rounded-md overflow-hidden bg-primary/5 flex-shrink-0 flex items-center justify-center">
+          <FolderOpen className="h-3.5 w-3.5 text-primary/40" />
+        </div>
+      )}
     </div>
   );
 }
