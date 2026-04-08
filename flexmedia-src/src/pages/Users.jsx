@@ -277,7 +277,7 @@ export default function UsersManagement() {
                         <TableCell>
                           <Select
                             value={user.internal_team_id || "none"}
-                            onValueChange={(v) => updateUserMutation.mutate({ userId: user.id, updates: { internal_team_id: v === "none" ? null : v, internal_team_name: v === "none" ? "" : teams.find(t => t.id === v)?.name || "" } })}
+                            onValueChange={(v) => updateUserMutation.mutate({ userId: user.id, updates: { internal_team_id: v === "none" ? null : v, internal_team_name: v === "none" ? null : teams.find(t => t.id === v)?.name || null } })}
                           >
                             <SelectTrigger className="h-8 text-xs w-32"><SelectValue placeholder="No team" /></SelectTrigger>
                             <SelectContent>
@@ -380,7 +380,7 @@ export default function UsersManagement() {
               </div>
               <div className="space-y-2">
                 <Label>Team</Label>
-                <Select value={editingUser.internal_team_id || "none"} onValueChange={(v) => setEditingUser(p => ({ ...p, internal_team_id: v === "none" ? null : v, internal_team_name: v === "none" ? "" : teams.find(t => t.id === v)?.name || "" }))}>
+                <Select value={editingUser.internal_team_id || "none"} onValueChange={(v) => setEditingUser(p => ({ ...p, internal_team_id: v === "none" ? null : v, internal_team_name: v === "none" ? null : teams.find(t => t.id === v)?.name || null }))}>
                   <SelectTrigger className="h-11"><SelectValue placeholder="No team" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">No team</SelectItem>
@@ -395,11 +395,11 @@ export default function UsersManagement() {
                 onClick={() => updateUserMutation.mutate({
                   userId: editingUser.id,
                   updates: {
-                    full_name: editingUser.full_name,
-                    phone: editingUser.phone || null,
+                    full_name: editingUser.full_name?.trim() || null,
+                    phone: editingUser.phone?.trim() || null,
                     role: editingUser.role,
-                    internal_team_id: editingUser.internal_team_id,
-                    internal_team_name: editingUser.internal_team_name,
+                    internal_team_id: editingUser.internal_team_id || null,
+                    internal_team_name: editingUser.internal_team_name || null,
                   },
                 })}
                 disabled={updateUserMutation.isPending}

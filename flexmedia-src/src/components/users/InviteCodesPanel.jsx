@@ -75,9 +75,9 @@ export default function InviteCodesPanel() {
       code: cleanCode,
       role: newCode.role,
       max_uses: parseInt(newCode.max_uses) || 1,
-      note: newCode.note.trim() || null,
-      created_by: currentUser?.id,
-      created_by_name: currentUser?.full_name,
+      note: (newCode.note || '').trim() || null,
+      created_by: currentUser?.id || null,
+      created_by_name: currentUser?.full_name || null,
       expires_at: newCode.expires_days
         ? new Date(Date.now() + parseInt(newCode.expires_days) * 86400000).toISOString()
         : null,
