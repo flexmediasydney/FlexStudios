@@ -819,13 +819,24 @@ function DeliveryCard({ project, isNew }) {
                 </span>
               )}
             </div>
-            {totalFileCount > 0 && (
+            {(totalFileCount > 0 || mediaResult?.folders?.length > 0) && (
               <div className="flex gap-2 mt-2 flex-wrap items-center">
-                {Object.entries(fileTypeCounts).filter(([_, c]) => c > 0).map(([type, count]) => {
-                  const cfg = TYPE_CONFIG[type]; const Icon = cfg.icon;
-                  return <Badge key={type} className={cn('text-[10px] gap-1', cfg.color)}><Icon className="h-2.5 w-2.5" />{count} {cfg.label}</Badge>;
-                })}
-                <span className="text-[10px] text-muted-foreground">{totalFileCount} files</span>
+                {/* Show folder-based counts when gallery data is available */}
+                {mediaResult?.folders?.length > 0 ? (
+                  mediaResult.folders.map(folder => (
+                    <Badge key={folder.name} className="text-[10px] gap-1 bg-blue-50 text-blue-600 border-blue-200">
+                      <Camera className="h-2.5 w-2.5" />{folder.files.length} {folder.name}
+                    </Badge>
+                  ))
+                ) : (
+                  Object.entries(fileTypeCounts).filter(([_, c]) => c > 0).map(([type, count]) => {
+                    const cfg = TYPE_CONFIG[type]; const Icon = cfg.icon;
+                    return <Badge key={type} className={cn('text-[10px] gap-1', cfg.color)}><Icon className="h-2.5 w-2.5" />{count} {cfg.label}</Badge>;
+                  })
+                )}
+                <span className="text-[10px] text-muted-foreground">
+                  {mediaResult?.folders ? allGalleryFiles.length : totalFileCount} files
+                </span>
                 {loadingMedia && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
               </div>
             )}
