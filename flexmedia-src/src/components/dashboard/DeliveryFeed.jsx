@@ -410,13 +410,13 @@ function DeliveryCard({ project, isNew }) {
     } catch { return null; }
   }, [project.shoot_date, deliveredAt]);
 
-  // Determine Dropbox source -- prefer share_url for the grouped gallery experience
-  const dropboxSource = hasDeliveredFiles ? null : (deliverableLink || deliverablePath || null);
-  const isShareUrl = !!deliverableLink && !deliverablePath;
+  // Determine Dropbox source -- always try Dropbox API when link exists (shows individual files)
+  const dropboxSource = deliverableLink || deliverablePath || null;
+  const isShareUrl = !!deliverableLink;
 
   // Lazy load: fetch only when card is expanded
   useEffect(() => {
-    if (!expanded || hasDeliveredFiles || !dropboxSource || hasFetchedRef.current) return;
+    if (!expanded || !dropboxSource || hasFetchedRef.current) return;
     hasFetchedRef.current = true;
     setLoadingMedia(true);
     fetchMediaFeed(dropboxSource, isShareUrl).then(result => {
@@ -426,7 +426,7 @@ function DeliveryCard({ project, isNew }) {
       setFlatFiles(allFiles);
       setLoadingMedia(false);
     });
-  }, [expanded, dropboxSource, isShareUrl, hasDeliveredFiles]);
+  }, [expanded, dropboxSource, isShareUrl]);
 
   const handleRefresh = async (e) => {
     e.stopPropagation();
@@ -547,8 +547,40 @@ function DeliveryCard({ project, isNew }) {
 
       {expanded && (
         <div className="border-t px-4 py-3">
-          {/* Case 1: delivered_files objects fallback -- render as before */}
-          {hasDeliveredFiles ? (
+          {/* Priority: Dropbox API gallery > delivered_files fallback */}
+          {loadingMedia ? (
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="aspect-[4/3] bg-muted rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : mediaResult?.folders?.length > 0 ? (
+            <div className="space-y-4">
+              {mediaResult.folders.map((folder, fi) => (
+                <div key={fi}>
+                  <p className="text-xs font-semibold text-muted-foreground mb-2">{folder.name} ({folder.files?.length || 0})</p>
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {(folder.files || []).map((file, fii) => (
+                      <a key={fii} href={file.preview_url || file.url || deliverableLink} target="_blank" rel="noopener noreferrer"
+                        className="aspect-[4/3] rounded-lg border overflow-hidden bg-muted/50 hover:shadow-md transition-shadow flex items-center justify-center group relative">
+                        {file.thumbnail ? (
+                          <img src={`data:image/jpeg;base64,${file.thumbnail}`} alt={file.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="text-center p-2">
+                            <FileText className="h-6 w-6 mx-auto text-muted-foreground/40 mb-1" />
+                            <p className="text-[9px] text-muted-foreground truncate">{file.name}</p>
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-end opacity-0 group-hover:opacity-100">
+                          <p className="text-white text-[9px] p-1.5 truncate w-full">{file.name}</p>
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : hasDeliveredFiles ? (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
