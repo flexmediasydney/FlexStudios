@@ -137,7 +137,15 @@ Deno.serve(async (req) => {
       const parentUrl = Deno.env.get('DROPBOX_PARENT_SHARE_URL') || body.parent_url;
       if (!parentUrl) return errorResponse('DROPBOX_PARENT_SHARE_URL not configured', 500, req);
 
-      const arg = JSON.stringify({ url: parentUrl, path: body.file_path });
+      // Strip the parent path prefix to get the path relative to the share root
+      const prefix = Deno.env.get('DROPBOX_PARENT_PATH_PREFIX') || '';
+      let relPath = body.file_path;
+      if (prefix && relPath.startsWith(prefix)) {
+        relPath = relPath.slice(prefix.length);
+        if (!relPath.startsWith('/')) relPath = '/' + relPath;
+      }
+
+      const arg = JSON.stringify({ url: parentUrl, path: relPath });
       const dbxRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
         headers: {
