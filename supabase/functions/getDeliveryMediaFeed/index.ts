@@ -335,7 +335,7 @@ function fileEntry(f: Record<string, unknown>, folderName: string, parentShareUr
     size: f.size as number,
     ext: getExt(name),
     type: classifyFile(name),
-    preview_url: parentShareUrl ? buildParentPreviewUrl(parentShareUrl, pathPrefix || '', basePath || '', relativePath) : null,
+    preview_url: null, // Preview URLs are constructed client-side using the project's deliverableLink
     path: relativePath,
     dbx_id: (f.id as string) || undefined,
     modified: (f.client_modified as string) || null,

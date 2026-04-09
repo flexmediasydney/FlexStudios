@@ -392,7 +392,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
               {zoomed ? <ZoomOut className="h-4 w-4" /> : <ZoomIn className="h-4 w-4" />}
             </button>
           )}
-          {file?.preview_url && (
+          {deliverableLink && (
             <button
               onClick={() => safeWindowOpen(deliverableLink || file.preview_url)}
               className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-white/40"
@@ -494,7 +494,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
           <div className="flex flex-col items-center gap-3 text-white/60 pmg-lightbox-img-enter">
             <FileIcon type={file?.type} className="h-16 w-16" />
             <span className="text-sm">{file?.name}</span>
-            {file?.preview_url && (
+            {deliverableLink && (
               <Button variant="outline" size="sm" onClick={() => safeWindowOpen(deliverableLink || file.preview_url)} className="text-white border-white/30 hover:bg-white/10">
                 <ExternalLink className="h-3.5 w-3.5 mr-1.5" />Open in Dropbox
               </Button>
@@ -583,7 +583,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
 
   const handleClick = () => {
     if (onClick) onClick();
-    else if (file.preview_url) safeWindowOpen(deliverableLink || file.preview_url);
+    else if (deliverableLink) safeWindowOpen(deliverableLink);
   };
 
   const uploadTime = timeAgo(file.uploaded_at);
@@ -665,7 +665,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
               size="sm"
               className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm"
             />
-            {file.preview_url && (
+            {deliverableLink && (
               <button
                 onClick={(e) => { e.stopPropagation(); safeWindowOpen(deliverableLink || file.preview_url); }}
                 className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm transition-colors"
@@ -675,9 +675,18 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
                 <ExternalLink className="h-3.5 w-3.5" />
               </button>
             )}
-            {file.preview_url && (
+            {deliverableLink && (
               <button
-                onClick={(e) => { e.stopPropagation(); safeWindowOpen(file.preview_url.replace('/s/', '/s/dl/').replace('?dl=0', '?dl=1')); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const pp = buildProxyPath(tonomoBasePath, file);
+                  if (pp) {
+                    fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+                      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+                      body: JSON.stringify({ action: 'proxy', file_path: pp }),
+                    }).then(r => r.blob()).then(blob => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file.name; a.click(); URL.revokeObjectURL(a.href); });
+                  }
+                }}
                 className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm transition-colors"
                 title={`Download ${file.name}`}
                 aria-label={`Download ${file.name}`}
