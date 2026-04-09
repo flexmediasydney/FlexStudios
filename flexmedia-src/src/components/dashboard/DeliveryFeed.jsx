@@ -463,23 +463,40 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
     : null;
 
   useEffect(() => {
-    if ((!isImage && !isVideo) || !proxyPath || started.current) return;
-    const cached = imgBlobCache.get(`thumb::${proxyPath}`);
-    if (cached) { setBlobUrl(cached); return; }
-    started.current = true;
-    setLoading(true);
-    // PERF: fetchProxyImage now handles concurrency via global limiter
-    fetchProxyImage(proxyPath).then(url => {
-      if (!mountedRef.current) return;
-      if (url) setBlobUrl(url);
-      setLoading(false);
-    });
+    if ((!isImage && !isVideo) || !proxyPath) return;
+    // Show thumbnail immediately if cached
+    const thumbCached = imgBlobCache.get(`thumb::${proxyPath}`);
+    if (thumbCached && !blobUrl) setBlobUrl(thumbCached);
+    // For videos: fetch full file via direct proxy (bypass queue)
+    if (isVideo) {
+      setLoading(true);
+      fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+        body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
+      }).then(r => { if (!r.ok) throw new Error(); return r.blob(); })
+        .then(blob => { if (!mountedRef.current || blob.size < 1000) return; setBlobUrl(URL.createObjectURL(blob)); setLoading(false); })
+        .catch(() => { if (mountedRef.current) setLoading(false); });
+      return;
+    }
+    // For images: fetch full-res via proxy
+    if (!started.current) {
+      started.current = true;
+      setLoading(true);
+      fetchProxyImage(proxyPath, 'proxy').then(url => {
+        if (!mountedRef.current) return;
+        if (url) setBlobUrl(url);
+        setLoading(false);
+      });
+    }
   }, [isImage, isVideo, proxyPath]);
 
   // Reset when file changes
   useEffect(() => {
     started.current = false;
-    const cached = proxyPath ? imgBlobCache.get(`thumb::${proxyPath}`) : null;
+    const cached = proxyPath
+      ? (imgBlobCache.get(`proxy::${proxyPath}`) || imgBlobCache.get(`thumb::${proxyPath}`))
+      : null;
     setBlobUrl(cached || null);
     setLoading(false);
   }, [file.path, proxyPath]);
@@ -1495,6 +1512,8 @@ export default function DeliveryFeed() {
   const [dropboxWarning, setDropboxWarning] = useState(false);
   const [emptyProjectIds, setEmptyProjectIds] = useState(new Set()); // Projects with 0 Dropbox files
   const [newestFileDate, setNewestFileDate] = useState(new Map()); // projectId → newest file uploaded_at
+  const [scannedCount, setScannedCount] = useState(0); // How many Dropbox folders have reported back
+  const scannedIdsRef = useRef(new Set()); // Track which project IDs have been scanned
 
   // Load project revisions for request badges
   const { data: allRevisions = [] } = useEntityList('ProjectRevision', '-created_date');
@@ -1538,6 +1557,11 @@ export default function DeliveryFeed() {
     // Track the newest file upload date — used for date grouping
     if (newestUploadAt) {
       setNewestFileDate(prev => { const next = new Map(prev); next.set(projectId, newestUploadAt); return next; });
+    }
+    // Track scan progress for the loading indicator
+    if (!scannedIdsRef.current.has(projectId)) {
+      scannedIdsRef.current.add(projectId);
+      setScannedCount(scannedIdsRef.current.size);
     }
   }, []);
 
@@ -1721,6 +1745,19 @@ export default function DeliveryFeed() {
           </Card>
         ))}
       </div>
+
+      {/* Scan progress */}
+      {scannedCount > 0 && scannedCount < deliveries.length && (
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
+            <div className="h-full bg-primary/60 rounded-full transition-all duration-500" style={{ width: `${Math.round((scannedCount / deliveries.length) * 100)}%` }} />
+          </div>
+          <span className="text-[10px] text-muted-foreground shrink-0 flex items-center gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Scanning {scannedCount} of {deliveries.length} folders...
+          </span>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-48">

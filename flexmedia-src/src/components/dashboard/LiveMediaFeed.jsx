@@ -373,7 +373,18 @@ function MediaLightbox({ files, initialIndex, onClose }) {
     return () => window.removeEventListener('keydown', handler);
   }, [index, files.length, handleClose]);
 
-  const imgBlobUrl = isImage ? (blobCache.get(`thumb::${proxyPath}`) || blobCache.get(proxyPath)) : null;
+  // Full-res image loading for lightbox
+  const [fullResUrl, setFullResUrl] = useState(null);
+  useEffect(() => {
+    if (!isImage || !proxyPath) { setFullResUrl(null); return; }
+    setFullResUrl(null);
+    const cached = blobCache.get(`proxy::${proxyPath}`);
+    if (cached) { setFullResUrl(cached); return; }
+    fetchProxyImage(proxyPath, 'proxy').then(url => { if (url) setFullResUrl(url); });
+  }, [isImage, proxyPath]);
+
+  const thumbUrl = isImage && proxyPath ? (blobCache.get(`thumb::${proxyPath}`) || blobCache.get(proxyPath)) : null;
+  const imgBlobUrl = fullResUrl || thumbUrl;
 
   return (
     <div
