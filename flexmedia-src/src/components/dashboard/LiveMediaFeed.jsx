@@ -561,13 +561,11 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
     if (!isVisible) return;
     started.current = true;
     setLoading(true);
-    loadQueue.push(async () => {
-      const url = await fetchProxyImage(item.proxyPath);
+    fetchProxyImage(item.proxyPath).then(url => {
       if (url) setBlobUrl(url);
       else setError(true);
       setLoading(false);
     });
-    processQueue();
   }, [canThumb, item.proxyPath, isVisible]);
 
   const handleClick = () => {
