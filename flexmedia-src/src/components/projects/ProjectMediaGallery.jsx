@@ -211,7 +211,7 @@ function LoadingProgress() {
 
 // ─── MediaLightbox -- fullscreen viewer with zoom + swipe ───────────
 
-function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
+function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, onClose }) {
   const [index, setIndex] = useState(initialIndex);
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
@@ -227,28 +227,16 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
   const isImage = file?.type === 'image';
   const proxyPath = buildProxyPath(tonomoBasePath, file);
 
-  // Videos: stream via edge function
+  // Videos: download via proxy and create blob URL for playback
   useEffect(() => {
     if (!isVideo || !proxyPath) { setVideoUrl(null); setVideoLoading(false); return; }
     let stale = false;
     setVideoLoading(true);
     setVideoUrl(null);
-    fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: 'stream_url', file_path: proxyPath }),
-    })
-      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
-      .then(data => {
-        if (stale) return;
-        if (data.url) { setVideoUrl(data.url); setVideoLoading(false); }
-        else {
-          return fetchProxyImage(proxyPath, 'proxy').then(url => {
-            if (!stale) { setVideoUrl(url); setVideoLoading(false); }
-          });
-        }
-      })
-      .catch(() => { if (!stale) setVideoLoading(false); });
+    // Use proxy action which returns the raw binary video data
+    fetchProxyImage(proxyPath, 'proxy').then(url => {
+      if (!stale) { setVideoUrl(url); setVideoLoading(false); }
+    }).catch(() => { if (!stale) setVideoLoading(false); });
     return () => { stale = true; };
   }, [isVideo, proxyPath]);
 
@@ -266,6 +254,33 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
     });
     return () => { stale = true; };
   }, [isImage, proxyPath]);
+
+  // ─── Predictive preloading ─────────────────────────────────────────
+  // When viewing image N, preload N+1, N+2, N-1 full-res in background.
+  // This makes forward/backward navigation feel instant.
+  useEffect(() => {
+    if (!tonomoBasePath || files.length === 0) return;
+    const preloadOffsets = [1, 2, -1]; // next, next+1, previous
+    const preloadTasks = [];
+
+    for (const offset of preloadOffsets) {
+      const targetIdx = safeIndex + offset;
+      if (targetIdx < 0 || targetIdx >= files.length) continue;
+      const targetFile = files[targetIdx];
+      if (!targetFile || targetFile.type === 'video') continue; // skip videos (too large)
+      const targetPath = buildProxyPath(tonomoBasePath, targetFile);
+      if (!targetPath) continue;
+      const key = cacheKey(targetPath, 'proxy');
+      if (blobCache.has(key)) continue; // already cached
+      // Preload at low priority — don't block current image
+      preloadTasks.push(fetchProxyImage(targetPath, 'proxy'));
+    }
+
+    // Fire and forget — these cache themselves
+    if (preloadTasks.length > 0) {
+      Promise.allSettled(preloadTasks);
+    }
+  }, [safeIndex, files.length, tonomoBasePath]);
 
   // Keyboard nav + focus trapping
   const dialogRef = useRef(null);
@@ -362,7 +377,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
           )}
           {file?.preview_url && (
             <button
-              onClick={() => safeWindowOpen(file.preview_url)}
+              onClick={() => safeWindowOpen(file.preview_url || deliverableLink)}
               className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-white/40"
               title="Open in Dropbox"
               aria-label="Open in Dropbox"
@@ -463,7 +478,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
             <FileIcon type={file?.type} className="h-16 w-16" />
             <span className="text-sm">{file?.name}</span>
             {file?.preview_url && (
-              <Button variant="outline" size="sm" onClick={() => safeWindowOpen(file.preview_url)} className="text-white border-white/30 hover:bg-white/10">
+              <Button variant="outline" size="sm" onClick={() => safeWindowOpen(file.preview_url || deliverableLink)} className="text-white border-white/30 hover:bg-white/10">
                 <ExternalLink className="h-3.5 w-3.5 mr-1.5" />Open in Dropbox
               </Button>
             )}
@@ -480,6 +495,12 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
             <button
               key={f.path || i}
               onClick={() => { setIndex(i); setZoomed(false); }}
+              onMouseEnter={() => {
+                // Preload full-res on hover (before user clicks)
+                if (path && f.type !== 'video' && !blobCache.has(cacheKey(path, 'proxy'))) {
+                  fetchProxyImage(path, 'proxy');
+                }
+              }}
               role="tab"
               aria-selected={i === safeIndex}
               aria-label={`View ${f.name}`}
@@ -545,7 +566,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
 
   const handleClick = () => {
     if (onClick) onClick();
-    else if (file.preview_url) safeWindowOpen(file.preview_url);
+    else if (file.preview_url) safeWindowOpen(file.preview_url || deliverableLink);
   };
 
   const uploadTime = timeAgo(file.uploaded_at);
@@ -629,7 +650,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
             />
             {file.preview_url && (
               <button
-                onClick={(e) => { e.stopPropagation(); safeWindowOpen(file.preview_url); }}
+                onClick={(e) => { e.stopPropagation(); safeWindowOpen(file.preview_url || deliverableLink); }}
                 className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm transition-colors"
                 title="Open in Dropbox"
                 aria-label={`Open ${file.name} in Dropbox`}
@@ -1038,6 +1059,7 @@ export default function ProjectMediaGallery({ project }) {
           files={lightbox.files}
           initialIndex={lightbox.index}
           tonomoBasePath={tonomoBasePath}
+          deliverableLink={deliverableLink}
           onClose={closeLightbox}
         />
       )}
