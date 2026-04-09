@@ -60,11 +60,11 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
 }
 
 // ---- Constants ----
-const DATE_RANGES = [
-  { value: '7',   label: 'Last 7 days' },
-  { value: '30',  label: 'Last 30 days' },
-  { value: '90',  label: 'Last 3 months' },
-  { value: '0',   label: 'All time' },
+const PROJECT_LIMITS = [
+  { value: '10',  label: 'Last 10 projects' },
+  { value: '25',  label: 'Last 25 projects' },
+  { value: '50',  label: 'Last 50 projects' },
+  { value: '100', label: 'Last 100 projects' },
 ];
 
 const TYPE_FILTERS = [
@@ -836,12 +836,11 @@ function ScrollToTop() {
 // =====================================================================
 // EmptyState
 // =====================================================================
-function EmptyState({ hasFiles, onClearFilters, typeFilter, dateRange, search }) {
+function EmptyState({ hasFiles, onClearFilters, typeFilter, search }) {
   if (hasFiles) {
     const hints = [];
     if (search && search.trim()) hints.push(`search "${search.trim()}"`);
-    if (typeFilter && typeFilter !== 'all') hints.push(`type "${typeFilter}"`);
-    if (dateRange && dateRange !== '30' && dateRange !== '0') hints.push('date range');
+    if (typeFilter && typeFilter !== 'all') hints.push(`type "${typeFilter}"`)
     return (
       <Card className="border-dashed border-2">
         <CardContent className="flex flex-col items-center justify-center py-20 text-center">
@@ -917,7 +916,7 @@ function ErrorState({ error, onRetry }) {
 // Main component
 // =====================================================================
 export default function LiveMediaFeed() {
-  const [dateRange, setDateRange] = useState('30');
+  const [projectLimit, setProjectLimit] = useState('25');
   const [typeFilter, setTypeFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [gridSize, setGridSize] = useState('md');
@@ -970,15 +969,16 @@ export default function LiveMediaFeed() {
 
   const eligibleProjects = useMemo(() => {
     if (!Array.isArray(allProjects)) return [];
+    const limit = parseInt(projectLimit, 10) || 25;
     return allProjects
       .filter(p => p?.tonomo_deliverable_link && p?.tonomo_deliverable_path)
       .sort((a, b) => {
-        const aDate = a.tonomo_delivered_at || a.updated_date || a.created_date || '';
-        const bDate = b.tonomo_delivered_at || b.updated_date || b.created_date || '';
+        const aDate = a.tonomo_delivered_at || a.updated_at || a.created_at || '';
+        const bDate = b.tonomo_delivered_at || b.updated_at || b.created_at || '';
         try { return new Date(fixTimestamp(bDate)) - new Date(fixTimestamp(aDate)); } catch { return 0; }
       })
-      .slice(0, 20);
-  }, [allProjects]);
+      .slice(0, limit);
+  }, [allProjects, projectLimit]);
 
   // Fetch file listings
   const { data: projectFiles, isLoading: filesLoading, isError, error: fetchError, isFetching, refetch } = useQuery({
@@ -1064,11 +1064,11 @@ export default function LiveMediaFeed() {
     return () => { if (typeof unsub === 'function') unsub(); };
   }, [eligibleProjects]);
 
-  const hasActiveFilters = dateRange !== '30' || typeFilter !== 'all' || search.trim() !== '';
-  const activeFilterCount = (dateRange !== '30' ? 1 : 0) + (typeFilter !== 'all' ? 1 : 0) + (search.trim() !== '' ? 1 : 0);
+  const hasActiveFilters = projectLimit !== '25' || typeFilter !== 'all' || search.trim() !== '';
+  const activeFilterCount = (projectLimit !== '25' ? 1 : 0) + (typeFilter !== 'all' ? 1 : 0) + (search.trim() !== '' ? 1 : 0);
 
   const clearFilters = useCallback(() => {
-    setDateRange('30');
+    setProjectLimit('25');
     setTypeFilter('all');
     setSearch('');
     setPage(1);
@@ -1076,16 +1076,9 @@ export default function LiveMediaFeed() {
 
   const feedItems = useMemo(() => {
     if (!projectFiles || !Array.isArray(projectFiles)) return [];
-    const now = new Date();
-    const days = parseInt(dateRange, 10);
 
     return projectFiles
       .filter(f => {
-        if (days > 0 && f.uploaded_at) {
-          try {
-            if (differenceInDays(now, new Date(f.uploaded_at)) > days) return false;
-          } catch { /* keep it */ }
-        }
         if (typeFilter !== 'all' && f.type !== typeFilter) return false;
         if (search.trim()) {
           const q = search.toLowerCase();
@@ -1093,7 +1086,9 @@ export default function LiveMediaFeed() {
             f.name?.toLowerCase().includes(q) ||
             f.projectName?.toLowerCase().includes(q) ||
             f.folderName?.toLowerCase().includes(q) ||
-            f.photographerName?.toLowerCase().includes(q)
+            f.photographerName?.toLowerCase().includes(q) ||
+            f.agencyName?.toLowerCase().includes(q) ||
+            f.agentName?.toLowerCase().includes(q)
           );
           if (!matches) return false;
         }
@@ -1104,13 +1099,13 @@ export default function LiveMediaFeed() {
         const bDate = b.uploaded_at || b.modified || '';
         try { return new Date(bDate) - new Date(aDate); } catch { return 0; }
       });
-  }, [projectFiles, dateRange, typeFilter, search]);
+  }, [projectFiles, typeFilter, search]);
 
   // Paginated items
   const paginatedItems = useMemo(() => feedItems.slice(0, page * PAGE_SIZE), [feedItems, page]);
   const hasMore = paginatedItems.length < feedItems.length;
 
-  useEffect(() => { setPage(1); }, [dateRange, typeFilter, search]);
+  useEffect(() => { setPage(1); }, [projectLimit, typeFilter, search]);
 
   // Stats over ALL files
   const stats = useMemo(() => {
@@ -1230,13 +1225,13 @@ export default function LiveMediaFeed() {
           )}
         </div>
 
-        <Select value={dateRange} onValueChange={v => { setDateRange(v); setPage(1); }}>
-          <SelectTrigger className="w-36 h-8 text-xs bg-background border-0 shadow-sm">
-            <Clock className="h-3 w-3 mr-1 text-muted-foreground shrink-0" />
+        <Select value={projectLimit} onValueChange={v => { setProjectLimit(v); setPage(1); }}>
+          <SelectTrigger className="w-40 h-8 text-xs bg-background border-0 shadow-sm">
+            <FolderOpen className="h-3 w-3 mr-1 text-muted-foreground shrink-0" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {DATE_RANGES.map(d => (
+            {PROJECT_LIMITS.map(d => (
               <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>
             ))}
           </SelectContent>
@@ -1314,7 +1309,7 @@ export default function LiveMediaFeed() {
       ) : isError ? (
         <ErrorState error={fetchError} onRetry={handleRefresh} />
       ) : feedItems.length === 0 ? (
-        <EmptyState hasFiles={projectFiles && projectFiles.length > 0} onClearFilters={clearFilters} typeFilter={typeFilter} dateRange={dateRange} search={search} />
+        <EmptyState hasFiles={projectFiles && projectFiles.length > 0} onClearFilters={clearFilters} typeFilter={typeFilter} search={search} />
       ) : (
         <>
           <div
