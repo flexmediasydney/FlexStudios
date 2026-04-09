@@ -169,8 +169,8 @@ export function decodeImage(url) {
 // Centralized function for fetching media through the edge function proxy.
 // Handles caching, retry on token refresh (503), and blob URL management.
 
-const SUPABASE_URL = typeof import !== 'undefined' && import.meta?.env?.VITE_SUPABASE_URL || '';
-const SUPABASE_ANON = typeof import !== 'undefined' && import.meta?.env?.VITE_SUPABASE_ANON_KEY || '';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 const _pending = new Set();
 
 /**
