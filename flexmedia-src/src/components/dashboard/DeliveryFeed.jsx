@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useFavorites } from '@/components/favorites/useFavorites';
 import { LRUBlobCache, enqueueFetch, decodeImage } from '@/utils/mediaPerf';
-import { downloadFile } from '@/utils/mediaActions';
+import { downloadFile, preloadAdjacentImages } from '@/utils/mediaActions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -619,6 +620,18 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
   }, []);
+
+  // Predictive preloading: preload next 2 + previous 1 full-res images
+  useEffect(() => {
+    if (!tonomoBase || files.length === 0) return;
+    preloadAdjacentImages(
+      files, index,
+      (f) => tonomoBase + (f.path?.startsWith('/') ? f.path : '/' + f.path),
+      fetchProxyImage,
+      imgBlobCache,
+      (path, mode) => `${mode}::${path}`,
+    );
+  }, [index, files.length, tonomoBase]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -1498,7 +1511,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
       )}
         </div>
       </div>
-      {lightbox && <MiniLightbox files={lightbox.files} initialIndex={lightbox.index} shareUrl={deliverableLink} onClose={() => setLightbox(null)} project={project} />}
+      {lightbox && createPortal(<MiniLightbox files={lightbox.files} initialIndex={lightbox.index} shareUrl={deliverableLink} onClose={() => setLightbox(null)} project={project} />, document.body)}
     </div>
   );
 }

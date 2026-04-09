@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { createPortal } from "react-dom";
 import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { LRUBlobCache, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
@@ -1073,14 +1074,15 @@ export default function ProjectMediaGallery({ project }) {
       ))}
 
       {/* Lightbox */}
-      {lightbox && (
+      {lightbox && createPortal(
         <MediaLightbox
           files={lightbox.files}
           initialIndex={lightbox.index}
           tonomoBasePath={tonomoBasePath}
           deliverableLink={deliverableLink}
           onClose={closeLightbox}
-        />
+        />,
+        document.body
       )}
     </div>
   );

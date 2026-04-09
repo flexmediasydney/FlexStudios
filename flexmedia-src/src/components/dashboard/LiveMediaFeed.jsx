@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { createPortal } from "react-dom";
 import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useFavorites } from "@/components/favorites/useFavorites";
 import { useQuery } from "@tanstack/react-query";
 import { fixTimestamp } from "@/components/utils/dateUtils";
-import { downloadFile } from "@/utils/mediaActions";
+import { downloadFile, preloadAdjacentImages } from "@/utils/mediaActions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -355,6 +356,18 @@ function MediaLightbox({ files, initialIndex, onClose }) {
   }, [isVideo, proxyPath]);
 
   useEffect(() => { setZoomed(false); }, [index]);
+
+  // Predictive preloading: preload next 2 + previous 1 full-res images
+  useEffect(() => {
+    if (files.length === 0) return;
+    preloadAdjacentImages(
+      files, index,
+      (f) => f.proxyPath || null,
+      fetchProxyImage,
+      blobCache,
+      (path, mode) => `${mode}::${path}`,
+    );
+  }, [index, files.length]);
 
   useEffect(() => {
     if (!filmstripRef.current) return;
@@ -1361,12 +1374,13 @@ export default function LiveMediaFeed() {
 
       <ScrollToTop />
 
-      {lightbox && (
+      {lightbox && createPortal(
         <MediaLightbox
           files={lightbox.files}
           initialIndex={lightbox.index}
           onClose={() => setLightbox(null)}
-        />
+        />,
+        document.body
       )}
     </div>
   );
