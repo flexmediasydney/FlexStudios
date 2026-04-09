@@ -636,19 +636,19 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
             >
               {item.projectName}
             </Link>
-            <div className="flex items-center gap-2 mt-0.5">
-              {item.photographerName && (
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+              {item.agentName && (
                 <Link
-                  to={item.photographerId ? createPageUrl("Users") + `?id=${item.photographerId}` : createPageUrl("People") + `?search=${encodeURIComponent(item.photographerName)}`}
+                  to={item.agentId ? createPageUrl("PersonDetails") + `?id=${item.agentId}` : createPageUrl("People") + `?search=${encodeURIComponent(item.agentName)}`}
                   onClick={e => e.stopPropagation()}
                   className="text-white/70 text-[10px] truncate hover:text-white hover:underline flex items-center gap-0.5"
                 >
-                  <User className="h-2.5 w-2.5 shrink-0" />{item.photographerName}
+                  <User className="h-2.5 w-2.5 shrink-0" />{item.agentName}
                 </Link>
               )}
               {item.agencyName && (
                 <Link
-                  to={item.agencyId ? createPageUrl("OrgDetails") + `?id=${item.agencyId}` : createPageUrl("Organisations") + `?search=${encodeURIComponent(item.agencyName)}`}
+                  to={item.agencyId ? createPageUrl("OrgDetails") + `?id=${item.agencyId}` : '#'}
                   onClick={e => e.stopPropagation()}
                   className="text-white/60 text-[10px] truncate hover:text-white hover:underline flex items-center gap-0.5"
                 >
@@ -722,6 +722,16 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
             <Camera className="h-2.5 w-2.5 shrink-0" />
             <span className="truncate">{item.projectName}</span>
           </Link>
+          {item.agentName && (
+            <Link
+              to={item.agentId ? createPageUrl("PersonDetails") + `?id=${item.agentId}` : createPageUrl("People") + `?search=${encodeURIComponent(item.agentName)}`}
+              onClick={e => e.stopPropagation()}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground/60 truncate hover:text-primary transition-colors"
+            >
+              <User className="h-2.5 w-2.5 shrink-0" />
+              <span className="truncate">{item.agentName}</span>
+            </Link>
+          )}
           {item.agencyName && (
             <Link
               to={item.agencyId ? createPageUrl("OrgDetails") + `?id=${item.agencyId}` : '#'}
@@ -732,9 +742,9 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
               <span className="truncate">{item.agencyName}</span>
             </Link>
           )}
-          {item.photographerName && (
+          {item.photographerName && item.photographerName !== item.agentName && (
             <Link
-              to={item.photographerId ? createPageUrl("Users") + `?id=${item.photographerId}` : createPageUrl("People") + `?search=${encodeURIComponent(item.photographerName)}`}
+              to={item.photographerId ? createPageUrl("Users") + `?id=${item.photographerId}` : '#'}
               onClick={e => e.stopPropagation()}
               className="flex items-center gap-1 text-[10px] text-muted-foreground/60 truncate hover:text-primary transition-colors"
             >
@@ -987,6 +997,7 @@ export default function LiveMediaFeed() {
                 photographerName: userMap.get(project.photographer_id) || userMap.get(project.project_owner_id) || project.agent_name || null,
                 photographerId: project.photographer_id || project.project_owner_id || null,
                 agentName: project.agent_name || null,
+                agentId: project.agent_id || null,
                 agencyName: project.agency_name || null,
                 agencyId: project.agency_id || null,
                 proxyPath: project.tonomo_deliverable_path
