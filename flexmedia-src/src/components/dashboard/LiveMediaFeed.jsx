@@ -18,6 +18,8 @@ import {
   Filter, Hash, TrendingUp, Bell, ArrowUp
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
+import { Link } from "react-router-dom";
+import { createPageUrl } from "@/utils";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, differenceInDays, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
@@ -627,12 +629,33 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
           )}
 
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 pt-10 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">
-            <p className="text-white text-xs font-semibold truncate leading-tight">{item.projectName}</p>
-            {item.photographerName && (
-              <p className="text-white/70 text-[10px] mt-0.5 truncate">
-                <User className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />{item.photographerName}
-              </p>
-            )}
+            <Link
+              to={createPageUrl("ProjectDetails") + `?id=${item.projectId}&tab=media`}
+              onClick={e => e.stopPropagation()}
+              className="text-white text-xs font-semibold truncate leading-tight block hover:underline"
+            >
+              {item.projectName}
+            </Link>
+            <div className="flex items-center gap-2 mt-0.5">
+              {item.photographerName && (
+                <Link
+                  to={createPageUrl("People") + `?search=${encodeURIComponent(item.photographerName)}`}
+                  onClick={e => e.stopPropagation()}
+                  className="text-white/70 text-[10px] truncate hover:text-white hover:underline flex items-center gap-0.5"
+                >
+                  <User className="h-2.5 w-2.5 shrink-0" />{item.photographerName}
+                </Link>
+              )}
+              {item.agencyName && (
+                <Link
+                  to={item.agencyId ? createPageUrl("OrgDetails") + `?id=${item.agencyId}` : createPageUrl("Organisations") + `?search=${encodeURIComponent(item.agencyName)}`}
+                  onClick={e => e.stopPropagation()}
+                  className="text-white/60 text-[10px] truncate hover:text-white hover:underline flex items-center gap-0.5"
+                >
+                  <Building2 className="h-2.5 w-2.5 shrink-0" />{item.agencyName}
+                </Link>
+              )}
+            </div>
             {uploadTime && <p className="text-white/50 text-[10px] mt-0.5">{uploadTime}</p>}
           </div>
 
@@ -653,10 +676,14 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
               size="sm"
               className="bg-black/30 hover:bg-black/50 rounded-full p-1 text-white backdrop-blur-sm"
             />
-            {item.type !== 'document' && (
-              <span className="pointer-events-none">
-                <ExternalLink className="h-3.5 w-3.5 text-white drop-shadow-md" />
-              </span>
+            {item.projectLink && (
+              <button
+                onClick={(e) => { e.stopPropagation(); safeWindowOpen(item.projectLink); }}
+                className="bg-black/30 hover:bg-black/50 rounded-full p-1 text-white backdrop-blur-sm"
+                title="Open in Dropbox"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </button>
             )}
           </div>
 
@@ -687,15 +714,33 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
             {item.size > 0 && <span className="text-muted-foreground/30">|</span>}
             <span className="uppercase">{item.ext}</span>
           </div>
-          <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70 truncate">
-            <Building2 className="h-2.5 w-2.5 shrink-0" />
+          <Link
+            to={createPageUrl("ProjectDetails") + `?id=${item.projectId}&tab=media`}
+            onClick={e => e.stopPropagation()}
+            className="flex items-center gap-1 text-[10px] text-muted-foreground/70 truncate hover:text-primary transition-colors"
+          >
+            <Camera className="h-2.5 w-2.5 shrink-0" />
             <span className="truncate">{item.projectName}</span>
-          </div>
+          </Link>
+          {item.agencyName && (
+            <Link
+              to={item.agencyId ? createPageUrl("OrgDetails") + `?id=${item.agencyId}` : '#'}
+              onClick={e => e.stopPropagation()}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground/60 truncate hover:text-primary transition-colors"
+            >
+              <Building2 className="h-2.5 w-2.5 shrink-0" />
+              <span className="truncate">{item.agencyName}</span>
+            </Link>
+          )}
           {item.photographerName && (
-            <div className="flex items-center gap-1 text-[10px] text-muted-foreground/60 truncate">
+            <Link
+              to={createPageUrl("People") + `?search=${encodeURIComponent(item.photographerName)}`}
+              onClick={e => e.stopPropagation()}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground/60 truncate hover:text-primary transition-colors"
+            >
               <User className="h-2.5 w-2.5 shrink-0" />
               <span className="truncate">{item.photographerName}</span>
-            </div>
+            </Link>
           )}
         </div>
       </button>
@@ -940,7 +985,10 @@ export default function LiveMediaFeed() {
                 tonomoBasePath: project.tonomo_deliverable_path,
                 folderName: folder.name,
                 photographerName: userMap.get(project.photographer_id) || userMap.get(project.project_owner_id) || project.agent_name || null,
+                photographerId: project.photographer_id || project.project_owner_id || null,
                 agentName: project.agent_name || null,
+                agencyName: project.agency_name || null,
+                agencyId: project.agency_id || null,
                 proxyPath: project.tonomo_deliverable_path
                   ? `${project.tonomo_deliverable_path}${file.path?.startsWith('/') ? file.path : '/' + file.path}`
                   : null,
