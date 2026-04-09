@@ -227,16 +227,33 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
   const isImage = file?.type === 'image';
   const proxyPath = buildProxyPath(tonomoBasePath, file);
 
-  // Videos: download via proxy and create blob URL for playback
+  // Videos: download via proxy directly (bypass queue — videos are large and shouldn't wait behind thumbnails)
   useEffect(() => {
     if (!isVideo || !proxyPath) { setVideoUrl(null); setVideoLoading(false); return; }
     let stale = false;
     setVideoLoading(true);
     setVideoUrl(null);
-    // Use proxy action which returns the raw binary video data
-    fetchProxyImage(proxyPath, 'proxy').then(url => {
-      if (!stale) { setVideoUrl(url); setVideoLoading(false); }
-    }).catch(() => { if (!stale) setVideoLoading(false); });
+
+    (async () => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+          body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
+        });
+        if (stale) return;
+        if (!res.ok) { setVideoLoading(false); return; }
+        const blob = await res.blob();
+        if (stale) return;
+        if (blob.size < 1000) { setVideoLoading(false); return; } // Error JSON is small
+        const url = URL.createObjectURL(blob);
+        setVideoUrl(url);
+        setVideoLoading(false);
+      } catch {
+        if (!stale) setVideoLoading(false);
+      }
+    })();
+
     return () => { stale = true; };
   }, [isVideo, proxyPath]);
 
@@ -377,7 +394,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
           )}
           {file?.preview_url && (
             <button
-              onClick={() => safeWindowOpen(file.preview_url || deliverableLink)}
+              onClick={() => safeWindowOpen(deliverableLink || file.preview_url)}
               className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-white/40"
               title="Open in Dropbox"
               aria-label="Open in Dropbox"
@@ -478,7 +495,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
             <FileIcon type={file?.type} className="h-16 w-16" />
             <span className="text-sm">{file?.name}</span>
             {file?.preview_url && (
-              <Button variant="outline" size="sm" onClick={() => safeWindowOpen(file.preview_url || deliverableLink)} className="text-white border-white/30 hover:bg-white/10">
+              <Button variant="outline" size="sm" onClick={() => safeWindowOpen(deliverableLink || file.preview_url)} className="text-white border-white/30 hover:bg-white/10">
                 <ExternalLink className="h-3.5 w-3.5 mr-1.5" />Open in Dropbox
               </Button>
             )}
@@ -566,7 +583,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
 
   const handleClick = () => {
     if (onClick) onClick();
-    else if (file.preview_url) safeWindowOpen(file.preview_url || deliverableLink);
+    else if (file.preview_url) safeWindowOpen(deliverableLink || file.preview_url);
   };
 
   const uploadTime = timeAgo(file.uploaded_at);
@@ -650,7 +667,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
             />
             {file.preview_url && (
               <button
-                onClick={(e) => { e.stopPropagation(); safeWindowOpen(file.preview_url || deliverableLink); }}
+                onClick={(e) => { e.stopPropagation(); safeWindowOpen(deliverableLink || file.preview_url); }}
                 className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm transition-colors"
                 title="Open in Dropbox"
                 aria-label={`Open ${file.name} in Dropbox`}
