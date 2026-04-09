@@ -546,7 +546,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
 // ─── MediaThumbnail ─────────────────────────────────────────────────
 // PERF: memo prevents re-render when parent re-renders but props haven't changed
 
-const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile, gridSize }) {
+const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, deliverableLink, onClick, getTagsForFile, gridSize }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -738,7 +738,7 @@ const GRID_SIZES = {
   lg: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4',
 };
 
-function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox, getTagsForFile }) {
+function FolderSection({ folder, tonomoBasePath, deliverableLink, gridSize = 'md', onOpenLightbox, getTagsForFile }) {
   const [collapsed, setCollapsed] = useState(false);
   const contentRef = useRef(null);
   const [contentHeight, setContentHeight] = useState("auto");
@@ -827,6 +827,7 @@ function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox
               <MediaThumbnail
                 file={file}
                 tonomoBasePath={tonomoBasePath}
+                deliverableLink={deliverableLink}
                 gridSize={gridSize}
                 getTagsForFile={getTagsForFile}
                 onClick={() => onOpenLightbox(folder.files, folder.files.indexOf(file))}
@@ -1067,6 +1068,7 @@ export default function ProjectMediaGallery({ project }) {
           key={folder.name}
           folder={folder}
           tonomoBasePath={tonomoBasePath}
+          deliverableLink={deliverableLink}
           gridSize={gridSize}
           getTagsForFile={getTagsForFile}
           onOpenLightbox={openLightbox}

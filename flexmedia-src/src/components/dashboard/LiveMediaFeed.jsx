@@ -5,7 +5,7 @@ import { useEntityList } from "@/components/hooks/useEntityData";
 import { useFavorites } from "@/components/favorites/useFavorites";
 import { useQuery } from "@tanstack/react-query";
 import { fixTimestamp } from "@/components/utils/dateUtils";
-import { downloadFile, preloadAdjacentImages } from "@/utils/mediaActions";
+import { downloadFile, preloadAdjacentImages, fetchFullRes } from "@/utils/mediaActions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -344,13 +344,12 @@ function MediaLightbox({ files, initialIndex, onClose }) {
   }, [onClose]);
 
   useEffect(() => {
-    if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
+    if (!isVideo || !proxyPath) { setVideoUrl(null); setVideoLoading(false); return; }
     setVideoLoading(true);
     setVideoUrl(null);
-    const cached = blobCache.get(`proxy::${proxyPath}`) || blobCache.get(proxyPath);
-    if (cached) { setVideoUrl(cached); setVideoLoading(false); return; }
-    fetchProxyImage(proxyPath, 'proxy').then(url => {
-      setVideoUrl(url);
+    // Direct fetch — bypass queue for video (large files shouldn't wait behind thumbnails)
+    fetchFullRes(proxyPath).then(url => {
+      if (url) setVideoUrl(url);
       setVideoLoading(false);
     });
   }, [isVideo, proxyPath]);
@@ -436,8 +435,8 @@ function MediaLightbox({ files, initialIndex, onClose }) {
               {zoomed ? <ZoomOut className="h-4 w-4" /> : <ZoomIn className="h-4 w-4" />}
             </button>
           )}
-          {file?.preview_url && (
-            <button onClick={() => safeWindowOpen(file.preview_url)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
+          {file?.projectLink && (
+            <button onClick={() => safeWindowOpen(file.projectLink)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
               <ExternalLink className="h-4 w-4" />
             </button>
           )}
@@ -517,9 +516,9 @@ function MediaLightbox({ files, initialIndex, onClose }) {
               <FileIcon type={file?.type} className="h-16 w-16" />
             </div>
             <span className="text-sm font-medium">{file?.name}</span>
-            {file?.preview_url && (
+            {file?.projectLink && (
               <button
-                onClick={() => safeWindowOpen(file.preview_url)}
+                onClick={() => safeWindowOpen(file.projectLink)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors text-sm"
               >
                 <ExternalLink className="h-3.5 w-3.5" />Open in Dropbox
