@@ -996,21 +996,38 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFi
   );
 }
 
-// Stages where delivery is fully complete (not still in progress)
-const FULL_DELIVERY_STAGES = ['delivered'];
 // All stages that appear in the delivery feed
 const ALL_DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
 
+/**
+ * Determine delivery state for badge/styling:
+ * - 'delivered': has tonomo_delivered_at (official Tonomo completion)
+ * - 'request': has tonomo_delivered_at BUT newest file was uploaded AFTER delivery (revision/change request)
+ * - 'partial': has files in Dropbox but NO tonomo_delivered_at (not officially delivered yet)
+ */
+function getDeliveryState(project, newestFileDateMap) {
+  const deliveredAt = project.tonomo_delivered_at;
+  const newestFile = newestFileDateMap?.get(project.id);
+
+  if (deliveredAt) {
+    // Check if files were uploaded AFTER the official delivery timestamp
+    if (newestFile && new Date(newestFile) > new Date(fixTimestamp(deliveredAt))) {
+      return 'request';
+    }
+    return 'delivered';
+  }
+
+  // No delivery webhook — it's a partial delivery
+  return 'partial';
+}
+
+// Backward compat
 function isPartialDelivery(project) {
-  // A partial delivery is any project whose status indicates it's still in progress.
-  // This includes ready_for_partial and in_revision stages, regardless of link presence.
-  if (project.status === 'ready_for_partial' || project.status === 'in_revision') return true;
-  // Also treat as partial if status is not fully delivered but has a deliverable link
-  return !FULL_DELIVERY_STAGES.includes(project.status) && !!project.tonomo_deliverable_link;
+  return !project.tonomo_delivered_at && !!project.tonomo_deliverable_link;
 }
 
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
-function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
+function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newestFileDateMap }) {
   const [expanded, setExpanded] = useState(false);
   const [mediaResult, setMediaResult] = useState(null); // { folders: [...] } or null
   const [flatFiles, setFlatFiles] = useState([]); // backward compat for flat response
@@ -1024,7 +1041,9 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
     return () => { mountedRef.current = false; };
   }, []);
 
-  const isPartial = isPartialDelivery(project);
+  const deliveryState = getDeliveryState(project, newestFileDateMap); // 'delivered' | 'partial' | 'request'
+  const isPartial = deliveryState === 'partial';
+  const isRequest = deliveryState === 'request';
   const deliveredAt = project.tonomo_delivered_at || project.updated_date || project.created_date;
   const deliverableLink = project.tonomo_deliverable_link;
   const deliverablePath = project.tonomo_deliverable_path;
@@ -1035,14 +1054,27 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
   const packageName = project.tonomo_package;
 
   const turnaroundHrs = useMemo(() => {
-    if (!project.shoot_date || !deliveredAt) return null;
+    if (!project.shoot_date || !project.tonomo_delivered_at) return null;
     try {
       const shoot = new Date(fixTimestamp(project.shoot_date));
-      const delivered = new Date(fixTimestamp(deliveredAt));
+      const delivered = new Date(fixTimestamp(project.tonomo_delivered_at));
       const hrs = differenceInHours(delivered, shoot);
       return hrs > 0 ? hrs : null;
     } catch { return null; }
-  }, [project.shoot_date, deliveredAt]);
+  }, [project.shoot_date, project.tonomo_delivered_at]);
+
+  // Request turnaround: time from official delivery to newest file upload (revision work time)
+  const requestTurnaroundHrs = useMemo(() => {
+    if (!isRequest || !project.tonomo_delivered_at) return null;
+    const newestFile = newestFileDateMap?.get(project.id);
+    if (!newestFile) return null;
+    try {
+      const delivered = new Date(fixTimestamp(project.tonomo_delivered_at));
+      const newest = new Date(newestFile);
+      const hrs = differenceInHours(newest, delivered);
+      return hrs > 0 ? hrs : null;
+    } catch { return null; }
+  }, [isRequest, project.tonomo_delivered_at, newestFileDateMap, project.id]);
 
   // Determine Dropbox source -- always try Dropbox API when link exists (shows individual files)
   const dropboxSource = deliverableLink || deliverablePath || null;
@@ -1121,7 +1153,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
     <div role="article" aria-label={projectTitle(project)} className={cn(
       'border rounded-xl overflow-hidden transition-all duration-200 bg-card hover:shadow-lg hover:-translate-y-[1px]',
       'border-l-[3px]',
-      isPartial ? 'border-l-orange-400 df-partial-card' : project.status === 'delivered' ? 'border-l-emerald-400' : 'border-l-blue-400',
+      isRequest ? 'border-l-violet-400' : isPartial ? 'border-l-orange-400 df-partial-card' : deliveryState === 'delivered' ? 'border-l-emerald-400' : 'border-l-blue-400',
       isNew && 'ring-2 ring-green-300 ring-opacity-50',
       expanded && 'shadow-md'
     )}>
@@ -1130,23 +1162,38 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
         className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset rounded-xl"
         aria-expanded={expanded}
         aria-controls={`delivery-panel-${project.id}`}
-        aria-label={`${projectTitle(project)} delivery${isPartial ? ' (in progress)' : ''} \u2014 ${expanded ? 'collapse' : 'expand'} details`}
+        aria-label={`${projectTitle(project)} delivery (${deliveryState}) \u2014 ${expanded ? 'collapse' : 'expand'} details`}
       >
         <div className="flex items-start gap-3 p-4">
-          <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5', isPartial ? 'bg-orange-100' : project.status === 'delivered' ? 'bg-emerald-100' : 'bg-blue-100')}>
-            {isPartial ? <Loader2 className="h-5 w-5 text-orange-600 animate-spin" /> : project.status === 'delivered' ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Package className="h-5 w-5 text-blue-600" />}
+          <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5',
+            isRequest ? 'bg-violet-100' : isPartial ? 'bg-orange-100' : deliveryState === 'delivered' ? 'bg-emerald-100' : 'bg-blue-100'
+          )}>
+            {isRequest
+              ? <Send className="h-5 w-5 text-violet-600" />
+              : isPartial
+                ? <Loader2 className="h-5 w-5 text-orange-600 animate-spin" />
+                : <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            }
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-[15px] leading-tight">{projectTitle(project)}</span>
               {isNew && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-200">NEW</Badge>}
-              {isPartial ? (
+              {isRequest ? (
+                <Badge className="text-[9px] bg-violet-100 text-violet-700 border-violet-200 gap-1">
+                  <Send className="h-2.5 w-2.5" />
+                  Request
+                </Badge>
+              ) : isPartial ? (
                 <Badge className="text-[9px] bg-orange-100 text-orange-700 border-orange-200 gap-1.5">
                   <span className="df-pulse-dot inline-block w-1.5 h-1.5 rounded-full bg-orange-500" />
-                  In Progress
+                  Partially Delivered
                 </Badge>
               ) : (
-                <Badge variant="outline" className="text-[9px]">{stageLabel(project.status)}</Badge>
+                <Badge className="text-[9px] bg-emerald-100 text-emerald-700 border-emerald-200">
+                  <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />
+                  Delivered
+                </Badge>
               )}
               {packageName && <Badge variant="outline" className="text-[9px] bg-muted/50">{packageName}</Badge>}
             </div>
@@ -1158,6 +1205,12 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
                 <span className="flex items-center gap-1 text-blue-600">
                   <Timer className="h-3 w-3" />
                   {turnaroundHrs < 24 ? `${turnaroundHrs}h` : `${Math.round(turnaroundHrs / 24)}d`} turnaround
+                </span>
+              )}
+              {requestTurnaroundHrs != null && (
+                <span className="flex items-center gap-1 text-violet-600">
+                  <Send className="h-3 w-3" />
+                  {requestTurnaroundHrs < 24 ? `${requestTurnaroundHrs}h` : `${Math.round(requestTurnaroundHrs / 24)}d`} since delivery
                 </span>
               )}
               {value > 0 && <span className="font-semibold text-foreground">${value.toLocaleString()}</span>}
@@ -1770,7 +1823,7 @@ export default function DeliveryFeed() {
                 </span>
               </div>
               <div className="space-y-2" role="list">
-                {projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} />)}
+                {projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} newestFileDateMap={newestFileDate} />)}
               </div>
             </section>
           ))}
