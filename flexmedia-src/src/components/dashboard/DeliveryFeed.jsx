@@ -824,13 +824,11 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
     if (cached) { setBlobUrl(cached); return; }
     started.current = true;
     setLoading(true);
-    imgLoadQueue.push(async () => {
-      const url = await fetchProxyImage(proxyPath);
+    fetchProxyImage(proxyPath).then(url => {
       if (!mountedRef.current) return;
       if (url) setBlobUrl(url);
       setLoading(false);
     });
-    processImgQueue();
   }, [canThumb, tonomoBase, file.path]);
 
   const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);

@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  RefreshCw, FolderOpen, Image, Film, FileText, File,
+  RefreshCw, FolderOpen, Film, FileText, File,
   ExternalLink, AlertCircle, ImageOff, Camera, Play, Clock,
   Grid2x2, Grid3x3, LayoutGrid, X, ChevronLeft, ChevronRight,
   Download, Loader2, ZoomIn, ZoomOut, ChevronDown, Inbox
@@ -15,7 +15,6 @@ import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
-import TagManager from "@/components/favorites/TagManager";
 import { useFavorites } from "@/components/favorites/useFavorites";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;

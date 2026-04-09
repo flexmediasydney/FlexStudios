@@ -199,12 +199,10 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, anim
     if (!isVisible) return;
     started.current = true;
     setLoading(true);
-    loadQueue.push(async () => {
-      const url = await fetchProxyImage(proxyPath, 'thumb');
+    fetchProxyImage(proxyPath, 'thumb').then(url => {
       if (url) setBlobUrl(url);
       setLoading(false);
     });
-    processQueue();
   }, [canThumb, proxyPath, isVisible]);
 
   const handleClick = () => {
@@ -547,11 +545,9 @@ function TimelineEntry({ entry, index }) {
     const cached = blobCache.get(`thumb::${thumbPath}`);
     if (cached) { setThumbUrl(cached); return; }
     thumbStarted.current = true;
-    loadQueue.push(async () => {
-      const url = await fetchProxyImage(thumbPath, 'thumb');
+    fetchProxyImage(thumbPath, 'thumb').then(url => {
       if (url) setThumbUrl(url);
     });
-    processQueue();
   }, [thumbPath, details.file_type]);
 
   return (
