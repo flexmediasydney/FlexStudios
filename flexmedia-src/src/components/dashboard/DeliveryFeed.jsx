@@ -574,7 +574,7 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
   }
 
   // Document / other — show placeholder with Open in Dropbox
-  const previewUrl = shareUrl && file.path ? buildDropboxPreviewUrl(shareUrl, file.path) : file.preview_url;
+  const previewUrl = shareUrl && file.path ? buildDropboxPreviewUrl(shareUrl, file.path) : null;
   return (
     <div className="flex flex-col items-center gap-3 text-white/60">
       <FileText className="h-16 w-16" />
@@ -660,6 +660,9 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
   }, [files.length, onClose]);
   if (!file) return null;
   const previewUrl = buildDropboxPreviewUrl(shareUrl, file.path);
+  const currentProxyPath = tonomoBase && file.path
+    ? tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)
+    : null;
   return (
     <div className="fixed inset-0 z-50 bg-black/90 flex flex-col df-lightbox-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Media lightbox">
       {/* Header */}
@@ -670,6 +673,11 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
           <span className="text-xs text-white/40 tabular-nums">{index + 1} / {files.length}</span>
         </div>
         <div className="flex items-center gap-1">
+          {currentProxyPath && (
+            <button onClick={() => downloadFile(currentProxyPath, file.name)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title={`Download ${file.name}`} aria-label={`Download ${file.name}`}>
+              <Download className="h-4 w-4" />
+            </button>
+          )}
           {previewUrl && previewUrl !== '#' && (
             <button onClick={() => window.open(previewUrl, '_blank')} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
               <ExternalLink className="h-4 w-4" />

@@ -435,6 +435,11 @@ function MediaLightbox({ files, initialIndex, onClose }) {
               {zoomed ? <ZoomOut className="h-4 w-4" /> : <ZoomIn className="h-4 w-4" />}
             </button>
           )}
+          {proxyPath && (
+            <button onClick={() => downloadFile(proxyPath, file?.name)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title={`Download ${file?.name}`} aria-label={`Download ${file?.name}`}>
+              <Download className="h-4 w-4" />
+            </button>
+          )}
           {file?.projectLink && (
             <button onClick={() => safeWindowOpen(file.projectLink)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
               <ExternalLink className="h-4 w-4" />
@@ -515,7 +520,11 @@ function MediaLightbox({ files, initialIndex, onClose }) {
               style={{ maxHeight: 'calc(100vh - 140px)' }}
             />
           ) : (
-            <div className="text-white/60 text-sm">Video unavailable</div>
+            <div className="flex flex-col items-center gap-3 text-white/60">
+              <Film className="h-16 w-16 text-white/20" />
+              <p className="text-sm font-medium">{file?.name}</p>
+              <p className="text-xs text-white/30">Video could not be loaded</p>
+            </div>
           )
         )}
 
@@ -547,7 +556,7 @@ function MediaLightbox({ files, initialIndex, onClose }) {
         onClick={e => e.stopPropagation()}
       >
         {files.slice(0, 60).map((f, i) => {
-          const thumbUrl = f.proxyPath ? (blobCache.get(`thumb::${f.proxyPath}`) || blobCache.get(f.proxyPath)) : null;
+          const thumbUrl = f.proxyPath ? (blobCache.get(`thumb::${f.proxyPath}`) || blobCache.get(`proxy::${f.proxyPath}`)) : null;
           const isActive = i === index;
           return (
             <button
@@ -591,7 +600,7 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
 
   useEffect(() => {
     if (!canThumb || !item.proxyPath || started.current) return;
-    const cached = blobCache.get(item.proxyPath);
+    const cached = blobCache.get(`thumb::${item.proxyPath}`);
     if (cached) { setBlobUrl(cached); return; }
     if (!isVisible) return;
     started.current = true;
@@ -605,7 +614,6 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
 
   const handleClick = () => {
     if (onClick) onClick();
-    else if (item.preview_url) safeWindowOpen(item.preview_url);
   };
 
   const uploadTime = timeAgo(item.uploaded_at);

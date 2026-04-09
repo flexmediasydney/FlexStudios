@@ -394,6 +394,16 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
               {zoomed ? <ZoomOut className="h-4 w-4" /> : <ZoomIn className="h-4 w-4" />}
             </button>
           )}
+          {proxyPath && (
+            <button
+              onClick={() => downloadFile(proxyPath, file?.name)}
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-white/40"
+              title={`Download ${file?.name}`}
+              aria-label={`Download ${file?.name}`}
+            >
+              <Download className="h-4 w-4" />
+            </button>
+          )}
           {deliverableLink && (
             <button
               onClick={() => openInDropbox(deliverableLink)}
@@ -488,7 +498,11 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
           ) : videoUrl ? (
             <video src={videoUrl} controls autoPlay className="max-w-full max-h-[calc(100vh-160px)] rounded-lg pmg-lightbox-img-enter" />
           ) : (
-            <div className="text-white/60 text-sm">Video unavailable</div>
+            <div className="flex flex-col items-center gap-3 text-white/60 pmg-lightbox-img-enter">
+              <Film className="h-16 w-16 text-white/20" />
+              <p className="text-sm font-medium">{file?.name}</p>
+              <p className="text-xs text-white/30">Video could not be loaded</p>
+            </div>
           )
         )}
 
@@ -677,9 +691,9 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, deli
                 <ExternalLink className="h-3.5 w-3.5" />
               </button>
             )}
-            {deliverableLink && (
+            {proxyPath && (
               <button
-                onClick={(e) => { e.stopPropagation(); downloadFile(buildProxyPath(tonomoBasePath, file), file.name); }}
+                onClick={(e) => { e.stopPropagation(); downloadFile(proxyPath, file.name); }}
                 className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm transition-colors"
                 title={`Download ${file.name}`}
                 aria-label={`Download ${file.name}`}
