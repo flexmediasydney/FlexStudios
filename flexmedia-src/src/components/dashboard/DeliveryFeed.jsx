@@ -1060,8 +1060,12 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
       const allFiles = (result?.folders || []).flatMap(f => f.files);
       setFlatFiles(allFiles);
       setLoadingMedia(false);
-      // Report file count to parent — used to hide empty cards
-      if (onFileCountKnown) onFileCountKnown(project.id, allFiles.length);
+      // Report file count + newest file timestamp to parent
+      const newestUpload = allFiles.reduce((latest, f) => {
+        if (!f.uploaded_at) return latest;
+        return !latest || f.uploaded_at > latest ? f.uploaded_at : latest;
+      }, null);
+      if (onFileCountKnown) onFileCountKnown(project.id, allFiles.length, newestUpload);
     });
   }, [dropboxSource, isShareUrl, deliverablePath]);
 
@@ -1464,6 +1468,7 @@ export default function DeliveryFeed() {
   const [newDeliveryIds, setNewDeliveryIds] = useState(new Set());
   const [dropboxWarning, setDropboxWarning] = useState(false);
   const [emptyProjectIds, setEmptyProjectIds] = useState(new Set()); // Projects with 0 Dropbox files
+  const [newestFileDate, setNewestFileDate] = useState(new Map()); // projectId → newest file uploaded_at
 
   // Favorites + tags: call once at parent level, pass helper down
   const { favorites, allTags: tagRegistry } = useFavorites();
@@ -1479,11 +1484,15 @@ export default function DeliveryFeed() {
   }, [favorites, tagRegistry]);
 
   // Callback from DeliveryCard when file count is known
-  const handleFileCountKnown = useCallback((projectId, count) => {
+  const handleFileCountKnown = useCallback((projectId, count, newestUploadAt) => {
     if (count === 0) {
       setEmptyProjectIds(prev => { const next = new Set(prev); next.add(projectId); return next; });
     } else {
       setEmptyProjectIds(prev => { if (!prev.has(projectId)) return prev; const next = new Set(prev); next.delete(projectId); return next; });
+    }
+    // Track the newest file upload date — used for date grouping
+    if (newestUploadAt) {
+      setNewestFileDate(prev => { const next = new Map(prev); next.set(projectId, newestUploadAt); return next; });
     }
   }, []);
 
@@ -1568,10 +1577,20 @@ export default function DeliveryFeed() {
   const grouped = useMemo(() => {
     const groups = {};
     deliveries.forEach(p => {
-      const raw = p.tonomo_delivered_at || p.updated_date;
+      // Use the newest file's upload timestamp if available (from Dropbox scan).
+      // This is the source of truth — files uploaded today should group under TODAY
+      // even if the project record wasn't updated today.
+      const fileDate = newestFileDate.get(p.id);
+      const projectDate = p.tonomo_delivered_at || p.updated_date;
+      // Pick whichever is more recent
+      let raw = projectDate;
+      if (fileDate) {
+        if (!raw || new Date(fileDate) > new Date(fixTimestamp(raw))) {
+          raw = fileDate;
+        }
+      }
       let label;
       if (!raw) {
-        // Projects with no date still need to appear
         label = 'No Date';
       } else {
         const d = new Date(fixTimestamp(raw));
@@ -1584,7 +1603,7 @@ export default function DeliveryFeed() {
       groups[label].push(p);
     });
     return Object.entries(groups);
-  }, [deliveries]);
+  }, [deliveries, newestFileDate]);
 
   const agencyOptions = useMemo(() => {
     const seen = new Map();
