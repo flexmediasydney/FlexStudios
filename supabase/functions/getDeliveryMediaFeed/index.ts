@@ -192,15 +192,32 @@ function fileEntry(f: Record<string, unknown>, folderName: string, parentShareUr
 
 function stripPrefix(filePath: string, pathPrefix: string): string {
   let rel = filePath;
-  // Try matching the prefix as-is first, then try URL-decoded comparison
   if (pathPrefix) {
-    if (rel.startsWith(pathPrefix)) {
-      rel = rel.slice(pathPrefix.length);
+    // Normalize the prefix: remove trailing slash so boundary check is consistent
+    const normPrefix = pathPrefix.endsWith('/') ? pathPrefix.slice(0, -1) : pathPrefix;
+
+    // Helper: strip prefix only if it matches at a path boundary (followed by / or end-of-string).
+    // Prevents "/foo" from incorrectly matching "/foobar".
+    const tryStrip = (path: string, prefix: string): string | null => {
+      if (!path.startsWith(prefix)) return null;
+      const rest = path.slice(prefix.length);
+      // Valid boundary: nothing left, or remainder starts with '/'
+      if (rest === '' || rest.startsWith('/')) return rest;
+      return null;
+    };
+
+    // Try matching the prefix as-is first
+    const stripped = tryStrip(rel, normPrefix);
+    if (stripped !== null) {
+      rel = stripped;
     } else {
+      // Try URL-decoded comparison on both sides
       try {
-        const decoded = decodeURIComponent(rel);
-        if (decoded.startsWith(pathPrefix)) {
-          rel = decoded.slice(pathPrefix.length);
+        const decodedRel = decodeURIComponent(rel);
+        const decodedPrefix = decodeURIComponent(normPrefix);
+        const decodedStripped = tryStrip(decodedRel, decodedPrefix);
+        if (decodedStripped !== null) {
+          rel = decodedStripped;
         }
       } catch { /* not URL-encoded, leave as-is */ }
     }
@@ -216,8 +233,9 @@ function stripPrefix(filePath: string, pathPrefix: string): string {
 /** Reject file_path values that attempt traversal or are obviously invalid. */
 function isValidFilePath(filePath: string): boolean {
   if (!filePath || typeof filePath !== 'string') return false;
-  // Block path traversal sequences
-  if (filePath.includes('..')) return false;
+  // Block actual path traversal sequences (/../ or /.. at end or leading ../)
+  // but allow legitimate filenames containing ".." like "report..2024.pdf"
+  if (/(^|\/)\.\.(\/|$)/.test(filePath)) return false;
   // Block null bytes
   if (filePath.includes('\0')) return false;
   // Must look like a reasonable Dropbox path (starts with / or alphanumeric)
@@ -245,7 +263,13 @@ function hasValidApiKey(req: Request): boolean {
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
   // Accept either the apikey header matching the anon key, or a Bearer token (JWT)
   if (apikey && apikey === anonKey) return true;
-  if (authHeader.startsWith('Bearer ') && authHeader.length > 20) return true;
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    // Validate JWT structure: must have 3 dot-separated segments (header.payload.signature)
+    // This prevents accepting arbitrary strings like "Bearer AAAA" as valid auth
+    const parts = token.split('.');
+    if (parts.length === 3 && parts.every(p => p.length > 0)) return true;
+  }
   return false;
 }
 
@@ -281,6 +305,11 @@ Deno.serve(async (req) => {
     const pathPrefix = Deno.env.get('DROPBOX_PARENT_PATH_PREFIX') || '';
 
     const { share_url, path, action, base_path } = body;
+
+    // Safe debug — only shows token status, not the token itself
+    if (body?._debug) {
+      return jsonResponse({ token_set: token.length > 100, token_length: token.length, token_starts: token.substring(0, 10) }, 200, req);
+    }
 
     // ─── Validate file_path for proxy/thumb/stream actions ──────────────
     if ((action === 'thumb' || action === 'proxy' || action === 'stream_url') && body.file_path) {
@@ -383,6 +412,13 @@ Deno.serve(async (req) => {
         if (tokenErr) return tokenErr;
         await dbxRes.body?.cancel();
         return errResponse('STREAM_FAILED', 'Could not stream file from Dropbox', 502, req);
+      }
+
+      // Enforce size cap on streamed content (same as proxy action)
+      const streamCl = dbxRes.headers.get('content-length');
+      if (streamCl && parseInt(streamCl, 10) > MAX_PROXY_BYTES) {
+        await dbxRes.body?.cancel();
+        return errResponse('FILE_TOO_LARGE', 'Requested file exceeds maximum proxy size', 413, req);
       }
 
       const ct = dbxRes.headers.get('content-type') || 'application/octet-stream';

@@ -31,6 +31,7 @@ export function useFavorites() {
   const [optimisticToggles, setOptimisticToggles] = useState({});
   const toggleVersionRef = useRef(0); // monotonic counter to discard stale reconciliations
   const optimisticIdCounter = useRef(0); // monotonic ID to avoid Date.now() collisions in rapid toggles
+  const inFlightKeys = useRef(new Set()); // guards against duplicate toggles for the same key
 
   // Filter to current user's favorites, then overlay optimistic state
   const favorites = useMemo(() => {
@@ -132,11 +133,18 @@ export function useFavorites() {
     projectTitle,
     propertyAddress,
     tonomoBasePath,
+    _skipRefetch = false, // internal: skip cache refetch (batch caller does it once)
+    _skipToast = false,   // internal: skip success toast (batch caller shows summary)
   }) => {
     if (!userId) return false;
 
-    const existing = getFavorite(filePath, projectId);
     const optimisticKey = filePath ? `file:${filePath}` : `project:${projectId}`;
+
+    // Guard: reject duplicate toggle for the same key while one is in-flight
+    if (inFlightKeys.current.has(optimisticKey)) return isFavorited(filePath, projectId);
+    inFlightKeys.current.add(optimisticKey);
+
+    const existing = getFavorite(filePath, projectId);
     const version = ++toggleVersionRef.current;
     const displayName = fileName || projectTitle || 'item';
 
@@ -165,6 +173,7 @@ export function useFavorites() {
         }).catch(() => {}); // fire-and-forget audit log — swallow rejection to avoid unhandled promise
       } catch (err) {
         // Revert optimistic state on failure
+        inFlightKeys.current.delete(optimisticKey);
         if (toggleVersionRef.current === version) {
           setOptimisticToggles(prev => {
             const next = { ...prev };
@@ -228,6 +237,7 @@ export function useFavorites() {
         }).catch(() => {}); // fire-and-forget audit log — swallow rejection to avoid unhandled promise
       } catch (err) {
         // Revert optimistic state on failure
+        inFlightKeys.current.delete(optimisticKey);
         if (toggleVersionRef.current === version) {
           setOptimisticToggles(prev => {
             const next = { ...prev };
@@ -242,32 +252,44 @@ export function useFavorites() {
       }
     }
 
-    // Refresh the shared cache so all components update, then clear optimistic state
-    await refetchEntityList('MediaFavorite');
-    // Only clear if no newer toggle has been issued (prevents stale reconciliation)
-    if (toggleVersionRef.current === version) {
-      setOptimisticToggles(prev => {
-        const next = { ...prev };
-        delete next[optimisticKey];
-        return next;
-      });
+    // Refresh the shared cache so all components update, then clear optimistic state.
+    // In batch mode (_skipRefetch), the caller does a single refetch after all toggles.
+    if (!_skipRefetch) {
+      try {
+        await refetchEntityList('MediaFavorite');
+      } finally {
+        // Always clear optimistic state and in-flight guard, even if refetch fails.
+        // Only clear if no newer toggle has been issued (prevents stale reconciliation)
+        inFlightKeys.current.delete(optimisticKey);
+        if (toggleVersionRef.current === version) {
+          setOptimisticToggles(prev => {
+            const next = { ...prev };
+            delete next[optimisticKey];
+            return next;
+          });
+        }
+      }
+    } else {
+      inFlightKeys.current.delete(optimisticKey);
     }
 
-    // Success toast for single toggle
-    if (existing) {
-      toast.success('Removed from favorites', {
-        description: `"${displayName}" unfavorited.`,
-        duration: 2000,
-      });
-    } else {
-      toast.success('Added to favorites', {
-        description: `"${displayName}" favorited.`,
-        duration: 2000,
-      });
+    // Success toast for single toggle (suppressed in batch mode)
+    if (!_skipToast) {
+      if (existing) {
+        toast.success('Removed from favorites', {
+          description: `"${displayName}" unfavorited.`,
+          duration: 2000,
+        });
+      } else {
+        toast.success('Added to favorites', {
+          description: `"${displayName}" favorited.`,
+          duration: 2000,
+        });
+      }
     }
 
     return !existing;
-  }, [userId, user, getFavorite]);
+  }, [userId, user, getFavorite, isFavorited]);
 
   /**
    * Toggle multiple items at once. Accepts an array of item descriptors
@@ -300,9 +322,17 @@ export function useFavorites() {
       // Use the return value (new favorited state) to detect whether the toggle succeeded:
       // - If targetState is true (favoriting), success means the return is true.
       // - If targetState is false (unfavoriting), success means the return is false.
+      // Pass _skipRefetch + _skipToast so we do ONE refetch after all toggles complete.
       const results = await Promise.all(
-        itemsToToggle.map(item => toggleFavorite(item))
+        itemsToToggle.map(item => toggleFavorite({ ...item, _skipRefetch: true, _skipToast: true }))
       );
+
+      // Single refetch after all toggles
+      try {
+        await refetchEntityList('MediaFavorite');
+      } catch {
+        // Swallow refetch error — optimistic state will be cleared below
+      }
 
       toggledCount = results.filter(r => r === targetState).length;
       const failedCount = results.length - toggledCount;
@@ -318,6 +348,9 @@ export function useFavorites() {
       toast.error('Batch operation failed', {
         description: err?.message || 'Could not complete the bulk operation.',
       });
+    } finally {
+      // Always clear all optimistic state after batch completes, even on partial failure
+      setOptimisticToggles({});
     }
 
     return toggledCount;
@@ -333,7 +366,13 @@ export function useFavorites() {
 
     // Get the current favorite to diff tags
     const current = allFavorites?.find(f => f.id === favoriteId);
-    const oldTags = current?.tags || [];
+    if (!current) {
+      toast.error('Cannot update tags', {
+        description: 'Favorite record not found. It may have been removed.',
+      });
+      return;
+    }
+    const oldTags = Array.isArray(current.tags) ? current.tags : [];
     const displayName = current?.file_name || current?.project_title || 'item';
 
     try {
@@ -344,9 +383,11 @@ export function useFavorites() {
       const added = newTags.filter(t => !oldTags.includes(t));
       const removed = oldTags.filter(t => !newTags.includes(t));
 
-      // Upsert new tags into the registry
+      // Upsert new tags into the registry.
+      // Re-fetch fresh tag list to avoid stale usage_count from concurrent updateTags calls.
+      const freshTags = await refetchEntityList('MediaTag') || allTags || [];
       for (const tagName of added) {
-        const existing = allTags?.find(t => t.name === tagName);
+        const existing = freshTags.find(t => t.name === tagName);
         if (existing) {
           await api.entities.MediaTag.update(existing.id, {
             usage_count: (existing.usage_count || 0) + 1,
@@ -363,7 +404,7 @@ export function useFavorites() {
 
       // Decrement usage_count for removed tags
       for (const tagName of removed) {
-        const existing = allTags?.find(t => t.name === tagName);
+        const existing = freshTags.find(t => t.name === tagName);
         if (existing && (existing.usage_count || 0) > 0) {
           await api.entities.MediaTag.update(existing.id, {
             usage_count: Math.max(0, (existing.usage_count || 0) - 1),
@@ -371,8 +412,8 @@ export function useFavorites() {
         }
       }
 
-      // Audit log
-      await api.entities.AuditLog.create({
+      // Audit log — fire-and-forget (consistent with toggle audit logs)
+      api.entities.AuditLog.create({
         entity_type: 'media_favorite',
         entity_id: favoriteId,
         action: 'tags_updated',
@@ -390,7 +431,7 @@ export function useFavorites() {
           added_tags: added,
           removed_tags: removed,
         },
-      });
+      }).catch(() => {}); // swallow rejection to avoid unhandled promise
 
       // Refresh caches
       await Promise.all([

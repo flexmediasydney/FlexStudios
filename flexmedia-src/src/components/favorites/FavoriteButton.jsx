@@ -114,6 +114,7 @@ export default function FavoriteButton({
               className,
             )}
             aria-label={active ? 'Remove from favorites' : 'Add to favorites'}
+            aria-pressed={active}
           >
             {/* Glow effect behind the star when active */}
             <AnimatePresence>
@@ -128,8 +129,8 @@ export default function FavoriteButton({
               )}
             </AnimatePresence>
 
-            {/* Color flash on toggle */}
-            <AnimatePresence mode="wait">
+            {/* Color flash on toggle — no mode so enter/exit can overlap */}
+            <AnimatePresence>
               <motion.span
                 key={flashKey}
                 className="absolute inset-0 rounded-md pointer-events-none"

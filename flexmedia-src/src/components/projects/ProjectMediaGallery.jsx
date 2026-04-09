@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
+import { LRUBlobCache, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,10 +22,9 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // ─── Image proxy with concurrent loading + progress tracking ────────
-const blobCache = new Map();
+// PERF: LRU blob cache with max 200 entries — revokes oldest blob URLs automatically
+const blobCache = new LRUBlobCache(200);
 const pending = new Set();
-let activeLoads = 0;
-const loadQueue = [];
 
 /** Canonical cache key */
 function cacheKey(filePath, mode = 'thumb') {
@@ -45,30 +45,30 @@ function notifyProgress() { _progressListeners.forEach(fn => fn({ loaded: _loade
 function subscribeProgress(fn) { _progressListeners.add(fn); return () => _progressListeners.delete(fn); }
 function resetProgress() { _loadedCount = 0; _totalQueued = 0; notifyProgress(); }
 
-function processQueue() {
-  while (activeLoads < 8 && loadQueue.length > 0) {
-    const job = loadQueue.shift();
-    activeLoads++;
-    job().finally(() => { activeLoads--; _loadedCount++; notifyProgress(); processQueue(); });
-  }
-}
-
+// PERF: fetchProxyImage now routes through global concurrency limiter + img.decode()
 async function fetchProxyImage(filePath, mode = 'thumb') {
   const key = cacheKey(filePath, mode);
   if (blobCache.has(key)) return blobCache.get(key);
   if (pending.has(key)) return null;
   pending.add(key);
   try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: mode, file_path: filePath }),
+    const url = await enqueueFetch(async () => {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+        body: JSON.stringify({ action: mode, file_path: filePath }),
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      if (blob.size < 500) return null;
+      const blobUrl = URL.createObjectURL(blob);
+      // PERF: decode image off main thread before caching to avoid jank
+      if (mode === 'thumb') await decodeImage(blobUrl);
+      return blobUrl;
     });
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    if (blob.size < 500) return null;
-    const url = URL.createObjectURL(blob);
-    blobCache.set(key, url);
+    if (url) blobCache.set(key, url);
+    _loadedCount++;
+    notifyProgress();
     return url;
   } catch { return null; }
   finally { pending.delete(key); }
@@ -123,7 +123,7 @@ if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
     }
     .pmg-fade-in {
       opacity: 0;
-      transition: opacity 300ms ease-out;
+      transition: opacity 200ms ease-out;
     }
     .pmg-fade-in.pmg-loaded {
       opacity: 1;
@@ -140,13 +140,22 @@ if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
     }
     .pmg-pulse-ring { animation: pmg-pulse-ring 2.5s ease-in-out infinite; }
     @keyframes pmg-lightbox-in {
-      from { opacity: 0; }
-      to   { opacity: 1; }
+      from { opacity: 0; backdrop-filter: blur(0px); }
+      to   { opacity: 1; backdrop-filter: blur(4px); }
     }
-    .pmg-lightbox-enter { animation: pmg-lightbox-in 200ms ease-out forwards; }
+    .pmg-lightbox-enter { animation: pmg-lightbox-in 280ms ease-out forwards; }
     @keyframes pmg-lightbox-img-in {
-      from { opacity: 0; transform: scale(0.97); }
+      from { opacity: 0; transform: scale(0.95); }
       to   { opacity: 1; transform: scale(1); }
+    }
+    @keyframes pmg-empty-dot-pulse {
+      0%, 100% { opacity: 0.08; }
+      50%      { opacity: 0.18; }
+    }
+    .pmg-dot-grid {
+      background-image: radial-gradient(circle, currentColor 1px, transparent 1px);
+      background-size: 20px 20px;
+      animation: pmg-empty-dot-pulse 4s ease-in-out infinite;
     }
     .pmg-lightbox-img-enter { animation: pmg-lightbox-img-in 250ms ease-out forwards; }
   `;
@@ -190,10 +199,10 @@ function LoadingProgress() {
       aria-label={`Loading thumbnails: ${progress.loaded} of ${progress.total}`}
     >
       <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-      <span>Loading {progress.loaded} of {progress.total} images...</span>
-      <div className="h-1 w-20 bg-muted rounded-full overflow-hidden">
+      <span>Loading {progress.loaded} of {progress.total} images{pct > 0 ? ` (${pct}%)` : ""}...</span>
+      <div className="h-1.5 w-24 bg-muted rounded-full overflow-hidden">
         <div
-          className="h-full bg-primary/60 rounded-full transition-all duration-300 ease-out"
+          className="h-full bg-primary/70 rounded-full transition-all duration-300 ease-out"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -259,15 +268,29 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
     return () => { stale = true; };
   }, [isImage, proxyPath]);
 
-  // Keyboard nav
+  // Keyboard nav + focus trapping
+  const dialogRef = useRef(null);
   useEffect(() => {
     const len = files.length;
     const handler = (e) => {
       if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft')  { setIndex(i => Math.max(0, i - 1)); setZoomed(false); }
-      if (e.key === 'ArrowRight') { setIndex(i => Math.min(len - 1, i + 1)); setZoomed(false); }
+      if (len === 0) return;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setIndex(i => Math.max(0, i - 1)); setZoomed(false); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); setIndex(i => Math.min(len - 1, i + 1)); setZoomed(false); }
+      // Focus trap: keep Tab within the lightbox dialog
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusable = dialogRef.current.querySelectorAll('button, [tabindex="0"], a[href]');
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
     };
     window.addEventListener('keydown', handler);
+    // Auto-focus close button on mount for screen readers
+    const closeBtn = dialogRef.current?.querySelector('[aria-label="Close lightbox"]');
+    if (closeBtn) closeBtn.focus();
     return () => window.removeEventListener('keydown', handler);
   }, [files.length, onClose]);
 
@@ -305,6 +328,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
 
   return (
     <div
+      ref={dialogRef}
       className="fixed inset-0 z-50 bg-black/95 flex flex-col pmg-lightbox-enter select-none"
       onClick={onClose}
       onTouchStart={handleTouchStart}
@@ -382,20 +406,36 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
         {isImage && imgBlobUrl && (
           <div
             className={cn(
-              "pmg-lightbox-img-enter transition-all duration-300 ease-out",
+              "pmg-lightbox-img-enter transition-all duration-300 ease-out relative",
               zoomed ? "cursor-zoom-out overflow-auto max-w-full max-h-full" : "cursor-zoom-in"
             )}
             onClick={toggleZoom}
+            onDoubleClick={toggleZoom}
           >
+            {loadingFullRes && thumbUrl && (
+              <img
+                src={thumbUrl}
+                alt=""
+                className="absolute inset-0 w-full h-full object-contain rounded-lg blur-sm opacity-60 pointer-events-none"
+                aria-hidden="true"
+                draggable={false}
+              />
+            )}
             <img
               src={imgBlobUrl}
               alt={file.name}
               className={cn(
-                "rounded-lg transition-all duration-300",
+                "rounded-lg transition-all duration-300 relative",
                 zoomed ? "max-w-none w-auto h-auto" : "max-w-full max-h-[calc(100vh-160px)] object-contain"
               )}
               draggable={false}
             />
+            {loadingFullRes && (
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white/80 text-xs px-3 py-1.5 rounded-full pointer-events-none">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading full resolution...
+              </div>
+            )}
           </div>
         )}
 
@@ -436,7 +476,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
       <div className="flex gap-1.5 px-4 py-3 overflow-x-auto justify-center shrink-0" onClick={e => e.stopPropagation()} role="tablist" aria-label="Image filmstrip">
         {files.map((f, i) => {
           const path = buildProxyPath(tonomoBasePath, f);
-          const thumbSrc = path ? (blobCache.get(cacheKey(path, 'thumb')) || blobCache.get(path)) : null;
+          const thumbSrc = path ? (blobCache.get(cacheKey(path, 'thumb')) || blobCache.get(cacheKey(path, 'proxy'))) : null;
           return (
             <button
               key={f.path || i}
@@ -465,32 +505,43 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, onClose }) {
 }
 
 // ─── MediaThumbnail ─────────────────────────────────────────────────
+// PERF: memo prevents re-render when parent re-renders but props haven't changed
 
-function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile, gridSize }) {
+const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile, gridSize }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
-  const started = useRef(false);
+  const mountedRef = useRef(true);
+  const lastPathRef = useRef(null);
 
   const canThumb = file.type === 'image' || file.type === 'video' || file.type === 'document';
   const proxyPath = buildProxyPath(tonomoBasePath, file);
 
+  // Clean up mounted flag on unmount
   useEffect(() => {
-    if (!canThumb || !proxyPath || started.current) return;
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!canThumb || !proxyPath) return;
+    // Skip if we already started loading this exact path
+    if (lastPathRef.current === proxyPath) return;
     const cached = blobCache.get(cacheKey(proxyPath, 'thumb'));
-    if (cached) { setBlobUrl(cached); return; }
-    started.current = true;
+    if (cached) { setBlobUrl(cached); lastPathRef.current = proxyPath; return; }
+    lastPathRef.current = proxyPath;
     setLoading(true);
+    setError(false);
+    setImgLoaded(false);
     _totalQueued++;
     notifyProgress();
-    loadQueue.push(async () => {
-      const url = await fetchProxyImage(proxyPath);
+    fetchProxyImage(proxyPath).then(url => {
+      if (!mountedRef.current) return; // Don't set state on unmounted component
       if (url) setBlobUrl(url);
       else setError(true);
       setLoading(false);
     });
-    processQueue();
   }, [canThumb, proxyPath]);
 
   const handleClick = () => {
@@ -516,8 +567,11 @@ function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile, gridSiz
       aria-label={`${file.name}, ${formatSize(file.size) || file.type}${uploadTime ? `, uploaded ${uploadTime}` : ""}`}
       tabIndex={0}
     >
-      {/* Thumbnail area */}
-      <div className="aspect-[4/3] bg-muted flex items-center justify-center overflow-hidden relative">
+      {/* Thumbnail area -- aspect ratio adjusts by grid size */}
+      <div className={cn(
+        "bg-muted flex items-center justify-center overflow-hidden relative",
+        gridSize === 'lg' ? "aspect-[16/10]" : gridSize === 'sm' ? "aspect-square" : "aspect-[4/3]"
+      )}>
         {blobUrl ? (
           <img
             src={blobUrl}
@@ -584,6 +638,16 @@ function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile, gridSiz
                 <ExternalLink className="h-3.5 w-3.5" />
               </button>
             )}
+            {file.preview_url && (
+              <button
+                onClick={(e) => { e.stopPropagation(); safeWindowOpen(file.preview_url.replace('/s/', '/s/dl/').replace('?dl=0', '?dl=1')); }}
+                className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm transition-colors"
+                title={`Download ${file.name}`}
+                aria-label={`Download ${file.name}`}
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -625,13 +689,13 @@ function MediaThumbnail({ file, tonomoBasePath, onClick, getTagsForFile, gridSiz
       </div>
     </button>
   );
-}
+});
 
 // ─── FolderSection with smooth collapse animation ───────────────────
 
 const GRID_SIZES = {
-  sm: 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2',
-  md: 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3',
+  sm: 'grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-1.5',
+  md: 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3',
   lg: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4',
 };
 
@@ -640,23 +704,31 @@ function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox
   const contentRef = useRef(null);
   const [contentHeight, setContentHeight] = useState("auto");
 
-  const imageCount = folder.files.filter(f => f.type === 'image').length;
-  const videoCount = folder.files.filter(f => f.type === 'video').length;
-  const docCount   = folder.files.filter(f => f.type === 'document').length;
+  const { imageCount, videoCount, docCount } = useMemo(() => {
+    let img = 0, vid = 0, doc = 0;
+    for (const f of folder.files) {
+      if (f.type === 'image') img++;
+      else if (f.type === 'video') vid++;
+      else if (f.type === 'document') doc++;
+    }
+    return { imageCount: img, videoCount: vid, docCount: doc };
+  }, [folder.files]);
 
   // Measure + animate height for smooth collapse/expand
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
+    let rafId1, rafId2;
     if (!collapsed) {
       setContentHeight(`${el.scrollHeight}px`);
       const t = setTimeout(() => setContentHeight("auto"), 320);
       return () => clearTimeout(t);
     } else {
       setContentHeight(`${el.scrollHeight}px`);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => setContentHeight("0px"));
+      rafId1 = requestAnimationFrame(() => {
+        rafId2 = requestAnimationFrame(() => setContentHeight("0px"));
       });
+      return () => { cancelAnimationFrame(rafId1); cancelAnimationFrame(rafId2); };
     }
   }, [collapsed]);
 
@@ -706,8 +778,8 @@ function FolderSection({ folder, tonomoBasePath, gridSize = 'md', onOpenLightbox
       <div
         ref={contentRef}
         id={`folder-${folder.name}`}
-        className="overflow-hidden transition-[height] duration-300 ease-in-out"
-        style={{ height: contentHeight }}
+        className="overflow-hidden transition-[height] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
+        style={{ height: contentHeight, willChange: collapsed ? 'height' : 'auto' }}
         aria-hidden={collapsed}
       >
         <div className={cn("grid", GRID_SIZES[gridSize])} role="list" aria-label={`${folder.name} files`}>
@@ -759,8 +831,9 @@ function MediaSkeleton() {
 
 function EmptyFolderState() {
   return (
-    <Card className="border-dashed border-2">
-      <CardContent className="flex flex-col items-center justify-center py-20 text-center">
+    <Card className="border-dashed border-2 relative overflow-hidden">
+      <div className="absolute inset-0 pmg-dot-grid text-muted-foreground pointer-events-none" aria-hidden="true" />
+      <CardContent className="relative flex flex-col items-center justify-center py-20 text-center">
         <div className="relative mb-6">
           <div className="rounded-full bg-muted/60 p-6 pmg-float">
             <Inbox className="h-10 w-10 text-muted-foreground/60" />
@@ -780,8 +853,9 @@ function EmptyFolderState() {
 
 function NotLinkedState() {
   return (
-    <Card className="border-dashed border-2">
-      <CardContent className="flex flex-col items-center justify-center py-20 text-center">
+    <Card className="border-dashed border-2 relative overflow-hidden">
+      <div className="absolute inset-0 pmg-dot-grid text-muted-foreground pointer-events-none" aria-hidden="true" />
+      <CardContent className="relative flex flex-col items-center justify-center py-20 text-center">
         <div className="relative mb-6">
           <div className="rounded-full bg-muted/60 p-6 pmg-float">
             <ImageOff className="h-10 w-10 text-muted-foreground/60" />
@@ -807,23 +881,46 @@ export default function ProjectMediaGallery({ project }) {
 
   const { favorites, allTags: tagRegistry } = useFavorites();
 
+  // PERF: Pre-index favorites by file_path and tags by name for O(1) lookups
+  // instead of O(n) array.find() on every card render
+  const favByPath = useMemo(() => {
+    const m = new Map();
+    for (const f of favorites) {
+      if (f.file_path) m.set(f.file_path, f);
+    }
+    return m;
+  }, [favorites]);
+
+  const tagColorMap = useMemo(() => {
+    const m = new Map();
+    for (const t of tagRegistry) {
+      m.set(t.name, t.color || '#3b82f6');
+    }
+    return m;
+  }, [tagRegistry]);
+
   const getTagsForFile = useCallback((filePath) => {
     if (!filePath) return [];
-    const fav = favorites.find(f => f.file_path === filePath);
+    const fav = favByPath.get(filePath);
     if (!fav?.tags?.length) return [];
-    return fav.tags.map(tagName => {
-      const reg = tagRegistry.find(t => t.name === tagName);
-      return { name: tagName, color: reg?.color || '#3b82f6' };
-    });
-  }, [favorites, tagRegistry]);
+    return fav.tags.map(tagName => ({
+      name: tagName,
+      color: tagColorMap.get(tagName) || '#3b82f6',
+    }));
+  }, [favByPath, tagColorMap]);
 
   const { data: mediaData, isLoading, isError, error, refetch, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: ["projectMedia", deliverableLink],
+    queryKey: ["projectMedia", deliverableLink, tonomoBasePath],
     queryFn: async () => {
       resetProgress();
       const res = await api.functions.invoke("getDeliveryMediaFeed", { share_url: deliverableLink, base_path: tonomoBasePath });
       const data = res?.data || res;
-      if (data?.error) throw new Error(data.error);
+      if (data?.error) {
+        const errMsg = typeof data.error === 'object'
+          ? (data.error.message || data.error.code || JSON.stringify(data.error))
+          : String(data.error);
+        throw new Error(errMsg);
+      }
       let folders = [];
       if (data?.folders && Array.isArray(data.folders)) folders = data.folders;
       else if (data?.files && Array.isArray(data.files)) folders = [{ name: "All Files", files: data.files }];
@@ -831,15 +928,16 @@ export default function ProjectMediaGallery({ project }) {
     },
     enabled: !!deliverableLink,
     staleTime: 120_000,
+    gcTime: 10 * 60 * 1000, // PERF: keep cached data 10 min after unmount to avoid refetch on re-mount
     refetchOnWindowFocus: false,
     retry: 1,
   });
 
   const handleRefresh = useCallback(() => {
+    // PERF: use LRU cache's prefix eviction instead of manual iteration
     if (tonomoBasePath) {
-      for (const [k, v] of blobCache.entries()) {
-        if (k.startsWith(tonomoBasePath)) { URL.revokeObjectURL(v); blobCache.delete(k); }
-      }
+      blobCache.evictByPrefix(`thumb::${tonomoBasePath}`);
+      blobCache.evictByPrefix(`proxy::${tonomoBasePath}`);
     }
     resetProgress();
     refetch();

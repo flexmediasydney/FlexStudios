@@ -20,40 +20,38 @@ import {
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, differenceInDays, format } from "date-fns";
+import FavoriteButton from "@/components/favorites/FavoriteButton";
+import { LRUBlobCache, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// ---- Image proxy with concurrency limiter + blob cache ----
-const blobCache = new Map();
+// ---- Image proxy with concurrency limiter + LRU blob cache ----
+// PERF: LRU cache with max 200 entries, auto-revokes oldest blob URLs
+const blobCache = new LRUBlobCache(200);
 const pending = new Set();
-let activeLoads = 0;
-const loadQueue = [];
 
-function processQueue() {
-  while (activeLoads < 8 && loadQueue.length > 0) {
-    const job = loadQueue.shift();
-    activeLoads++;
-    job().finally(() => { activeLoads--; processQueue(); });
-  }
-}
-
+// PERF: Uses global concurrency limiter + img.decode() before caching
 async function fetchProxyImage(filePath, mode = 'thumb') {
   const cacheKey = `${mode}::${filePath}`;
   if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
   if (pending.has(cacheKey)) return null;
   pending.add(cacheKey);
   try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: mode, file_path: filePath }),
+    const url = await enqueueFetch(async () => {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+        body: JSON.stringify({ action: mode, file_path: filePath }),
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      if (blob.size < 500) return null;
+      const blobUrl = URL.createObjectURL(blob);
+      if (mode === 'thumb') await decodeImage(blobUrl);
+      return blobUrl;
     });
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    if (blob.size < 500) return null;
-    const url = URL.createObjectURL(blob);
-    blobCache.set(cacheKey, url);
+    if (url) blobCache.set(cacheKey, url);
     return url;
   } catch { return null; }
   finally { pending.delete(cacheKey); }
@@ -175,7 +173,7 @@ function StatCard({ icon: Icon, label, value, color, delay = 0 }) {
   return (
     <div
       className={cn(
-        "relative rounded-xl border bg-gradient-to-br p-3.5 transition-all duration-500",
+        "relative rounded-xl border bg-gradient-to-br p-3.5 transition-all duration-500 shadow-sm hover:shadow-md",
         colorMap[color] || colorMap.slate,
         visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"
       )}
@@ -212,9 +210,15 @@ function StatsHeader({ stats, newestUpload, isLoading }) {
         <StatCard icon={FileText} label="Documents" value={stats.docs} color="amber" delay={320} />
       ) : newestUpload ? (
         <div
-          className="relative rounded-xl border bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border-emerald-200/60 p-3.5"
+          className="relative rounded-xl border bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border-emerald-200/60 p-3.5 shadow-sm"
           style={{ animation: 'fadeSlideIn 0.5s ease-out 320ms both' }}
         >
+          <div className="absolute top-2 right-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+          </div>
           <div className="flex items-center gap-3">
             <div className="rounded-lg p-2 bg-emerald-100 text-emerald-600 shrink-0">
               <Clock className="h-4 w-4" />
@@ -236,9 +240,12 @@ function StatsHeader({ stats, newestUpload, isLoading }) {
 // =====================================================================
 // FeedCardSkeleton: realistic placeholder matching actual card layout
 // =====================================================================
-function FeedCardSkeleton() {
+function FeedCardSkeleton({ index = 0 }) {
   return (
-    <div className="rounded-xl overflow-hidden border bg-card">
+    <div
+      className="rounded-xl overflow-hidden border bg-card"
+      style={{ animation: `fadeSlideIn 0.4s ease-out ${index * 50}ms both` }}
+    >
       <div className="aspect-[4/3] bg-muted relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full animate-[shimmer_2s_infinite]" />
         <div className="absolute inset-0 flex items-center justify-center">
@@ -291,7 +298,7 @@ function FeedSkeleton({ count = 12, gridSize = 'md', scanProgress = null }) {
       )}
       <div className={cn("grid", GRID_CONFIGS[gridSize])}>
         {Array.from({ length: count }).map((_, i) => (
-          <FeedCardSkeleton key={i} />
+          <FeedCardSkeleton key={i} index={i} />
         ))}
       </div>
     </div>
@@ -320,18 +327,25 @@ function MediaLightbox({ files, initialIndex, onClose }) {
     requestAnimationFrame(() => setEntering(false));
   }, []);
 
+  // Lock body scroll while lightbox is open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
   const handleClose = useCallback(() => {
     setExiting(true);
-    setTimeout(() => onClose(), 200);
+    setTimeout(() => onClose(), 280);
   }, [onClose]);
 
   useEffect(() => {
     if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
     setVideoLoading(true);
     setVideoUrl(null);
-    const cached = blobCache.get(proxyPath);
+    const cached = blobCache.get(`proxy::${proxyPath}`) || blobCache.get(proxyPath);
     if (cached) { setVideoUrl(cached); setVideoLoading(false); return; }
-    fetchProxyImage(proxyPath).then(url => {
+    fetchProxyImage(proxyPath, 'proxy').then(url => {
       setVideoUrl(url);
       setVideoLoading(false);
     });
@@ -356,15 +370,18 @@ function MediaLightbox({ files, initialIndex, onClose }) {
     return () => window.removeEventListener('keydown', handler);
   }, [index, files.length, handleClose]);
 
-  const imgBlobUrl = isImage ? blobCache.get(proxyPath) : null;
+  const imgBlobUrl = isImage ? (blobCache.get(`thumb::${proxyPath}`) || blobCache.get(proxyPath)) : null;
 
   return (
     <div
       className={cn(
         "fixed inset-0 z-50 flex flex-col transition-all duration-200",
-        entering || exiting ? "bg-black/0" : "bg-black/90"
+        entering || exiting ? "bg-black/0 backdrop-blur-none" : "bg-black/90 backdrop-blur-sm"
       )}
       onClick={handleClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Viewing ${file?.name || 'media'}, ${index + 1} of ${files.length}`}
     >
       <div
         className={cn(
@@ -385,18 +402,19 @@ function MediaLightbox({ files, initialIndex, onClose }) {
           {isImage && imgBlobUrl && (
             <button
               onClick={() => setZoomed(z => !z)}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
               title={zoomed ? "Zoom out (Z)" : "Zoom in (Z)"}
+              aria-label={zoomed ? "Zoom out" : "Zoom in"}
             >
               {zoomed ? <ZoomOut className="h-4 w-4" /> : <ZoomIn className="h-4 w-4" />}
             </button>
           )}
           {file?.preview_url && (
-            <button onClick={() => safeWindowOpen(file.preview_url)} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Open in Dropbox">
+            <button onClick={() => safeWindowOpen(file.preview_url)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
               <ExternalLink className="h-4 w-4" />
             </button>
           )}
-          <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+          <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Close lightbox">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -412,7 +430,8 @@ function MediaLightbox({ files, initialIndex, onClose }) {
         {index > 0 && (
           <button
             onClick={() => setIndex(i => i - 1)}
-            className="absolute left-3 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-all z-10 hover:scale-110 active:scale-95"
+            className="absolute left-3 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-all z-10 hover:scale-110 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            aria-label="Previous image"
           >
             <ChevronLeft className="h-6 w-6" />
           </button>
@@ -420,7 +439,8 @@ function MediaLightbox({ files, initialIndex, onClose }) {
         {index < files.length - 1 && (
           <button
             onClick={() => setIndex(i => i + 1)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-all z-10 hover:scale-110 active:scale-95"
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white transition-all z-10 hover:scale-110 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            aria-label="Next image"
           >
             <ChevronRight className="h-6 w-6" />
           </button>
@@ -492,7 +512,7 @@ function MediaLightbox({ files, initialIndex, onClose }) {
         onClick={e => e.stopPropagation()}
       >
         {files.slice(0, 60).map((f, i) => {
-          const thumbUrl = f.proxyPath ? blobCache.get(f.proxyPath) : null;
+          const thumbUrl = f.proxyPath ? (blobCache.get(`thumb::${f.proxyPath}`) || blobCache.get(f.proxyPath)) : null;
           const isActive = i === index;
           return (
             <button
@@ -595,20 +615,20 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
 
           {item.type === 'video' && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="bg-black/50 rounded-full p-3 backdrop-blur-sm group-hover:scale-110 transition-transform duration-300">
-                <Play className="h-6 w-6 text-white fill-white" />
+              <div className="bg-black/50 rounded-full p-3 backdrop-blur-sm group-hover:scale-110 transition-all duration-300 shadow-lg shadow-black/30 group-hover:shadow-xl group-hover:shadow-black/40">
+                <Play className="h-6 w-6 text-white fill-white drop-shadow-sm" />
               </div>
             </div>
           )}
 
           {item.type === 'document' && (
             <div className="absolute top-0 right-0 pointer-events-none">
-              <div className="w-0 h-0 border-t-[28px] border-t-amber-500 border-l-[28px] border-l-transparent" />
-              <FileText className="absolute top-0.5 right-0.5 h-3 w-3 text-white" />
+              <div className="w-0 h-0 border-t-[28px] border-t-amber-500 border-l-[28px] border-l-transparent drop-shadow-sm" />
+              <FileText className="absolute top-0.5 right-0.5 h-3 w-3 text-white drop-shadow-sm" />
             </div>
           )}
 
-          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 pt-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 pt-10 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-1 group-hover:translate-y-0">
             <p className="text-white text-xs font-semibold truncate leading-tight">{item.projectName}</p>
             {item.photographerName && (
               <p className="text-white/70 text-[10px] mt-0.5 truncate">
@@ -626,8 +646,20 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
             </div>
           )}
 
-          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            {item.type !== 'document' && <ExternalLink className="h-3.5 w-3.5 text-white drop-shadow-md" />}
+          <div className="absolute top-2 right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <FavoriteButton
+              filePath={item.proxyPath}
+              fileName={item.name}
+              fileType={item.type}
+              tonomoBasePath={item.tonomoBasePath}
+              size="sm"
+              className="bg-black/30 hover:bg-black/50 rounded-full p-1 text-white backdrop-blur-sm"
+            />
+            {item.type !== 'document' && (
+              <span className="pointer-events-none">
+                <ExternalLink className="h-3.5 w-3.5 text-white drop-shadow-md" />
+              </span>
+            )}
           </div>
 
           {tags.length > 0 && (
@@ -729,8 +761,12 @@ function ScrollToTop() {
 // =====================================================================
 // EmptyState
 // =====================================================================
-function EmptyState({ hasFiles, onClearFilters }) {
+function EmptyState({ hasFiles, onClearFilters, typeFilter, dateRange, search }) {
   if (hasFiles) {
+    const hints = [];
+    if (search && search.trim()) hints.push(`search "${search.trim()}"`);
+    if (typeFilter && typeFilter !== 'all') hints.push(`type "${typeFilter}"`);
+    if (dateRange && dateRange !== '30' && dateRange !== '0') hints.push('date range');
     return (
       <Card className="border-dashed border-2">
         <CardContent className="flex flex-col items-center justify-center py-20 text-center">
@@ -742,7 +778,9 @@ function EmptyState({ hasFiles, onClearFilters }) {
           </div>
           <h3 className="text-sm font-semibold mb-1.5">No files match your filters</h3>
           <p className="text-xs text-muted-foreground max-w-sm mb-4">
-            Try adjusting the date range, type filter, or search query to find what you are looking for.
+            {hints.length > 0
+              ? `No results for ${hints.join(' + ')}. Try broadening your criteria or clearing the filters below.`
+              : 'Try adjusting the date range, type filter, or search query to find what you are looking for.'}
           </p>
           <Button variant="outline" size="sm" onClick={onClearFilters} className="text-xs gap-1.5">
             <X className="h-3 w-3" />Clear all filters
@@ -762,10 +800,15 @@ function EmptyState({ hasFiles, onClearFilters }) {
           </div>
         </div>
         <h3 className="text-sm font-semibold mb-1.5">No delivered media found</h3>
-        <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
+        <p className="text-xs text-muted-foreground max-w-sm leading-relaxed mb-3">
           Files appear here once projects have Dropbox delivery folders linked.
           Delivered photos, videos, and documents will show up automatically.
         </p>
+        <div className="flex flex-col gap-1.5 text-[11px] text-muted-foreground/70 max-w-xs">
+          <span>1. Link a Dropbox delivery folder to a project</span>
+          <span>2. Upload or deliver media files</span>
+          <span>3. Files will appear in this feed within minutes</span>
+        </div>
       </CardContent>
     </Card>
   );
@@ -813,15 +856,32 @@ export default function LiveMediaFeed() {
   // Favorites + tags
   const { favorites, allTags: tagRegistry } = useFavorites();
 
+  // PERF: Pre-index favorites and tags for O(1) lookups instead of O(n) find per card
+  const favByPath = useMemo(() => {
+    const m = new Map();
+    for (const f of favorites) {
+      if (f.file_path) m.set(f.file_path, f);
+    }
+    return m;
+  }, [favorites]);
+
+  const tagColorMap = useMemo(() => {
+    const m = new Map();
+    for (const t of tagRegistry) {
+      m.set(t.name, t.color || '#3b82f6');
+    }
+    return m;
+  }, [tagRegistry]);
+
   const getTagsForFile = useCallback((filePath) => {
     if (!filePath) return [];
-    const fav = favorites.find(f => f.file_path === filePath);
+    const fav = favByPath.get(filePath);
     if (!fav?.tags?.length) return [];
-    return fav.tags.map(tagName => {
-      const reg = tagRegistry.find(t => t.name === tagName);
-      return { name: tagName, color: reg?.color || '#3b82f6' };
-    });
-  }, [favorites, tagRegistry]);
+    return fav.tags.map(tagName => ({
+      name: tagName,
+      color: tagColorMap.get(tagName) || '#3b82f6',
+    }));
+  }, [favByPath, tagColorMap]);
 
   // Load projects
   const { data: allProjects = [], loading: projectsLoading } = useEntityList('Project', '-created_date', 500);
@@ -861,6 +921,7 @@ export default function LiveMediaFeed() {
           try {
             const res = await api.functions.invoke("getDeliveryMediaFeed", {
               share_url: project.tonomo_deliverable_link,
+              base_path: project.tonomo_deliverable_path || undefined,
             });
             const data = res?.data || res;
             if (data?.error) {
@@ -902,6 +963,7 @@ export default function LiveMediaFeed() {
     },
     enabled: eligibleProjects.length > 0,
     staleTime: 5 * 60 * 1000,
+    gcTime: 15 * 60 * 1000, // PERF: keep cached data 15 min after unmount (heavy scan)
     refetchOnWindowFocus: false,
     retry: 1,
   });
@@ -924,6 +986,7 @@ export default function LiveMediaFeed() {
   }, [eligibleProjects]);
 
   const hasActiveFilters = dateRange !== '30' || typeFilter !== 'all' || search.trim() !== '';
+  const activeFilterCount = (dateRange !== '30' ? 1 : 0) + (typeFilter !== 'all' ? 1 : 0) + (search.trim() !== '' ? 1 : 0);
 
   const clearFilters = useCallback(() => {
     setDateRange('30');
@@ -1010,14 +1073,11 @@ export default function LiveMediaFeed() {
   }, [paginatedItems]);
 
   const handleRefresh = useCallback(() => {
+    // PERF: use LRU cache's prefix eviction instead of manual iteration
     eligibleProjects.forEach(p => {
       if (p.tonomo_deliverable_path) {
-        for (const [k, v] of blobCache.entries()) {
-          if (k.startsWith(p.tonomo_deliverable_path)) {
-            URL.revokeObjectURL(v);
-            blobCache.delete(k);
-          }
-        }
+        blobCache.evictByPrefix(`thumb::${p.tonomo_deliverable_path}`);
+        blobCache.evictByPrefix(`proxy::${p.tonomo_deliverable_path}`);
       }
     });
     setNewFilesCount(0);
@@ -1032,6 +1092,8 @@ export default function LiveMediaFeed() {
       <style>{`
         @keyframes shimmer { 100% { transform: translateX(100%); } }
         @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes cardEnter { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+        [data-feed-id] { animation: cardEnter 0.3s ease-out both; contain: layout style paint; }
       `}</style>
 
       {/* New files toast */}
@@ -1120,7 +1182,7 @@ export default function LiveMediaFeed() {
           </SelectContent>
         </Select>
 
-        <div className="flex items-center bg-background rounded-lg overflow-hidden shadow-sm shrink-0">
+        <div className="flex items-center bg-background rounded-lg overflow-hidden shadow-sm shrink-0" role="radiogroup" aria-label="Grid size">
           {[
             { key: 'sm', icon: Grid3x3, title: 'Small grid' },
             { key: 'md', icon: Grid2x2, title: 'Medium grid' },
@@ -1130,8 +1192,11 @@ export default function LiveMediaFeed() {
               key={key}
               onClick={() => setGridSize(key)}
               title={title}
+              role="radio"
+              aria-checked={gridSize === key}
+              aria-label={title}
               className={cn(
-                "p-1.5 transition-all duration-200",
+                "p-1.5 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset",
                 gridSize === key
                   ? 'bg-primary text-primary-foreground'
                   : 'hover:bg-muted text-muted-foreground'
@@ -1147,9 +1212,13 @@ export default function LiveMediaFeed() {
             variant="ghost"
             size="sm"
             onClick={clearFilters}
-            className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground gap-1"
+            className="h-8 px-2.5 text-xs text-orange-600 hover:text-orange-700 hover:bg-orange-50 gap-1.5"
           >
-            <X className="h-3 w-3" />Clear
+            <X className="h-3 w-3" />
+            Clear
+            <span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-orange-100 text-[10px] font-bold text-orange-700">
+              {activeFilterCount}
+            </span>
           </Button>
         )}
 
@@ -1166,7 +1235,7 @@ export default function LiveMediaFeed() {
       ) : isError ? (
         <ErrorState error={fetchError} onRetry={handleRefresh} />
       ) : feedItems.length === 0 ? (
-        <EmptyState hasFiles={projectFiles && projectFiles.length > 0} onClearFilters={clearFilters} />
+        <EmptyState hasFiles={projectFiles && projectFiles.length > 0} onClearFilters={clearFilters} typeFilter={typeFilter} dateRange={dateRange} search={search} />
       ) : (
         <>
           <div

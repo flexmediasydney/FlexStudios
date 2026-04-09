@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useFavorites } from './useFavorites';
+import { toast } from 'sonner';
 
 // Default palette for tags without a registry color
 const DEFAULT_COLORS = [
@@ -75,16 +76,19 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
   const [open, setOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [removingTag, setRemovingTag] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
   const inputRef = useRef(null);
   const suggestionsRef = useRef(null);
 
-  // Focus input when popover opens
+  // Focus input when popover opens; reset state when it closes
   useEffect(() => {
     if (open) {
       setTimeout(() => inputRef.current?.focus(), 50);
     } else {
       setInput('');
       setFocusedIndex(-1);
+      setRemovingTag(null);
+      setIsSaving(false);
     }
   }, [open]);
 
@@ -110,23 +114,41 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
   }, [allTags, currentTags]);
 
   const addTag = useCallback(async (tagName) => {
-    const trimmed = tagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, ' ').trim();
-    if (!trimmed || currentTags.some(t => t.toLowerCase() === trimmed)) return;
+    if (isSaving) return;
+    const trimmed = tagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, ' ').replace(/^[-_ ]+|[-_ ]+$/g, '').trim();
+    if (!trimmed || trimmed.length > 50 || currentTags.some(t => t.toLowerCase() === trimmed)) return;
 
     const newTags = [...currentTags, trimmed];
     setInput('');
     setFocusedIndex(-1);
+    setIsSaving(true);
     onTagsChanged?.(newTags);
-    await updateTags(favoriteId, newTags);
-  }, [currentTags, favoriteId, updateTags, onTagsChanged]);
+    try {
+      await updateTags(favoriteId, newTags);
+    } catch {
+      // updateTags already shows a toast.error; revert local state
+      onTagsChanged?.(currentTags);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [currentTags, favoriteId, updateTags, onTagsChanged, isSaving]);
 
   const removeTag = useCallback(async (tagName) => {
+    if (isSaving) return;
     setRemovingTag(tagName);
+    setIsSaving(true);
     const newTags = currentTags.filter(t => t !== tagName);
     onTagsChanged?.(newTags);
-    await updateTags(favoriteId, newTags);
-    setRemovingTag(null);
-  }, [currentTags, favoriteId, updateTags, onTagsChanged]);
+    try {
+      await updateTags(favoriteId, newTags);
+    } catch {
+      // updateTags already shows a toast.error; revert local state
+      onTagsChanged?.(currentTags);
+    } finally {
+      setRemovingTag(null);
+      setIsSaving(false);
+    }
+  }, [currentTags, favoriteId, updateTags, onTagsChanged, isSaving]);
 
   const handleKeyDown = useCallback((e) => {
     const hasSuggestions = suggestions.length > 0;

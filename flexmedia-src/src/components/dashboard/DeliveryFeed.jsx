@@ -21,6 +21,7 @@ import {
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import { format, formatDistanceToNow, differenceInDays, differenceInHours, isToday, isYesterday } from 'date-fns';
+import FavoriteButton from '@/components/favorites/FavoriteButton';
 
 // ─── CSS-in-JS animations injected once ──────────────────────────────────────
 const DELIVERY_STYLES_ID = 'delivery-feed-animations';
@@ -33,6 +34,8 @@ if (typeof document !== 'undefined' && !document.getElementById(DELIVERY_STYLES_
     @keyframes df-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
     @keyframes df-backdropIn { from { opacity: 0; } to { opacity: 1; } }
     @keyframes df-imgFadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes df-partial-border { 0%, 100% { border-color: rgba(251, 146, 60, 0.5); } 50% { border-color: rgba(251, 146, 60, 1); } }
+    @keyframes df-pill-in { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
 
     .df-stat-enter { animation: df-fadeIn 0.4s ease-out both; }
     .df-stat-enter:nth-child(1) { animation-delay: 0.00s; }
@@ -42,6 +45,22 @@ if (typeof document !== 'undefined' && !document.getElementById(DELIVERY_STYLES_
     .df-stat-enter:nth-child(5) { animation-delay: 0.24s; }
     .df-stat-enter:nth-child(6) { animation-delay: 0.30s; }
 
+    .df-stat-card {
+      position: relative;
+      overflow: hidden;
+    }
+    .df-stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--df-stat-accent, hsl(var(--muted)));
+      opacity: 0.7;
+      border-radius: 0 0 2px 2px;
+    }
+
     .df-skeleton-pill {
       background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(var(--muted-foreground) / 0.08) 50%, hsl(var(--muted)) 75%);
       background-size: 200% 100%;
@@ -49,8 +68,20 @@ if (typeof document !== 'undefined' && !document.getElementById(DELIVERY_STYLES_
       border-radius: 9999px;
     }
 
+    .df-pill-enter {
+      animation: df-pill-in 0.25s ease-out both;
+    }
+    .df-pill-enter:nth-child(1) { animation-delay: 0.00s; }
+    .df-pill-enter:nth-child(2) { animation-delay: 0.08s; }
+    .df-pill-enter:nth-child(3) { animation-delay: 0.16s; }
+    .df-pill-enter:nth-child(4) { animation-delay: 0.24s; }
+
     .df-pulse-dot {
       animation: df-pulse-dot 1.5s ease-in-out infinite;
+    }
+
+    .df-partial-card {
+      animation: df-partial-border 2.5s ease-in-out infinite;
     }
 
     .df-lightbox-backdrop {
@@ -433,6 +464,12 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const started = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const isImage = file.type === 'image';
   const isVideo = file.type === 'video';
@@ -448,6 +485,7 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
     setLoading(true);
     imgLoadQueue.push(async () => {
       const url = await fetchProxyImage(proxyPath);
+      if (!mountedRef.current) return;
       if (url) setBlobUrl(url);
       setLoading(false);
     });
@@ -537,6 +575,12 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
 function LightboxThumb({ file, tonomoBase }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const started = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const canThumb = file.type === 'image' || file.type === 'video' || file.type === 'document';
 
@@ -548,6 +592,7 @@ function LightboxThumb({ file, tonomoBase }) {
     started.current = true;
     imgLoadQueue.push(async () => {
       const url = await fetchProxyImage(proxyPath);
+      if (!mountedRef.current) return;
       if (url) setBlobUrl(url);
     });
     processImgQueue();
@@ -568,6 +613,13 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
   const [index, setIndex] = useState(initialIndex);
   const file = files[index];
   const tonomoBase = project?.tonomo_deliverable_path;
+
+  // Lock body scroll while lightbox is open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
 
   useEffect(() => {
     const handler = (e) => {
@@ -591,11 +643,11 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
         </div>
         <div className="flex items-center gap-1">
           {previewUrl && previewUrl !== '#' && (
-            <button onClick={() => window.open(previewUrl, '_blank')} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Open in Dropbox" aria-label="Open in Dropbox">
+            <button onClick={() => window.open(previewUrl, '_blank')} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
               <ExternalLink className="h-4 w-4" />
             </button>
           )}
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors" aria-label="Close lightbox">
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Close lightbox">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -605,12 +657,12 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
       <div className="flex-1 flex items-center justify-center relative min-h-0 px-16" onClick={e => e.stopPropagation()}>
         {/* Nav arrows */}
         {index > 0 && (
-          <button onClick={() => setIndex(i => i - 1)} className="absolute left-3 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/80 rounded-full text-white transition-all hover:scale-105 z-10 backdrop-blur-sm" aria-label="Previous image">
+          <button onClick={() => setIndex(i => i - 1)} className="absolute left-3 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/80 rounded-full text-white transition-all hover:scale-105 z-10 backdrop-blur-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Previous image">
             <ChevronLeft className="h-6 w-6" />
           </button>
         )}
         {index < files.length - 1 && (
-          <button onClick={() => setIndex(i => i + 1)} className="absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/80 rounded-full text-white transition-all hover:scale-105 z-10 backdrop-blur-sm" aria-label="Next image">
+          <button onClick={() => setIndex(i => i + 1)} className="absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/80 rounded-full text-white transition-all hover:scale-105 z-10 backdrop-blur-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Next image">
             <ChevronRight className="h-6 w-6" />
           </button>
         )}
@@ -635,6 +687,12 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
   const [blobUrl, setBlobUrl] = useState(null);
   const [proxyLoading, setProxyLoading] = useState(false);
   const proxyStarted = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const isImage = file.type === 'image';
   const isVideo = file.type === 'video';
@@ -655,6 +713,7 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
     setProxyLoading(true);
     imgLoadQueue.push(async () => {
       const url = await fetchProxyImage(proxyPath);
+      if (!mountedRef.current) return;
       if (url) setBlobUrl(url);
       setProxyLoading(false);
     });
@@ -669,11 +728,13 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
   return (
     <button
       ref={cardRef}
+      role="listitem"
       onClick={() => {
         onOpenLightbox(folder.files, index);
       }}
-      className="group relative aspect-[4/3] rounded-lg overflow-hidden bg-muted border border-border/30 hover:ring-2 hover:ring-primary/30 transition-all"
+      className="group relative aspect-[4/3] rounded-lg overflow-hidden bg-muted border border-border/30 hover:ring-2 hover:ring-primary/30 transition-all focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1"
       title={file.name}
+      aria-label={`View ${file.name}${file.size > 0 ? ` (${fmtFileSize(file.size)})` : ''}`}
     >
       {hasVisual ? (
         <img
@@ -744,8 +805,19 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
         </div>
       </div>
 
-      {/* Hover eye icon top-right */}
-      <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+      {/* Hover actions top-right */}
+      <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        {tonomoBase && file.path && (
+          <FavoriteButton
+            filePath={tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)}
+            fileName={file.name}
+            fileType={file.type}
+            tonomoBasePath={tonomoBase}
+            propertyAddress={project?.property_address || project?.title}
+            size="sm"
+            className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
+          />
+        )}
         <div className="bg-black/50 backdrop-blur-sm rounded-full p-1">
           <Eye className="h-3 w-3 text-white" />
         </div>
@@ -759,6 +831,12 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const started = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const canThumb = file.type === 'image' || file.type === 'video' || file.type === 'document';
   const tonomoBase = project?.tonomo_deliverable_path;
@@ -772,6 +850,7 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
     setLoading(true);
     imgLoadQueue.push(async () => {
       const url = await fetchProxyImage(proxyPath);
+      if (!mountedRef.current) return;
       if (url) setBlobUrl(url);
       setLoading(false);
     });
@@ -821,6 +900,20 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
           </div>
         );
       })()}
+      {/* Favorite button top-right on hover */}
+      {tonomoBase && file.path && (
+        <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+          <FavoriteButton
+            filePath={tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)}
+            fileName={file.name}
+            fileType={file.type}
+            tonomoBasePath={tonomoBase}
+            propertyAddress={project?.property_address || project?.title}
+            size="sm"
+            className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
+          />
+        </div>
+      )}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-colors">
         <p className="text-white text-[9px] truncate">{file.name}</p>
         <div className="flex items-center gap-1.5 text-[7px] text-white/60">
@@ -870,7 +963,7 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFi
       </div>
 
       {/* Thumbnail grid */}
-      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2" role="list" aria-label={`${folder.name} gallery`}>
         {folder.files.map((file, i) => (
           <LazyThumbFileCard
             key={file.path || i}
@@ -894,8 +987,10 @@ const FULL_DELIVERY_STAGES = ['delivered'];
 const ALL_DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
 
 function isPartialDelivery(project) {
-  // A partial delivery is any project with a deliverable link whose status
-  // is NOT yet fully delivered (includes ready_for_partial, in_revision, etc.)
+  // A partial delivery is any project whose status indicates it's still in progress.
+  // This includes ready_for_partial and in_revision stages, regardless of link presence.
+  if (project.status === 'ready_for_partial' || project.status === 'in_revision') return true;
+  // Also treat as partial if status is not fully delivered but has a deliverable link
   return !FULL_DELIVERY_STAGES.includes(project.status) && !!project.tonomo_deliverable_link;
 }
 
@@ -953,7 +1048,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
       // Report file count to parent — used to hide empty cards
       if (onFileCountKnown) onFileCountKnown(project.id, allFiles.length);
     });
-  }, [dropboxSource, isShareUrl]);
+  }, [dropboxSource, isShareUrl, deliverablePath]);
 
   const handleRefresh = async (e) => {
     e.stopPropagation();
@@ -961,6 +1056,15 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
     setLoadingMedia(true);
     thumbCache.delete(dropboxSource);
     pendingRequests.delete(dropboxSource);
+    // Clear stale image blob cache entries for this project's files
+    if (deliverablePath) {
+      for (const key of [...imgBlobCache.keys()]) {
+        if (key.includes(deliverablePath)) {
+          URL.revokeObjectURL(imgBlobCache.get(key));
+          imgBlobCache.delete(key);
+        }
+      }
+    }
     const result = await fetchMediaFeed(dropboxSource, isShareUrl, deliverablePath);
     if (!mountedRef.current) return;
     setMediaResult(result);
@@ -998,14 +1102,16 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
     <div className={cn(
       'border rounded-xl overflow-hidden transition-all duration-200 bg-card hover:shadow-lg hover:-translate-y-[1px]',
       'border-l-[3px]',
-      isPartial ? 'border-l-orange-400' : project.status === 'delivered' ? 'border-l-emerald-400' : 'border-l-blue-400',
-      isNew && 'ring-2 ring-green-300 ring-opacity-50'
+      isPartial ? 'border-l-orange-400 df-partial-card' : project.status === 'delivered' ? 'border-l-emerald-400' : 'border-l-blue-400',
+      isNew && 'ring-2 ring-green-300 ring-opacity-50',
+      expanded && 'shadow-md'
     )}>
       <button
         onClick={() => setExpanded(e => !e)}
         className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset rounded-xl"
         aria-expanded={expanded}
         aria-controls={`delivery-panel-${project.id}`}
+        aria-label={`${projectTitle(project)} delivery${isPartial ? ' (in progress)' : ''} \u2014 ${expanded ? 'collapse' : 'expand'} details`}
       >
         <div className="flex items-start gap-3 p-4">
           <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5', isPartial ? 'bg-orange-100' : project.status === 'delivered' ? 'bg-emerald-100' : 'bg-blue-100')}>
@@ -1047,42 +1153,38 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
                 {/* Skeleton pill placeholders while gallery is loading */}
                 {loadingMedia ? (
                   <>
-                    <div className="df-skeleton-pill h-5 w-24" />
-                    <div className="df-skeleton-pill h-5 w-20" style={{ animationDelay: '0.2s' }} />
-                    <div className="df-skeleton-pill h-5 w-16" style={{ animationDelay: '0.4s' }} />
+                    <div className="df-skeleton-pill h-5 w-24" aria-hidden="true" />
+                    <div className="df-skeleton-pill h-5 w-20" style={{ animationDelay: '0.2s' }} aria-hidden="true" />
+                    <div className="df-skeleton-pill h-5 w-16" style={{ animationDelay: '0.4s' }} aria-hidden="true" />
+                    <span className="sr-only">Loading file information...</span>
                   </>
                 ) : mediaResult?.folders?.length > 0 ? (
                   /* Folder-based pills from Dropbox gallery (preferred source) */
                   <>
-                    {mediaResult.folders.filter(f => f.files?.length > 0).map(folder => {
+                    {mediaResult.folders.filter(f => f.files?.length > 0).map((folder, idx) => {
                       const style = getFolderStyle(folder.name);
                       const FIcon = style.icon;
                       return (
-                        <Badge key={folder.name} className={cn('text-[10px] gap-1 border', style.bg, style.color)}>
+                        <Badge key={folder.name} className={cn('df-pill-enter text-[10px] gap-1 border', style.bg, style.color)} style={{ animationDelay: `${idx * 0.08}s` }}>
                           <FIcon className="h-2.5 w-2.5" />{folder.files.length} {folder.name}
                         </Badge>
                       );
                     })}
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="df-pill-enter text-[10px] text-muted-foreground" style={{ animationDelay: `${(mediaResult.folders.filter(f => f.files?.length > 0).length) * 0.08}s` }}>
                       {allGalleryFiles.length} files
                     </span>
                   </>
-                ) : !mediaResult && totalFileCount > 0 ? (
-                  /* Fallback: generic type pills from tonomo_delivered_files (only when gallery never loaded) */
+                ) : totalFileCount > 0 ? (
+                  /* Fallback: generic type pills from tonomo_delivered_files (when gallery has no folders or never loaded) */
                   <>
-                    {Object.entries(fileTypeCounts).filter(([_, c]) => c > 0).map(([type, count]) => {
+                    {Object.entries(fileTypeCounts).filter(([_, c]) => c > 0).map(([type, count], idx) => {
                       const cfg = TYPE_CONFIG[type]; const Icon = cfg.icon;
-                      return <Badge key={type} className={cn('text-[10px] gap-1', cfg.color)}><Icon className="h-2.5 w-2.5" />{count} {cfg.label}</Badge>;
+                      return <Badge key={type} className={cn('df-pill-enter text-[10px] gap-1', cfg.color)} style={{ animationDelay: `${idx * 0.08}s` }}><Icon className="h-2.5 w-2.5" />{count} {cfg.label}</Badge>;
                     })}
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="df-pill-enter text-[10px] text-muted-foreground">
                       {totalFileCount} files
                     </span>
                   </>
-                ) : mediaResult && allGalleryFiles.length > 0 ? (
-                  /* Gallery loaded but folders array was empty — show total count */
-                  <span className="text-[10px] text-muted-foreground">
-                    {allGalleryFiles.length} files
-                  </span>
                 ) : null}
               </div>
             )}
@@ -1133,10 +1235,11 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
         <div className="border-t px-4 py-3">
           {/* Priority: Dropbox API gallery > delivered_files fallback */}
           {loadingMedia ? (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2" role="status" aria-label="Loading gallery">
               {Array.from({ length: 8 }).map((_, i) => (
-                <div key={i} className="aspect-[4/3] bg-muted rounded-lg animate-pulse" />
+                <div key={i} className="aspect-[4/3] bg-muted rounded-lg animate-pulse" aria-hidden="true" />
               ))}
+              <span className="sr-only">Loading gallery thumbnails...</span>
             </div>
           ) : mediaResult?.folders?.length > 0 ? (
             <div className="space-y-4">
@@ -1302,12 +1405,32 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
             </div>
           ) : dropboxSource ? (
             /* Case 4: Dropbox source exists but nothing returned */
-            <div className="text-center py-4 text-xs text-muted-foreground">
-              No files found in Dropbox — <a href={deliverableLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">open in Dropbox</a>
+            <div className="flex flex-col items-center py-8 gap-2">
+              <div className="w-10 h-10 rounded-xl bg-muted/60 flex items-center justify-center">
+                <FolderOpen className="h-5 w-5 text-muted-foreground/40" />
+              </div>
+              <p className="text-sm font-medium text-muted-foreground">No files found yet</p>
+              <p className="text-xs text-muted-foreground/60 max-w-xs text-center">The delivery folder exists but appears empty. Files may still be uploading.</p>
+              <div className="flex items-center gap-2 mt-1">
+                <button onClick={handleRefresh} className="text-xs text-primary hover:underline flex items-center gap-1">
+                  <RefreshCw className="h-3 w-3" /> Refresh
+                </button>
+                {deliverableLink && (
+                  <a href={deliverableLink} target="_blank" rel="noopener noreferrer" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+                    <ExternalLink className="h-3 w-3" /> Open in Dropbox
+                  </a>
+                )}
+              </div>
             </div>
           ) : (
             /* Case 5: No data at all */
-            <div className="text-center py-4 text-xs text-muted-foreground">No delivery data available</div>
+            <div className="flex flex-col items-center py-8 gap-2">
+              <div className="w-10 h-10 rounded-xl bg-muted/60 flex items-center justify-center">
+                <Inbox className="h-5 w-5 text-muted-foreground/40" />
+              </div>
+              <p className="text-sm font-medium text-muted-foreground">No delivery data available</p>
+              <p className="text-xs text-muted-foreground/60 max-w-xs text-center">This project does not have a delivery folder linked yet.</p>
+            </div>
           )}
         </div>
       )}
@@ -1413,10 +1536,17 @@ export default function DeliveryFeed() {
         if (aDelivered && !bDelivered) return -1;
         if (!aDelivered && bDelivered) return 1;
         // Within the same group, sort by date descending, then by id for stability
-        const dateDiff = new Date(fixTimestamp(b.tonomo_delivered_at || b.updated_date || '')) - new Date(fixTimestamp(a.tonomo_delivered_at || a.updated_date || ''));
-        if (dateDiff !== 0) return dateDiff;
+        const aDate = a.tonomo_delivered_at || a.updated_date;
+        const bDate = b.tonomo_delivered_at || b.updated_date;
+        // Handle missing dates: projects with dates come before those without
+        if (aDate && !bDate) return -1;
+        if (!aDate && bDate) return 1;
+        if (aDate && bDate) {
+          const dateDiff = new Date(fixTimestamp(bDate)) - new Date(fixTimestamp(aDate));
+          if (dateDiff !== 0) return dateDiff;
+        }
         // Stable tiebreaker: compare by id so order is deterministic across re-renders
-        return (a.id || '').localeCompare(b.id || '');
+        return String(a.id || '').localeCompare(String(b.id || ''));
       });
   }, [allProjects, dateFilter, agencyFilter, search]);
 
@@ -1482,21 +1612,21 @@ export default function DeliveryFeed() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { label: 'Delivered today', value: stats.today, icon: Zap, accent: 'text-green-600', bg: 'bg-green-50' },
-          { label: 'Total deliveries', value: stats.total, icon: Package, accent: 'text-foreground', bg: 'bg-muted/50' },
-          { label: 'Total files', value: stats.totalFiles.toLocaleString(), icon: Camera, accent: 'text-foreground', bg: 'bg-blue-50' },
-          { label: 'Revenue', value: fmtRevenue(stats.totalRevenue), icon: DollarSign, accent: 'text-emerald-600', bg: 'bg-emerald-50' },
-          { label: 'Paid', value: `${stats.paidCount}/${stats.total}`, icon: CreditCard, accent: stats.paidCount === stats.total ? 'text-green-600' : 'text-orange-500', bg: stats.paidCount === stats.total ? 'bg-green-50' : 'bg-orange-50' },
-          { label: 'Avg turnaround', value: stats.avgTurnaroundHrs != null ? (stats.avgTurnaroundHrs < 24 ? `${stats.avgTurnaroundHrs}h` : `${Math.round(stats.avgTurnaroundHrs / 24)}d`) : '—', icon: Timer, accent: 'text-blue-600', bg: 'bg-blue-50' },
+          { label: 'Delivered today', value: stats.today, icon: Zap, accent: 'text-green-600', bg: 'bg-green-50', bar: '#22c55e' },
+          { label: 'Total deliveries', value: stats.total, icon: Package, accent: 'text-foreground', bg: 'bg-muted/50', bar: 'hsl(var(--muted-foreground))' },
+          { label: 'Total files', value: stats.totalFiles.toLocaleString(), icon: Camera, accent: 'text-blue-600', bg: 'bg-blue-50', bar: '#3b82f6' },
+          { label: 'Revenue', value: fmtRevenue(stats.totalRevenue), icon: DollarSign, accent: 'text-emerald-600', bg: 'bg-emerald-50', bar: '#10b981' },
+          { label: 'Paid', value: `${stats.paidCount}/${stats.total}`, icon: CreditCard, accent: stats.paidCount === stats.total ? 'text-green-600' : 'text-orange-500', bg: stats.paidCount === stats.total ? 'bg-green-50' : 'bg-orange-50', bar: stats.paidCount === stats.total ? '#22c55e' : '#f97316' },
+          { label: 'Avg turnaround', value: stats.avgTurnaroundHrs != null ? (stats.avgTurnaroundHrs < 24 ? `${stats.avgTurnaroundHrs}h` : `${Math.round(stats.avgTurnaroundHrs / 24)}d`) : '\u2014', icon: Timer, accent: 'text-blue-600', bg: 'bg-blue-50', bar: '#3b82f6' },
         ].map((s, i) => (
-          <Card key={i} className="df-stat-enter p-3 hover:shadow-md transition-shadow duration-200">
+          <Card key={i} className="df-stat-enter df-stat-card p-3 hover:shadow-md transition-shadow duration-200" style={{ '--df-stat-accent': s.bar }}>
             <div className="flex items-center gap-2.5">
-              <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', s.bg)}>
+              <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center shrink-0', s.bg)}>
                 <s.icon className={cn('h-4 w-4', s.accent || 'text-muted-foreground')} />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className={cn('text-lg font-bold leading-tight tabular-nums', s.accent)}>{s.value}</div>
-                <div className="text-[9px] text-muted-foreground uppercase tracking-wider">{s.label}</div>
+                <div className="text-[9px] text-muted-foreground uppercase tracking-wider leading-tight">{s.label}</div>
               </div>
             </div>
           </Card>
@@ -1545,17 +1675,29 @@ export default function DeliveryFeed() {
       </div>
 
       {loading ? (
-        <div className="space-y-3">{[...Array(4)].map((_, i) => <div key={i} className="h-24 rounded-xl border border-border/30 df-skeleton-pill" style={{ animationDelay: `${i * 0.1}s`, borderRadius: '0.75rem' }} />)}</div>
+        <div className="space-y-3" role="status" aria-label="Loading deliveries">
+          {[...Array(4)].map((_, i) => <div key={i} className="h-24 rounded-xl border border-border/30 df-skeleton-pill" style={{ animationDelay: `${i * 0.1}s`, borderRadius: '0.75rem' }} />)}
+          <span className="sr-only">Loading delivery feed...</span>
+        </div>
       ) : deliveries.length === 0 ? (
         <Card className="p-16 text-center border-dashed">
           <div className="w-14 h-14 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto mb-4">
-            <Inbox className="h-7 w-7 text-muted-foreground/40" />
-          </div>
-          <p className="text-sm font-medium text-muted-foreground">No deliveries found</p>
-          <p className="text-xs text-muted-foreground/60 mt-1.5 max-w-xs mx-auto">
             {search || agencyFilter !== 'all'
-              ? 'Try adjusting your search terms or filters to find what you are looking for.'
-              : 'Deliveries will appear here automatically when Tonomo marks a booking as delivered.'}
+              ? <Search className="h-7 w-7 text-muted-foreground/40" />
+              : <Inbox className="h-7 w-7 text-muted-foreground/40" />
+            }
+          </div>
+          <p className="text-base font-semibold text-muted-foreground">
+            {search || agencyFilter !== 'all' ? 'No matching deliveries' : 'No deliveries yet'}
+          </p>
+          <p className="text-xs text-muted-foreground/60 mt-1.5 max-w-sm mx-auto leading-relaxed">
+            {search
+              ? `No results for "${search}". Try a different search term or broaden your filters.`
+              : agencyFilter !== 'all'
+                ? 'No deliveries found for this agency in the selected time range.'
+                : dateFilter !== '0' && dateFilter !== '30'
+                  ? `No deliveries in the last ${dateFilter} days. Try expanding the date range.`
+                  : 'Deliveries will appear here automatically when Tonomo marks a booking as delivered.'}
           </p>
           {(search || dateFilter !== '30' || agencyFilter !== 'all') && (
             <Button
@@ -1570,21 +1712,28 @@ export default function DeliveryFeed() {
           )}
         </Card>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-6" role="feed" aria-label={`Delivery feed, ${deliveries.length} total`}>
           {grouped.map(([dateLabel, projects]) => (
-            <div key={dateLabel}>
-              <div className="flex items-center gap-3 mb-3 py-1">
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-primary/40" />
-                  <span className="text-xs font-bold text-foreground/70 uppercase tracking-widest">{dateLabel}</span>
+            <section key={dateLabel} aria-label={`${dateLabel} deliveries`}>
+              <div className="flex items-center gap-3 mb-3 pt-1 pb-2" role="heading" aria-level="3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-2 h-2 rounded-full bg-primary/60 ring-2 ring-primary/15" />
+                  <span className="text-xs font-bold text-foreground/80 uppercase tracking-widest">{dateLabel}</span>
                 </div>
-                <div className="flex-1 h-px bg-border/60" />
-                <span className="text-[10px] text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">{projects.length} deliver{projects.length !== 1 ? 'ies' : 'y'}</span>
+                <div className="flex-1 border-b border-border/40" />
+                <span className="text-[10px] font-medium text-muted-foreground bg-muted/60 px-2.5 py-0.5 rounded-full tabular-nums">{projects.length} deliver{projects.length !== 1 ? 'ies' : 'y'}</span>
               </div>
-              <div className="space-y-2">
-                {projects.filter(p => !emptyProjectIds.has(p.id)).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} />)}
+              <div className="space-y-2" role="list">
+                {projects.filter(p => {
+                  // Don't hide cards that have deliveredFiles fallback data even if Dropbox returned 0 files
+                  if (emptyProjectIds.has(p.id)) {
+                    const hasDeliveredFallback = parseDeliveredFiles(p.tonomo_delivered_files).length > 0;
+                    return hasDeliveredFallback;
+                  }
+                  return true;
+                }).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} />)}
               </div>
-            </div>
+            </section>
           ))}
         </div>
       )}

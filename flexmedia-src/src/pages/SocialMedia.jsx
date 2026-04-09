@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { api } from "@/api/supabaseClient";
+import { LRUBlobCache, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import { formatDistanceToNow, format } from "date-fns";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -865,39 +867,50 @@ function TagManagementTab() {
     // Check for duplicate name before saving
     const duplicate = mediaTags.find(t => t.name === trimmed && t.id !== tag.id);
     if (duplicate) {
+      toast.error('Duplicate tag name', { description: `A tag named "#${trimmed}" already exists.` });
       setEditingId(null);
       return;
     }
-    await api.entities.MediaTag.update(tag.id, { name: trimmed });
-
-    // Propagate rename into all media_favorites that reference the old tag name.
-    // Without this, favorites would keep stale tag references in their tags[] array.
     try {
-      const { data: allFavs } = await api.entities.MediaFavorite.list();
-      const affectedFavs = (allFavs || []).filter(f =>
-        Array.isArray(f.tags) && f.tags.includes(tag.name)
-      );
-      await Promise.all(
-        affectedFavs.map(f =>
-          api.entities.MediaFavorite.update(f.id, {
-            tags: f.tags.map(t => t === tag.name ? trimmed : t),
-          })
-        )
-      );
-    } catch (e) {
-      console.error('Failed to propagate tag rename to favorites:', e);
-    }
+      await api.entities.MediaTag.update(tag.id, { name: trimmed });
 
-    await Promise.all([
-      refetchEntityList('MediaTag'),
-      refetchEntityList('MediaFavorite'),
-    ]);
+      // Propagate rename into all media_favorites that reference the old tag name.
+      // Without this, favorites would keep stale tag references in their tags[] array.
+      try {
+        const { data: allFavs } = await api.entities.MediaFavorite.list();
+        const affectedFavs = (allFavs || []).filter(f =>
+          Array.isArray(f.tags) && f.tags.includes(tag.name)
+        );
+        await Promise.all(
+          affectedFavs.map(f =>
+            api.entities.MediaFavorite.update(f.id, {
+              tags: f.tags.map(t => t === tag.name ? trimmed : t),
+            })
+          )
+        );
+      } catch (e) {
+        console.error('Failed to propagate tag rename to favorites:', e);
+      }
+
+      await Promise.all([
+        refetchEntityList('MediaTag'),
+        refetchEntityList('MediaFavorite'),
+      ]);
+      toast.success('Tag renamed', { description: `"#${tag.name}" renamed to "#${trimmed}".`, duration: 2500 });
+    } catch (err) {
+      toast.error('Failed to rename tag', { description: err?.message || 'Please try again.' });
+    }
     setEditingId(null);
   }, [editName, mediaTags]);
 
   const updateColor = useCallback(async (tag, color) => {
-    await api.entities.MediaTag.update(tag.id, { color });
-    await refetchEntityList('MediaTag');
+    try {
+      await api.entities.MediaTag.update(tag.id, { color });
+      await refetchEntityList('MediaTag');
+      toast.success('Tag color updated', { description: `Color changed for "#${tag.name}".`, duration: 2000 });
+    } catch (err) {
+      toast.error('Failed to update color', { description: err?.message || 'Please try again.' });
+    }
     setColorPickerOpen(null);
   }, []);
 
@@ -905,18 +918,26 @@ function TagManagementTab() {
     const trimmed = newTagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, ' ').trim();
     if (!trimmed) return;
     const existing = mediaTags.find(t => t.name === trimmed);
-    if (existing) return;
-    await api.entities.MediaTag.create({
-      name: trimmed,
-      color: newTagColor,
-      usage_count: 0,
-      created_by_id: user?.id,
-      created_by_name: user?.full_name || user?.email || 'Unknown',
-    });
-    await refetchEntityList('MediaTag');
-    setNewTagName('');
-    setNewTagColor('#3b82f6');
-    setCreating(false);
+    if (existing) {
+      toast.error('Tag already exists', { description: `"#${trimmed}" is already in the registry.` });
+      return;
+    }
+    try {
+      await api.entities.MediaTag.create({
+        name: trimmed,
+        color: newTagColor,
+        usage_count: 0,
+        created_by_id: user?.id,
+        created_by_name: user?.full_name || user?.email || 'Unknown',
+      });
+      await refetchEntityList('MediaTag');
+      toast.success('Tag created', { description: `"#${trimmed}" has been added to the registry.`, duration: 2500 });
+      setNewTagName('');
+      setNewTagColor('#3b82f6');
+      setCreating(false);
+    } catch (err) {
+      toast.error('Failed to create tag', { description: err?.message || 'Please try again.' });
+    }
   }, [newTagName, newTagColor, mediaTags, user]);
 
   const deleteTag = useCallback(async (tagId) => {
@@ -924,32 +945,37 @@ function TagManagementTab() {
     const tagRecord = mediaTags.find(t => t.id === tagId);
     const tagName = tagRecord?.name;
 
-    await api.entities.MediaTag.delete(tagId);
+    try {
+      await api.entities.MediaTag.delete(tagId);
 
-    // Remove this tag from all favorites that reference it.
-    // Without this, favorites keep ghost tag names in their tags[] array.
-    if (tagName) {
-      try {
-        const { data: allFavs } = await api.entities.MediaFavorite.list();
-        const affectedFavs = (allFavs || []).filter(f =>
-          Array.isArray(f.tags) && f.tags.includes(tagName)
-        );
-        await Promise.all(
-          affectedFavs.map(f =>
-            api.entities.MediaFavorite.update(f.id, {
-              tags: f.tags.filter(t => t !== tagName),
-            })
-          )
-        );
-      } catch (e) {
-        console.error('Failed to clean up tag references from favorites:', e);
+      // Remove this tag from all favorites that reference it.
+      // Without this, favorites keep ghost tag names in their tags[] array.
+      if (tagName) {
+        try {
+          const { data: allFavs } = await api.entities.MediaFavorite.list();
+          const affectedFavs = (allFavs || []).filter(f =>
+            Array.isArray(f.tags) && f.tags.includes(tagName)
+          );
+          await Promise.all(
+            affectedFavs.map(f =>
+              api.entities.MediaFavorite.update(f.id, {
+                tags: f.tags.filter(t => t !== tagName),
+              })
+            )
+          );
+        } catch (e) {
+          console.error('Failed to clean up tag references from favorites:', e);
+        }
       }
-    }
 
-    await Promise.all([
-      refetchEntityList('MediaTag'),
-      refetchEntityList('MediaFavorite'),
-    ]);
+      await Promise.all([
+        refetchEntityList('MediaTag'),
+        refetchEntityList('MediaFavorite'),
+      ]);
+      toast.success('Tag deleted', { description: tagName ? `"#${tagName}" has been removed.` : 'Tag removed.', duration: 2500 });
+    } catch (err) {
+      toast.error('Failed to delete tag', { description: err?.message || 'Please try again.' });
+    }
     setDeleteConfirm(null);
   }, [mediaTags]);
 
@@ -1317,14 +1343,23 @@ export default function SocialMedia() {
     }
   }, [search, typeFilter, selectedTags]);
 
-  // Unfavorite handler
+  // Unfavorite handler with confirmation
   const handleUnfavorite = useCallback(async (fav) => {
     if (!fav.id) return;
+    const displayName = fav.file_name || fav.project_title || 'this item';
+    if (!window.confirm(`Remove "${displayName}" from favorites?`)) return;
     try {
       await api.entities.MediaFavorite.delete(fav.id);
       await refetchEntityList('MediaFavorite');
+      toast.success('Removed from favorites', {
+        description: `"${displayName}" has been unfavorited.`,
+        duration: 2500,
+      });
     } catch (err) {
       console.error('Failed to unfavorite:', err);
+      toast.error('Failed to remove favorite', {
+        description: err?.message || 'Something went wrong. Please try again.',
+      });
     }
   }, []);
 
