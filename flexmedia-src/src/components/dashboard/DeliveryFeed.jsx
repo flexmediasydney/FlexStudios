@@ -568,16 +568,16 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
   }
 
   // Document / other — show placeholder with Open in Dropbox
-  const previewUrl = shareUrl && file.path ? buildDropboxPreviewUrl(shareUrl, file.path) : null;
   return (
     <div className="flex flex-col items-center gap-3 text-white/60">
       <FileText className="h-16 w-16" />
       <p className="text-sm">{file.name}</p>
-      {previewUrl && previewUrl !== '#' && (
-        <a href={previewUrl} target="_blank" rel="noopener noreferrer"
+      {shareUrl && (
+        <button
+          onClick={() => window.open(shareUrl, '_blank', 'noopener,noreferrer')}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors text-xs">
           <ExternalLink className="h-3.5 w-3.5" /> Open in Dropbox
-        </a>
+        </button>
       )}
     </div>
   );
@@ -653,7 +653,8 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
     return () => window.removeEventListener('keydown', handler);
   }, [files.length, onClose]);
   if (!file) return null;
-  const previewUrl = buildDropboxPreviewUrl(shareUrl, file.path);
+  // Use shareUrl directly (per-project Tonomo link) — always works
+  const dropboxUrl = shareUrl || null;
   const currentProxyPath = tonomoBase && file.path
     ? tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)
     : null;
@@ -672,8 +673,8 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
               <Download className="h-4 w-4" />
             </button>
           )}
-          {previewUrl && previewUrl !== '#' && (
-            <button onClick={() => window.open(previewUrl, '_blank')} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
+          {dropboxUrl && (
+            <button onClick={() => window.open(dropboxUrl, '_blank', 'noopener,noreferrer')} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
               <ExternalLink className="h-4 w-4" />
             </button>
           )}
