@@ -976,34 +976,16 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFi
 const ALL_DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
 
 /**
- * Determine delivery state for badge/styling:
+ * Primary delivery state (mutually exclusive):
  * - 'delivered': has tonomo_delivered_at (official Tonomo completion)
- * - 'request': has tonomo_delivered_at BUT newest file was uploaded AFTER delivery (revision/change request)
- * - 'partial': has files in Dropbox but NO tonomo_delivered_at (not officially delivered yet)
+ * - 'partial': has files in Dropbox but NO tonomo_delivered_at
  */
-function getDeliveryState(project, newestFileDateMap) {
-  const deliveredAt = project.tonomo_delivered_at;
-  const newestFile = newestFileDateMap?.get(project.id);
-
-  if (deliveredAt) {
-    // Check if files were uploaded AFTER the official delivery timestamp
-    if (newestFile && new Date(newestFile) > new Date(fixTimestamp(deliveredAt))) {
-      return 'request';
-    }
-    return 'delivered';
-  }
-
-  // No delivery webhook — it's a partial delivery
-  return 'partial';
-}
-
-// Backward compat
-function isPartialDelivery(project) {
-  return !project.tonomo_delivered_at && !!project.tonomo_deliverable_link;
+function getPrimaryState(project) {
+  return project.tonomo_delivered_at ? 'delivered' : 'partial';
 }
 
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
-function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newestFileDateMap }) {
+function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newestFileDateMap, projectRevisions }) {
   const [expanded, setExpanded] = useState(false);
   const [mediaResult, setMediaResult] = useState(null); // { folders: [...] } or null
   const [flatFiles, setFlatFiles] = useState([]); // backward compat for flat response
@@ -1017,9 +999,15 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
     return () => { mountedRef.current = false; };
   }, []);
 
-  const deliveryState = getDeliveryState(project, newestFileDateMap); // 'delivered' | 'partial' | 'request'
-  const isPartial = deliveryState === 'partial';
-  const isRequest = deliveryState === 'request';
+  const primaryState = getPrimaryState(project); // 'delivered' | 'partial'
+  const isPartial = primaryState === 'partial';
+  const isDelivered = primaryState === 'delivered';
+
+  // Secondary: request badge from project_revisions
+  const revData = projectRevisions || { active: [], completed: [] };
+  const hasActiveRequest = revData.active.length > 0;
+  const hasCompletedRequest = revData.completed.length > 0;
+  const hasAnyRequest = hasActiveRequest || hasCompletedRequest;
   const deliveredAt = project.tonomo_delivered_at || project.updated_date || project.created_date;
   const deliverableLink = project.tonomo_deliverable_link;
   const deliverablePath = project.tonomo_deliverable_path;
@@ -1039,18 +1027,20 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
     } catch { return null; }
   }, [project.shoot_date, project.tonomo_delivered_at]);
 
-  // Request turnaround: time from official delivery to newest file upload (revision work time)
+  // Request turnaround: time from request creation to completion (for completed requests)
   const requestTurnaroundHrs = useMemo(() => {
-    if (!isRequest || !project.tonomo_delivered_at) return null;
-    const newestFile = newestFileDateMap?.get(project.id);
-    if (!newestFile) return null;
+    if (!hasCompletedRequest) return null;
+    // Use the most recently completed request
+    const sorted = [...revData.completed].sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+    const latest = sorted[0];
+    if (!latest?.requested_date || !latest?.updated_at) return null;
     try {
-      const delivered = new Date(fixTimestamp(project.tonomo_delivered_at));
-      const newest = new Date(newestFile);
-      const hrs = differenceInHours(newest, delivered);
+      const requested = new Date(fixTimestamp(latest.requested_date));
+      const completed = new Date(fixTimestamp(latest.updated_at));
+      const hrs = differenceInHours(completed, requested);
       return hrs > 0 ? hrs : null;
     } catch { return null; }
-  }, [isRequest, project.tonomo_delivered_at, newestFileDateMap, project.id]);
+  }, [hasCompletedRequest, revData.completed]);
 
   // Determine Dropbox source -- always try Dropbox API when link exists (shows individual files)
   const dropboxSource = deliverableLink || deliverablePath || null;
@@ -1129,7 +1119,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
     <div role="article" aria-label={projectTitle(project)} className={cn(
       'border rounded-xl overflow-hidden transition-all duration-200 bg-card hover:shadow-lg hover:-translate-y-[1px]',
       'border-l-[3px]',
-      isRequest ? 'border-l-violet-400' : isPartial ? 'border-l-orange-400 df-partial-card' : deliveryState === 'delivered' ? 'border-l-emerald-400' : 'border-l-blue-400',
+      isPartial ? 'border-l-orange-400 df-partial-card' : 'border-l-emerald-400',
       isNew && 'ring-2 ring-green-300 ring-opacity-50',
       expanded && 'shadow-md'
     )}>
@@ -1138,29 +1128,23 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
         className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-inset rounded-xl"
         aria-expanded={expanded}
         aria-controls={`delivery-panel-${project.id}`}
-        aria-label={`${projectTitle(project)} delivery (${deliveryState}) \u2014 ${expanded ? 'collapse' : 'expand'} details`}
+        aria-label={`${projectTitle(project)} delivery (${primaryState}) \u2014 ${expanded ? 'collapse' : 'expand'} details`}
       >
         <div className="flex items-start gap-3 p-4">
           <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5',
-            isRequest ? 'bg-violet-100' : isPartial ? 'bg-orange-100' : deliveryState === 'delivered' ? 'bg-emerald-100' : 'bg-blue-100'
+            isPartial ? 'bg-orange-100' : 'bg-emerald-100'
           )}>
-            {isRequest
-              ? <Send className="h-5 w-5 text-violet-600" />
-              : isPartial
-                ? <Loader2 className="h-5 w-5 text-orange-600 animate-spin" />
-                : <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            {isPartial
+              ? <Loader2 className="h-5 w-5 text-orange-600 animate-spin" />
+              : <CheckCircle2 className="h-5 w-5 text-emerald-600" />
             }
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-[15px] leading-tight">{projectTitle(project)}</span>
               {isNew && <Badge className="text-[9px] bg-green-100 text-green-700 border-green-200">NEW</Badge>}
-              {isRequest ? (
-                <Badge className="text-[9px] bg-violet-100 text-violet-700 border-violet-200 gap-1">
-                  <Send className="h-2.5 w-2.5" />
-                  Request
-                </Badge>
-              ) : isPartial ? (
+              {/* Primary state badge */}
+              {isPartial ? (
                 <Badge className="text-[9px] bg-orange-100 text-orange-700 border-orange-200 gap-1.5">
                   <span className="df-pulse-dot inline-block w-1.5 h-1.5 rounded-full bg-orange-500" />
                   Partially Delivered
@@ -1169,6 +1153,19 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
                 <Badge className="text-[9px] bg-emerald-100 text-emerald-700 border-emerald-200">
                   <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />
                   Delivered
+                </Badge>
+              )}
+              {/* Secondary: request badge from project_revisions */}
+              {hasActiveRequest && (
+                <Badge className="text-[9px] bg-violet-100 text-violet-700 border-violet-200 gap-1">
+                  <Send className="h-2.5 w-2.5" />
+                  {revData.active.length} Request{revData.active.length !== 1 ? 's' : ''} In Progress
+                </Badge>
+              )}
+              {!hasActiveRequest && hasCompletedRequest && (
+                <Badge className="text-[9px] bg-blue-100 text-blue-700 border-blue-200 gap-1">
+                  <CheckCircle2 className="h-2.5 w-2.5" />
+                  {revData.completed.length} Request{revData.completed.length !== 1 ? 's' : ''} Completed
                 </Badge>
               )}
               {packageName && <Badge variant="outline" className="text-[9px] bg-muted/50">{packageName}</Badge>}
@@ -1186,7 +1183,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
               {requestTurnaroundHrs != null && (
                 <span className="flex items-center gap-1 text-violet-600">
                   <Send className="h-3 w-3" />
-                  {requestTurnaroundHrs < 24 ? `${requestTurnaroundHrs}h` : `${Math.round(requestTurnaroundHrs / 24)}d`} since delivery
+                  {requestTurnaroundHrs < 24 ? `${requestTurnaroundHrs}h` : `${Math.round(requestTurnaroundHrs / 24)}d`} request turnaround
                 </span>
               )}
               {value > 0 && <span className="font-semibold text-foreground">${value.toLocaleString()}</span>}
@@ -1499,6 +1496,25 @@ export default function DeliveryFeed() {
   const [emptyProjectIds, setEmptyProjectIds] = useState(new Set()); // Projects with 0 Dropbox files
   const [newestFileDate, setNewestFileDate] = useState(new Map()); // projectId → newest file uploaded_at
 
+  // Load project revisions for request badges
+  const { data: allRevisions = [] } = useEntityList('ProjectRevision', '-created_date');
+
+  // Build a map: projectId → { hasActive, hasCompleted, activeCount, completedCount }
+  const revisionsByProject = useMemo(() => {
+    const map = new Map();
+    allRevisions.forEach(rev => {
+      if (!rev.project_id) return;
+      if (!map.has(rev.project_id)) map.set(rev.project_id, { active: [], completed: [] });
+      const bucket = map.get(rev.project_id);
+      if (rev.status === 'completed' || rev.status === 'delivered') {
+        bucket.completed.push(rev);
+      } else if (rev.status !== 'cancelled' && rev.status !== 'rejected') {
+        bucket.active.push(rev);
+      }
+    });
+    return map;
+  }, [allRevisions]);
+
   // Favorites + tags: call once at parent level, pass helper down
   const { favorites, allTags: tagRegistry } = useFavorites();
 
@@ -1799,7 +1815,7 @@ export default function DeliveryFeed() {
                 </span>
               </div>
               <div className="space-y-2" role="list">
-                {projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} newestFileDateMap={newestFileDate} />)}
+                {projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} newestFileDateMap={newestFileDate} projectRevisions={revisionsByProject.get(p.id)} />)}
               </div>
             </section>
           ))}
