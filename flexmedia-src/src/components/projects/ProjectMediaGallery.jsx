@@ -67,8 +67,8 @@ async function fetchProxyImage(filePath, mode = 'thumb') {
       return blobUrl;
     });
     if (url) blobCache.set(key, url);
-    _loadedCount++;
-    notifyProgress();
+    // Only count thumbnail fetches toward progress (lightbox full-res fetches shouldn't inflate the count)
+    if (mode === 'thumb') { _loadedCount++; notifyProgress(); }
     return url;
   } catch { return null; }
   finally { pending.delete(key); }
@@ -943,6 +943,10 @@ export default function ProjectMediaGallery({ project }) {
     refetch();
   }, [refetch, tonomoBasePath]);
 
+  // Stable references to avoid re-registering listeners and defeating memo on every render
+  const closeLightbox = useCallback(() => setLightbox(null), []);
+  const openLightbox = useCallback((files, idx) => setLightbox({ files, index: idx }), []);
+
   if (!deliverableLink) return <NotLinkedState />;
   if (isLoading) return <MediaSkeleton />;
 
@@ -1025,7 +1029,7 @@ export default function ProjectMediaGallery({ project }) {
           tonomoBasePath={tonomoBasePath}
           gridSize={gridSize}
           getTagsForFile={getTagsForFile}
-          onOpenLightbox={(files, idx) => setLightbox({ files, index: idx })}
+          onOpenLightbox={openLightbox}
         />
       ))}
 
@@ -1035,7 +1039,7 @@ export default function ProjectMediaGallery({ project }) {
           files={lightbox.files}
           initialIndex={lightbox.index}
           tonomoBasePath={tonomoBasePath}
-          onClose={() => setLightbox(null)}
+          onClose={closeLightbox}
         />
       )}
     </div>

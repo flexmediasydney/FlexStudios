@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useFavorites } from '@/components/favorites/useFavorites';
+import { LRUBlobCache, enqueueFetch, decodeImage } from '@/utils/mediaPerf';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -112,54 +113,34 @@ if (typeof document !== 'undefined' && !document.getElementById(DELIVERY_STYLES_
   document.head.appendChild(style);
 }
 
-// ─── Proxy image loading (mirrors ProjectMediaGallery approach) ─────────────
+// ─── Proxy image loading (uses shared LRU cache + global concurrency limiter) ─
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const imgBlobCache = new Map();
+// PERF: Replaced ad-hoc Map + manual eviction with shared LRUBlobCache (max 200)
+const imgBlobCache = new LRUBlobCache(200);
 const imgPending = new Set();
-let imgActiveLoads = 0;
-const imgLoadQueue = [];
 
-function processImgQueue() {
-  while (imgActiveLoads < 8 && imgLoadQueue.length > 0) {
-    const job = imgLoadQueue.shift();
-    imgActiveLoads++;
-    job().finally(() => { imgActiveLoads--; processImgQueue(); });
-  }
-}
-
-const IMG_BLOB_CACHE_MAX = 200; // Max blob URLs to keep in memory
-
-function evictOldBlobEntries() {
-  if (imgBlobCache.size <= IMG_BLOB_CACHE_MAX) return;
-  // Map preserves insertion order — delete oldest entries first
-  const excess = imgBlobCache.size - IMG_BLOB_CACHE_MAX;
-  let removed = 0;
-  for (const [key, url] of imgBlobCache) {
-    if (removed >= excess) break;
-    URL.revokeObjectURL(url);
-    imgBlobCache.delete(key);
-    removed++;
-  }
-}
-
+// PERF: Uses global concurrency limiter + img.decode() before caching
 async function fetchProxyImage(filePath, mode = 'thumb') {
   const cacheKey = `${mode}::${filePath}`;
   if (imgBlobCache.has(cacheKey)) return imgBlobCache.get(cacheKey);
   if (imgPending.has(cacheKey)) return null;
   imgPending.add(cacheKey);
   try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: mode, file_path: filePath }),
+    const url = await enqueueFetch(async () => {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+        body: JSON.stringify({ action: mode, file_path: filePath }),
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      if (blob.size < 500) return null;
+      const blobUrl = URL.createObjectURL(blob);
+      if (mode === 'thumb') await decodeImage(blobUrl);
+      return blobUrl;
     });
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    if (blob.size < 500) return null;
-    const url = URL.createObjectURL(blob);
-    imgBlobCache.set(cacheKey, url);
-    evictOldBlobEntries();
+    if (url) imgBlobCache.set(cacheKey, url);
     return url;
   } catch { return null; }
   finally { imgPending.delete(cacheKey); }
@@ -483,13 +464,12 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
     if (cached) { setBlobUrl(cached); return; }
     started.current = true;
     setLoading(true);
-    imgLoadQueue.push(async () => {
-      const url = await fetchProxyImage(proxyPath);
+    // PERF: fetchProxyImage now handles concurrency via global limiter
+    fetchProxyImage(proxyPath).then(url => {
       if (!mountedRef.current) return;
       if (url) setBlobUrl(url);
       setLoading(false);
     });
-    processImgQueue();
   }, [isImage, isVideo, proxyPath]);
 
   // Reset when file changes
@@ -590,12 +570,10 @@ function LightboxThumb({ file, tonomoBase }) {
     const cached = imgBlobCache.get(`thumb::${proxyPath}`);
     if (cached) { setBlobUrl(cached); return; }
     started.current = true;
-    imgLoadQueue.push(async () => {
-      const url = await fetchProxyImage(proxyPath);
+    fetchProxyImage(proxyPath).then(url => {
       if (!mountedRef.current) return;
       if (url) setBlobUrl(url);
     });
-    processImgQueue();
   }, [canThumb, tonomoBase, file.path]);
 
   const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
@@ -711,13 +689,11 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
     if (cached) { setBlobUrl(cached); return; }
     proxyStarted.current = true;
     setProxyLoading(true);
-    imgLoadQueue.push(async () => {
-      const url = await fetchProxyImage(proxyPath);
+    fetchProxyImage(proxyPath).then(url => {
       if (!mountedRef.current) return;
       if (url) setBlobUrl(url);
       setProxyLoading(false);
     });
-    processImgQueue();
   }, [canThumb, tonomoBase, file.path]);
 
   const hasVisual = blobUrl || thumbnail || file.thumbnail;
@@ -1099,7 +1075,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile }) {
   const allGalleryFiles = useMemo(() => (mediaResult?.folders || []).flatMap(f => f.files), [mediaResult]);
 
   return (
-    <div className={cn(
+    <div role="article" aria-label={projectTitle(project)} className={cn(
       'border rounded-xl overflow-hidden transition-all duration-200 bg-card hover:shadow-lg hover:-translate-y-[1px]',
       'border-l-[3px]',
       isPartial ? 'border-l-orange-400 df-partial-card' : project.status === 'delivered' ? 'border-l-emerald-400' : 'border-l-blue-400',

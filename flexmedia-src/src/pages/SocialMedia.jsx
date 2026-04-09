@@ -86,46 +86,31 @@ if (typeof document !== 'undefined' && !document.getElementById(STYLE_ID)) {
 
 
 // ---- Image proxy with concurrency limiter + LRU blob cache ----
-const MAX_BLOB_CACHE = 400;
-const blobCache = new Map();
+// PERF: Reduced from 400 to 200 max entries; uses shared LRU class with proper URL.revokeObjectURL
+const blobCache = new LRUBlobCache(200);
 const pending = new Set();
-let activeLoads = 0;
-const loadQueue = [];
 
-function evictBlobCache() {
-  while (blobCache.size > MAX_BLOB_CACHE) {
-    const oldestKey = blobCache.keys().next().value;
-    const oldUrl = blobCache.get(oldestKey);
-    if (oldUrl) URL.revokeObjectURL(oldUrl);
-    blobCache.delete(oldestKey);
-  }
-}
-
-function processQueue() {
-  while (activeLoads < 8 && loadQueue.length > 0) {
-    const job = loadQueue.shift();
-    activeLoads++;
-    job().finally(() => { activeLoads--; processQueue(); });
-  }
-}
-
+// PERF: Uses global concurrency limiter + img.decode() before caching
 async function fetchProxyImage(filePath, mode = 'thumb') {
   const cacheKey = `${mode}::${filePath}`;
   if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
   if (pending.has(cacheKey)) return null;
   pending.add(cacheKey);
   try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-      body: JSON.stringify({ action: mode, file_path: filePath }),
+    const url = await enqueueFetch(async () => {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+        body: JSON.stringify({ action: mode, file_path: filePath }),
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      if (blob.size < 500) return null;
+      const blobUrl = URL.createObjectURL(blob);
+      if (mode === 'thumb') await decodeImage(blobUrl);
+      return blobUrl;
     });
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    if (blob.size < 500) return null;
-    const url = URL.createObjectURL(blob);
-    blobCache.set(cacheKey, url);
-    evictBlobCache();
+    if (url) blobCache.set(cacheKey, url);
     return url;
   } catch { return null; }
   finally { pending.delete(cacheKey); }
