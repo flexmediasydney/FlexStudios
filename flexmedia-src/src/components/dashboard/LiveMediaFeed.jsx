@@ -559,6 +559,11 @@ function MediaLightbox({ files, initialIndex, onClose }) {
               key={f.proxyPath || f.path || i}
               data-active={isActive ? "true" : undefined}
               onClick={() => setIndex(i)}
+              onMouseEnter={() => {
+                if (f.proxyPath && f.type !== 'video' && !blobCache.has(`proxy::${f.proxyPath}`)) {
+                  fetchProxyImage(f.proxyPath, 'proxy');
+                }
+              }}
               className={cn(
                 "w-14 h-10 rounded-md overflow-hidden shrink-0 border-2 transition-all duration-200",
                 isActive

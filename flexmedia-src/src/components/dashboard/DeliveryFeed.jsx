@@ -658,7 +658,10 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
       {/* Filmstrip */}
       <div className="flex gap-1.5 px-4 py-3 overflow-x-auto justify-center border-t border-white/10" onClick={e => e.stopPropagation()}>
         {files.slice(0, 40).map((f, i) => (
-          <button key={f.path || i} onClick={() => setIndex(i)} className={cn('shrink-0 w-14 h-10 rounded overflow-hidden border-2 transition-all duration-150', i === index ? 'border-white ring-1 ring-white/50 scale-105' : 'border-transparent opacity-50 hover:opacity-90')} aria-label={`View ${f.name}`}>
+          <button key={f.path || i} onClick={() => setIndex(i)} onMouseEnter={() => {
+            const pp = tonomoBase && f.path ? tonomoBase + (f.path.startsWith('/') ? f.path : '/' + f.path) : null;
+            if (pp && f.type !== 'video' && !imgBlobCache.has(`proxy::${pp}`)) fetchProxyImage(pp, 'proxy');
+          }} className={cn('shrink-0 w-14 h-10 rounded overflow-hidden border-2 transition-all duration-150', i === index ? 'border-white ring-1 ring-white/50 scale-105' : 'border-transparent opacity-50 hover:opacity-90')} aria-label={`View ${f.name}`}>
             <LightboxThumb file={f} tonomoBase={tonomoBase} />
           </button>
         ))}

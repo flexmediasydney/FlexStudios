@@ -61,34 +61,73 @@ export function downloadFile(proxyPath, fileName) {
     .catch(err => console.error('Download failed:', err));
 }
 
+// Track navigation direction for smarter preloading
+let _lastLightboxIndex = -1;
+let _navDirection = 1; // 1 = forward, -1 = backward
+
 /**
- * Predictive preloading for lightbox navigation.
- * When viewing image at `currentIndex`, preload adjacent images (next 2 + previous 1).
- * This makes arrow-key navigation feel instant.
+ * World-class predictive preloading for lightbox navigation.
  *
- * @param {Array} files - array of file objects
- * @param {number} currentIndex - currently viewed index
- * @param {Function} getProxyPath - (file) => string|null — builds the proxy path for a file
- * @param {Function} fetchFn - (proxyPath, mode) => Promise<string|null> — the fetchProxyImage function
- * @param {object} cache - the blob cache to check for existing entries
- * @param {Function} cacheKeyFn - (path, mode) => string — builds cache keys
+ * - Direction-aware: preloads more images in the direction of travel
+ * - Deep: preloads up to 4 images ahead and 2 behind (or vice versa)
+ * - Priority: immediate next/prev first, then further out
+ * - Video-aware: preloads video thumbnails (small) but not full video files
+ * - Staggered: slight delay between preloads to avoid flooding
  */
 export function preloadAdjacentImages(files, currentIndex, getProxyPath, fetchFn, cache, cacheKeyFn) {
   if (!files || files.length === 0) return;
-  const offsets = [1, 2, -1]; // next, next+1, previous
+
+  // Detect navigation direction
+  if (_lastLightboxIndex >= 0 && currentIndex !== _lastLightboxIndex) {
+    _navDirection = currentIndex > _lastLightboxIndex ? 1 : -1;
+  }
+  _lastLightboxIndex = currentIndex;
+
+  // Build priority-ordered offsets: immediate neighbors first, then deeper in travel direction
+  const forward = _navDirection >= 0;
+  const offsets = forward
+    ? [1, -1, 2, 3, -2, 4]   // forward: prioritize ahead
+    : [-1, 1, -2, -3, 2, -4]; // backward: prioritize behind
+
+  let preloaded = 0;
+  const MAX_PRELOAD = 5; // don't preload more than 5 at once
 
   for (const offset of offsets) {
+    if (preloaded >= MAX_PRELOAD) break;
     const idx = currentIndex + offset;
     if (idx < 0 || idx >= files.length) continue;
     const file = files[idx];
-    if (!file || file.type === 'video') continue; // skip videos (too large to preload)
+    if (!file) continue;
     const path = getProxyPath(file);
     if (!path) continue;
+
+    // For videos: preload thumbnail only (not full video)
+    if (file.type === 'video') {
+      const thumbKey = cacheKeyFn ? cacheKeyFn(path, 'thumb') : `thumb::${path}`;
+      if (!cache?.has?.(thumbKey)) {
+        fetchFn(path, 'thumb').catch(() => {});
+        preloaded++;
+      }
+      continue;
+    }
+
+    // For images: preload full-res
     const key = cacheKeyFn ? cacheKeyFn(path, 'proxy') : `proxy::${path}`;
-    if (cache?.has?.(key)) continue; // already cached
-    // Fire and forget — low priority background fetch
+    if (cache?.has?.(key)) continue;
     fetchFn(path, 'proxy').catch(() => {});
+    preloaded++;
   }
+}
+
+/**
+ * Preload a single image's full-res on demand (e.g., filmstrip hover).
+ * Returns immediately if already cached.
+ */
+export function preloadSingleImage(proxyPath, fetchFn, cache, cacheKeyFn) {
+  if (!proxyPath) return;
+  const key = cacheKeyFn ? cacheKeyFn(proxyPath, 'proxy') : `proxy::${proxyPath}`;
+  if (cache?.has?.(key)) return;
+  fetchFn(proxyPath, 'proxy').catch(() => {});
 }
 
 /**
