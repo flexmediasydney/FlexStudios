@@ -1614,14 +1614,24 @@ export default function DeliveryFeed() {
   }, [allProjects]);
 
   const stats = useMemo(() => {
-    const today = deliveries.filter(p => p.tonomo_delivered_at && isToday(new Date(fixTimestamp(p.tonomo_delivered_at)))).length;
-    const totalFiles = deliveries.reduce((s, p) => s + deliveredFileCount(p), 0);
-    const totalRevenue = deliveries.reduce((s, p) => s + projectRevenue(p), 0);
-    const paidCount = deliveries.filter(p => p.tonomo_payment_status === 'paid').length;
+    // Filter to only visible (non-empty) deliveries for accurate counts
+    const visible = deliveries.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0);
+
+    // "Delivered today" = projects with files uploaded today OR tonomo_delivered_at today
+    const today = visible.filter(p => {
+      const fileDate = newestFileDate.get(p.id);
+      if (fileDate && isToday(new Date(fileDate))) return true;
+      if (p.tonomo_delivered_at && isToday(new Date(fixTimestamp(p.tonomo_delivered_at)))) return true;
+      return false;
+    }).length;
+
+    const totalFiles = visible.reduce((s, p) => s + deliveredFileCount(p), 0);
+    const totalRevenue = visible.reduce((s, p) => s + projectRevenue(p), 0);
+    const paidCount = visible.filter(p => p.tonomo_payment_status === 'paid').length;
 
     let turnaroundSum = 0;
     let turnaroundCount = 0;
-    deliveries.forEach(p => {
+    visible.forEach(p => {
       if (p.shoot_date && p.tonomo_delivered_at) {
         try {
           const hrs = differenceInHours(new Date(fixTimestamp(p.tonomo_delivered_at)), new Date(fixTimestamp(p.shoot_date)));
@@ -1631,8 +1641,8 @@ export default function DeliveryFeed() {
     });
     const avgTurnaroundHrs = turnaroundCount > 0 ? Math.round(turnaroundSum / turnaroundCount) : null;
 
-    return { today, total: deliveries.length, totalFiles, totalRevenue, paidCount, avgTurnaroundHrs };
-  }, [deliveries]);
+    return { today, total: visible.length, totalFiles, totalRevenue, paidCount, avgTurnaroundHrs };
+  }, [deliveries, emptyProjectIds, newestFileDate]);
 
   return (
     <div className="p-6 space-y-4">
