@@ -13,7 +13,7 @@ import {
   Download, Loader2, ZoomIn, ZoomOut, ChevronDown, Inbox
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
-import { openInDropbox, downloadFile, buildProxyPath as buildProxyPathUtil } from "@/utils/mediaActions";
+import { openInDropbox, downloadFile, buildProxyPath as buildProxyPathUtil, getVideoStreamUrl } from "@/utils/mediaActions";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
@@ -229,34 +229,12 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
   const isImage = file?.type === 'image';
   const proxyPath = buildProxyPath(tonomoBasePath, file);
 
-  // Videos: download via proxy directly (bypass queue — videos are large and shouldn't wait behind thumbnails)
+  // Videos: use streaming URL (browser streams directly, instant playback)
   useEffect(() => {
     if (!isVideo || !proxyPath) { setVideoUrl(null); setVideoLoading(false); return; }
-    let stale = false;
-    setVideoLoading(true);
-    setVideoUrl(null);
-
-    (async () => {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-          body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
-        });
-        if (stale) return;
-        if (!res.ok) { setVideoLoading(false); return; }
-        const blob = await res.blob();
-        if (stale) return;
-        if (blob.size < 1000) { setVideoLoading(false); return; } // Error JSON is small
-        const url = URL.createObjectURL(blob);
-        setVideoUrl(url);
-        setVideoLoading(false);
-      } catch {
-        if (!stale) setVideoLoading(false);
-      }
-    })();
-
-    return () => { stale = true; };
+    // Instant — just set the streaming URL, browser handles buffering
+    setVideoUrl(getVideoStreamUrl(proxyPath));
+    setVideoLoading(false);
   }, [isVideo, proxyPath]);
 
   // Images: thumb immediate, full-res background upgrade

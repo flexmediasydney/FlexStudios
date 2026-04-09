@@ -4,7 +4,7 @@ import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useFavorites } from '@/components/favorites/useFavorites';
 import { LRUBlobCache, enqueueFetch, decodeImage } from '@/utils/mediaPerf';
-import { downloadFile, preloadAdjacentImages } from '@/utils/mediaActions';
+import { downloadFile, preloadAdjacentImages, getVideoStreamUrl } from "@/utils/mediaActions";
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -468,16 +468,10 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
     // Show thumbnail immediately if cached
     const thumbCached = imgBlobCache.get(`thumb::${proxyPath}`);
     if (thumbCached && !blobUrl) setBlobUrl(thumbCached);
-    // For videos: fetch full file via direct proxy (bypass queue)
+    // For videos: use streaming URL (instant, browser handles buffering)
     if (isVideo) {
-      setLoading(true);
-      fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-        body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
-      }).then(r => { if (!r.ok) throw new Error(); return r.blob(); })
-        .then(blob => { if (!mountedRef.current || blob.size < 1000) return; setBlobUrl(URL.createObjectURL(blob)); setLoading(false); })
-        .catch(() => { if (mountedRef.current) setLoading(false); });
+      setBlobUrl(getVideoStreamUrl(proxyPath));
+      setLoading(false);
       return;
     }
     // For images: fetch full-res via proxy

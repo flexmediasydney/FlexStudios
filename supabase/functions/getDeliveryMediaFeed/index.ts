@@ -500,6 +500,65 @@ Deno.serve(async (req) => {
   if (cors) return cors;
 
   if (req.method === 'GET') {
+    // GET with ?stream= param: stream a file directly for <video src="..."> usage
+    const url = new URL(req.url);
+    const streamPath = url.searchParams.get('stream');
+    if (streamPath) {
+      const token = await getAccessToken();
+      const parentShareUrl = Deno.env.get('DROPBOX_PARENT_SHARE_URL') || '';
+      const pathPrefix = Deno.env.get('DROPBOX_PARENT_PATH_PREFIX') || '';
+      if (!token || !parentShareUrl) {
+        return errResponse('CONFIG_ERROR', 'Not configured', 500, req);
+      }
+
+      let rel = streamPath;
+      if (pathPrefix && rel.startsWith(pathPrefix)) rel = rel.slice(pathPrefix.length);
+      if (!rel.startsWith('/')) rel = '/' + rel;
+
+      const arg = JSON.stringify({ url: parentShareUrl, path: rel });
+      const dbxRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
+      }, );
+
+      if (!dbxRes.ok) {
+        // Try refresh
+        try {
+          const newToken = await refreshAccessToken();
+          const retryRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${newToken}`, 'Dropbox-API-Arg': arg },
+          });
+          if (!retryRes.ok) return errResponse('STREAM_FAILED', 'Could not stream file', 502, req);
+          const ct = retryRes.headers.get('content-type') || 'application/octet-stream';
+          const cl = retryRes.headers.get('content-length');
+          const headers: Record<string, string> = {
+            ...getCorsHeaders(req),
+            'Content-Type': ct,
+            'Accept-Ranges': 'bytes',
+            'Content-Disposition': 'inline',
+            'Cache-Control': 'public, max-age=3600',
+          };
+          if (cl) headers['Content-Length'] = cl;
+          return new Response(retryRes.body, { status: 200, headers });
+        } catch {
+          return errResponse('STREAM_FAILED', 'Could not stream file', 502, req);
+        }
+      }
+
+      const ct = dbxRes.headers.get('content-type') || 'application/octet-stream';
+      const cl = dbxRes.headers.get('content-length');
+      const headers: Record<string, string> = {
+        ...getCorsHeaders(req),
+        'Content-Type': ct,
+        'Accept-Ranges': 'bytes',
+        'Content-Disposition': 'inline',
+        'Cache-Control': 'public, max-age=3600',
+      };
+      if (cl) headers['Content-Length'] = cl;
+      return new Response(dbxRes.body, { status: 200, headers });
+    }
+
     return jsonResponse({ status: 'ok', function: 'getDeliveryMediaFeed' }, 200, req);
   }
   if (req.method !== 'POST') {

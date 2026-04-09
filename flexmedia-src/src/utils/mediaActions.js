@@ -92,8 +92,21 @@ export function preloadAdjacentImages(files, currentIndex, getProxyPath, fetchFn
 }
 
 /**
- * Fetch a full-res image or video via the proxy edge function.
+ * Get a streaming URL for a video file.
+ * Returns a URL that can be used as <video src="...">.
+ * The edge function streams the file directly from Dropbox with proper headers.
+ *
+ * @param {string} proxyPath - full Dropbox path
+ * @returns {string} streaming URL
+ */
+export function getVideoStreamUrl(proxyPath) {
+  return `${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed?stream=${encodeURIComponent(proxyPath)}`;
+}
+
+/**
+ * Fetch a full-res image via the proxy edge function.
  * Returns a blob URL or null. Used by lightboxes for full-quality display.
+ * NOTE: For videos, use getVideoStreamUrl() instead (streaming, no download).
  *
  * @param {string} proxyPath - full Dropbox path
  * @returns {Promise<string|null>} blob URL

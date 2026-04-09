@@ -5,7 +5,7 @@ import { useEntityList } from "@/components/hooks/useEntityData";
 import { useFavorites } from "@/components/favorites/useFavorites";
 import { useQuery } from "@tanstack/react-query";
 import { fixTimestamp } from "@/components/utils/dateUtils";
-import { downloadFile, preloadAdjacentImages, fetchFullRes } from "@/utils/mediaActions";
+import { downloadFile, preloadAdjacentImages, fetchFullRes, getVideoStreamUrl } from "@/utils/mediaActions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -343,15 +343,11 @@ function MediaLightbox({ files, initialIndex, onClose }) {
     setTimeout(() => onClose(), 280);
   }, [onClose]);
 
+  // Videos: instant streaming URL (browser handles buffering)
   useEffect(() => {
     if (!isVideo || !proxyPath) { setVideoUrl(null); setVideoLoading(false); return; }
-    setVideoLoading(true);
-    setVideoUrl(null);
-    // Direct fetch — bypass queue for video (large files shouldn't wait behind thumbnails)
-    fetchFullRes(proxyPath).then(url => {
-      if (url) setVideoUrl(url);
-      setVideoLoading(false);
-    });
+    setVideoUrl(getVideoStreamUrl(proxyPath));
+    setVideoLoading(false);
   }, [isVideo, proxyPath]);
 
   useEffect(() => { setZoomed(false); }, [index]);
