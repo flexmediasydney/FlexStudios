@@ -639,7 +639,7 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
             <div className="flex items-center gap-2 mt-0.5">
               {item.photographerName && (
                 <Link
-                  to={createPageUrl("People") + `?search=${encodeURIComponent(item.photographerName)}`}
+                  to={item.photographerId ? createPageUrl("Users") + `?id=${item.photographerId}` : createPageUrl("People") + `?search=${encodeURIComponent(item.photographerName)}`}
                   onClick={e => e.stopPropagation()}
                   className="text-white/70 text-[10px] truncate hover:text-white hover:underline flex items-center gap-0.5"
                 >
@@ -734,7 +734,7 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
           )}
           {item.photographerName && (
             <Link
-              to={createPageUrl("People") + `?search=${encodeURIComponent(item.photographerName)}`}
+              to={item.photographerId ? createPageUrl("Users") + `?id=${item.photographerId}` : createPageUrl("People") + `?search=${encodeURIComponent(item.photographerName)}`}
               onClick={e => e.stopPropagation()}
               className="flex items-center gap-1 text-[10px] text-muted-foreground/60 truncate hover:text-primary transition-colors"
             >
