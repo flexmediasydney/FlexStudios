@@ -8,7 +8,7 @@ const VIDEO_EXTS = new Set(['mp4','mov','avi','webm','mkv','m4v','wmv']);
 const DOC_EXTS   = new Set(['pdf','ai','eps','svg','dwg']);
 
 const DBX_TIMEOUT_MS = 10_000;
-const DBX_CONTENT_TIMEOUT_MS = 30_000; // longer timeout for binary content downloads
+const DBX_CONTENT_TIMEOUT_MS = 60_000; // 60s for binary content (videos can be 100MB+)
 const SUBFOLDER_CONCURRENCY = 5;
 const MAX_PROXY_BYTES = 100 * 1024 * 1024; // 100 MB cap on proxied files
 

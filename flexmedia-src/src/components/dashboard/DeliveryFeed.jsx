@@ -540,9 +540,25 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
     );
   }
 
-  // Image display
+  // Image display — show thumb immediately with full-res upgrade indicator
   if (isImage && imgSrc) {
-    return <img src={imgSrc} alt={file.name} className="df-img-loaded max-w-full max-h-full object-contain p-4 rounded-lg" style={{ maxHeight: 'calc(100vh - 140px)' }} />;
+    const thumbOnly = loading && file.thumbnail; // showing thumb while loading full-res
+    return (
+      <div className="relative">
+        <img
+          src={imgSrc}
+          alt={file.name}
+          className={cn("df-img-loaded max-w-full max-h-full object-contain p-4 rounded-lg", thumbOnly && "blur-[1px] opacity-80")}
+          style={{ maxHeight: 'calc(100vh - 140px)' }}
+        />
+        {loading && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white/80 text-xs px-3 py-1.5 rounded-full pointer-events-none">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Loading full resolution...
+          </div>
+        )}
+      </div>
+    );
   }
   if (loading) {
     return (

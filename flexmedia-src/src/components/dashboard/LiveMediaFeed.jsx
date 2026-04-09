@@ -473,16 +473,25 @@ function MediaLightbox({ files, initialIndex, onClose }) {
         )}
 
         {isImage && imgBlobUrl && (
-          <img
-            src={imgBlobUrl}
-            alt={file.name}
-            onClick={() => setZoomed(z => !z)}
-            className={cn(
-              "max-h-full rounded-lg transition-all duration-300 select-none",
-              zoomed ? "max-w-none scale-150 cursor-zoom-out" : "max-w-full object-contain cursor-zoom-in"
+          <div className="relative">
+            <img
+              src={imgBlobUrl}
+              alt={file.name}
+              onClick={() => setZoomed(z => !z)}
+              className={cn(
+                "max-h-full rounded-lg transition-all duration-300 select-none",
+                zoomed ? "max-w-none scale-150 cursor-zoom-out" : "max-w-full object-contain cursor-zoom-in",
+                !fullResUrl && thumbUrl && "blur-[1px] opacity-80"
+              )}
+              draggable={false}
+            />
+            {!fullResUrl && thumbUrl && (
+              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white/80 text-xs px-3 py-1.5 rounded-full pointer-events-none">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading full resolution...
+              </div>
             )}
-            draggable={false}
-          />
+          </div>
         )}
         {isImage && !imgBlobUrl && (
           <div className="flex flex-col items-center gap-3 text-white/60">
