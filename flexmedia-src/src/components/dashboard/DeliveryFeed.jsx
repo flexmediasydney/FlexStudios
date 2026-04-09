@@ -794,9 +794,29 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
             className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
           />
         )}
-        <div className="bg-black/50 backdrop-blur-sm rounded-full p-1">
-          <Eye className="h-3 w-3 text-white" />
-        </div>
+        {tonomoBase && file.path && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const proxyPath = tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path);
+              fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+                body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
+              }).then(r => r.blob()).then(blob => {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = file.name;
+                a.click();
+                URL.revokeObjectURL(a.href);
+              });
+            }}
+            className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
+            title={`Download ${file.name}`}
+          >
+            <Download className="h-3 w-3" />
+          </button>
+        )}
       </div>
     </button>
   );
@@ -874,9 +894,9 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
           </div>
         );
       })()}
-      {/* Favorite button top-right on hover */}
+      {/* Hover actions top-right */}
       {tonomoBase && file.path && (
-        <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
           <FavoriteButton
             filePath={tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)}
             fileName={file.name}
@@ -886,6 +906,27 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
             size="sm"
             className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
           />
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const proxyPath = tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path);
+              fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+                body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
+              }).then(r => r.blob()).then(blob => {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = file.name;
+                a.click();
+                URL.revokeObjectURL(a.href);
+              });
+            }}
+            className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
+            title={`Download ${file.name}`}
+          >
+            <Download className="h-3 w-3" />
+          </button>
         </div>
       )}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-colors">

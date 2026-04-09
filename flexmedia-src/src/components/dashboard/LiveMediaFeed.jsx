@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  RefreshCw, Camera, Film, FileText, File, ExternalLink,
+  RefreshCw, Camera, Film, FileText, File, ExternalLink, Download,
   ImageOff, Play, Clock, Search, Building2, User, Loader2,
   AlertCircle, FolderOpen, Grid2x2, Grid3x3, LayoutGrid,
   X, ChevronLeft, ChevronRight, Star, ZoomIn, ZoomOut,
@@ -676,6 +676,28 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
               size="sm"
               className="bg-black/30 hover:bg-black/50 rounded-full p-1 text-white backdrop-blur-sm"
             />
+            {item.proxyPath && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+                    body: JSON.stringify({ action: 'proxy', file_path: item.proxyPath }),
+                  }).then(r => r.blob()).then(blob => {
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = item.name;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                  });
+                }}
+                className="bg-black/30 hover:bg-black/50 rounded-full p-1 text-white backdrop-blur-sm"
+                title={`Download ${item.name}`}
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
+            )}
             {item.projectLink && (
               <button
                 onClick={(e) => { e.stopPropagation(); safeWindowOpen(item.projectLink); }}
