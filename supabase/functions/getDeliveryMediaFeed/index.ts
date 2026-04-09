@@ -60,19 +60,86 @@ function classifyFile(name: string): string {
   return 'other';
 }
 
+// ─── Auto-refreshing Dropbox token ──────────────────────────────────
+// The access token expires every 4 hours. The refresh token never expires.
+// When a 401 is detected, we automatically refresh and retry.
+let cachedAccessToken: string | null = null;
+let refreshPromise: Promise<string> | null = null;
+
+async function getAccessToken(): Promise<string> {
+  if (cachedAccessToken) return cachedAccessToken;
+  cachedAccessToken = Deno.env.get('DROPBOX_API_TOKEN') || '';
+  return cachedAccessToken;
+}
+
+async function refreshAccessToken(): Promise<string> {
+  // Deduplicate concurrent refresh calls
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    const refreshToken = Deno.env.get('DROPBOX_REFRESH_TOKEN');
+    const appKey = Deno.env.get('DROPBOX_APP_KEY');
+    const appSecret = Deno.env.get('DROPBOX_APP_SECRET');
+
+    if (!refreshToken || !appKey || !appSecret) {
+      throw new Error('Missing DROPBOX_REFRESH_TOKEN, DROPBOX_APP_KEY, or DROPBOX_APP_SECRET');
+    }
+
+    const res = await fetch('https://api.dropboxapi.com/oauth2/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + btoa(`${appKey}:${appSecret}`),
+      },
+      body: `grant_type=refresh_token&refresh_token=${refreshToken}`,
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`Token refresh failed: ${res.status} ${txt.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    cachedAccessToken = data.access_token;
+    console.log(`Dropbox token refreshed, expires in ${data.expires_in}s`);
+    return cachedAccessToken!;
+  })();
+
+  try {
+    const token = await refreshPromise;
+    return token;
+  } finally {
+    refreshPromise = null;
+  }
+}
+
 async function dbxPost(token: string, endpoint: string, body: Record<string, unknown>) {
-  const res = await fetchWithTimeout(`${DROPBOX_API}${endpoint}`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const doRequest = async (t: string) => {
+    const res = await fetchWithTimeout(`${DROPBOX_API}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${t}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return res;
+  };
+
+  let res = await doRequest(token);
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
-    // Surface token expiry as a distinct error so callers can show a clear message
+    // Auto-refresh on 401 and retry once
     if (res.status === 401 || txt.includes('expired_access_token') || txt.includes('invalid_access_token')) {
-      throw new Error(`expired_access_token: Dropbox ${endpoint} ${res.status}`);
+      try {
+        const newToken = await refreshAccessToken();
+        res = await doRequest(newToken);
+        if (!res.ok) {
+          const txt2 = await res.text().catch(() => '');
+          throw new Error(`Dropbox ${endpoint} ${res.status}: ${txt2.slice(0, 300)}`);
+        }
+        return res.json();
+      } catch (refreshErr) {
+        throw new Error(`expired_access_token: ${refreshErr.message}`);
+      }
     }
-    // Surface rate limiting with Retry-After hint
     if (res.status === 429) {
       const retryAfter = res.headers?.get('Retry-After') || '60';
       throw new Error(`Dropbox rate limited on ${endpoint} — retry after ${retryAfter}s`);
@@ -82,11 +149,18 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
   return res.json();
 }
 
-/** Check if a failed Dropbox response indicates an expired/invalid token. */
-async function checkTokenExpiry(res: Response, req: Request): Promise<Response | null> {
+/** If response is 401, try to refresh token and return error response. */
+async function handleTokenExpiry(res: Response, req: Request): Promise<Response | null> {
   if (res.status === 401) {
     await res.body?.cancel();
-    return errResponse('TOKEN_EXPIRED', 'Dropbox token expired — contact admin', 502, req);
+    try {
+      await refreshAccessToken();
+      // Token refreshed — but we can't easily retry the binary request here.
+      // Return an error that tells the frontend to retry.
+      return errResponse('TOKEN_REFRESHED', 'Token was refreshed — please retry', 503, req);
+    } catch {
+      return errResponse('TOKEN_EXPIRED', 'Dropbox token expired and refresh failed', 502, req);
+    }
   }
   return null;
 }
@@ -298,7 +372,7 @@ Deno.serve(async (req) => {
     // but is intentionally not called here to avoid a wasted Supabase RPC round-trip
     // on every media feed request (including unauthenticated public delivery pages).
 
-    const token = Deno.env.get('DROPBOX_API_TOKEN');
+    const token = await getAccessToken();
     if (!token) return errResponse('CONFIG_ERROR', 'Dropbox integration not configured', 500, req);
 
     const parentShareUrl = Deno.env.get('DROPBOX_PARENT_SHARE_URL') || '';
@@ -358,7 +432,7 @@ Deno.serve(async (req) => {
       }
 
       // Check if the thumbnail failure is a token issue before falling back
-      const tokenErr = await checkTokenExpiry(dbxRes, req);
+      const tokenErr = await handleTokenExpiry(dbxRes, req);
       if (tokenErr) return tokenErr;
 
       // Explicit fallback: thumbnail failed, proxy the full file instead.
@@ -371,7 +445,7 @@ Deno.serve(async (req) => {
         headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': proxyArg },
       }, DBX_CONTENT_TIMEOUT_MS);
       if (!proxyRes.ok) {
-        const proxyTokenErr = await checkTokenExpiry(proxyRes, req);
+        const proxyTokenErr = await handleTokenExpiry(proxyRes, req);
         if (proxyTokenErr) return proxyTokenErr;
         await proxyRes.body?.cancel();
         return errResponse('PROXY_FAILED', 'Could not retrieve file from Dropbox', 502, req);
@@ -408,7 +482,7 @@ Deno.serve(async (req) => {
       }, DBX_CONTENT_TIMEOUT_MS);
 
       if (!dbxRes.ok) {
-        const tokenErr = await checkTokenExpiry(dbxRes, req);
+        const tokenErr = await handleTokenExpiry(dbxRes, req);
         if (tokenErr) return tokenErr;
         await dbxRes.body?.cancel();
         return errResponse('STREAM_FAILED', 'Could not stream file from Dropbox', 502, req);
@@ -448,7 +522,7 @@ Deno.serve(async (req) => {
         headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
       }, DBX_CONTENT_TIMEOUT_MS);
       if (!dbxRes.ok) {
-        const tokenErr = await checkTokenExpiry(dbxRes, req);
+        const tokenErr = await handleTokenExpiry(dbxRes, req);
         if (tokenErr) return tokenErr;
         await dbxRes.body?.cancel();
         return errResponse('PROXY_FAILED', 'Could not retrieve file from Dropbox', 502, req);

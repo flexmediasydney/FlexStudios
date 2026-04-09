@@ -163,3 +163,58 @@ export function decodeImage(url) {
     }
   });
 }
+
+
+// ─── Shared Proxy Fetch ─────────────────────────────────────────────────────
+// Centralized function for fetching media through the edge function proxy.
+// Handles caching, retry on token refresh (503), and blob URL management.
+
+const SUPABASE_URL = typeof import !== 'undefined' && import.meta?.env?.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON = typeof import !== 'undefined' && import.meta?.env?.VITE_SUPABASE_ANON_KEY || '';
+const _pending = new Set();
+
+/**
+ * Fetch a media file through the edge function proxy.
+ * @param {LRUBlobCache} cache - The blob cache to use
+ * @param {string} filePath - Full Dropbox path
+ * @param {'thumb'|'proxy'|'stream_url'} mode - Fetch mode
+ * @param {number} retries - Retry count for 503 (token refreshed)
+ * @returns {Promise<string|null>} Blob URL or null
+ */
+export async function fetchMediaProxy(cache, filePath, mode = 'thumb', retries = 1) {
+  const cacheKey = `${mode}::${filePath}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  if (_pending.has(cacheKey)) return null;
+  _pending.add(cacheKey);
+
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
+      body: JSON.stringify({ action: mode, file_path: filePath }),
+    });
+
+    // 503 = token was refreshed, retry once
+    if (res.status === 503 && retries > 0) {
+      _pending.delete(cacheKey);
+      return fetchMediaProxy(cache, filePath, mode, retries - 1);
+    }
+
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (blob.size < 500) return null;
+    const url = URL.createObjectURL(blob);
+    cache.set(cacheKey, url);
+
+    // Decode images off main thread
+    if (mode === 'thumb') {
+      try { await decodeImage(url); } catch {}
+    }
+
+    return url;
+  } catch {
+    return null;
+  } finally {
+    _pending.delete(cacheKey);
+  }
+}
