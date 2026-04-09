@@ -98,14 +98,29 @@ const GLOBAL_MAX_CONCURRENT = 12; // Max simultaneous fetches across ALL views
 let _globalActive = 0;
 const _globalQueue = [];
 
+// Safety: reset stuck counter periodically (handles unmounted component leaks)
+setInterval(() => {
+  if (_globalActive > 0 && _globalQueue.length > 0) {
+    // If queue has items waiting but active count is at max for >30s, something leaked
+    _globalActive = Math.max(0, _globalActive - 1);
+    _processGlobalQueue();
+  }
+}, 30000);
+
 function _processGlobalQueue() {
   while (_globalActive < GLOBAL_MAX_CONCURRENT && _globalQueue.length > 0) {
     const { job, resolve, reject } = _globalQueue.shift();
     _globalActive++;
+    // Add a 30s timeout to prevent permanent leak
+    const timeout = setTimeout(() => {
+      _globalActive = Math.max(0, _globalActive - 1);
+      _processGlobalQueue();
+    }, 30000);
     job()
       .then(resolve)
       .catch(reject)
       .finally(() => {
+        clearTimeout(timeout);
         _globalActive--;
         _processGlobalQueue();
       });
