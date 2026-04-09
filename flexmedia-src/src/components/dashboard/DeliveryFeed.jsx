@@ -856,6 +856,15 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
             <Download className="h-3 w-3" />
           </button>
         )}
+        {shareUrl && (
+          <button
+            onClick={(e) => { e.stopPropagation(); window.open(shareUrl, '_blank', 'noopener,noreferrer'); }}
+            className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
+            title="Open in Dropbox"
+          >
+            <ExternalLink className="h-3 w-3" />
+          </button>
+        )}
       </div>
     </button>
   );
@@ -1601,7 +1610,8 @@ export default function DeliveryFeed() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (dropboxFailCount >= 3) setDropboxWarning(true);
+      // Only show warning if a significant portion of fetches fail (not just 3 out of 40+)
+      if (dropboxFailCount >= 10) setDropboxWarning(true);
     }, 8000);
     return () => clearTimeout(timer);
   }, []);
