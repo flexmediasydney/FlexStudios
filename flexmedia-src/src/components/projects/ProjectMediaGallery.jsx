@@ -964,10 +964,11 @@ export default function ProjectMediaGallery({ project }) {
       return { folders, fetched_at: data?.fetched_at || new Date().toISOString() };
     },
     enabled: !!deliverableLink,
-    staleTime: 120_000,
-    gcTime: 10 * 60 * 1000, // PERF: keep cached data 10 min after unmount to avoid refetch on re-mount
+    staleTime: 0,             // Always treat as stale — edge function returns from server cache (~100ms)
+    gcTime: 10 * 60 * 1000,  // PERF: keep cached data 10 min after unmount to avoid refetch on re-mount
     refetchOnWindowFocus: false,
     retry: 1,
+    placeholderData: (prev) => prev, // Show previous data while refetching (stale-while-revalidate)
   });
 
   const handleRefresh = useCallback(() => {

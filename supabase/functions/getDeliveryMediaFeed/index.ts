@@ -1,4 +1,4 @@
-import { handleCors, getCorsHeaders, jsonResponse } from '../_shared/supabase.ts';
+import { handleCors, getCorsHeaders, jsonResponse, getAdminClient } from '../_shared/supabase.ts';
 
 const DROPBOX_API = 'https://api.dropboxapi.com/2';
 const DROPBOX_CONTENT = 'https://content.dropboxapi.com/2';
@@ -11,6 +11,87 @@ const DBX_TIMEOUT_MS = 10_000;
 const DBX_CONTENT_TIMEOUT_MS = 30_000; // longer timeout for binary content downloads
 const SUBFOLDER_CONCURRENCY = 5;
 const MAX_PROXY_BYTES = 100 * 1024 * 1024; // 100 MB cap on proxied files
+
+const LISTING_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const LISTING_STALE_MS = 5 * 60 * 1000;      // 5 minutes — background refresh threshold
+const THUMB_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days for thumbnails
+const THUMB_BUCKET = 'media-thumbs';
+
+// ─── Media cache helpers ────────────────────────────────────────────────────
+
+interface CacheEntry {
+  id: string;
+  cache_key: string;
+  cache_type: string;
+  data: unknown;
+  blob_path: string | null;
+  project_id: string | null;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+async function getCacheEntry(cacheKey: string): Promise<CacheEntry | null> {
+  const admin = getAdminClient();
+  const { data, error } = await admin
+    .from('media_cache')
+    .select('*')
+    .eq('cache_key', cacheKey)
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle();
+  if (error) {
+    console.warn('Cache read error:', error.message);
+    return null;
+  }
+  return data;
+}
+
+async function upsertCacheEntry(entry: {
+  cache_key: string;
+  cache_type: string;
+  data?: unknown;
+  blob_path?: string;
+  project_id?: string;
+  expires_at: string;
+}): Promise<void> {
+  const admin = getAdminClient();
+  const { error } = await admin
+    .from('media_cache')
+    .upsert(
+      {
+        ...entry,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'cache_key' }
+    );
+  if (error) console.warn('Cache write error:', error.message);
+}
+
+async function ensureThumbBucket(): Promise<void> {
+  const admin = getAdminClient();
+  const { data: buckets } = await admin.storage.listBuckets();
+  const exists = buckets?.some((b: { name: string }) => b.name === THUMB_BUCKET);
+  if (!exists) {
+    const { error } = await admin.storage.createBucket(THUMB_BUCKET, {
+      public: true,
+      fileSizeLimit: 5 * 1024 * 1024, // 5 MB max per thumbnail
+    });
+    if (error && !error.message?.includes('already exists')) {
+      console.warn('Failed to create thumb bucket:', error.message);
+    }
+  }
+}
+
+/** Convert a file_path to a safe storage key for the thumbs bucket. */
+function thumbStorageKey(filePath: string): string {
+  // Strip leading slash, replace remaining slashes with double underscores
+  return filePath.replace(/^\/+/, '').replace(/\//g, '__');
+}
+
+function isCacheStale(entry: CacheEntry): boolean {
+  const age = Date.now() - new Date(entry.updated_at).getTime();
+  return age > LISTING_STALE_MS;
+}
 
 // ─── Structured error helper ─────────────────────────────────────────────────
 
@@ -347,6 +428,71 @@ function hasValidApiKey(req: Request): boolean {
   return false;
 }
 
+// ─── Listing fetcher (extracted for reuse in cache-miss + background refresh) ─
+
+async function fetchListingFromDropbox(
+  token: string,
+  share_url: string | undefined,
+  path: string | undefined,
+  base_path: string | undefined,
+  parentShareUrl: string,
+  pathPrefix: string,
+): Promise<Record<string, unknown>> {
+  const useShared = !!share_url;
+  const listPath = useShared ? '' : ((path || '').startsWith('/') ? path! : '/' + path);
+
+  const { entries: topEntries, truncated: topTruncated } = await listAll(token, listPath, useShared ? share_url : undefined);
+
+  const subfolders: Record<string, unknown>[] = [];
+  const rootFiles: Record<string, unknown>[] = [];
+
+  for (const e of topEntries) {
+    if (e['.tag'] === 'folder') subfolders.push(e);
+    else if (e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string))) rootFiles.push(e);
+  }
+
+  const folders: { name: string; files: FileEntry[] }[] = [];
+  let anyTruncated = topTruncated;
+
+  if (rootFiles.length > 0) {
+    folders.push({
+      name: 'Root',
+      files: rootFiles.map(f => fileEntry(f, 'Root', parentShareUrl, pathPrefix, base_path)),
+    });
+  }
+
+  const subResults = await mapWithConcurrency(subfolders, SUBFOLDER_CONCURRENCY, async (sf) => {
+    const sfPath = (sf.path_display as string) || (sf.path_lower as string) || '';
+    const subPath = useShared
+      ? (sfPath ? sfPath : `/${sf.name}`)
+      : (sfPath ? sfPath : `${listPath}/${sf.name}`);
+    const { entries: subEntries, truncated: subTruncated } = await listAll(token, subPath, useShared ? share_url : undefined);
+    if (subTruncated) anyTruncated = true;
+    const files = subEntries
+      .filter((e: Record<string, unknown>) => e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string)))
+      .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, parentShareUrl, pathPrefix, base_path));
+    if (files.length === 0) return null;
+    return { name: sf.name as string, files };
+  });
+
+  for (const result of subResults) {
+    if (result) folders.push(result);
+  }
+
+  const totalFiles = folders.reduce((s, f) => s + f.files.length, 0);
+  const listing: Record<string, unknown> = {
+    folders,
+    total_files: totalFiles,
+    fetched_at: new Date().toISOString(),
+  };
+  if (anyTruncated) {
+    listing.truncated = true;
+    listing.truncated_message = `Results were capped at ${MAX_LIST_ENTRIES} entries per folder. Some files may not be shown.`;
+  }
+
+  return listing;
+}
+
 // ─── Main handler ────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -397,10 +543,49 @@ Deno.serve(async (req) => {
       return errResponse('INVALID_SHARE_URL', 'share_url must be a valid Dropbox shared link', 400, req);
     }
 
-    // ─── Action: thumb — fast thumbnail via Dropbox API ──────────────────
+    // ─── Action: invalidate_cache — clear all cache for a project ───────
+    if (action === 'invalidate_cache') {
+      const projectId = body.project_id;
+      if (!projectId) return errResponse('INVALID_PARAMS', 'project_id required for cache invalidation', 400, req);
+      const admin = getAdminClient();
+      const { error: delErr, count } = await admin
+        .from('media_cache')
+        .delete({ count: 'exact' })
+        .eq('project_id', projectId);
+      if (delErr) {
+        console.warn('Cache invalidation error:', delErr.message);
+        return errResponse('CACHE_ERROR', 'Failed to invalidate cache', 500, req);
+      }
+      console.log(`Invalidated ${count ?? 0} cache entries for project ${projectId}`);
+      return jsonResponse({ invalidated: count ?? 0 }, 200, req);
+    }
+
+    // ─── Action: thumb — cached thumbnail via Supabase Storage + Dropbox API ──
     if (action === 'thumb' && body.file_path) {
       if (!parentShareUrl) return errResponse('CONFIG_ERROR', 'Dropbox share link not configured', 500, req);
 
+      const thumbCacheKey = `thumb::${body.file_path}`;
+      const storageKey = thumbStorageKey(body.file_path);
+
+      // 1. Check if thumbnail is cached in Supabase Storage
+      const cached = await getCacheEntry(thumbCacheKey);
+      if (cached?.blob_path) {
+        const admin = getAdminClient();
+        const { data: publicUrlData } = admin.storage.from(THUMB_BUCKET).getPublicUrl(cached.blob_path);
+        if (publicUrlData?.publicUrl) {
+          // Redirect to CDN-served thumbnail — instant response
+          return new Response(null, {
+            status: 302,
+            headers: {
+              ...getCorsHeaders(req),
+              'Location': publicUrlData.publicUrl,
+              'Cache-Control': 'public, max-age=86400',
+            },
+          });
+        }
+      }
+
+      // 2. Not cached — fetch from Dropbox
       const relPath = stripPrefix(body.file_path, pathPrefix);
       const size = body.size || 'w480h320';
       const arg = JSON.stringify({
@@ -421,7 +606,46 @@ Deno.serve(async (req) => {
       }
 
       if (dbxRes.ok) {
-        return new Response(dbxRes.body, {
+        // Read the thumbnail bytes so we can both return them AND upload to storage
+        const thumbBytes = new Uint8Array(await dbxRes.arrayBuffer());
+
+        // Upload to Supabase Storage in background (don't block the response)
+        const uploadPromise = (async () => {
+          try {
+            await ensureThumbBucket();
+            const admin = getAdminClient();
+            const { error: uploadErr } = await admin.storage
+              .from(THUMB_BUCKET)
+              .upload(storageKey, thumbBytes, {
+                contentType: 'image/jpeg',
+                upsert: true,
+              });
+            if (uploadErr) {
+              console.warn('Thumb upload error:', uploadErr.message);
+              return;
+            }
+            // Store cache entry pointing to the storage path
+            await upsertCacheEntry({
+              cache_key: thumbCacheKey,
+              cache_type: 'thumbnail',
+              blob_path: storageKey,
+              project_id: body.project_id || undefined,
+              expires_at: new Date(Date.now() + THUMB_CACHE_TTL_MS).toISOString(),
+            });
+          } catch (e) {
+            console.warn('Thumb cache write failed:', e instanceof Error ? e.message : e);
+          }
+        })();
+
+        // Use waitUntil if available (Deno Deploy), otherwise just let it run
+        try {
+          // deno-lint-ignore no-explicit-any
+          (globalThis as any).EdgeRuntime?.waitUntil?.(uploadPromise);
+        } catch {
+          // Fire and forget — the response is already being sent
+        }
+
+        return new Response(thumbBytes, {
           status: 200,
           headers: {
             ...getCorsHeaders(req),
@@ -546,63 +770,73 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ─── Main: list folder contents ──────────────────────────────────────
+    // ─── Main: list folder contents (with server-side cache) ──────────────
     if (!share_url && !path) return errResponse('INVALID_PARAMS', 'share_url or path required', 400, req);
 
-    const useShared = !!share_url;
-    const listPath = useShared ? '' : (path.startsWith('/') ? path : '/' + path);
+    const listingCacheKey = `listing::${share_url || path}`;
 
-    const { entries: topEntries, truncated: topTruncated } = await listAll(token, listPath, useShared ? share_url : undefined);
+    // 1. Check media_cache for a non-expired listing
+    const cachedListing = await getCacheEntry(listingCacheKey);
+    if (cachedListing?.data) {
+      const cachedData = cachedListing.data as Record<string, unknown>;
+      cachedData.cached = true;
+      cachedData.cached_at = cachedListing.updated_at;
 
-    const subfolders: Record<string, unknown>[] = [];
-    const rootFiles: Record<string, unknown>[] = [];
+      // If cache is stale (>5 min old), trigger background Dropbox refresh
+      if (isCacheStale(cachedListing)) {
+        console.log(`Listing cache stale (key=${listingCacheKey}), triggering background refresh`);
+        const refreshPromise = (async () => {
+          try {
+            const freshListing = await fetchListingFromDropbox(
+              token, share_url, path, base_path, parentShareUrl, pathPrefix
+            );
+            await upsertCacheEntry({
+              cache_key: listingCacheKey,
+              cache_type: 'listing',
+              data: freshListing,
+              project_id: body.project_id || undefined,
+              expires_at: new Date(Date.now() + LISTING_CACHE_TTL_MS).toISOString(),
+            });
+            console.log(`Background listing refresh complete (key=${listingCacheKey})`);
+          } catch (e) {
+            console.warn('Background listing refresh failed:', e instanceof Error ? e.message : e);
+          }
+        })();
+        // Fire and forget — don't block the cached response
+        try {
+          // deno-lint-ignore no-explicit-any
+          (globalThis as any).EdgeRuntime?.waitUntil?.(refreshPromise);
+        } catch { /* ignore */ }
+      }
 
-    for (const e of topEntries) {
-      if (e['.tag'] === 'folder') subfolders.push(e);
-      else if (e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string))) rootFiles.push(e);
-    }
-
-    const folders: { name: string; files: FileEntry[] }[] = [];
-    let anyTruncated = topTruncated;
-
-    if (rootFiles.length > 0) {
-      folders.push({
-        name: 'Root',
-        files: rootFiles.map(f => fileEntry(f, 'Root', parentShareUrl, pathPrefix, base_path)),
+      return new Response(JSON.stringify(cachedData), {
+        status: 200,
+        headers: {
+          ...getCorsHeaders(req),
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=60',
+          'X-Cache': isCacheStale(cachedListing) ? 'STALE' : 'HIT',
+        },
       });
     }
 
-    // List all subfolders in parallel (concurrency limit of 5)
-    // Use path_display (or path_lower) when available for correct Dropbox path resolution
-    const subResults = await mapWithConcurrency(subfolders, SUBFOLDER_CONCURRENCY, async (sf) => {
-      const sfPath = (sf.path_display as string) || (sf.path_lower as string) || '';
-      const subPath = useShared
-        ? (sfPath ? sfPath : `/${sf.name}`)
-        : (sfPath ? sfPath : `${listPath}/${sf.name}`);
-      const { entries: subEntries, truncated: subTruncated } = await listAll(token, subPath, useShared ? share_url : undefined);
-      if (subTruncated) anyTruncated = true;
-      const files = subEntries
-        .filter((e: Record<string, unknown>) => e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string)))
-        .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, parentShareUrl, pathPrefix, base_path));
-      if (files.length === 0) return null;
-      return { name: sf.name as string, files };
+    // 2. No cache — fetch from Dropbox and store
+    const listing = await fetchListingFromDropbox(
+      token, share_url, path, base_path, parentShareUrl, pathPrefix
+    );
+
+    // Store in cache (don't block the response)
+    const cacheWritePromise = upsertCacheEntry({
+      cache_key: listingCacheKey,
+      cache_type: 'listing',
+      data: listing,
+      project_id: body.project_id || undefined,
+      expires_at: new Date(Date.now() + LISTING_CACHE_TTL_MS).toISOString(),
     });
-
-    for (const result of subResults) {
-      if (result) folders.push(result);
-    }
-
-    const totalFiles = folders.reduce((s, f) => s + f.files.length, 0);
-    const listing: Record<string, unknown> = {
-      folders,
-      total_files: totalFiles,
-      fetched_at: new Date().toISOString(),
-    };
-    // Warn the client when results were capped so they know files may be missing
-    if (anyTruncated) {
-      listing.truncated = true;
-      listing.truncated_message = `Results were capped at ${MAX_LIST_ENTRIES} entries per folder. Some files may not be shown.`;
-    }
+    try {
+      // deno-lint-ignore no-explicit-any
+      (globalThis as any).EdgeRuntime?.waitUntil?.(cacheWritePromise);
+    } catch { /* ignore */ }
 
     return new Response(JSON.stringify(listing), {
       status: 200,
@@ -610,6 +844,7 @@ Deno.serve(async (req) => {
         ...getCorsHeaders(req),
         'Content-Type': 'application/json',
         'Cache-Control': 'public, max-age=300',
+        'X-Cache': 'MISS',
       },
     });
 

@@ -179,6 +179,19 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
 
   if (Object.keys(updates).length) await entities.Project.update(project.id, updates);
 
+  // Invalidate old media cache and pre-warm with fresh data
+  if (updates.tonomo_deliverable_link || project.tonomo_deliverable_link) {
+    try {
+      await invokeFunction('getDeliveryMediaFeed', {
+        action: 'invalidate_cache',
+        project_id: project.id,
+        share_url: updates.tonomo_deliverable_link || project.tonomo_deliverable_link,
+      });
+    } catch (err: any) {
+      console.warn('Cache invalidation failed:', err.message);
+    }
+  }
+
   // Sync calendar event time when shoot date changes
   if (updates.shoot_date || updates.shoot_time) {
     try {

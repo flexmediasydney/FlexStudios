@@ -69,6 +69,20 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
   }
 
   await entities.Project.update(project.id, updates);
+
+  // Invalidate old media cache and pre-warm with fresh data
+  if (updates.tonomo_deliverable_link || project.tonomo_deliverable_link) {
+    try {
+      await invokeFunction('getDeliveryMediaFeed', {
+        action: 'invalidate_cache',
+        project_id: project.id,
+        share_url: updates.tonomo_deliverable_link || project.tonomo_deliverable_link,
+      });
+    } catch (err: any) {
+      console.warn('Cache invalidation failed:', err.message);
+    }
+  }
+
   await writeAudit(entities, {
     action: 'booking_completed', entity_type: 'Project', entity_id: project.id, operation: 'updated',
     tonomo_order_id: orderId,

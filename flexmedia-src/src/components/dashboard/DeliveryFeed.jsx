@@ -1736,17 +1736,12 @@ export default function DeliveryFeed() {
                   <span className="text-xs font-bold text-foreground/80 uppercase tracking-widest">{dateLabel}</span>
                 </div>
                 <div className="flex-1 border-b border-border/40" />
-                <span className="text-[10px] font-medium text-muted-foreground bg-muted/60 px-2.5 py-0.5 rounded-full tabular-nums">{projects.length} deliver{projects.length !== 1 ? 'ies' : 'y'}</span>
+                <span className="text-[10px] font-medium text-muted-foreground bg-muted/60 px-2.5 py-0.5 rounded-full tabular-nums">
+                  {projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).length} deliver{projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).length !== 1 ? 'ies' : 'y'}
+                </span>
               </div>
               <div className="space-y-2" role="list">
-                {projects.filter(p => {
-                  // Don't hide cards that have deliveredFiles fallback data even if Dropbox returned 0 files
-                  if (emptyProjectIds.has(p.id)) {
-                    const hasDeliveredFallback = parseDeliveredFiles(p.tonomo_delivered_files).length > 0;
-                    return hasDeliveredFallback;
-                  }
-                  return true;
-                }).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} />)}
+                {projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} />)}
               </div>
             </section>
           ))}
