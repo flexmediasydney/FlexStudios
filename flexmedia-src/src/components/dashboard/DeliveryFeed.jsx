@@ -446,16 +446,14 @@ function SkeletonGrid() {
 }
 
 // ─── LightboxImage: loads proxy blob for a single lightbox slide ─────────────
+// Copied from working Media subtab + File Feed pattern
 function LightboxImage({ file, tonomoBase, shareUrl }) {
-  const [blobUrl, setBlobUrl] = useState(null);
+  const [videoUrl, setVideoUrl] = useState(null);
+  const [fullResUrl, setFullResUrl] = useState(null);
   const [loading, setLoading] = useState(false);
-  const started = useRef(false);
   const mountedRef = useRef(true);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   const isImage = file.type === 'image';
   const isVideo = file.type === 'video';
@@ -463,67 +461,30 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
     ? tonomoBase + (file.path?.startsWith('/') ? file.path : '/' + file.path)
     : null;
 
+  // Videos: instant streaming URL (same pattern as Media subtab + File Feed)
   useEffect(() => {
-    if ((!isImage && !isVideo) || !proxyPath) return;
-    // Show thumbnail immediately if cached
-    const thumbCached = imgBlobCache.get(`thumb::${proxyPath}`);
-    if (thumbCached && !blobUrl) setBlobUrl(thumbCached);
-    // For videos: use streaming URL (instant, browser handles buffering)
-    if (isVideo) {
-      setBlobUrl(getVideoStreamUrl(proxyPath));
+    if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
+    setVideoUrl(getVideoStreamUrl(proxyPath));
+  }, [isVideo, proxyPath]);
+
+  // Images: show thumb immediately, load full-res in background
+  useEffect(() => {
+    if (!isImage || !proxyPath) { setFullResUrl(null); setLoading(false); return; }
+    setFullResUrl(null);
+    const cached = imgBlobCache.get(`proxy::${proxyPath}`);
+    if (cached) { setFullResUrl(cached); setLoading(false); return; }
+    setLoading(true);
+    fetchProxyImage(proxyPath, 'proxy').then(url => {
+      if (!mountedRef.current) return;
+      if (url) setFullResUrl(url);
       setLoading(false);
-      return;
-    }
-    // For images: fetch full-res via proxy
-    if (!started.current) {
-      started.current = true;
-      setLoading(true);
-      fetchProxyImage(proxyPath, 'proxy').then(url => {
-        if (!mountedRef.current) return;
-        if (url) setBlobUrl(url);
-        setLoading(false);
-      });
-    }
-  }, [isImage, isVideo, proxyPath]);
+    });
+  }, [isImage, proxyPath]);
 
-  // Reset when file changes
-  useEffect(() => {
-    started.current = false;
-    const cached = proxyPath
-      ? (imgBlobCache.get(`proxy::${proxyPath}`) || imgBlobCache.get(`thumb::${proxyPath}`))
-      : null;
-    setBlobUrl(cached || null);
-    setLoading(false);
-  }, [file.path, proxyPath]);
-
-  const imgSrc = blobUrl || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
-
-  // Video playback
+  // Video rendering
   if (isVideo) {
-    if (loading) {
-      return (
-        <div className="flex flex-col items-center gap-4 text-white/50">
-          <div className="relative">
-            <Film className="h-12 w-12 text-white/20" />
-            <Loader2 className="h-6 w-6 animate-spin absolute -bottom-1 -right-1 text-white/60" />
-          </div>
-          <p className="text-sm font-medium">Loading video...</p>
-          <p className="text-xs text-white/30">{file.name}</p>
-        </div>
-      );
-    }
-    if (blobUrl) {
-      return (
-        <video
-          src={blobUrl}
-          controls
-          autoPlay
-          playsInline
-          controlsList="nodownload"
-          className="max-w-full max-h-full rounded-lg shadow-2xl"
-          style={{ maxHeight: 'calc(100vh - 140px)' }}
-        />
-      );
+    if (videoUrl) {
+      return <video src={videoUrl} controls autoPlay playsInline className="max-w-full max-h-full rounded-lg shadow-2xl" style={{ maxHeight: 'calc(100vh - 140px)' }} />;
     }
     return (
       <div className="flex flex-col items-center gap-3 text-white/60">
@@ -534,47 +495,41 @@ function LightboxImage({ file, tonomoBase, shareUrl }) {
     );
   }
 
-  // Image display — show thumb immediately with full-res upgrade indicator
-  if (isImage && imgSrc) {
-    const thumbOnly = loading && file.thumbnail; // showing thumb while loading full-res
-    return (
-      <div className="relative">
-        <img
-          src={imgSrc}
-          alt={file.name}
-          className={cn("df-img-loaded max-w-full max-h-full object-contain p-4 rounded-lg", thumbOnly && "blur-[1px] opacity-80")}
-          style={{ maxHeight: 'calc(100vh - 140px)' }}
-        />
-        {loading && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white/80 text-xs px-3 py-1.5 rounded-full pointer-events-none">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Loading full resolution...
-          </div>
-        )}
-      </div>
-    );
-  }
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center gap-4 text-white/50">
+  // Image rendering — thumb → full-res with upgrade indicator
+  if (isImage) {
+    const thumbUrl = imgBlobCache.get(`thumb::${proxyPath}`) || (file.thumbnail ? `data:image/jpeg;base64,${file.thumbnail}` : null);
+    const imgSrc = fullResUrl || thumbUrl;
+    if (imgSrc) {
+      const isUpgrading = loading && !fullResUrl && thumbUrl;
+      return (
         <div className="relative">
-          <ImageIcon className="h-12 w-12 text-white/20" />
-          <Loader2 className="h-6 w-6 animate-spin absolute -bottom-1 -right-1 text-white/60" />
+          <img src={imgSrc} alt={file.name} className={cn("df-img-loaded max-w-full max-h-full object-contain p-4 rounded-lg", isUpgrading && "blur-[1px] opacity-80")} style={{ maxHeight: 'calc(100vh - 140px)' }} />
+          {isUpgrading && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white/80 text-xs px-3 py-1.5 rounded-full pointer-events-none">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading full resolution...
+            </div>
+          )}
         </div>
-        <p className="text-sm font-medium">Loading image...</p>
-        <p className="text-xs text-white/30">{file.name}</p>
-      </div>
-    );
+      );
+    }
+    if (loading) {
+      return (
+        <div className="flex flex-col items-center gap-4 text-white/50">
+          <Loader2 className="h-10 w-10 animate-spin" />
+          <p className="text-sm">Loading image...</p>
+        </div>
+      );
+    }
   }
 
-  // Document / other — show placeholder with Open in Dropbox
+  // Document / other
   return (
     <div className="flex flex-col items-center gap-3 text-white/60">
       <FileText className="h-16 w-16" />
       <p className="text-sm">{file.name}</p>
       {shareUrl && (
-        <button
-          onClick={() => window.open(shareUrl, '_blank', 'noopener,noreferrer')}
+        <button onClick={() => window.open(shareUrl, '_blank', 'noopener,noreferrer')}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors text-xs">
           <ExternalLink className="h-3.5 w-3.5" /> Open in Dropbox
         </button>
