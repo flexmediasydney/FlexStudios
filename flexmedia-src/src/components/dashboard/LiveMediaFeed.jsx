@@ -4,6 +4,7 @@ import { useEntityList } from "@/components/hooks/useEntityData";
 import { useFavorites } from "@/components/favorites/useFavorites";
 import { useQuery } from "@tanstack/react-query";
 import { fixTimestamp } from "@/components/utils/dateUtils";
+import { downloadFile } from "@/utils/mediaActions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -678,20 +679,7 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
             />
             {item.proxyPath && (
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-                    body: JSON.stringify({ action: 'proxy', file_path: item.proxyPath }),
-                  }).then(r => r.blob()).then(blob => {
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = item.name;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                  });
-                }}
+                onClick={(e) => { e.stopPropagation(); downloadFile(item.proxyPath, item.name); }}
                 className="bg-black/30 hover:bg-black/50 rounded-full p-1 text-white backdrop-blur-sm"
                 title={`Download ${item.name}`}
               >

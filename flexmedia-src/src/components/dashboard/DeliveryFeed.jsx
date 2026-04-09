@@ -3,6 +3,7 @@ import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useFavorites } from '@/components/favorites/useFavorites';
 import { LRUBlobCache, enqueueFetch, decodeImage } from '@/utils/mediaPerf';
+import { downloadFile } from '@/utils/mediaActions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -252,13 +253,16 @@ function fmtFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Build a Dropbox preview URL from shared link + filename */
+/** Build a Dropbox preview URL from shared link + filename.
+ *  Preserves rlkey so the link works without Dropbox auth. */
 function buildDropboxPreviewUrl(shareUrl, filePath) {
-  if (!shareUrl || !filePath) return shareUrl || '#';
+  if (!shareUrl) return '#';
+  if (!filePath) return shareUrl;
   const fileName = filePath.split('/').pop();
-  // Remove query params from share URL, then add preview param
   const base = shareUrl.split('?')[0];
-  return `${base}?preview=${encodeURIComponent(fileName)}`;
+  const rlMatch = shareUrl.match(/rlkey=([^&]+)/);
+  const rlPart = rlMatch ? `&rlkey=${rlMatch[1]}` : '';
+  return `${base}?preview=${encodeURIComponent(fileName)}${rlPart}`;
 }
 
 // ─── Thumbnail fetching ──────────────────────────────────────────────────────
@@ -796,21 +800,7 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
         )}
         {tonomoBase && file.path && (
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              const proxyPath = tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path);
-              fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-                body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
-              }).then(r => r.blob()).then(blob => {
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = file.name;
-                a.click();
-                URL.revokeObjectURL(a.href);
-              });
-            }}
+            onClick={(e) => { e.stopPropagation(); downloadFile(tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path), file.name); }}
             className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
             title={`Download ${file.name}`}
           >
@@ -907,21 +897,7 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
             className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
           />
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              const proxyPath = tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path);
-              fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-                body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
-              }).then(r => r.blob()).then(blob => {
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = file.name;
-                a.click();
-                URL.revokeObjectURL(a.href);
-              });
-            }}
+            onClick={(e) => { e.stopPropagation(); downloadFile(tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path), file.name); }}
             className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
             title={`Download ${file.name}`}
           >

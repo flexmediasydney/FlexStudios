@@ -12,6 +12,7 @@ import {
   Download, Loader2, ZoomIn, ZoomOut, ChevronDown, Inbox
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
+import { openInDropbox, downloadFile, buildProxyPath as buildProxyPathUtil } from "@/utils/mediaActions";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
@@ -394,7 +395,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
           )}
           {deliverableLink && (
             <button
-              onClick={() => safeWindowOpen(deliverableLink || file.preview_url)}
+              onClick={() => openInDropbox(deliverableLink)}
               className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-white/40"
               title="Open in Dropbox"
               aria-label="Open in Dropbox"
@@ -495,7 +496,7 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
             <FileIcon type={file?.type} className="h-16 w-16" />
             <span className="text-sm">{file?.name}</span>
             {deliverableLink && (
-              <Button variant="outline" size="sm" onClick={() => safeWindowOpen(deliverableLink || file.preview_url)} className="text-white border-white/30 hover:bg-white/10">
+              <Button variant="outline" size="sm" onClick={() => openInDropbox(deliverableLink)} className="text-white border-white/30 hover:bg-white/10">
                 <ExternalLink className="h-3.5 w-3.5 mr-1.5" />Open in Dropbox
               </Button>
             )}
@@ -583,7 +584,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
 
   const handleClick = () => {
     if (onClick) onClick();
-    else if (deliverableLink) safeWindowOpen(deliverableLink);
+    else if (deliverableLink) openInDropbox(deliverableLink);
   };
 
   const uploadTime = timeAgo(file.uploaded_at);
@@ -667,7 +668,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
             />
             {deliverableLink && (
               <button
-                onClick={(e) => { e.stopPropagation(); safeWindowOpen(deliverableLink || file.preview_url); }}
+                onClick={(e) => { e.stopPropagation(); openInDropbox(deliverableLink); }}
                 className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm transition-colors"
                 title="Open in Dropbox"
                 aria-label={`Open ${file.name} in Dropbox`}
@@ -677,16 +678,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, onCl
             )}
             {deliverableLink && (
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const pp = buildProxyPath(tonomoBasePath, file);
-                  if (pp) {
-                    fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-                      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-                      body: JSON.stringify({ action: 'proxy', file_path: pp }),
-                    }).then(r => r.blob()).then(blob => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file.name; a.click(); URL.revokeObjectURL(a.href); });
-                  }
-                }}
+                onClick={(e) => { e.stopPropagation(); downloadFile(buildProxyPath(tonomoBasePath, file), file.name); }}
                 className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm transition-colors"
                 title={`Download ${file.name}`}
                 aria-label={`Download ${file.name}`}
@@ -1059,7 +1051,7 @@ export default function ProjectMediaGallery({ project }) {
               </button>
             ))}
           </div>
-          <Button variant="ghost" size="sm" onClick={() => safeWindowOpen(deliverableLink)} className="text-xs h-7 px-2" aria-label="Open project folder in Dropbox">
+          <Button variant="ghost" size="sm" onClick={() => openInDropbox(deliverableLink)} className="text-xs h-7 px-2" aria-label="Open project folder in Dropbox">
             <ExternalLink className="h-3.5 w-3.5 mr-1" />Open in Dropbox
           </Button>
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isFetching} className="text-xs h-7 px-2" aria-label="Refresh media files">
