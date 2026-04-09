@@ -1215,15 +1215,15 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
               )}
               {/* Secondary: request badge from project_revisions */}
               {hasActiveRequest && (
-                <Badge className="text-[9px] bg-violet-100 text-violet-700 border-violet-200 gap-1">
-                  <Send className="h-2.5 w-2.5" />
-                  {revData.active.length} Request{revData.active.length !== 1 ? 's' : ''} In Progress
+                <Badge className="text-[9px] bg-violet-100 text-violet-700 border-violet-200 gap-1.5">
+                  <span className="df-pulse-dot inline-block w-1.5 h-1.5 rounded-full bg-violet-500" />
+                  {revData.active.length} Active Request{revData.active.length !== 1 ? 's' : ''}
                 </Badge>
               )}
               {!hasActiveRequest && hasCompletedRequest && (
                 <Badge className="text-[9px] bg-blue-100 text-blue-700 border-blue-200 gap-1">
                   <CheckCircle2 className="h-2.5 w-2.5" />
-                  {revData.completed.length} Request{revData.completed.length !== 1 ? 's' : ''} Completed
+                  {revData.completed.length} Completed Request{revData.completed.length !== 1 ? 's' : ''}
                 </Badge>
               )}
               {packageName && <Badge variant="outline" className="text-[9px] bg-muted/50">{packageName}</Badge>}

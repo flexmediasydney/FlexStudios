@@ -530,7 +530,9 @@ Deno.serve(async (req) => {
             headers: { 'Authorization': `Bearer ${newToken}`, 'Dropbox-API-Arg': arg },
           });
           if (!retryRes.ok) return errResponse('STREAM_FAILED', 'Could not stream file', 502, req);
-          const ct = retryRes.headers.get('content-type') || 'application/octet-stream';
+          const retryExt = (streamPath.split('.').pop() || '').toLowerCase();
+          const retryMime: Record<string, string> = { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', m4v: 'video/mp4' };
+          const ct = retryMime[retryExt] || retryRes.headers.get('content-type') || 'application/octet-stream';
           const cl = retryRes.headers.get('content-length');
           const headers: Record<string, string> = {
             ...getCorsHeaders(req),
@@ -546,7 +548,15 @@ Deno.serve(async (req) => {
         }
       }
 
-      const ct = dbxRes.headers.get('content-type') || 'application/octet-stream';
+      // Dropbox often returns generic application/octet-stream — override based on extension
+      const ext = (streamPath.split('.').pop() || '').toLowerCase();
+      const mimeMap: Record<string, string> = {
+        mp4: 'video/mp4', mov: 'video/quicktime', avi: 'video/x-msvideo', webm: 'video/webm',
+        mkv: 'video/x-matroska', m4v: 'video/mp4',
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+        pdf: 'application/pdf', svg: 'image/svg+xml',
+      };
+      const ct = mimeMap[ext] || dbxRes.headers.get('content-type') || 'application/octet-stream';
       const cl = dbxRes.headers.get('content-length');
       const headers: Record<string, string> = {
         ...getCorsHeaders(req),
