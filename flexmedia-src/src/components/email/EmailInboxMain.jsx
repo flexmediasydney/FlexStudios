@@ -457,10 +457,24 @@ export default function EmailInboxMain() {
   });
 
   // Delete emails mutation - subscription auto-updates UI
+  // BUG FIX: onSuccess captured stale `selectedMessages` and `threads` closures.
+  // By the time onSuccess fires, threads may have been removed by the real-time subscription,
+  // causing getAccountIdsFromThreads to return empty and breaking undo.
+  // Fix: pass undo context through the mutation data so it's captured at call time.
   const deleteEmailsMutation = useMutation({
-    mutationFn: (data) => api.functions.invoke('deleteEmails', data),
-    onSuccess: () => {
+    mutationFn: async (data) => {
+      const result = await api.functions.invoke('deleteEmails', data);
+      return { result, _undoContext: data._undoContext };
+    },
+    onSuccess: ({ _undoContext }) => {
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
+      if (_undoContext) {
+        setUndoStack(prev => [...prev, {
+          type: 'delete',
+          data: { threadIds: _undoContext.threadIds, accountIds: _undoContext.accountIds }
+        }].slice(-MAX_UNDO_STACK));
+        setRedoStack([]);
+      }
       toast.success("Emails deleted", {
         action: {
           label: "Undo",
@@ -476,60 +490,61 @@ export default function EmailInboxMain() {
         data: { threadIds, accountIds }
       });
       setSelectedMessages(new Set());
-      setRedoStack([]);
     },
     onError: () => {
       toast.error("Failed to delete emails");
     }
   });
 
+  // BUG FIX: handleUndo was reading `undoStack` and `redoStack` from the closure,
+  // but it's passed as a toast action callback which captures a stale version.
+  // Now extracts the action via functional setState so we always read the latest stack.
+  // Also: archive/visibility undo previously looked up threads from the current view,
+  // but after archiving/deleting, the thread leaves the view and the lookup fails silently.
+  // Now uses server functions with stored accountIds instead of client-side thread lookups.
   const handleUndo = async () => {
-    if (undoStack.length === 0) return;
-    const lastAction = undoStack[undoStack.length - 1];
-    // Use functional updaters to avoid stale closure issues (e.g., called from toast action)
-    pushRedoAction(lastAction);
-    setUndoStack(prev => prev.slice(0, -1));
-    
+    let actionToUndo = null;
+    setUndoStack(prev => {
+      if (prev.length === 0) return prev;
+      actionToUndo = prev[prev.length - 1];
+      return prev.slice(0, -1);
+    });
+    // actionToUndo is assigned synchronously inside the updater
+    if (!actionToUndo) return;
+    setRedoStack(prev => [...prev, actionToUndo].slice(-MAX_UNDO_STACK));
+
     // Reverse the action
-    if (lastAction.type === 'delete') {
-      // Restore deleted emails across all affected accounts
-      const acctIds = lastAction.data.accountIds || [lastAction.data.emailAccountId];
+    if (actionToUndo.type === 'delete') {
+      const acctIds = actionToUndo.data.accountIds || [actionToUndo.data.emailAccountId];
       await Promise.allSettled(acctIds.map(accId =>
         api.functions.invoke('restoreEmails', {
-          threadIds: lastAction.data.threadIds,
+          threadIds: actionToUndo.data.threadIds,
           emailAccountId: accId
         })
       ));
-    } else if (lastAction.type === 'archive') {
-      // Unarchive
+    } else if (actionToUndo.type === 'archive') {
+      // BUG FIX: use server function — thread may have left the current view
+      const acctIds = actionToUndo.data.accountIds || [];
+      await Promise.allSettled(acctIds.map(accId =>
+        api.functions.invoke('unarchiveEmails', {
+          threadIds: actionToUndo.data.threadIds,
+          emailAccountId: accId
+        })
+      ));
+    } else if (actionToUndo.type === 'visibility') {
+      // BUG FIX: use stored messageIds instead of thread lookup
+      if (actionToUndo.data.messageIds) {
+        await Promise.all(
+          actionToUndo.data.messageIds.map(msgId =>
+            api.entities.EmailMessage.update(msgId, {
+              visibility: actionToUndo.data.oldVisibility
+            })
+          )
+        );
+      }
+    } else if (actionToUndo.type === 'linkProject') {
       await Promise.all(
-        lastAction.data.threadIds.map(threadId => {
-          const thread = threads.find(t => t.threadId === threadId);
-          if (thread) {
-            return updateMessageMutation.mutateAsync({
-              messageId: thread.messages[0].id,
-              updates: { is_archived: false }
-            });
-          }
-        }).filter(Boolean)
-      );
-    } else if (lastAction.type === 'visibility') {
-      // Restore old visibility
-      await Promise.all(
-        lastAction.data.threadIds.map(threadId => {
-          const thread = threads.find(t => t.threadId === threadId);
-          if (thread) {
-            return updateMessageMutation.mutateAsync({
-              messageId: thread.messages[0].id,
-              updates: { visibility: lastAction.data.oldVisibility }
-            });
-          }
-        }).filter(Boolean)
-      );
-    } else if (lastAction.type === 'linkProject') {
-      // Unlink project
-      await Promise.all(
-        lastAction.data.messageIds.map(msgId =>
+        actionToUndo.data.messageIds.map(msgId =>
           api.entities.EmailMessage.update(msgId, {
             project_id: null,
             project_title: null,
@@ -541,46 +556,51 @@ export default function EmailInboxMain() {
     // Subscription auto-updates UI
   };
 
+  // BUG FIX: Same stale-closure fix as handleUndo + use server functions for archive/delete redo.
   const handleRedo = async () => {
-    if (redoStack.length === 0) return;
-    const action = redoStack[redoStack.length - 1];
-    // Use functional updaters to avoid stale closure issues
-    pushUndoAction(action);
-    setRedoStack(prev => prev.slice(0, -1));
-    
-    // Redo the action
-    if (action.type === 'delete') {
-      deleteEmailsMutation.mutate(action.data);
-    } else if (action.type === 'archive') {
-      Promise.all(
-        action.data.threadIds.map(threadId => {
-          const thread = threads.find(t => t.threadId === threadId);
-          if (thread) {
-            return updateMessageMutation.mutateAsync({
-              messageId: thread.messages[0].id,
-              updates: { is_archived: true }
-            });
-          }
-        }).filter(Boolean)
-      );
-    } else if (action.type === 'visibility') {
-      Promise.all(
-        action.data.threadIds.map(threadId => {
-          const thread = threads.find(t => t.threadId === threadId);
-          if (thread) {
-            return updateMessageMutation.mutateAsync({
-              messageId: thread.messages[0].id,
-              updates: { visibility: action.data.newVisibility }
-            });
-          }
-        }).filter(Boolean)
-      );
-    } else if (action.type === 'linkProject') {
-      Promise.all(
-        action.data.messageIds.map(msgId =>
+    let actionToRedo = null;
+    setRedoStack(prev => {
+      if (prev.length === 0) return prev;
+      actionToRedo = prev[prev.length - 1];
+      return prev.slice(0, -1);
+    });
+    if (!actionToRedo) return;
+    setUndoStack(prev => [...prev, actionToRedo].slice(-MAX_UNDO_STACK));
+
+    // Re-apply the action
+    if (actionToRedo.type === 'delete') {
+      const acctIds = actionToRedo.data.accountIds || [];
+      await Promise.allSettled(acctIds.map(accId =>
+        api.functions.invoke('deleteEmails', {
+          threadIds: actionToRedo.data.threadIds,
+          emailAccountId: accId,
+          permanently: false,
+        })
+      ));
+    } else if (actionToRedo.type === 'archive') {
+      const acctIds = actionToRedo.data.accountIds || [];
+      await Promise.allSettled(acctIds.map(accId =>
+        api.functions.invoke('archiveEmails', {
+          threadIds: actionToRedo.data.threadIds,
+          emailAccountId: accId,
+        })
+      ));
+    } else if (actionToRedo.type === 'visibility') {
+      if (actionToRedo.data.messageIds) {
+        await Promise.all(
+          actionToRedo.data.messageIds.map(msgId =>
+            api.entities.EmailMessage.update(msgId, {
+              visibility: actionToRedo.data.newVisibility
+            })
+          )
+        );
+      }
+    } else if (actionToRedo.type === 'linkProject') {
+      await Promise.all(
+        actionToRedo.data.messageIds.map(msgId =>
           api.entities.EmailMessage.update(msgId, {
-            project_id: action.data.projectId,
-            project_title: action.data.projectTitle,
+            project_id: actionToRedo.data.projectId,
+            project_title: actionToRedo.data.projectTitle,
             visibility: 'shared'
           })
         )
@@ -842,19 +862,25 @@ export default function EmailInboxMain() {
       // a or e = archive (only in list view, not when thread is open — thread viewer has its own handler)
       if ((e.key === 'a' || e.key === 'e') && !selectedThread && selectedMessages.size > 0 && filterView !== 'archived' && filterView !== 'deleted') {
         e.preventDefault();
+        const threadIds = Array.from(selectedMessages);
         const accountIds = Array.from(new Set(
-          Array.from(selectedMessages).map(msgId => {
+          threadIds.map(msgId => {
             const thread = currentThreads.find(t => t.threadId === msgId);
             return thread?.email_account_id;
           }).filter(Boolean)
         ));
         Promise.all(accountIds.map(accId =>
           api.functions.invoke('archiveEmails', {
-            threadIds: Array.from(selectedMessages),
+            threadIds,
             emailAccountId: accId
           })
         )).then(() => {
-          toast.success("Archived");
+          // BUG FIX: keyboard archive was not pushing to undo stack — action was irreversible
+          setUndoStack(prev => [...prev, { type: 'archive', data: { threadIds, accountIds } }].slice(-MAX_UNDO_STACK));
+          setRedoStack([]);
+          toast.success("Archived", {
+            action: { label: 'Undo', onClick: handleUndo }
+          });
           setSelectedMessages(new Set());
         });
       }
@@ -870,18 +896,21 @@ export default function EmailInboxMain() {
             return thread?.email_account_id;
           }).filter(Boolean)
         ));
-        {
-          Promise.all(accountIds.map(accId =>
-            api.functions.invoke('deleteEmails', {
-              threadIds,
-              emailAccountId: accId,
-              permanently: false
-            })
-          )).then(() => {
-            toast.success(`Deleted ${count} email${count !== 1 ? 's' : ''}`);
-            setSelectedMessages(new Set());
+        Promise.all(accountIds.map(accId =>
+          api.functions.invoke('deleteEmails', {
+            threadIds,
+            emailAccountId: accId,
+            permanently: false
+          })
+        )).then(() => {
+          // BUG FIX: keyboard delete was not pushing to undo stack — action was irreversible
+          setUndoStack(prev => [...prev, { type: 'delete', data: { threadIds, accountIds } }].slice(-MAX_UNDO_STACK));
+          setRedoStack([]);
+          toast.success(`Deleted ${count} email${count !== 1 ? 's' : ''}`, {
+            action: { label: 'Undo', onClick: handleUndo }
           });
-        }
+          setSelectedMessages(new Set());
+        });
       }
 
       // c = compose
@@ -1179,7 +1208,7 @@ export default function EmailInboxMain() {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0" ref={containerRef}>
+      <div className="flex-1 flex flex-col min-w-0 min-h-0" ref={containerRef}>
         {selectedThread ? (
           <ErrorBoundary fallbackLabel="Email Thread" compact onReset={() => setSelectedThread(null)}>
             <EmailThreadViewer
@@ -1188,17 +1217,31 @@ export default function EmailInboxMain() {
               onBack={() => setSelectedThread(null)}
               currentView={filterView}
               emailAccounts={emailAccounts}
+              // BUG FIX: The old IIFEs captured filteredThreads[idx+1] at render time.
+              // If a real-time subscription update removes/reorders threads between render
+              // and user click, the captured index could point to the wrong thread or OOB.
+              // Now re-lookup the index at call time with a bounds check.
               onNextThread={(() => {
                 const idx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
                 if (idx >= 0 && idx < filteredThreads.length - 1) {
-                  return () => setSelectedThread(filteredThreads[idx + 1]);
+                  return () => {
+                    const currentIdx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
+                    if (currentIdx >= 0 && currentIdx < filteredThreads.length - 1) {
+                      setSelectedThread(filteredThreads[currentIdx + 1]);
+                    }
+                  };
                 }
                 return null;
               })()}
               onPrevThread={(() => {
                 const idx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
                 if (idx > 0) {
-                  return () => setSelectedThread(filteredThreads[idx - 1]);
+                  return () => {
+                    const currentIdx = filteredThreads.findIndex(t => t.threadId === selectedThread.threadId);
+                    if (currentIdx > 0) {
+                      setSelectedThread(filteredThreads[currentIdx - 1]);
+                    }
+                  };
                 }
                 return null;
               })()}

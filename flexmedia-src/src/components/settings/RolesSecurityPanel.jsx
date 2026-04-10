@@ -447,9 +447,9 @@ function SimulatorMode() {
           if (visible.length === 0) return null;
           return (
             <div key={section.label} className="mb-2">
-              <div className="text-[9px] uppercase tracking-widest text-slate-500 px-2 pt-2 pb-1">{section.label}</div>
+              <div className="text-[9px] uppercase tracking-widest text-muted-foreground px-2 pt-2 pb-1">{section.label}</div>
               {visible.map(page => (
-                <div key={page} className="text-xs text-slate-300 px-2 py-1 flex items-center gap-2">
+                <div key={page} className="text-xs text-muted-foreground/50 px-2 py-1 flex items-center gap-2">
                   <span className="w-1 h-1 rounded-full bg-slate-600 flex-shrink-0" />
                   <span className="flex-1">{prettify(page)}</span>
                 </div>
@@ -457,7 +457,7 @@ function SimulatorMode() {
             </div>
           );
         })}
-        <div className="border-t border-slate-800 mt-3 pt-2 px-2 text-[10px] text-slate-500">
+        <div className="border-t border-slate-800 mt-3 pt-2 px-2 text-[10px] text-muted-foreground">
           {countAccess(role)} pages accessible
         </div>
       </div>
@@ -567,7 +567,7 @@ function MatrixMode() {
                   </div>
                   {["master_admin", "employee"].map(role => (
                     <div key={role} className="text-center text-sm">
-                      {canAccessRoute(page, role) ? <span className="text-green-500">●</span> : <span className="text-slate-200">○</span>}
+                      {canAccessRoute(page, role) ? <span className="text-green-500">●</span> : <span className="text-muted-foreground/50">○</span>}
                     </div>
                   ))}
                 </div>

@@ -103,6 +103,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
       onOpenChange(false);
       if (onSuccess) onSuccess();
     } catch (err) {
+      console.error('Save agency error:', err);
       toast.error(err.message || 'Failed to save agency');
       setError(err.message || 'Failed to save agency');
     } finally {

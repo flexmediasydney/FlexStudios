@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
-import { usePermissions } from "@/components/auth/PermissionGuard";
+import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
@@ -50,9 +50,9 @@ import { createNotification, createNotificationsForUsers, writeFeedEvent } from 
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 
-
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
 // creating a new Set on every render. Since it's a constant, it belongs here.
+const statuses = PROJECT_STAGES;
 const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'tonomo']);
 
 const serviceLabels = {
@@ -213,10 +213,7 @@ export default function ProjectDetails() {
    const { data: allAgents = [] } = useSmartEntityList('Agent');
    const { data: productsData = [] } = useSmartEntityList('Product');
    const { data: packagesData = [] } = useSmartEntityList('Package');
-   const { data: user = null } = useQuery({
-     queryKey: ["current-user"],
-     queryFn: () => api.auth.me()
-   });
+   const { data: user = null } = useCurrentUser();
 
    const filterProjectTasks = useCallback((t) => t.project_id === projectId, [projectId]);
    const filterProjectActivities = useCallback((a) => !!(projectId && a.project_id === projectId), [projectId]);
@@ -1089,7 +1086,7 @@ export default function ProjectDetails() {
             {project.outcome === "lost" ? "✓ Lost" : "◯ Lost"}
           </button>
           {memoizedCanEdit && (
-           <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-shadow h-9" aria-label="Edit project">
+           <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-all h-9" aria-label="Edit project">
              <Edit className="h-4 w-4" />
              <span className="hidden sm:inline ml-1.5">Edit</span>
            </Button>
@@ -1477,9 +1474,9 @@ export default function ProjectDetails() {
 
       {/* Agent Selector Dialog */}
        {showAgentSelector && (
-         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowAgentSelector(false)}>
-           <Card 
-             className="w-full max-w-md animate-in scale-in-95 duration-200"
+         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200" onClick={() => setShowAgentSelector(false)}>
+           <Card
+             className="w-full max-w-md max-h-[85vh] flex flex-col animate-in scale-in-95 duration-200"
              onClick={(e) => e.stopPropagation()}
            >
              <CardHeader className="flex flex-row items-center justify-between">

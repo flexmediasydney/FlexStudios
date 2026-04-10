@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -23,19 +23,21 @@ export default function ProjectLinkDialogForInbox({
   const [searchQuery, setSearchQuery] = useState("");
   const queryClient = useQueryClient();
 
-  const { data: projects = [], isLoading } = useQuery({
-    queryKey: ["projects-search", searchQuery],
-    queryFn: async () => {
-      if (!searchQuery.trim()) return [];
-      const allProjects = await api.entities.Project.filter({}, "-updated_date", 100);
-      const query = searchQuery.toLowerCase();
-      return allProjects.filter(p => 
-        p.title?.toLowerCase().includes(query) ||
-        p.property_address?.toLowerCase().includes(query) ||
-        p.client_name?.toLowerCase().includes(query)
-      );
-    }
+  // Fetch recent projects once, filter client-side (avoids re-fetching on every keystroke)
+  const { data: allProjects = [], isLoading } = useQuery({
+    queryKey: ["projects-for-linking"],
+    queryFn: () => api.entities.Project.filter({}, "-updated_date", 200),
+    staleTime: 2 * 60 * 1000,
   });
+  const projects = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const query = searchQuery.toLowerCase();
+    return allProjects.filter(p =>
+      p.title?.toLowerCase().includes(query) ||
+      p.property_address?.toLowerCase().includes(query) ||
+      p.client_name?.toLowerCase().includes(query)
+    );
+  }, [allProjects, searchQuery]);
 
   const linkProjectMutation = useMutation({
     mutationFn: async (projectId) => {

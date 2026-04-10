@@ -319,6 +319,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       invalidateProjectCaches(queryClient, { timeLogs: true, effort: true });
       logTimerActivity('timer_paused', `Timer paused on "${task.title}" by ${currentUser?.full_name}`);
     } catch (err) {
+      console.error('Pause timer error:', err);
       setError(err.message || 'Failed to pause timer');
     } finally {
       setIsSubmitting(false);
@@ -371,6 +372,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       logTimerActivity('timer_completed', `Timer completed on "${task.title}" — ${Math.round(finalSeconds / 60)}m by ${currentUser?.full_name}`);
       if (onTaskComplete) onTaskComplete(task.id);
     } catch (err) {
+      console.error('Finish timer error:', err);
       setError(err.message || 'Failed to finish timer');
     } finally {
       setIsSubmitting(false);
@@ -474,7 +476,8 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       
       await startTimer();
     } catch (err) {
-      setError(err.message || 'Failed to start timer');
+      console.error('Start timer error:', err);
+      setError('Failed to start timer. Please try again.');
     }
   };
 
@@ -523,6 +526,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       invalidateProjectCaches(queryClient, { timeLogs: true, effort: true });
       logTimerActivity('timer_started', `Timer started on "${task.title}" by ${currentUser?.full_name}`);
     } catch (err) {
+      console.error('Create timer error:', err);
       setError(err.message || 'Failed to create timer');
     } finally {
       setIsSubmitting(false);
@@ -557,6 +561,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       });
       logTimerActivity('timer_resumed', `Timer resumed on "${task.title}" by ${currentUser?.full_name}`);
     } catch (err) {
+      console.error('Resume timer error:', err);
       setError(err.message || 'Failed to resume timer');
     } finally {
       setIsSubmitting(false);
@@ -615,6 +620,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       logTimerActivity('timer_continued', `New timer session started on "${task.title}" by ${currentUser?.full_name}`);
       // Subscription will update activeLog
     } catch (err) {
+      console.error('Continue timer error:', err);
       setError(err.message || 'Failed to continue timer');
     } finally {
       setIsSubmitting(false);

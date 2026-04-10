@@ -232,8 +232,9 @@ export default function ClientAgents() {
   // Health checks for badge count
   const warningCount = useMemo(() => {
     let count = 0;
-    if (agents.some(a => !agencies.find(ag => ag.id === a.current_agency_id))) count++;
-    if (teams.some(t => !agencies.find(a => a.id === t.agency_id))) count++;
+    const agencyIds = new Set(agencies.map(a => a.id));
+    if (agents.some(a => a.current_agency_id && !agencyIds.has(a.current_agency_id))) count++;
+    if (teams.some(t => t.agency_id && !agencyIds.has(t.agency_id))) count++;
     return count;
   }, [agencies, teams, agents]);
 
@@ -720,11 +721,15 @@ export default function ClientAgents() {
           <HierarchyHealthCheck
             checks={(() => {
               const checks = [];
-              const orphanedAgents = agents.filter(a => !agencies.find(ag => ag.id === a.current_agency_id));
+              // Use Sets for O(1) lookups instead of O(N) .find() per item
+              const agencyIds = new Set(agencies.map(a => a.id));
+              const agentAgencyIds = new Set(agents.map(a => a.current_agency_id).filter(Boolean));
+              const teamAgencyIds = new Set(teams.map(t => t.agency_id).filter(Boolean));
+              const orphanedAgents = agents.filter(a => a.current_agency_id && !agencyIds.has(a.current_agency_id));
               if (orphanedAgents.length > 0) checks.push({ type: "warning", title: "Orphaned People", message: `${orphanedAgents.length} person(s) reference non-existent organisations`, agents: orphanedAgents });
-              const orphanedTeams = teams.filter(t => !agencies.find(a => a.id === t.agency_id));
+              const orphanedTeams = teams.filter(t => t.agency_id && !agencyIds.has(t.agency_id));
               if (orphanedTeams.length > 0) checks.push({ type: "warning", title: "Orphaned Teams", message: `${orphanedTeams.length} team(s) reference non-existent organisations`, teams: orphanedTeams });
-              const emptyAgencies = agencies.filter(a => !agents.find(ag => ag.current_agency_id === a.id) && !teams.find(t => t.agency_id === a.id));
+              const emptyAgencies = agencies.filter(a => !agentAgencyIds.has(a.id) && !teamAgencyIds.has(a.id));
               if (emptyAgencies.length > 0) checks.push({ type: "info", title: "Empty Organisations", message: `${emptyAgencies.length} organisation(s) have no teams or people`, agencies: emptyAgencies });
               return checks;
             })()}

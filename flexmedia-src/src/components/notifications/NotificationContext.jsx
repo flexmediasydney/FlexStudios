@@ -105,15 +105,17 @@ export function NotificationProvider({ children }) {
   // wasUnread variable being set synchronously inside setNotifications before
   // setUnreadCount was called — fragile under React concurrent mode.
   const markRead = useCallback(async (notificationId) => {
-    setNotifications(prev => {
-      const target = prev.find(n => n.id === notificationId);
-      if (target && !target.is_read) {
-        setUnreadCount(c => Math.max(0, c - 1));
-      }
-      return prev.map(n =>
-        n.id === notificationId ? { ...n, is_read: true } : n
-      );
-    });
+    let wasUnread = false;
+    setNotifications(prev =>
+      prev.map(n => {
+        if (n.id === notificationId) {
+          if (!n.is_read) wasUnread = true;
+          return { ...n, is_read: true };
+        }
+        return n;
+      })
+    );
+    if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
     try {
       await api.entities.Notification.update(notificationId, {
         is_read: true,
@@ -126,20 +128,21 @@ export function NotificationProvider({ children }) {
   // avoiding stale closure over `notifications` which caused markAllRead
   // to miss notifications that arrived between the last render and the click.
   const markAllRead = useCallback(async () => {
-    let unreadIds = [];
-    setNotifications(prev => {
-      unreadIds = prev.filter(n => !n.is_read).map(n => n.id);
-      return prev.map(n => ({ ...n, is_read: true }));
-    });
+    const unread = notifications.filter(n => !n.is_read);
+    if (unread.length === 0) return;
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
     setUnreadCount(0);
     try {
-      // Batch in groups of 10 to avoid overwhelming the API
-      for (let i = 0; i < unreadIds.length; i += 10) {
+      // Batch in chunks of 20 to avoid overwhelming the API
+      const CHUNK_SIZE = 20;
+      const now = new Date().toISOString();
+      for (let i = 0; i < unread.length; i += CHUNK_SIZE) {
+        const chunk = unread.slice(i, i + CHUNK_SIZE);
         await Promise.all(
-          unreadIds.slice(i, i + 10).map(id =>
-            api.entities.Notification.update(id, {
+          chunk.map(n =>
+            api.entities.Notification.update(n.id, {
               is_read: true,
-              read_at: new Date().toISOString(),
+              read_at: now,
             })
           )
         );
@@ -148,16 +151,13 @@ export function NotificationProvider({ children }) {
   }, [fetchNotifications]);
 
   const dismiss = useCallback(async (notificationId) => {
-    // Bug fix: compute wasUnread synchronously from current state snapshot
-    // before mutating, avoiding the race condition with queueMicrotask
+    let wasUnread = false;
     setNotifications(prev => {
       const target = prev.find(n => n.id === notificationId);
-      const wasUnread = target && !target.is_read;
-      if (wasUnread) {
-        setUnreadCount(c => Math.max(0, c - 1));
-      }
+      if (target && !target.is_read) wasUnread = true;
       return prev.filter(n => n.id !== notificationId);
     });
+    if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
     try {
       await api.entities.Notification.update(notificationId, { is_dismissed: true });
     } catch { fetchNotifications(true); }

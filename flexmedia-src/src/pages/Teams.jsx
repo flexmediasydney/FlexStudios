@@ -196,7 +196,12 @@ export default function Teams() {
       <div className="flex items-center gap-3 px-6 py-3 border-b shrink-0 bg-muted/20">
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input placeholder="Search teams or organisations..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-7 text-xs" />
+          <Input placeholder="Search teams or organisations..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-7 text-xs pr-7" />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded-full hover:bg-muted transition-colors" aria-label="Clear search" title="Clear search">
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          )}
         </div>
         <span className="text-xs text-muted-foreground ml-auto">{filtered.length} shown</span>
         <div className="flex items-center border rounded-md overflow-hidden">
@@ -247,18 +252,38 @@ export default function Teams() {
             onSelectPage={handleSelectPage}
           />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {filtered.map(row => (
-              <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
-                onClick={() => navigate(createPageUrl('TeamDetails') + '?id=' + row.id)}>
-                <TeamCardContent row={row} members={agentsByTeam[row.id] || []} revenue={revenueByTeam[row.id] || 0} projectsByAgent={projectsByAgent} />
-                <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
-                  <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => { setEditingTeam(row); setPreselectedAgencyId(row.agency_id); setShowForm(true); }}>Edit</Button>
-                  <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => navigate(createPageUrl('TeamDetails') + '?id=' + row.id)}>View</Button>
-                </div>
+          <>
+            {loading && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {Array(8).fill(0).map((_, i) => <div key={i} className="h-48 bg-muted animate-pulse rounded-xl" />)}
               </div>
-            ))}
-          </div>
+            )}
+            {!loading && filtered.length === 0 && (
+              <div className="text-center py-16 text-muted-foreground">
+                <Building2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">{search ? `No results for "${search}"` : 'No teams found'}</p>
+                {search && (
+                  <Button variant="outline" size="sm" onClick={() => setSearch('')} className="mt-3">
+                    Clear search
+                  </Button>
+                )}
+              </div>
+            )}
+            {!loading && filtered.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {filtered.map(row => (
+                  <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                    onClick={() => navigate(createPageUrl('TeamDetails') + '?id=' + row.id)}>
+                    <TeamCardContent row={row} members={agentsByTeam[row.id] || []} revenue={revenueByTeam[row.id] || 0} projectsByAgent={projectsByAgent} />
+                    <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
+                      <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => { setEditingTeam(row); setPreselectedAgencyId(row.agency_id); setShowForm(true); }}>Edit</Button>
+                      <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => navigate(createPageUrl('TeamDetails') + '?id=' + row.id)}>View</Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 

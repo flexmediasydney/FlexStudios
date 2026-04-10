@@ -120,8 +120,10 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
       return { result, addAnother };
     },
     onSuccess: ({ addAnother }) => {
+      // Invalidate Agent cache so the new contact appears in staff selectors and search fields
       refetchEntityList("Agent");
       refetchEntityList("Agency");
+      refetchEntityList("AuditLog");
       toast.success("Contact created");
       if (addAnother) {
         // Reset form but keep the org
@@ -137,6 +139,7 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
       }
     },
     onError: (error) => {
+      console.error("Create contact error:", error);
       const hint = isTransientError(error) ? ' — check your connection and try again' : '';
       toast.error((error.message || "Failed to create contact") + hint);
     },

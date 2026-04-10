@@ -383,6 +383,7 @@ export default function ProjectProductsPackages({ project }) {
 
       toast.success("Products & packages saved");
     } catch (err) {
+      console.error('Products/packages save error:', err);
       setError(err.message || 'Failed to save changes');
       toast.error(err.message || 'Failed to save changes');
     } finally {

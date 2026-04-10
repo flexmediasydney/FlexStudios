@@ -18,6 +18,7 @@ export default function ColorPicker({ value = "#3b82f6", onChange, label, showPr
           className="h-10 w-10 rounded border-2 transition-transform hover:scale-105"
           style={{ borderColor: value, backgroundColor: value }}
           title={value}
+          aria-label={`Current color: ${value}. Click to ${openInput ? 'hide' : 'show'} color input.`}
         />
         {openInput && (
           <Input
@@ -37,6 +38,7 @@ export default function ColorPicker({ value = "#3b82f6", onChange, label, showPr
               className={`h-8 w-8 rounded transition-transform hover:scale-110 ${value === color ? "ring-2 ring-offset-2 ring-primary" : ""}`}
               style={{ backgroundColor: color }}
               title={color}
+              aria-label={`Select color ${color}${value === color ? ' (selected)' : ''}`}
             />
           ))}
         </div>

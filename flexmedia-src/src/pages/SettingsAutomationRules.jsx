@@ -760,6 +760,7 @@ export default function SettingsAutomationRules() {
 
         {builderOpen && (
           <RuleBuilderModal
+            key={editingRule?.id || "new"}
             open={builderOpen}
             onClose={() => { setBuilderOpen(false); setEditingRule(null); }}
             initialRule={editingRule}

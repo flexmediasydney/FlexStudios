@@ -42,7 +42,7 @@ export function isPalindrome(str) {
 }
 
 export function countWords(str) {
-  if (!str) return 0;
+  if (!str || !str.trim()) return 0;
   return str.trim().split(/\s+/).filter(Boolean).length;
 }
 

@@ -167,7 +167,7 @@ export default function SettingsTonomoMappings() {
       }));
     
     return [...realMappings, ...virtualMappings];
-  }, [mappings, activeType, products, packages, users, agents, bookingFlows]);
+  }, [mappings, activeType, products, packages, users, agents, bookingFlows, projectTypeMappings, flexProjectTypes]);
 
   // Filter for current tab
   const tabMappings = useMemo(() => {

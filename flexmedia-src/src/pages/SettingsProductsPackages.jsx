@@ -3,6 +3,7 @@ import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import ProductsManagement from "@/components/settings/ProductsManagement";
 import PackagesManagement from "@/components/settings/PackagesManagement";
 import RoleTaskMatrix from "@/components/settings/RoleTaskMatrix";
+import TeamRoleMatrix from "@/components/settings/TeamRoleMatrix";
 
 export default function SettingsProductsPackages() {
   return (
@@ -13,6 +14,7 @@ export default function SettingsProductsPackages() {
             <TabsTrigger value="products">Products</TabsTrigger>
             <TabsTrigger value="packages">Packages</TabsTrigger>
             <TabsTrigger value="role-matrix">Role Matrix</TabsTrigger>
+            <TabsTrigger value="team-roles">Team Roles</TabsTrigger>
           </TabsList>
           <TabsContent value="products">
             <ProductsManagement />
@@ -22,6 +24,9 @@ export default function SettingsProductsPackages() {
           </TabsContent>
           <TabsContent value="role-matrix">
             <RoleTaskMatrix />
+          </TabsContent>
+          <TabsContent value="team-roles">
+            <TeamRoleMatrix />
           </TabsContent>
         </Tabs>
       </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { validateField, LIMITS } from "@/components/hooks/useFormValidation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,20 +35,30 @@ export default function MediaDeliveryManager({ projectId, project }) {
   );
   const mediaConfig = allMedia[0] || null;
 
+  // Track the last synced config to detect external changes
+  const [lastSyncedId, setLastSyncedId] = useState(null);
+  const [lastSyncedUpdatedAt, setLastSyncedUpdatedAt] = useState(null);
+
   useEffect(() => {
     let mounted = true;
     if (mediaConfig && mounted) {
-      setConfig({
-        dropbox_link: mediaConfig.dropbox_link || "",
-        access_code: mediaConfig.access_code || "",
-        is_published: mediaConfig.is_published || false,
-        expiry_date: mediaConfig.expiry_date || "",
-        download_enabled: mediaConfig.download_enabled ?? true,
-        watermark_enabled: mediaConfig.watermark_enabled || false
-      });
+      // Resync when id changes OR when the record is updated externally
+      const updatedAt = mediaConfig.updated_at || mediaConfig.id;
+      if (mediaConfig.id !== lastSyncedId || updatedAt !== lastSyncedUpdatedAt) {
+        setConfig({
+          dropbox_link: mediaConfig.dropbox_link || "",
+          access_code: mediaConfig.access_code || "",
+          is_published: mediaConfig.is_published || false,
+          expiry_date: mediaConfig.expiry_date || "",
+          download_enabled: mediaConfig.download_enabled ?? true,
+          watermark_enabled: mediaConfig.watermark_enabled || false
+        });
+        setLastSyncedId(mediaConfig.id);
+        setLastSyncedUpdatedAt(updatedAt);
+      }
     }
     return () => { mounted = false; };
-  }, [mediaConfig?.id]);
+  }, [mediaConfig?.id, mediaConfig?.updated_at, mediaConfig?.dropbox_link, mediaConfig?.is_published]);
 
   const saveMutation = useMutation({
     mutationFn: async (data) => {
@@ -59,7 +69,10 @@ export default function MediaDeliveryManager({ projectId, project }) {
         return api.entities.ProjectMedia.create(saveData);
       }
     },
-    onSuccess: () => toast.success("Media delivery settings saved"),
+    onSuccess: () => {
+      toast.success("Media delivery settings saved");
+      refetchEntityList("ProjectMedia");
+    },
     onError: () => toast.error("Failed to save settings")
   });
 
@@ -74,29 +87,46 @@ export default function MediaDeliveryManager({ projectId, project }) {
     if (config.dropbox_link) {
       try {
         const parsed = new URL(config.dropbox_link);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          toast.error("Dropbox link must use http or https");
+          return;
+        }
         if (!parsed.hostname.endsWith('dropbox.com')) {
           toast.error("Link must be a Dropbox URL (dropbox.com)");
           return;
         }
       } catch {
-        toast.error("Invalid URL format");
+        toast.error("Invalid Dropbox link URL format");
         return;
       }
     }
     saveMutation.mutate(config);
   };
 
-  const copyClientLink = () => {
+  const copyClientLink = async () => {
     if (!projectId) {
       toast.error("No project ID");
       return;
     }
+    const clientUrl = `${window.location.origin}${window.location.pathname}#/ClientGallery?project=${projectId}`;
     try {
-      const clientUrl = `${window.location.origin}${window.location.pathname}#/ClientGallery?project=${projectId}`;
-      navigator.clipboard.writeText(clientUrl);
+      await navigator.clipboard.writeText(clientUrl);
       toast.success("Client link copied to clipboard");
     } catch {
-      toast.error("Failed to copy link");
+      // Fallback for non-secure contexts or denied permissions
+      try {
+        const textArea = document.createElement("textarea");
+        textArea.value = clientUrl;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+        toast.success("Client link copied to clipboard");
+      } catch {
+        toast.error("Failed to copy link — please copy manually");
+      }
     }
   };
 
@@ -136,6 +166,11 @@ export default function MediaDeliveryManager({ projectId, project }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
+        {mediaLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary" />
+          </div>
+        ) : <>
         {/* Dropbox Link */}
         <div className="space-y-2">
           <Label htmlFor="dropbox_link">Dropbox Shared Folder Link</Label>
@@ -278,7 +313,7 @@ export default function MediaDeliveryManager({ projectId, project }) {
 
         {/* Actions */}
         <div className="flex gap-2 pt-2">
-          <Button onClick={handleSave} disabled={saveMutation.isPending}>
+          <Button onClick={handleSave} disabled={saveMutation.isPending || mediaLoading}>
             {saveMutation.isPending ? "Saving..." : "Save Settings"}
           </Button>
           {config.is_published && (
@@ -288,6 +323,7 @@ export default function MediaDeliveryManager({ projectId, project }) {
             </Button>
           )}
         </div>
+        </>}
       </CardContent>
     </Card>
   );

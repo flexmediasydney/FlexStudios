@@ -83,10 +83,11 @@ export default function GlobalSearch({ open, onClose }) {
   const selectedItemRef = useRef(null);
 
   // ── Data (all from shared cache — zero extra API calls) ─────────────────
-  const { data: allProjects = [] } = useEntityList("Project");
-  const { data: allAgents = [] }   = useEntityList("Agent");
-  const { data: allAgencies = [] } = useEntityList("Agency");
-  const { data: allEmails = [] }   = useEntityList("EmailMessage", "-received_at", 500);
+  // Only load entities when dialog is open to avoid triggering subscriptions/cache for EmailMessage
+  const { data: allProjects = [] } = useEntityList(open ? "Project" : null);
+  const { data: allAgents = [] }   = useEntityList(open ? "Agent" : null);
+  const { data: allAgencies = [] } = useEntityList(open ? "Agency" : null);
+  const { data: allEmails = [] }   = useEntityList(open ? "EmailMessage" : null, "-received_at", 500);
 
   // Load recent searches when dialog opens
   useEffect(() => {

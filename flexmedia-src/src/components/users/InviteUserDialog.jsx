@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
@@ -65,7 +65,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
       setEmail("");
       setFullName("");
       setRole("employee");
-      onSuccess();
+      onSuccess?.();
       onClose();
     } catch (error) {
       toast.error(error.message || "Failed to send invitation");

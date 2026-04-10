@@ -15,7 +15,7 @@
     --secondary: 220 15% 94%;
     --secondary-foreground: 220 25% 20%;
     --muted: 220 15% 94%;
-    --muted-foreground: 220 10% 45%;
+    --muted-foreground: 220 10% 40%;
     --accent: 35 100% 50%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 84% 60%;
@@ -238,5 +238,19 @@
   .border.rounded-lg {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ── Reduced motion accessibility (WCAG 2.1 SC 2.3.3) ────────────────────── */
+/* Respect user preference for reduced motion by disabling animations,
+   transitions, and scroll behavior. Applies globally to all elements. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

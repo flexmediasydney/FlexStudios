@@ -46,7 +46,7 @@ export function ActiveTimersProvider({ children, currentUser }) {
         if (event.type === 'create') {
           // Only add genuinely running timers — not completed manual entries or paused logs
           if (event.data.is_active && event.data.status === 'running') {
-            // Prevent duplicates (e.g., subscription fires after initial fetch already added it)
+            // Deduplicate: skip if this timer is already tracked (e.g. initial fetch raced with subscription)
             if (prev.some(t => t.id === event.data.id)) return prev;
             return [...prev, event.data];
           }
@@ -58,7 +58,9 @@ export function ActiveTimersProvider({ children, currentUser }) {
           // payload.old?.id) which can differ from the actual record ID in edge cases.
           const dataId = event.data.id;
           if (event.data.is_active && event.data.status === 'running') {
-            // If already tracked, update it; otherwise add it (handles resume from paused)
+            // Upsert: update if already tracked, otherwise add (handles resume from paused
+            // state — initial load only fetches status=running, so a paused-then-resumed
+            // timer would be missing from the array without the add path)
             const exists = prev.some(t => t.id === dataId);
             if (exists) {
               return prev.map(t => t.id === dataId ? event.data : t);

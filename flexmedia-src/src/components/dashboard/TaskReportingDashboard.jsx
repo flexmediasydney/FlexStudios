@@ -283,7 +283,7 @@ export default function TaskReportingDashboard() {
                     })}
                   >
                     <div className="flex items-center gap-2">
-                      <Icon className={`h-4 w-4 ${level === 'late' || level === 'red' ? 'text-red-600' : level === 'orange' ? 'text-orange-600' : level === 'yellow' ? 'text-yellow-600' : 'text-slate-600'}`} />
+                      <Icon className={`h-4 w-4 ${level === 'late' || level === 'red' ? 'text-red-600' : level === 'orange' ? 'text-orange-600' : level === 'yellow' ? 'text-yellow-600' : 'text-muted-foreground'}`} />
                       <span className="text-sm">{label}</span>
                     </div>
                     <Badge className={criticalityColors[level]}>{count}</Badge>

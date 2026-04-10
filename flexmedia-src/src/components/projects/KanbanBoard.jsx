@@ -47,10 +47,10 @@ const animationStyles = `
     box-shadow: 0 20px 40px rgba(0,0,0,0.15), 0 0 0 3px rgba(59,130,246,0.4);
     transform: rotate(2deg) scale(1.04);
   }
-  .urgency-border-overdue  { border-left: 4px solid #ef4444 !important; }
-  .urgency-border-today    { border-left: 4px solid #f97316 !important; }
-  .urgency-border-ontrack  { border-left: 4px solid #22c55e !important; }
-  .urgency-border-none     { border-left: 4px solid transparent !important; }
+  .urgency-border-overdue  { border-left: 4px solid #ef4444; }
+  .urgency-border-today    { border-left: 4px solid #f97316; }
+  .urgency-border-ontrack  { border-left: 4px solid #22c55e; }
+  .urgency-border-none     { border-left: 4px solid transparent; }
 `;
 
 /* ─────────────────────────── Urgency helpers ─────────────────────────── */
@@ -387,7 +387,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
 }
 
 /* ═══════════════════════════ Main KanbanBoard ═══════════════════════════ */
-export default function KanbanBoard({ projects, products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs }) {
+export default function KanbanBoard({ projects = [], products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs }) {
   const navigate = useNavigate();
   const { enabledFields } = useCardFields();
   // Bug fix: use tasks/timeLogs from parent when available to avoid duplicate entity subscriptions
@@ -397,8 +397,18 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
   const allTimeLogs = parentTimeLogs || fallbackTimeLogs;
   const { prefetch: prefetchProject } = usePrefetchProjectDetails();
 
-  // Filter out archived projects
-  const activeProjects = projects.filter(p => !p.is_archived);
+  // Stable callbacks for card interactions — avoids creating new function refs
+  // on every render for potentially hundreds of project cards.
+  const handleCardClick = useCallback((projectId) => {
+    navigate(createPageUrl("ProjectDetails") + "?id=" + projectId);
+  }, [navigate]);
+
+  const handleCardHover = useCallback((projectId) => {
+    prefetchProject(projectId);
+  }, [prefetchProject]);
+
+  // Filter out archived projects (memoized to avoid recomputing on every render)
+  const activeProjects = useMemo(() => projects.filter(p => !p.is_archived), [projects]);
 
   // ── View mode: 'full' (normal kanban) or 'collapsed' (counts overview) ──
   const [viewMode, setViewMode] = useState(() => {
@@ -666,7 +676,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
       {viewMode === 'full' && (
         <DragDropContext onDragEnd={onDragEnd}>
           <div
-            className={`flex gap-2 pb-2 ${fitToScreen ? "overflow-x-hidden" : "overflow-x-auto scroll-smooth"}`}
+            className={`flex gap-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))] ${fitToScreen ? "overflow-x-hidden" : "overflow-x-auto scroll-smooth"}`}
             style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch', scrollSnapType: 'x proximity' }}
             onMouseDown={(e) => {
               // Grab-to-scroll: hold and drag horizontally
@@ -899,7 +909,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                       <div
                         ref={provided.innerRef}
                         {...provided.droppableProps}
-                        className={`kanban-drop-target min-h-[400px] p-2 space-y-2 ${
+                        className={`kanban-drop-target min-h-[400px] max-h-[calc(100vh-280px)] overflow-y-auto p-2 space-y-2 ${
                           snapshot.isDraggingOver
                             ? "bg-primary/10 ring-2 ring-primary/20 scale-[1.01]"
                             : "bg-muted/15"
@@ -927,7 +937,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                   ref={provided.innerRef}
                                   {...provided.draggableProps}
                                   {...provided.dragHandleProps}
-                                  className={`kanban-card-animated cursor-pointer hover:shadow-lg transition-all duration-200 border-0 group/card active:scale-[0.98] ${urgencyClass} ${
+                                  className={`kanban-card-animated cursor-pointer hover:shadow-lg transition-all duration-200 border-y-0 border-r-0 group/card active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 ${urgencyClass} ${
                                     snapshot.isDragging ? "kanban-dragging opacity-90" : ""
                                   }`}
                                   style={{
@@ -936,7 +946,7 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
                                   }}
                                   tabIndex={0}
                                   role="button"
-                                  aria-label={`Open project: ${project.title}`}
+                                  aria-label={`${project.title}${project.property_address ? ', ' + project.property_address : ''}`}
                                   onMouseEnter={() => prefetchProject(project.id)}
                                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(createPageUrl("ProjectDetails") + "?id=" + project.id); } }}
                                   onClick={() => navigate(createPageUrl("ProjectDetails") + "?id=" + project.id)}
@@ -1096,17 +1106,19 @@ export default function KanbanBoard({ projects, products, packages, fitToScreen 
             </p>
             <div className="flex gap-2 justify-end">
               <button
-                className="px-3 py-1.5 text-sm border rounded hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                className="px-3 py-1.5 text-sm border rounded hover:bg-muted disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                disabled={updateStatusMutation.isPending}
                 onClick={() => setPendingDrag(null)}
               >
                 Cancel
               </button>
               <button
-                className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+                className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+                disabled={updateStatusMutation.isPending}
                 onClick={confirmBackwardDrag}
                 autoFocus
               >
-                Move Backward
+                {updateStatusMutation.isPending ? 'Moving...' : 'Move Backward'}
               </button>
             </div>
           </div>

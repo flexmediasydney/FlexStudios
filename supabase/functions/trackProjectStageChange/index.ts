@@ -1,4 +1,5 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { MAX_USERS_FETCH } from '../_shared/constants.ts';
 
 const MAX_STAGE_DURATION_SECONDS = 90 * 24 * 3600; // 90 days hard cap
 
@@ -58,8 +59,8 @@ Deno.serve(async (req) => {
       project = await entities.Project.get(payload.projectId);
     }
 
-    if (!project) {
-      return errorResponse('Project not found', 404);
+    if (!project?.id) {
+      return errorResponse('Project not found or missing id', 404);
     }
 
     const now = new Date().toISOString();
@@ -192,7 +193,7 @@ Deno.serve(async (req) => {
 
         if (roles.includes('master_admin')) {
           try {
-            const users = await entities.User.list('-created_date', 200);
+            const users = await entities.User.list('-created_date', MAX_USERS_FETCH);
             users
               .filter((u: any) => u.role === 'master_admin' || u.role === 'admin')
               .forEach((u: any) => ids.add(u.id));
@@ -218,11 +219,10 @@ Deno.serve(async (req) => {
 
       const checkNotifPref = async (userId: string, type: string, category: string): Promise<boolean> => {
         try {
-          const prefs = await entities.NotificationPreference.list('-created_date', 500);
-          const up = prefs.filter((p: any) => p.user_id === userId);
-          const tp = up.find((p: any) => p.notification_type === type);
+          const prefs = await entities.NotificationPreference.filter({ user_id: userId }, null, 100);
+          const tp = prefs.find((p: any) => p.notification_type === type);
           if (tp !== undefined) return tp.in_app_enabled !== false;
-          const cp = up.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
+          const cp = prefs.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
           if (cp !== undefined) return cp.in_app_enabled !== false;
           return true;
         } catch { return true; }
@@ -230,33 +230,41 @@ Deno.serve(async (req) => {
 
       const isDupNotif = async (key: string, userId: string): Promise<boolean> => {
         try {
-          const recent = await entities.Notification.list('-created_date', 500);
-          return recent.some((n: any) => n.idempotency_key === key && n.user_id === userId);
+          const recent = await entities.Notification.filter(
+            { idempotency_key: key, user_id: userId }, null, 1
+          );
+          return recent.length > 0;
         } catch { return false; }
       };
 
       const fireNotif = async (userId: string, type: string, title: string, message: string, category: string, severity: string, idempKey?: string) => {
-        const allowed = await checkNotifPref(userId, type, category);
-        if (!allowed) return false;
-        if (idempKey && await isDupNotif(idempKey, userId)) return false;
-        await entities.Notification.create({
-          user_id: userId,
-          type,
-          category,
-          severity,
-          title,
-          message,
-          project_id: project.id,
-          project_name: projectName,
-          entity_type: 'project',
-          entity_id: project.id,
-          cta_label: 'View Project',
-          is_read: false,
-          is_dismissed: false,
-          source: 'stage_change',
-          idempotency_key: idempKey || null,
-        });
-        return true;
+        try {
+          const allowed = await checkNotifPref(userId, type, category);
+          if (!allowed) return false;
+          if (idempKey && await isDupNotif(idempKey, userId)) return false;
+          await entities.Notification.create({
+            user_id: userId,
+            type,
+            category,
+            severity,
+            title,
+            message,
+            project_id: project.id,
+            project_name: projectName,
+            entity_type: 'project',
+            entity_id: project.id,
+            cta_label: 'View Project',
+            is_read: false,
+            is_dismissed: false,
+            source: 'stage_change',
+            idempotency_key: idempKey || null,
+            created_date: new Date().toISOString(),
+          });
+          return true;
+        } catch (err: any) {
+          console.error(`Failed to create stage-change notification (type=${type}, user=${userId}):`, err?.message);
+          return false;
+        }
       };
 
       // All assigned users -- stage changed

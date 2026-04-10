@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ import { writeFeedEvent } from "@/components/notifications/createNotification";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 
 export default function EditRevisionDialog({ open, onClose, revision, project }) {
+  const queryClient = useQueryClient();
   const [form, setForm] = useState({});
   const { data: currentUser } = useCurrentUser();
   const [pricingImpact, setPricingImpact] = useState({});
@@ -43,6 +44,10 @@ export default function EditRevisionDialog({ open, onClose, revision, project })
   const updateMutation = useMutation({
     mutationFn: (data) => api.entities.ProjectRevision.update(revision.id, data),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-revisions'] });
+      queryClient.invalidateQueries({ queryKey: ['ProjectRevision'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      refetchEntityList("ProjectRevision");
       toast.success("Request updated");
       const projectName = project?.title || project?.property_address || 'Project';
       writeFeedEvent({
@@ -73,7 +78,7 @@ export default function EditRevisionDialog({ open, onClose, revision, project })
   if (!revision) return null;
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={o => { if (!o && !updateMutation.isPending) onClose(); }}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Request — {revision.title}</DialogTitle>

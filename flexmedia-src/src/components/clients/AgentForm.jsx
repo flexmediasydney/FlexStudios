@@ -138,12 +138,15 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
       refetchEntityList("Agent");
       refetchEntityList("AuditLog");
       refetchEntityList("Project");
+      // Invalidate Client cache so ProjectForm sees the new agent when auto-creating client records
+      refetchEntityList("Client");
       toast.success(agent ? "Person updated" : "Person created");
       setFormData(INITIAL_STATE);
       onClose();
     },
     onError: (error) => {
-      toast.error(error.message || "Failed to save agent");
+      console.error("Save agent error:", error);
+      toast.error("Failed to save contact details. Please try again.");
     }
   });
 

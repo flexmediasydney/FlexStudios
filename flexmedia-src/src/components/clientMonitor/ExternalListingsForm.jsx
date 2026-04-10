@@ -63,7 +63,8 @@ export default function ExternalListingsForm({ agent, onSuccess, onCancel }) {
       });
       onSuccess();
     } catch (err) {
-      setError(err.message || "Failed to add listing");
+      console.error("Add listing error:", err);
+      setError("Failed to add listing. Please try again.");
     } finally {
       setIsSubmitting(false);
     }

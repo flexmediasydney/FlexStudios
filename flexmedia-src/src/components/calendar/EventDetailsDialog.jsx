@@ -66,21 +66,29 @@ export default function EventDetailsDialog({
   const { data: projects = [] } = useQuery({
     queryKey: ["projects-for-cal"],
     queryFn: () => api.entities.Project.list("-created_date", 200),
+    staleTime: 5 * 60 * 1000,
+    enabled: open,
   });
 
   const { data: agents = [] } = useQuery({
     queryKey: ["agents-for-cal"],
     queryFn: () => api.entities.Agent.list("name", 500),
+    staleTime: 5 * 60 * 1000,
+    enabled: open,
   });
 
   const { data: agencies = [] } = useQuery({
     queryKey: ["agencies-for-cal"],
     queryFn: () => api.entities.Agency.list("name", 200),
+    staleTime: 5 * 60 * 1000,
+    enabled: open,
   });
 
   const { data: users = [] } = useQuery({
     queryKey: ["users-for-cal"],
     queryFn: () => api.entities.User.list(),
+    staleTime: 5 * 60 * 1000,
+    enabled: open,
   });
 
   const { data: emails = [] } = useQuery({
@@ -376,7 +384,8 @@ export default function EventDetailsDialog({
       onSave?.();
       onClose();
     } catch (err) {
-      toast.error('Failed to reschedule: ' + (err?.message || 'Unknown error'));
+      console.error('Reschedule error:', err);
+      toast.error('Failed to reschedule event. Please try again.');
     } finally {
       setRescheduling(false);
     }

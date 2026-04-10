@@ -10,8 +10,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  HoverCard, HoverCardContent, HoverCardTrigger,
-} from "@/components/ui/hover-card";
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ChevronDown, Plus, Settings, FileText, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EditTemplateModal from "./EditTemplateModal";
@@ -53,10 +53,11 @@ export default function TemplateSelector({ onSelectTemplate, onSaveAsTemplate })
             />
 
             {filteredTemplates.length > 0 ? (
+              <TooltipProvider delayDuration={400}>
               <div className="max-h-64 overflow-y-auto space-y-1">
                 {filteredTemplates.map((template) => (
-                  <HoverCard key={template.id} openDelay={300} closeDelay={100}>
-                    <HoverCardTrigger asChild>
+                  <Tooltip key={template.id}>
+                    <TooltipTrigger asChild>
                       <button
                         onClick={() => {
                           onSelectTemplate(template);
@@ -88,17 +89,18 @@ export default function TemplateSelector({ onSelectTemplate, onSaveAsTemplate })
                       </button>
                     </div>
                   </button>
-                    </HoverCardTrigger>
-                    <HoverCardContent side="right" className="w-72 p-3">
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="max-w-72 p-3">
                       <p className="text-xs font-semibold mb-1">{template.name}</p>
                       {template.subject && <p className="text-xs text-muted-foreground mb-2">Subject: {template.subject}</p>}
-                      <div className="text-xs text-muted-foreground line-clamp-6 prose prose-xs">
+                      <p className="text-xs text-muted-foreground line-clamp-6">
                         {(template.body || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 300)}
-                      </div>
-                    </HoverCardContent>
-                  </HoverCard>
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
                 ))}
               </div>
+              </TooltipProvider>
             ) : (
               <div className="text-center py-6 text-sm text-muted-foreground">
                 {search ? "No templates found" : "No templates yet"}

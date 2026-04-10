@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/api/supabaseClient';
 import { refetchEntityList } from '@/components/hooks/useEntityData';
@@ -61,6 +61,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
   const validate = () => {
     const newErrors = {};
     if (!formData.name.trim()) newErrors.name = 'Name is required';
+    if (formData.name.trim().length > 120) newErrors.name = 'Name must be 120 characters or less';
     // BUG FIX: Only require email format when email is provided.
     // Previously, empty email AND invalid-format were separate checks that
     // could overwrite each other, and empty email was always flagged even for
@@ -71,7 +72,6 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
     if (formData.phone.trim() && !/^[+\d\s\-().]{5,30}$/.test(formData.phone)) {
       newErrors.phone = 'Enter a valid phone number';
     }
-    if (formData.name.trim().length > 120) newErrors.name = 'Name must be 120 characters or less';
     if (!formData.current_agency_name.trim()) newErrors.current_agency_name = 'Agency name is required';
 
     setErrors(newErrors);
@@ -118,6 +118,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
       onOpenChange(false);
       if (onSuccess) onSuccess();
     } catch (err) {
+      console.error('Save agent error:', err);
       toast.error(err.message || 'Failed to save agent');
       setError(err.message || 'Failed to save agent');
     } finally {

@@ -303,22 +303,33 @@ export default function BulkActionBar({
                 });
                 setIsProcessing(true);
                 // Race condition fix: use allSettled so partial failures don't mask successful updates
-                Promise.allSettled(
-                  allMessages.map(({ id, labels }) => api.entities.EmailMessage.update(id, { labels }))
-                ).then((results) => {
-                  const failed = results.filter(r => r.status === 'rejected').length;
-                  if (failed > 0 && failed < allMessages.length) {
-                    toast.warning(`Labels updated with ${failed} error${failed !== 1 ? 's' : ''} — some messages may be out of sync`);
-                  } else if (failed === allMessages.length) {
+                // Chunk updates to avoid overwhelming the API at scale
+                (async () => {
+                  try {
+                    const CHUNK = 25;
+                    const allResults = [];
+                    for (let i = 0; i < allMessages.length; i += CHUNK) {
+                      const chunkResults = await Promise.allSettled(
+                        allMessages.slice(i, i + CHUNK).map(({ id, labels }) => api.entities.EmailMessage.update(id, { labels }))
+                      );
+                      allResults.push(...chunkResults);
+                    }
+                    const failed = allResults.filter(r => r.status === 'rejected').length;
+                    if (failed > 0 && failed < allMessages.length) {
+                      toast.warning(`Labels updated with ${failed} error${failed !== 1 ? 's' : ''} — some messages may be out of sync`);
+                    } else if (failed === allMessages.length) {
+                      toast.error("Failed to update labels");
+                    } else {
+                      toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
+                    }
+                    setSelectedMessages(new Set());
+                    onRefetch();
+                  } catch {
                     toast.error("Failed to update labels");
-                  } else {
-                    toast.success(`Labels updated for ${selectedCount} email${selectedCount !== 1 ? 's' : ''}`);
+                  } finally {
+                    setIsProcessing(false);
                   }
-                  setSelectedMessages(new Set());
-                  onRefetch();
-                }).finally(() => {
-                  setIsProcessing(false);
-                });
+                })();
               }}
               isAdmin={user?.role === "master_admin"}
               compact={false}

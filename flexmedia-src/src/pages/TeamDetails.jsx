@@ -261,11 +261,6 @@ function PipelineBar({ status }) {
 }
 
 function MiniProjectCard({ project }) {
-  const wonProjects = [project].filter(p => p.outcome === 'won');
-  const lostProjects = [project].filter(p => p.outcome === 'lost');
-  const totalClosed = wonProjects.length + lostProjects.length;
-  const winRate = totalClosed > 0 ? Math.round((wonProjects.length / totalClosed) * 100) : null;
-
   return (
     <Link
       to={createPageUrl(`ProjectDetails?id=${project.id}`)}
@@ -276,6 +271,11 @@ function MiniProjectCard({ project }) {
           <ProjectStatusBadge status={project.status} />
           <p className="text-xs font-medium text-foreground mt-1 truncate">{project.title}</p>
         </div>
+        {project.outcome && (
+          <Badge className={`text-[9px] shrink-0 ${project.outcome === 'won' ? 'bg-green-100 text-green-700 border-green-200' : project.outcome === 'lost' ? 'bg-red-100 text-red-700 border-red-200' : 'bg-muted text-muted-foreground'}`}>
+            {project.outcome}
+          </Badge>
+        )}
       </div>
       <PipelineBar status={project.status} />
       <div className="flex justify-between text-[10px] text-muted-foreground mt-1.5">
@@ -289,24 +289,6 @@ function MiniProjectCard({ project }) {
           </span>
         ) : null}
       </div>
-      {winRate !== null && (
-        <div className="mt-2 pt-2 border-t border-border/30">
-          <div className="flex items-center justify-between text-[10px] mb-1">
-            <span className="text-muted-foreground">
-              {wonProjects.length}W / {lostProjects.length}L
-            </span>
-            <span className="font-medium text-green-600">{winRate}%</span>
-          </div>
-          <div className="w-full bg-muted rounded-full h-1">
-            {wonProjects.length > 0 && (
-              <div
-                className="h-1 bg-green-500 rounded-full"
-                style={{ width: `${winRate}%` }}
-              />
-            )}
-          </div>
-        </div>
-      )}
     </Link>
   );
 }
@@ -371,6 +353,7 @@ function ActivityFeed({ interactions, projects }) {
             </div>
           );
         }
+        return null;
       })}
     </div>
   );
@@ -473,7 +456,7 @@ export default function TeamDetails() {
     },
     [memberIds]
   );
-  const { data: projects = [] } = useEntityList('Project', '-created_date', 200, projectFilter);
+  const { data: projects = [] } = useEntityList('Project', '-created_date', 200, members.length > 0 ? projectFilter : null);
   const { data: orgNotes = [] } = useEntityList('OrgNote', '-created_date', null, noteFilter);
   const { data: interactions = [] } = useEntityList('InteractionLog', '-date_time', 100, interactionFilter);
 

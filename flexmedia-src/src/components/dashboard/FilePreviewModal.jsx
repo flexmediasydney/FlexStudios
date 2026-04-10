@@ -75,13 +75,13 @@ export default function FilePreviewModal({ isOpen, onClose, file }) {
             </div>
           ) : previewUrl ? (
             isImage ? (
-              <img src={previewUrl} alt={file.name} className="max-w-full max-h-full object-contain" />
+              <img src={previewUrl} alt={file.name || 'File preview'} loading="lazy" className="max-w-full max-h-full object-contain" onError={(e) => { e.target.onerror = null; setError('Failed to load image preview'); }} />
             ) : isPdf || isVideo ? (
               <div className="text-center">
                 <p className="text-muted-foreground mb-4">Preview not available in browser</p>
                 <Button asChild>
                   <a href={previewUrl} target="_blank" rel="noopener noreferrer">
-                    Open {(ext || 'file').toUpperCase()} <ExternalLink className="h-4 w-4 ml-2" />
+                    Open {(ext || 'File').toUpperCase()} <ExternalLink className="h-4 w-4 ml-2" />
                   </a>
                 </Button>
               </div>

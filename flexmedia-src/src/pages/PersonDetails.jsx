@@ -203,7 +203,7 @@ function Section({ title, badge, children, defaultOpen = true }) {
 }
 
 const STAGES = [
-  { key: 'to_be_scheduled', color: 'bg-gray-300' },
+  { key: 'to_be_scheduled', color: 'bg-muted-foreground/40' },
   { key: 'scheduled',       color: 'bg-blue-400' },
   { key: 'onsite',          color: 'bg-orange-400' },
   { key: 'uploaded',        color: 'bg-yellow-400' },
@@ -215,7 +215,7 @@ const STAGES = [
 ];
 
 const STATUS_BORDER = {
-  to_be_scheduled: 'border-l-gray-300',
+  to_be_scheduled: 'border-l-muted-foreground/30',
   scheduled: 'border-l-blue-400',
   onsite: 'border-l-orange-400',
   uploaded: 'border-l-yellow-400',
@@ -261,6 +261,105 @@ function ErrorState({ navigate, title, message }) {
           <p className="text-red-800 dark:text-red-300 text-sm mt-1">{message}</p>
         </div>
       </div>
+    </div>
+  );
+}
+
+function MiniProjectCard({ project }) {
+  return (
+    <Link
+      to={createPageUrl(`ProjectDetails?id=${project.id}`)}
+      className="block p-2.5 rounded-lg bg-muted/40 hover:bg-muted/60 transition-colors"
+    >
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="flex-1 min-w-0">
+          <ProjectStatusBadge status={project.status} />
+          <p className="text-xs font-medium text-foreground mt-1 truncate">{project.title}</p>
+        </div>
+        {project.outcome && (
+          <Badge className={`text-[9px] shrink-0 ${project.outcome === 'won' ? 'bg-green-100 text-green-700 border-green-200' : project.outcome === 'lost' ? 'bg-red-100 text-red-700 border-red-200' : 'bg-muted text-muted-foreground'}`}>
+            {project.outcome}
+          </Badge>
+        )}
+      </div>
+      <PipelineBar status={project.status} />
+      <div className="flex justify-between text-[10px] text-muted-foreground mt-1.5">
+        <span>
+          {project.shoot_date ? fmtDate(project.shoot_date, 'd MMM') : '—'} →{' '}
+          {project.delivery_date ? fmtDate(project.delivery_date, 'd MMM') : '—'}
+        </span>
+        {project.calculated_price || project.price ? (
+          <span className="font-medium text-foreground">
+            ${project.calculated_price || project.price}
+          </span>
+        ) : null}
+      </div>
+    </Link>
+  );
+}
+
+function ActivityFeed({ interactions, projects }) {
+  const allEvents = useMemo(() => {
+    const items = [];
+    interactions.forEach(inter => {
+      items.push({
+        type: 'interaction',
+        data: inter,
+        date: inter.date_time || inter.created_date,
+      });
+    });
+    projects.forEach(proj => {
+      if (proj.last_status_change) {
+        items.push({
+          type: 'project_update',
+          data: proj,
+          date: proj.last_status_change,
+        });
+      }
+    });
+    return items.sort((a, b) => new Date(fixTimestamp(b.date)) - new Date(fixTimestamp(a.date)));
+  }, [interactions, projects]);
+
+  if (allEvents.length === 0) {
+    return <p className="text-sm text-muted-foreground">No activity yet</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {allEvents.map((item, idx) => {
+        if (item.type === 'interaction') {
+          const inter = item.data;
+          return (
+            <div key={`inter-${inter.id}`} className="flex gap-3 text-sm">
+              <MessageSquare className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-foreground font-medium">{inter.interaction_type || 'Interaction'}</p>
+                {inter.notes && <p className="text-xs text-muted-foreground mt-0.5">{inter.notes}</p>}
+                <p className="text-xs text-muted-foreground mt-1">
+                  {formatRelative(fixTimestamp(inter.date_time || inter.created_date))}
+                </p>
+              </div>
+            </div>
+          );
+        } else if (item.type === 'project_update') {
+          const proj = item.data;
+          return (
+            <div key={`proj-${proj.id}`} className="flex gap-3 text-sm">
+              <Activity className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-foreground font-medium">{proj.title}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Status changed to <span className="font-medium capitalize">{(proj.status || '').replace(/_/g, ' ')}</span>
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {formatRelative(fixTimestamp(proj.last_status_change))}
+                </p>
+              </div>
+            </div>
+          );
+        }
+        return null;
+      })}
     </div>
   );
 }
@@ -511,7 +610,9 @@ export default function PersonDetails() {
     return (
       <div className="flex flex-col h-[calc(100vh-4rem)] lg:h-screen overflow-hidden bg-background">
         <div className="flex items-center gap-3 px-5 py-3 border-b bg-card shrink-0 shadow-sm">
-          <div className="h-8 w-8 rounded-md bg-muted animate-pulse" />
+          <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
+          <div className="w-px h-5 bg-border" />
+          <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
           <div className="h-5 w-48 rounded bg-muted animate-pulse" />
           <div className="h-5 w-16 rounded-full bg-muted animate-pulse" />
         </div>
@@ -562,7 +663,7 @@ export default function PersonDetails() {
         <h1 className="text-base font-bold truncate leading-tight">{agent.name}</h1>
 
         {agent.relationship_state && (
-          <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-muted text-foreground/80'}`}>
+          <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agent.relationship_state] || 'bg-muted text-muted-foreground'}`}>
             {agent.relationship_state.toUpperCase()}
           </Badge>
         )}

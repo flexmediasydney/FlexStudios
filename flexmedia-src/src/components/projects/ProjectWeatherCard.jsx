@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { Cloud, Sun, CloudRain, CloudSnow, Wind, Thermometer, Droplets, Sunrise } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import WeatherHourlyBreakdown from "./WeatherHourlyBreakdown";
+import { OPEN_METEO_FORECAST_URL, OPEN_METEO_GEOCODING_URL } from "@/lib/constants";
 
 // WMO weather code to description + icon
 function getWeatherInfo(code) {
@@ -110,7 +111,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
         // Step 1: Geocode suburb — include state + Australia for accuracy
         const searchTerm = [suburb, addressState, 'Australia'].filter(Boolean).join(' ');
         const geoRes = await fetch(
-          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchTerm)}&count=10&language=en&format=json`,
+          `${OPEN_METEO_GEOCODING_URL}?name=${encodeURIComponent(searchTerm)}&count=10&language=en&format=json`,
           { signal: controller.signal }
         );
         const geoData = await geoRes.json();
@@ -137,7 +138,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
 
         // Step 2: Fetch weather for shoot date
          const weatherRes = await fetch(
-           `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+           `${OPEN_METEO_FORECAST_URL}?latitude=${latitude}&longitude=${longitude}` +
            `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,sunset` +
            `&timezone=Australia%2FSydney&start_date=${shootDate}&end_date=${shootDate}`,
            { signal: controller.signal }

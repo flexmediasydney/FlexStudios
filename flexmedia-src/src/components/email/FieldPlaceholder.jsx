@@ -11,13 +11,13 @@ export default function FieldPlaceholder({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-gray-100 text-gray-700 text-sm border border-gray-200 hover:bg-gray-150 transition-colors group",
+        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-gray-100 text-foreground/80 text-sm border border-gray-200 hover:bg-gray-150 transition-colors group",
         className
       )}
       contentEditable={false}
       suppressContentEditableWarning
     >
-      {Icon && <Icon className="h-3.5 w-3.5 text-gray-500 flex-shrink-0" />}
+      {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
       <span className="font-medium">{field}</span>
       {onRemove && (
         <button

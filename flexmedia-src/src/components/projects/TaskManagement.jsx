@@ -414,10 +414,11 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       }
     },
     onError: (err) => {
+      console.error("Task update error:", err);
       if (err?.message?.includes('ircular') || err?.message?.includes('loop')) {
-        toast.error(err.message);
+        toast.error("This change would create a circular dependency. Please review the task relationships.");
       } else {
-        toast.error(err?.message || "Failed to update task");
+        toast.error("Failed to update task. Please try again.");
       }
     },
   });
@@ -540,6 +541,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
         is_completed: !wasCompleted,
         ...(wasCompleted ? { completed_at: null } : { completed_at: new Date().toISOString() }),
       });
+      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       logActivity(
         wasCompleted ? 'task_added' : 'task_completed',
         wasCompleted
@@ -609,9 +611,10 @@ export default function TaskManagement({ projectId, project, canEdit }) {
         toast.success(wasCompleted ? "Task re-opened" : "Task completed");
       }
     } catch (err) {
+      console.error("Task update error:", err);
       toast.error(err.message || "Failed to update task");
     } finally {
-      // Clear optimistic state — real data from refetch takes over on success;
+      // Clear optimistic state -- real data from refetch takes over on success;
       // on error this reverts the UI to the server-true state
       setOptimisticCompletions(prev => {
         const next = { ...prev };

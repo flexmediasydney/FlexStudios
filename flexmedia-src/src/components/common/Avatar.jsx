@@ -11,7 +11,7 @@ export default function UserAvatar({ name, email, src, size = "default" }) {
 
   return (
     <Avatar className={sizeMap[size]} title={name || email}>
-      {src && <AvatarImage src={src} />}
+      {src && <AvatarImage src={src} alt={name || email || 'User avatar'} />}
       <AvatarFallback>{initials}</AvatarFallback>
     </Avatar>
   );

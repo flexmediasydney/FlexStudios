@@ -484,6 +484,10 @@ const authApi = {
       };
     }
 
+    if (appUser.is_active === false) {
+      throw new Error('Your account has been deactivated. Please contact your administrator.');
+    }
+
     return appUser;
   },
 

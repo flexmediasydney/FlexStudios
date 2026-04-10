@@ -136,7 +136,18 @@ export default function Dashboard() {
       .reduce((sum, p) => sum + projectValue(p), 0);
 
     const revenueGrowth = lastWeekRevenue > 0 ? ((thisWeekRevenue - lastWeekRevenue) / lastWeekRevenue * 100).toFixed(1) : 0;
-    
+
+    // Projects growth (was duplicated in executiveMetrics, now computed once here)
+    const thisWeekProjects = projects.filter(p => {
+      if (!p?.created_date) return false;
+      try { return new Date(fixTimestamp(p.created_date)) >= last7Days; } catch { return false; }
+    });
+    const lastWeekProjects = projects.filter(p => {
+      if (!p?.created_date) return false;
+      try { const d = new Date(fixTimestamp(p.created_date)); return d >= last14Days && d < last7Days; } catch { return false; }
+    });
+    const projectsGrowth = lastWeekProjects.length > 0 ? ((thisWeekProjects.length - lastWeekProjects.length) / lastWeekProjects.length * 100).toFixed(1) : 0;
+
     const totalRevenue = projects.reduce((sum, p) => sum + projectValue(p), 0);
     const averageValue = projects.length > 0 ? totalRevenue / projects.length : 0;
     
@@ -164,7 +175,7 @@ export default function Dashboard() {
       totalRevenue,
       revenueGrowth: parseFloat(revenueGrowth),
       activeProjectCount: activeProjects.length,
-      projectsGrowth: 0,
+      projectsGrowth: parseFloat(projectsGrowth),
       completionRate: parseFloat(completionRate),
       completionTrend: parseFloat(completionTrend),
       averageValue,
@@ -225,14 +236,28 @@ export default function Dashboard() {
       valueGrowth: 0,
       deliverySpeed: analytics.deliverySpeed,
       speedTrend: 0,
-      clientSatisfaction: 0,
-      satisfactionTrend: 0,
+      clientSatisfaction: analytics.clientSatisfaction ?? 0,
+      satisfactionTrend: analytics.satisfactionTrend ?? 0,
       teamUtilization: analytics.teamUtilization,
-      utilizationTrend: 0,
+      utilizationTrend: analytics.utilizationTrend ?? 0,
       overdueItems: analytics.overdueItems,
       overdueTrend: 0
     };
   }, [analytics, projects]);
+
+  // Revenue breakdown by status
+  const revenueBreakdown = useMemo(() => {
+    const projectValue = (p) => p.invoiced_amount ?? p.calculated_price ?? p.price ?? 0;
+    const won = projects.filter(p => p.outcome === "won").reduce((sum, p) => sum + projectValue(p), 0);
+    const active = projects.filter(p => p.outcome === "open" && !["delivered"].includes(p.status)).reduce((sum, p) => sum + projectValue(p), 0);
+    const lost = projects.filter(p => p.outcome === "lost").reduce((sum, p) => sum + projectValue(p), 0);
+    
+    return [
+      { name: 'Won', value: won, status: 'won' },
+      { name: 'Active Pipeline', value: active, status: 'active' },
+      { name: 'Lost', value: lost, status: 'lost' }
+    ].filter(d => d.value > 0);
+  }, [projects]);
 
   // Velocity data (last 8 weeks)
   // BUG FIX: capture `now` once outside the loop to avoid calling new Date()
@@ -293,8 +318,16 @@ export default function Dashboard() {
       }
     });
 
+    // Pre-index tasks by assignee to avoid O(N*M) per-user filter
+    const tasksByAssignee = {};
+    allTasks.forEach(t => {
+      if (t.assigned_to) {
+        if (!tasksByAssignee[t.assigned_to]) tasksByAssignee[t.assigned_to] = [];
+        tasksByAssignee[t.assigned_to].push(t);
+      }
+    });
     Object.values(userStats).forEach(u => {
-      const userTasks = allTasks.filter(t => t.assigned_to === u.id);
+      const userTasks = tasksByAssignee[u.id] || [];
       const estimated = userTasks.reduce((sum, t) => sum + ((t.estimated_minutes || 0) * 60), 0);
       u.utilization = estimated > 0 ? Math.round((u.hoursLogged / estimated) * 100) : 0;
     });
@@ -444,7 +477,7 @@ export default function Dashboard() {
       {/* Dashboard Tabs */}
       <React.Suspense fallback={<DashboardSkeleton />}>
       <Tabs value={activeTab} onValueChange={handleDashboardTabChange} className="space-y-4">
-       <div className="sticky top-0 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
+       <div className="sticky top-14 lg:top-16 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
          <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap -webkit-overflow-scrolling-touch" style={{ WebkitOverflowScrolling: 'touch' }}>
            <TabsTrigger 
              value="overview" 
@@ -741,7 +774,7 @@ function DashboardSkeleton() {
         </Card>
       </div>
       {/* Skeleton: Stats grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
         {Array(8).fill(0).map((_, i) => (
           <Card key={i} className="p-3">
             <div className="flex items-center justify-between mb-2">

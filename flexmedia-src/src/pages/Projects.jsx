@@ -20,7 +20,7 @@ import CardFieldsCustomizer, { CardFieldsCustomizerButton } from "@/components/p
 import ProjectFiltersSort from "@/components/projects/ProjectFiltersSort";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import { useCardFields } from "@/components/projects/useCardFields";
@@ -32,6 +32,7 @@ import KeyboardShortcutsModal from "@/components/common/KeyboardShortcutsModal";
 
 
 export default function Projects() {
+  const navigate = useNavigate();
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -179,6 +180,38 @@ export default function Projects() {
     return map;
   }, [allTasks]);
 
+  // Pre-compute maps so table cells don't need O(n) filter per row.
+  // Declared before filteredProjects because it uses tasksByProject in its sort.
+  const tasksByProject = useMemo(() => {
+    const map = {};
+    allTasks.forEach(t => {
+      if (!t.parent_task_id) {
+        if (!map[t.project_id]) map[t.project_id] = [];
+        map[t.project_id].push(t);
+      }
+    });
+    return map;
+  }, [allTasks]);
+
+  // All tasks (including subtasks) indexed by project — used for assignment filters
+  const allTasksByProject = useMemo(() => {
+    const map = {};
+    allTasks.forEach(t => {
+      if (!map[t.project_id]) map[t.project_id] = [];
+      map[t.project_id].push(t);
+    });
+    return map;
+  }, [allTasks]);
+
+  const timeLogsByProject = useMemo(() => {
+    const map = {};
+    allTimeLogs.forEach(l => {
+      if (!map[l.project_id]) map[l.project_id] = [];
+      map[l.project_id].push(l);
+    });
+    return map;
+  }, [allTimeLogs]);
+
   // Memoize filtered projects to prevent excessive recalculation (Fix #10)
   const filteredProjects = useMemo(() => {
     return allProjects
@@ -213,7 +246,7 @@ export default function Projects() {
         project.video_editor_type === 'team' ? project.video_editor_id : null,
       ].filter(Boolean));
 
-      // Task-level assignments for this project (use pre-computed map to avoid O(n*m))
+      // Task-level assignments for this project (use pre-computed map to avoid O(N*M))
       const projectTasksForProject = allTasksByProject[project.id] || [];
 
       // "My Projects": current user is assigned at project-role level OR has a task assigned
@@ -334,7 +367,7 @@ export default function Projects() {
       }
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
-  }, [allProjects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
+  }, [allProjects, projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, allEmployeeRoles, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
 
   // tasksByProject is now computed above filteredProjects (Bug fix #7)
 
@@ -684,7 +717,7 @@ export default function Projects() {
               variant={fitToScreen ? "default" : "outline"}
               size="sm"
               onClick={() => setFitToScreen(!fitToScreen)}
-              className="hidden sm:flex shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9"
+              className="hidden sm:flex shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9"
               title={fitToScreen ? "Fitted to screen - click to disable" : "Click to fit columns to screen width (Shift+F)"}
               aria-label={fitToScreen ? "Disable fit to screen" : "Enable fit to screen - Shift+F"}
             >
@@ -769,7 +802,7 @@ export default function Projects() {
                   <p className="text-muted-foreground mb-4 text-xs">
                     Try broadening your search or removing some filters.
                   </p>
-                  <Button variant="outline" size="sm" onClick={() => { setSearchQuery(""); setSearchInput(""); setFilters({}); setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); }} className="shadow-sm hover:shadow-md transition-shadow focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9">
+                  <Button variant="outline" size="sm" onClick={() => { setSearchQuery(""); setSearchInput(""); setFilters({}); setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); }} className="shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9">
                     <X className="h-4 w-4 mr-1.5" />
                     Clear All Filters
                   </Button>
@@ -827,9 +860,13 @@ export default function Projects() {
           setShowProjectForm(false);
           setEditingProject(null);
         }}
-        onSave={() => {
+        onSave={(result) => {
           setShowProjectForm(false);
           setEditingProject(null);
+          // Navigate to the newly created project so the user sees it immediately
+          if (result?.isNew && result?.id) {
+            navigate(createPageUrl("ProjectDetails") + `?id=${result.id}`);
+          }
         }}
       />
 

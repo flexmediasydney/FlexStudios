@@ -17,16 +17,13 @@ import { fmtDate, parseDate, todaySydney, fixTimestamp } from '@/components/util
 import { differenceInDays, format } from 'date-fns';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import MarkerClusterLayer from './MarkerClusterLayer';
+import { LEAFLET_ICON_OPTIONS } from '@/lib/constants';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
 // Fix leaflet default icons
 delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl:       'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl:     'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-});
+L.Icon.Default.mergeOptions(LEAFLET_ICON_OPTIONS);
 
 // ─── Carto Positron — fast CDN, designed for data overlays ───────────────────
 const TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';

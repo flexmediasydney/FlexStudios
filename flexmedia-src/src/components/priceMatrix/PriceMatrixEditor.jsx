@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
@@ -23,6 +23,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
   const [showActivity, setShowActivity] = useState(false);
   const [activeSection, setActiveSection] = useState("overrides"); // "overrides" | "summary"
   const lastSavedJsonRef = useRef(null);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     const incomingJson = JSON.stringify(priceMatrix);
@@ -97,10 +98,13 @@ export default function PriceMatrixEditor({ priceMatrix }) {
     onSuccess: async () => {
       toast.success("Pricing saved");
       lastSavedJsonRef.current = JSON.stringify(localData);
+      // PriceMatrix data is loaded via useEntityList (custom cache), not react-query,
+      // so we must use refetchEntityList to actually refresh the UI.
       await refetchEntityList("PriceMatrix");
       refetchEntityList("PriceMatrixAuditLog");
+      queryClient.invalidateQueries({ queryKey: ["price-matrix-audit", priceMatrix.id] });
     },
-    onError: (error) => toast.error("Failed to save: " + (error?.message || "Unknown error"))
+    onError: (error) => { console.error("Price matrix save error:", error); toast.error("Failed to save pricing. Please try again."); }
   });
 
   const setField = (path, value) => {

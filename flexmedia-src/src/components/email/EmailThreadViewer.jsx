@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { 
@@ -32,10 +33,16 @@ import { sanitizeEmailHtml as _baseSanitize } from '@/utils/sanitizeHtml';
 const sanitizeEmailHtml = (html) => {
   if (!html) return '';
   let clean = _baseSanitize(html);
-  // Auto-link plain text URLs that aren't already inside <a> tags
+  // Auto-link plain text URLs that aren't already inside <a> tags.
+  // Split on existing <a>...</a> tags so we only linkify outside them.
   clean = clean.replace(
-    /(?<![="'>])(https?:\/\/[^\s<>"']+)/gi,
-    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    /(<a\b[^>]*>[\s\S]*?<\/a>)|(?<![="'])(https?:\/\/[^\s<>"']+)/gi,
+    (match, anchorTag, url) => {
+      // If this is an existing <a> tag, leave it unchanged
+      if (anchorTag) return anchorTag;
+      // Otherwise wrap the bare URL in a new <a> tag
+      return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+    }
   );
   // Ensure ALL links open in new tab (some emails have <a> without target)
   clean = clean.replace(/<a\s(?![^>]*target=)/gi, '<a target="_blank" rel="noopener noreferrer" ');
@@ -86,13 +93,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       latestMessageRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }, [thread.threadId]);
-  const { data: user } = useQuery({
-    queryKey: ['current-user'],
-    queryFn: () => api.auth.me()
-  });
+  const { data: user } = useCurrentUser();
 
   // Subscribe to real-time updates for all messages in this thread
-  const messageIds = thread.messages.map(m => m.id);
   const [liveMessages, setLiveMessages] = useState(thread.messages);
 
   // Reset state when navigating between threads (J/K keys)
@@ -157,15 +160,25 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     return unsubscribe;
   }, [thread.threadId, thread.email_account_id, user?.id, account?.assigned_to_user_id]);
 
-  // Use live messages, sorted by received_at (slice to avoid mutating state)
-  const freshThread = {
+  // Memoize derived thread to avoid re-sorting on every render
+  const freshThread = useMemo(() => ({
     ...thread,
     messages: [...liveMessages].sort((a, b) => new Date(a.received_at) - new Date(b.received_at))
-  };
+  }), [thread, liveMessages]);
 
   // Use the latest message as the canonical source for labels, priority, visibility, and actions.
   // messages are sorted oldest→newest (ascending received_at), so last index = most recent.
   const msg = freshThread.messages[freshThread.messages.length - 1];
+
+  // Guard: if thread has no messages (e.g. all deleted), bail early
+  if (!msg) {
+    return (
+      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+        <p>No messages in this thread.</p>
+        <Button variant="ghost" size="sm" onClick={onBack} className="ml-3">Back</Button>
+      </div>
+    );
+  }
 
   const copyEmail = (email) => {
     navigator.clipboard.writeText(email);
@@ -523,6 +536,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
 
       // Don't fire action shortcuts when reply composer is open (except Escape)
       const composerOpen = replyExpanded || showForward;
+
 
       // Shift+R = Reply All
       if ((e.key === 'R') && e.shiftKey) {
@@ -1358,7 +1372,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Details</p>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1">
           <div className="p-4 space-y-3">
             {/* Contact card */}
             <ContactInfoCard

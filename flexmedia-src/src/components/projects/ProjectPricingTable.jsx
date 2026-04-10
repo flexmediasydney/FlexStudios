@@ -14,6 +14,8 @@ import { PricingTableBody } from "./PricingTableBody";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
+import { writeFeedEvent } from "@/components/notifications/createNotification";
+import { toast } from "sonner";
 
 export default function ProjectPricingTable({ 
   project, 
@@ -41,7 +43,17 @@ export default function ProjectPricingTable({
   const [pendingCalcResult, setPendingCalcResult] = useState(null);
   // ^ holds the full backend calc result between step 1 (verify) and step 2 (confirm)
   const [currentPage, setCurrentPage] = useState(0);
+  const refreshTimerRef = useRef(null);
+  const debouncedTimerRef = useRef(null);
   const ITEMS_PER_PAGE = 10; // Pagination to reduce large renders
+
+  // Clean up pending timers on unmount to prevent setState-after-unmount
+  useEffect(() => {
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      if (debouncedTimerRef.current) clearTimeout(debouncedTimerRef.current);
+    };
+  }, []);
 
   const tierKey = pricingTier === "premium" ? "premium_tier" : "standard_tier";
 
@@ -231,7 +243,8 @@ export default function ProjectPricingTable({
         setError("Pricing verification failed. Please try again.");
       }
     } catch (err) {
-      setError(err.message || "Failed to verify pricing");
+      console.error("Pricing verification error:", err);
+      setError("Failed to verify pricing. Please try again.");
     } finally {
       setIsVerifying(false);
     }
@@ -343,15 +356,19 @@ export default function ProjectPricingTable({
 
       // Force entity cache refresh for tasks after backend sync completes
       // The sync is fire-and-forget so we delay to give it time to finish
-      setTimeout(() => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(() => {
         refetchEntityList('ProjectTask');
         refetchEntityList('Project');
+        refreshTimerRef.current = null;
       }, 2500);
-      
+
       setPendingTotal(null);
       setPendingCalcResult(null);
+      toast.success("Pricing saved successfully");
     } catch (err) {
-      setError(err.message || "Failed to save changes");
+      console.error("Pricing save error:", err);
+      setError("Failed to save pricing changes. Please try again.");
     } finally {
       setIsSaving(false);
     }

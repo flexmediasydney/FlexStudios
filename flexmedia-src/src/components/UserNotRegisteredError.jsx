@@ -1,6 +1,12 @@
 import React from 'react';
+import { supabase } from '@/api/supabaseClient';
 
-const UserNotRegisteredError = () => {
+const UserNotRegisteredError = ({ message }) => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    window.location.href = '/login';
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-background to-muted/30">
       <div className="max-w-md w-full p-8 bg-card rounded-lg shadow-lg border border-border">
@@ -12,7 +18,7 @@ const UserNotRegisteredError = () => {
           </div>
           <h1 className="text-3xl font-bold text-foreground mb-4">Access Restricted</h1>
           <p className="text-muted-foreground mb-8">
-            You are not registered to use this application. Please contact the app administrator to request access.
+            {message || 'You are not registered to use this application. Please contact the app administrator to request access.'}
           </p>
           <div className="p-4 bg-muted/50 rounded-md text-sm text-muted-foreground">
             <p>If you believe this is an error, you can:</p>
@@ -24,13 +30,7 @@ const UserNotRegisteredError = () => {
           </div>
           <div className="mt-6 flex gap-3 justify-center">
             <button
-              onClick={() => {
-                // Clear all Supabase auth state from localStorage
-                Object.keys(localStorage).forEach(key => {
-                  if (key.startsWith('sb-')) localStorage.removeItem(key);
-                });
-                window.location.href = '/login';
-              }}
+              onClick={handleLogout}
               className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors"
             >
               Sign out and try again

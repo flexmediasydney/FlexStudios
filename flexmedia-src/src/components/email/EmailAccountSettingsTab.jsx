@@ -111,7 +111,7 @@ export default function EmailAccountSettingsTab() {
       queryClient.invalidateQueries({ queryKey: ["email-accounts", user?.id] });
       toast.success("Saved.");
     },
-    onError: (err) => toast.error("Failed to save: " + err.message),
+    onError: (err) => { console.error("Account update error:", err); toast.error("Failed to save account settings. Please try again."); },
   });
 
   const handleFieldSave = (field, value) => updateAccountMutation.mutate({ [field]: value });
@@ -130,7 +130,7 @@ export default function EmailAccountSettingsTab() {
       queryClient.invalidateQueries({ queryKey: ["email-conversations"] });
       toast.success(n > 0 ? `Synced ${n} new email${n !== 1 ? "s" : ""}.` : "Already up to date.");
     },
-    onError: (err) => toast.error("Sync failed: " + err.message),
+    onError: (err) => { console.error("Email sync error:", err); toast.error("Email sync failed. Please check your connection and try again."); },
   });
 
   // FIX 9: reconnect flow — sends reconnectAccountId in state
@@ -151,7 +151,8 @@ export default function EmailAccountSettingsTab() {
         `width=${w},height=${h},left=${window.screenX + (window.outerWidth - w) / 2},top=${window.screenY + (window.outerHeight - h) / 2}`
       );
     } catch (err) {
-      toast.error(err.message || "Could not start reconnect");
+      console.error("Reconnect error:", err);
+      toast.error("Could not start reconnect. Please try again.");
       setIsReconnecting(false);
     }
   };
@@ -242,7 +243,7 @@ export default function EmailAccountSettingsTab() {
       setSelectedAccountId(null);
       toast.success("Account disconnected.");
     },
-    onError: (err) => toast.error("Failed to disconnect: " + err.message),
+    onError: (err) => { console.error("Disconnect error:", err); toast.error("Failed to disconnect account. Please try again."); },
   });
 
   if (accountsLoading) {
@@ -661,7 +662,8 @@ export default function EmailAccountSettingsTab() {
                             }
                             toast.success(`${emails.length} emails updated to shared visibility`, { id: 'backfill-visibility' });
                           } catch (err) {
-                            toast.error('Failed to update emails: ' + (err?.message || 'Unknown error'), { id: 'backfill-visibility' });
+                            console.error('Backfill visibility error:', err);
+                            toast.error('Failed to update email visibility. Please try again.', { id: 'backfill-visibility' });
                           }
                         }}
                       >
@@ -886,7 +888,8 @@ function AddGmailAccountForm({ onSuccess }) {
         `width=${w},height=${h},left=${window.screenX + (window.outerWidth - w) / 2},top=${window.screenY + (window.outerHeight - h) / 2}`
       );
     } catch (err) {
-      toast.error(err.message || "Failed to start connection.");
+      console.error("Gmail connection error:", err);
+      toast.error("Failed to start Gmail connection. Please try again.");
       setIsConnecting(false);
     }
   };

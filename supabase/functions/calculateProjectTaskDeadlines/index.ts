@@ -207,6 +207,7 @@ Deno.serve(async (req) => {
     let project: any, allTasks: any[];
     try {
       project = await entities.Project.get(project_id);
+      if (!project) return jsonResponse({ error: 'Project not found' }, 404);
       allTasks = await entities.ProjectTask.filter({ project_id });
     } catch (err: any) {
       if (err.status === 404) return jsonResponse({ error: 'Project not found' }, 404);

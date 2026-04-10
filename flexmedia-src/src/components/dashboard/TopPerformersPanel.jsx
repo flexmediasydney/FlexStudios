@@ -60,7 +60,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
               >
                 <Avatar className="h-8 w-8">
                   <AvatarFallback className="text-xs bg-primary/10 text-primary font-semibold">
-                    {(agent.name || '?').split(' ').map(n => n[0]).join('').slice(0, 2)}
+                    {(agent.name || '?').split(' ').map(n => n[0]).join('').slice(0, 2) || '?'}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
@@ -68,7 +68,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
                     {agent.name}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    ${(agent.revenue / 1000).toFixed(1)}k • {agent.count} projects
+                    ${((agent.revenue || 0) / 1000).toFixed(1)}k • {agent.count || 0} projects
                   </p>
                 </div>
               </Link>
@@ -89,7 +89,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
               >
                 <Avatar className="h-8 w-8">
                   <AvatarFallback className="text-xs bg-blue-500/10 text-blue-600 font-semibold">
-                    {(user.name || '?').split(' ').map(n => n[0]).join('').slice(0, 2)}
+                    {(user.name || '?').split(' ').map(n => n[0]).join('').slice(0, 2) || '?'}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
@@ -97,7 +97,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
                     {user.name}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {user.completedTasks} tasks • {(user.hoursLogged / 3600).toFixed(1)}h logged
+                    {user.completedTasks || 0} tasks • {((user.hoursLogged || 0) / 3600).toFixed(1)}h logged
                   </p>
                 </div>
                 <Badge variant="secondary" className="text-xs">

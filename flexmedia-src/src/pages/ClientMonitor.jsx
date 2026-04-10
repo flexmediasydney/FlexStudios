@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ExternalLink, Search, Plus, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import AgentSearch from "@/components/clientMonitor/AgentSearch";
+import { DOMAIN_AGENT_URL, REA_AGENT_URL } from "@/lib/constants";
 import ExternalListingsForm from "@/components/clientMonitor/ExternalListingsForm";
 import ListingComparison from "@/components/clientMonitor/ListingComparison";
 

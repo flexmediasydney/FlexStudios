@@ -110,9 +110,11 @@ export default function ChatMessage({ message, currentUserEmail, onPin, onDelete
                   <div className="rounded-lg overflow-hidden max-w-xs bg-muted">
                     <img
                       src={safeUrl}
-                      alt={attachment.file_name}
+                      alt={attachment.file_name || 'Attached image'}
+                      loading="lazy"
                       className="w-full h-auto max-h-64 object-cover cursor-pointer hover:opacity-90"
                       onClick={() => safeWindowOpen(safeUrl)}
+                      onError={(e) => { e.target.style.display = 'none'; }}
                     />
                   </div>
                 ) : (

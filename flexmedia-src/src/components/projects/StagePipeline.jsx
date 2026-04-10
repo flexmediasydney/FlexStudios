@@ -176,6 +176,19 @@ export default function StagePipeline({ project, onStatusChange, canEdit, allTas
     return () => { mounted = false; unsub(); };
   }, [project.id]);
 
+  // Fix orphaned timers (open timers for non-current stages) outside render path
+  useEffect(() => {
+    if (!stageTimers.length) return;
+    const currentStageValue = project.status;
+    stageTimers.forEach(t => {
+      if (!t.exit_time && t.stage !== currentStageValue) {
+        api.entities.ProjectStageTimer.update(t.id, {
+          exit_time: t.updated_date || new Date().toISOString(),
+        }).catch(() => {});
+      }
+    });
+  }, [stageTimers, project.status]);
+
   // ── Optimistic session state ──────────────────────────────────────────────
   const sessionRef = useRef({
     status: project.status,
@@ -312,6 +325,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit, allTas
 
     // Safety: for non-current stages, enforce all timers have exit_time
     // Any open timer for a non-current stage is a bug — treat it as if it ended now
+    // Note: DB fix is deferred to useEffect below to avoid side effects during render
     const safeDbTimers = dbTimers.map(t => {
       if (!t.exit_time && !isCurrent) {
         // Orphaned open timer — patched in useEffect above, treat as closed for display

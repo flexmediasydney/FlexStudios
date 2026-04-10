@@ -4,7 +4,8 @@ import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Edit, Trash2, Users, Search } from "lucide-react";
+import { Plus, Edit, Trash2, Users, Search, Star } from "lucide-react";
+import { useTeamRoleAssignments } from "@/components/hooks/useTeamRoleAssignments";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +31,7 @@ export default function InternalTeamsManagement() {
     is_active: true
   });
   const [searchQuery, setSearchQuery] = useState("");
+  const { rolesByTeam } = useTeamRoleAssignments();
 
   const { data: teams = [] } = useQuery({
     queryKey: ["internal_teams"],
@@ -203,6 +205,7 @@ export default function InternalTeamsManagement() {
             <TableRow className="bg-muted/50">
               <TableHead className="font-semibold">Team Name</TableHead>
               <TableHead className="font-semibold">Description</TableHead>
+              <TableHead className="font-semibold">Roles</TableHead>
               <TableHead className="font-semibold">Members</TableHead>
               <TableHead className="font-semibold">Status</TableHead>
               <TableHead className="text-right font-semibold">Actions</TableHead>
@@ -211,7 +214,7 @@ export default function InternalTeamsManagement() {
           <TableBody>
             {filteredTeams.length === 0 ? (
               <TableRow>
-                <TableCell colSpan="5" className="text-center py-12">
+                <TableCell colSpan="6" className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <Users className="h-8 w-8 text-muted-foreground/40" />
                     <p className="text-sm text-muted-foreground">
@@ -255,6 +258,22 @@ export default function InternalTeamsManagement() {
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
                       {team.description || "—"}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {(rolesByTeam[team.id] || []).map(a => (
+                          <span
+                            key={a.role}
+                            className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-muted text-muted-foreground"
+                          >
+                            {(a.role || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                            {a.is_primary_fallback && <Star className="h-2.5 w-2.5 text-amber-500 fill-amber-500" />}
+                          </span>
+                        ))}
+                        {!(rolesByTeam[team.id]?.length) && (
+                          <span className="text-xs text-muted-foreground italic">None</span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">

@@ -88,26 +88,28 @@ export default function PackagesPage() {
   const { data: projectActivities = [] } = useEntityList("ProjectActivity");
 
   // Pass all active products to the dialog for selection
-  const availableProducts = products.filter(p => p.is_active);
+  const availableProducts = (products || []).filter(p => p?.is_active);
 
   const logChange = async (action, pkg, previousState, newState) => {
+    if (!pkg) return;
+
     const user = await api.auth.me().catch(() => null);
     const changedFields = action === "update" ? getChangedFields(previousState, newState) : [];
-    const summaryParts = changedFields.map(f => `${f.field}: ${f.old_value} → ${f.new_value}`);
+    const summaryParts = changedFields.map(f => `${f?.field || 'unknown'}: ${f?.old_value || ''} → ${f?.new_value || ''}`);
 
     await api.entities.PackageAuditLog.create({
       package_id: pkg.id || "new",
-      package_name: pkg.name,
+      package_name: pkg?.name || "Unnamed Package",
       action,
       user_email: user?.email || "",
       user_name: user?.full_name || user?.email || "Unknown",
       changes_summary: action === "create"
-        ? `Created package "${pkg.name}"`
+        ? `Created package "${pkg?.name || 'Unnamed'}"`
         : action === "delete"
-          ? `Deleted package "${pkg.name}"`
+          ? `Deleted package "${pkg?.name || 'Unnamed'}"`
           : summaryParts.length > 0
             ? summaryParts.join("; ")
-            : `Updated package "${pkg.name}"`,
+            : `Updated package "${pkg?.name || 'Unnamed'}"`,
       previous_state: previousState || {},
       new_state: newState || {},
       changed_fields: changedFields
@@ -115,21 +117,24 @@ export default function PackagesPage() {
   };
 
   const getImpactedItems = (pkg, newData) => {
+    if (!pkg || !newData) return { changes: [], impacts: {} };
+
     const changes = getChangedFields(pkg, newData);
-    const impactedMatrices = priceMatrices
-      .filter(pm => pm.package_pricing?.some(pp => pp.package_id === pkg.id))
-      .map(pm => pm.entity_name);
-    const impactedProjects = projects
-      .filter(proj => proj.status !== "delivered" && proj.packages?.some(p => p.package_id === pkg.id))
-      .map(proj => proj.title);
-    const impactedTasks = projectTasks
-      .filter(task => task.package_id === pkg.id)
-      .map(task => task.title);
-    const impactedSnapshots = packageSnapshots
-      .filter(snap => snap.package_id === pkg.id)
-      .map(snap => `${snap.package_name} (${new Date(snap.created_date).toLocaleDateString()})`);
-    const impactedActivities = projectActivities
-      .filter(act => act.description?.includes(pkg.name) || act.new_state?.name === pkg.name)
+    const impactedMatrices = (priceMatrices || [])
+      .filter(pm => pm?.package_pricing?.some(pp => pp?.package_id === pkg.id))
+      .map(pm => pm?.entity_name || 'Unnamed');
+    // "delivered" is the terminal status in Project — exclude it from impact count
+    const impactedProjects = (projects || [])
+      .filter(proj => proj?.status !== "delivered" && proj?.packages?.some(p => p?.package_id === pkg.id))
+      .map(proj => proj?.title || 'Untitled');
+    const impactedTasks = (projectTasks || [])
+      .filter(task => task?.package_id === pkg.id)
+      .map(task => task?.title || 'Untitled');
+    const impactedSnapshots = (packageSnapshots || [])
+      .filter(snap => snap?.package_id === pkg.id)
+      .map(snap => `${snap?.package_name || 'Unknown'} (${snap?.created_date ? new Date(snap.created_date).toLocaleDateString() : 'N/A'})`);
+    const impactedActivities = (projectActivities || [])
+      .filter(act => act?.description?.includes(pkg.name) || act?.new_state?.name === pkg.name)
       .length;
     
     return {
@@ -214,8 +219,8 @@ export default function PackagesPage() {
 
 
   // BUG FIX #9: Memoize filteredPackages to avoid re-computing on every render
-  const filteredPackages = useMemo(() => packages.filter(p => {
-    const matchesSearch = p.name?.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredPackages = useMemo(() => (packages || []).filter(p => {
+    const matchesSearch = p?.name?.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesType = !filterTypeId
       ? true
       : (p.project_type_ids || []).includes(filterTypeId);

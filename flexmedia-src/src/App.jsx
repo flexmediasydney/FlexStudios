@@ -128,18 +128,7 @@ const AuthenticatedApp = () => {
       return <UserNotRegisteredError />;
     }
     if (authError.type === 'user_deactivated') {
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-background px-4">
-          <div className="text-center space-y-4 max-w-sm">
-            <div className="mx-auto w-14 h-14 rounded-full bg-red-50 flex items-center justify-center">
-              <AlertCircle className="h-7 w-7 text-red-600" />
-            </div>
-            <h2 className="text-xl font-bold">Account Deactivated</h2>
-            <p className="text-sm text-muted-foreground">Your account has been deactivated. Please contact your administrator to regain access.</p>
-            <a href="/login" className="inline-block text-sm text-blue-600 hover:underline">Back to sign in</a>
-          </div>
-        </div>
-      );
+      return <UserNotRegisteredError message="Your account has been deactivated. Please contact your administrator to restore access." />;
     }
   }
 

@@ -115,7 +115,9 @@ export default function NotificationsPage() {
     if (!n.is_read) markRead(n.id);
     if (!n.cta_url) return;
     try {
-      const params = n.cta_params ? JSON.parse(n.cta_params) : {};
+      const params = n.cta_params
+        ? (typeof n.cta_params === 'string' ? JSON.parse(n.cta_params) : n.cta_params)
+        : {};
       // Strip leading slash to avoid createPageUrl producing "//PageName"
       const pageName = n.cta_url.replace(/^\/+/, '');
       navigate(createPageUrl(pageName) + (params.id ? `?id=${params.id}` : ""));

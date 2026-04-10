@@ -152,7 +152,7 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
                 <div className="border-2 border-dashed rounded-lg p-4 text-center">
                   {formData.floorplan_reference ? (
                     <div className="space-y-2">
-                      <img src={formData.floorplan_reference} alt="Floorplan" className="max-h-24 mx-auto" />
+                      <img src={formData.floorplan_reference} alt="Floorplan reference" loading="lazy" className="max-h-24 mx-auto" onError={(e) => { e.target.style.display = 'none'; }} />
                       <Button
                         variant="outline"
                         size="sm"
@@ -216,7 +216,7 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
                 <div className="border-2 border-dashed rounded-lg p-4 text-center">
                   {formData.images_logo_reference ? (
                     <div className="space-y-2">
-                      <img src={formData.images_logo_reference} alt="Logo" className="max-h-24 mx-auto" />
+                      <img src={formData.images_logo_reference} alt="Agency logo" loading="lazy" className="max-h-24 mx-auto" onError={(e) => { e.target.style.display = 'none'; }} />
                       <Button
                         variant="outline"
                         size="sm"

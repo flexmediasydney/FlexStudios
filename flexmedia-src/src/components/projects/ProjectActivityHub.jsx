@@ -231,6 +231,18 @@ export default function ProjectActivityHub({ projectId, project }) {
     return typeof unsub === 'function' ? unsub : undefined;
   }, [projectId, refetchEmails]);
 
+  // ── Build reply map (parent_note_id → replies[]) ──
+  const replyMap = useMemo(() => {
+    const map = {};
+    for (const n of notes) {
+      if (n.parent_note_id) {
+        if (!map[n.parent_note_id]) map[n.parent_note_id] = [];
+        map[n.parent_note_id].push(n);
+      }
+    }
+    return map;
+  }, [notes]);
+
   // ── Pinned notes ──
   const pinnedNotes = useMemo(
     () => notes.filter(n => n.is_pinned && !n.parent_note_id),
@@ -413,10 +425,12 @@ export default function ProjectActivityHub({ projectId, project }) {
                     _replies: replyMap[note.id] || [],
                   }}
                   projectId={projectId}
+                  project={project}
                   isLast={idx === pinnedNotes.length - 1}
                   onNoteRefresh={handleNoteSaved}
                   currentUser={currentUser}
                   smartTimestamp={smartTimestamp}
+                  noteReplies={replyMap[note.id] || []}
                 />
               ))}
             </div>
@@ -512,11 +526,13 @@ export default function ProjectActivityHub({ projectId, project }) {
                 key={item.id}
                 item={item}
                 projectId={projectId}
+                project={project}
                 isLast={idx === visibleItems.length - 1 && !hasMore}
                 onNoteRefresh={handleNoteSaved}
                 currentUser={currentUser}
                 isEmailOwner={item.type === 'email' && item._raw ? myAccountIds.has(item._raw.email_account_id) : false}
                 smartTimestamp={smartTimestamp}
+                noteReplies={item.type === 'note' && item._raw ? (replyMap[item._raw.id] || []) : []}
               />
             ))}
             {hasMore && (
@@ -541,6 +557,7 @@ export default function ProjectActivityHub({ projectId, project }) {
           onClose={() => setShowEmailCompose(false)}
           onSent={() => {
             queryClient.invalidateQueries({ queryKey: ['project-emails', projectId] });
+            queryClient.invalidateQueries({ queryKey: ['project-activities', projectId] });
             setShowEmailCompose(false);
           }}
           projectId={projectId}

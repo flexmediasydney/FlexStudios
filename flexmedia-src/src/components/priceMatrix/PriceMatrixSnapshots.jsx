@@ -207,6 +207,7 @@ export default function PriceMatrixSnapshots() {
     mutationFn: () => api.functions.invoke("generateMonthlyPriceMatrixSnapshots", {}),
     onSuccess: () => {
       toast.success("Snapshot captured successfully");
+      // PriceMatrixSnapshot data is loaded via useEntityList (custom cache), not react-query
       refetchEntityList("PriceMatrixSnapshot");
     },
     onError: () => toast.error("Failed to capture snapshot"),

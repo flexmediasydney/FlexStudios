@@ -74,7 +74,8 @@ export default function FileAttachmentManager({
       onChange([...attachments, ...uploaded]);
       toast.success(`${uploaded.length} file(s) attached`);
     } catch (e) {
-      toast.error("Upload failed: " + e.message);
+      console.error("File upload error:", e);
+      toast.error("File upload failed. Please check the file and try again.");
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -135,11 +136,12 @@ export default function FileAttachmentManager({
                {uploading ? "Uploading..." : "Add Files"}
              </Button>
            )}
-           <input 
-             ref={inputRef} 
-             type="file" 
-             multiple 
-             className="hidden" 
+           <input
+             ref={inputRef}
+             type="file"
+             multiple
+             className="hidden"
+             accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
              onChange={handleFileChange}
              disabled={uploading || attachments.length >= maxFiles}
            />
@@ -197,9 +199,11 @@ export default function FileAttachmentManager({
                   <div className="group/img relative max-w-xs">
                     <img
                       src={att.file_url}
-                      alt={att.file_name}
+                      alt={att.file_name || 'Attached image'}
+                      loading="lazy"
                       className="w-full h-auto max-h-48 object-cover cursor-pointer hover:opacity-90 transition-opacity"
                       onClick={() => safeWindowOpen(att.file_url)}
+                      onError={(e) => { e.target.style.display = 'none'; }}
                       title="Click to open full size"
                     />
                     <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/5 transition-colors flex items-center justify-center">
