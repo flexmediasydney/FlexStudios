@@ -609,8 +609,9 @@ Deno.serve(async (req) => {
           : null,
       });
     } catch (logErr: any) {
-      console.error('Failed to write ai_action_logs:', logErr.message);
-      // Don't fail the request over a logging error
+      console.error('Failed to write ai_action_logs:', logErr.message, logErr.details || '', logErr.hint || '');
+      // Don't fail the request over a logging error — but include in response for debugging
+      console.error('Audit payload:', JSON.stringify({ session_id, user_id: user.id, project_id, prompt_text: prompt_text?.substring(0, 50) }));
     }
 
     // ── 12. Return structured response ───────────────────────────────────────
