@@ -122,10 +122,10 @@ export default function Projects() {
   }, [searchQuery, viewMode, fitToScreen, handleCreateNew, setViewModePersisted]);
 
   // Load essential entities first batch to avoid rate limiting
-   const { data: allProjects = [], loading: projectsLoading } = useEntityList("Project", "-created_date", 200);
-   const { data: products = [], loading: productsLoading } = useEntityList("Product", "-created_date", 200);
-   const { data: packages = [], loading: packagesLoading } = useEntityList("Package", "-created_date", 200);
-   const { data: clients = [], loading: clientsLoading } = useEntityList("Client", null, 100);
+   const { data: allProjects = [], loading: projectsLoading, error: projectsError, refetch: refetchProjects } = useEntityList("Project", "-created_date", 200);
+   const { data: products = [], loading: productsLoading, error: productsError, refetch: refetchProducts } = useEntityList("Product", "-created_date", 200);
+   const { data: packages = [], loading: packagesLoading, error: packagesError, refetch: refetchPackages } = useEntityList("Package", "-created_date", 200);
+   const { data: clients = [], loading: clientsLoading, error: clientsError, refetch: refetchClients } = useEntityList("Client", null, 100);
    
    // Secondary batch: loaded but not blocking
    const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 300);
@@ -137,6 +137,7 @@ export default function Projects() {
    const { data: allEmployeeRoles = [] } = useEntityList("EmployeeRole", null, 100);
 
    const isLoading = projectsLoading || clientsLoading || productsLoading || packagesLoading;
+   const loadError = projectsError || productsError || packagesError || clientsError;
 
   // Current user's internal team memberships (via EmployeeRole) - Memoized (Fix #11)
   const myTeamIds = useMemo(() => {
@@ -292,12 +293,18 @@ export default function Projects() {
         if (!matchesTeamRole) return false;
       }
 
-      // Shoot date range filter
-      if (shootDateFrom) {
-        if (!project.shoot_date || project.shoot_date < shootDateFrom) return false;
+      // Shoot date range filter (normalize to YYYY-MM-DD to avoid string comparison issues)
+      if (shootDateFrom && project.shoot_date) {
+        const sd = project.shoot_date.slice(0, 10);
+        if (sd < shootDateFrom) return false;
+      } else if (shootDateFrom && !project.shoot_date) {
+        return false;
       }
-      if (shootDateTo) {
-        if (!project.shoot_date || project.shoot_date > shootDateTo) return false;
+      if (shootDateTo && project.shoot_date) {
+        const sd = project.shoot_date.slice(0, 10);
+        if (sd > shootDateTo) return false;
+      } else if (shootDateTo && !project.shoot_date) {
+        return false;
       }
 
       // Priority filter
@@ -469,6 +476,20 @@ export default function Projects() {
     setEditingProject(project);
     setShowProjectForm(true);
   }, []);
+
+  if (loadError && !isLoading && allProjects.length === 0) {
+    return (
+      <div className="p-8 text-center text-destructive">
+        <p className="font-medium">Failed to load projects.</p>
+        <button
+          onClick={() => { refetchProjects(); refetchProducts(); refetchPackages(); refetchClients(); }}
+          className="mt-2 text-sm underline hover:no-underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6">

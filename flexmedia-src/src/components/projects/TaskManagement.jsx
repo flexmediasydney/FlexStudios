@@ -675,7 +675,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                 title="Mark all remaining tasks complete"
                 disabled={updateMutation.isPending || deleteMutation.isPending}
                 onClick={async () => {
-                  const incomplete = tasks.filter(t => !t.is_completed && !t.is_locked && !isBlocked(t));
+                  const incomplete = tasks.filter(t => !t.is_completed && !t.is_locked && !t.is_deleted && !isBlocked(t));
                   if (incomplete.length === 0) { toast.info("No completable tasks — all remaining tasks are blocked or locked"); return; }
                   const progressToastId = toast.loading(`Completing ${incomplete.length} task${incomplete.length !== 1 ? 's' : ''}...`);
                   // Optimistic: mark all as completed immediately
@@ -760,7 +760,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       }}>
         <DialogContent className="max-w-md" onKeyDown={(e) => {
           if (e.key === 'Escape') setShowAddDialog(false);
-          if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (newTask.title?.trim()) createMutation.mutate({ ...newTask, title: newTask.title.trim(), description: (newTask.description || '').trim() || null, task_type: newTask.task_type || "back_office" }); }
+          if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (!newTask.title?.trim()) { toast.error('Task title is required'); return; } createMutation.mutate({ ...newTask, title: newTask.title.trim(), description: (newTask.description || '').trim() || null, task_type: newTask.task_type || "back_office" }); }
         }}>
           <DialogHeader><DialogTitle>Add Task</DialogTitle></DialogHeader>
           <div className="space-y-3">

@@ -56,6 +56,10 @@ Deno.serve(async (req) => {
 
     // in_progress -> completed
     if (rev.status === 'in_progress' && eventType === 'check_completion') {
+      // Guard: if already completed (concurrent event), skip
+      if (rev.status === 'completed') {
+        return jsonResponse({ success: true, skipped: true, reason: 'already_completed' });
+      }
       const activeTasks = revisionTasks.filter((t: any) => !t.is_deleted);
       const allComplete = activeTasks.length > 0 && activeTasks.every((t: any) => t.is_completed);
       if (allComplete) {

@@ -31,6 +31,11 @@ Deno.serve(async (req) => {
 
     const rev = revision[0];
 
+    // Guard: if already cancelled (concurrent request), skip
+    if (rev.status === 'cancelled') {
+      return jsonResponse({ success: true, skipped: true, reason: 'already_cancelled' });
+    }
+
     // Get all tasks for the revision
     const tasks = await entities.ProjectTask.filter({ project_id: rev.project_id });
     const revisionTasks = tasks.filter((t: any) => t.title?.startsWith(`[Revision #${rev.revision_number}]`));

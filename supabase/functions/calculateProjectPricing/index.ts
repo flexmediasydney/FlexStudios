@@ -259,7 +259,7 @@ Deno.serve(async (req) => {
       }
 
       const packageTotal = matrixPrice + nestedExtraCost;
-      const roundedPrice = roundToNearestFive(packageTotal * qty);
+      const roundedPrice = roundToNearestFive(packageTotal) * qty;
 
       lineItems.push({
         type: 'package',

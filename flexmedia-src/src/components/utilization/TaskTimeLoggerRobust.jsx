@@ -207,6 +207,15 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
     
     return () => {
       componentMountedRef.current = false;
+      // Final DB sync on unmount if timer is running
+      if (activeLogRef.current?.status === 'running' && activeLogRef.current?.start_time) {
+        const liveSeconds = Math.max(0, Math.floor((Date.now() - new Date(fixTimestamp(activeLogRef.current.start_time)).getTime()) / 1000) - (activeLogRef.current.paused_duration || 0));
+        if (liveSeconds > 0) {
+          api.entities.TaskTimeLog.update(activeLogRef.current.id, {
+            total_seconds: liveSeconds,
+          }).catch(() => {});
+        }
+      }
       if (unsubscribeRef.current) unsubscribeRef.current();
     };
   }, [task?.id, currentUser?.id]);
@@ -384,8 +393,11 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
     if (!isRunning || !activeLog) return;
 
     const inactivityInterval = setInterval(() => {
+      // Don't check inactivity on paused timers — pause already stops the clock
+      if (activeLogRef.current?.status === 'paused') return;
+
       const inactiveFor = (Date.now() - lastActivityTime.current) / 1000;
-      
+
       if (inactiveFor > INACTIVITY_TIMEOUT) {
         setShowInactivityWarning(true);
         handlePause();
@@ -553,7 +565,8 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       }
 
       // Calculate pause duration and add to cumulative
-      const pauseDuration = activeLog.pause_time
+      // Guard: only compute if actually paused AND pause_time exists (prevents race on rapid resume)
+      const pauseDuration = activeLog.pause_time && activeLog.status === 'paused'
         ? Math.floor((Date.now() - new Date(fixTimestamp(activeLog.pause_time)).getTime()) / 1000)
         : 0;
 

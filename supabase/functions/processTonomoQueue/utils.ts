@@ -485,7 +485,7 @@ export async function resolveEntity(entities: any, tonomoUid: string, email: str
 
   const nameField = entityDbName === 'User' ? 'full_name' : 'name';
   const allEntities = await entities[entityDbName].list('-created_date', 500);
-  const byEmail = email ? allEntities?.filter((e: any) => e.email === email) : [];
+  const byEmail = email ? allEntities?.filter((e: any) => e.email?.toLowerCase() === email?.toLowerCase()) : [];
   const byName = !byEmail?.length && name ? allEntities?.filter((e: any) => e[nameField]?.toLowerCase() === name.toLowerCase()) : [];
   let match = byEmail?.[0] || byName?.[0] || null;
 

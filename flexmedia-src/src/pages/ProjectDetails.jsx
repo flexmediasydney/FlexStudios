@@ -193,6 +193,11 @@ export default function ProjectDetails() {
    if (projectRaw) projectStableRef.current = projectRaw;
    const project = projectRaw || projectStableRef.current;
 
+   // Ref to always hold the latest project — used inside mutation closures
+   // to avoid stale-closure reads when project updates between mutation start and completion.
+   const projectRef = useRef(project);
+   projectRef.current = project;
+
    // Add tonomo tab to mounted once project loads (project must be declared above this)
    useEffect(() => {
      if (project?.source === 'tonomo') {
@@ -346,6 +351,8 @@ export default function ProjectDetails() {
 
   const updateStatusMutation = useMutation({
   mutationFn: async (newStatus) => {
+    // Snapshot latest project from ref to avoid stale closure data in fire-and-forget calls
+    const project = projectRef.current;
     if (!project) throw new Error('Project not loaded');
     if (!newStatus) throw new Error('Status is required');
 

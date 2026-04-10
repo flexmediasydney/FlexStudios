@@ -31,7 +31,11 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   const addressLng = p.address?.lng || p.address?.longitude || null;
   const photographers = p.photographers || [];
   const agent = p.order?.listingAgents?.[0] || p.listingAgents?.[0] || null;
-  const startTime = p.when?.start_time ? p.when.start_time * 1000 : null;
+  const rawStartTime = p.when?.start_time;
+  const parsedStartTime = typeof rawStartTime === 'number' ? rawStartTime * 1000
+    : typeof rawStartTime === 'string' ? Number(rawStartTime) * 1000
+    : null;
+  const startTime = parsedStartTime && !isNaN(parsedStartTime) ? parsedStartTime : null;
   const bookingFlowObj = p.order?.bookingFlow || null;
   const flowType = bookingFlowObj?.type || null;
   const isFirstOrder = p.isFirstOrder || p.order?.isFirstOrder || false;

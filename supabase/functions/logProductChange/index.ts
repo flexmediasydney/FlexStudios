@@ -135,6 +135,26 @@ Deno.serve(async (req) => {
           }
         }
       } catch { /* non-fatal */ }
+
+      // Also recalculate pricing for affected projects when product is deactivated
+      try {
+        const productId = event.entity_id;
+        const allProjects = await entities.Project.filter({}, null, 2000);
+        const deactivatedAffected = allProjects.filter((p: any) => {
+          if (['delivered', 'cancelled'].includes(p.status)) return false;
+          const hasProduct = (p.products || []).some((pr: any) => pr.product_id === productId);
+          const hasViaPackage = (p.packages || []).some((pkg: any) =>
+            (pkg.products || []).some((pr: any) => pr.product_id === productId)
+          );
+          return hasProduct || hasViaPackage;
+        });
+        for (let i = 0; i < deactivatedAffected.length; i += 10) {
+          const batch = deactivatedAffected.slice(i, i + 10);
+          await Promise.allSettled(batch.map((project: any) =>
+            invokeFunction('recalculateProjectPricingServerSide', { project_id: project.id })
+          ));
+        }
+      } catch { /* non-fatal */ }
     }
 
     // ─── CASCADE: Task template / pricing changes → sync projects ───────────

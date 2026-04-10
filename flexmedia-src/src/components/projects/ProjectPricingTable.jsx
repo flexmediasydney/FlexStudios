@@ -226,6 +226,10 @@ export default function ProjectPricingTable({
         return;
       }
 
+      // Refresh products/packages to ensure we calculate against latest matrix data
+      await queryClient.invalidateQueries({ queryKey: ['products'] });
+      await queryClient.invalidateQueries({ queryKey: ['packages'] });
+
       const response = await api.functions.invoke('calculateProjectPricing', {
         agent_id: project?.agent_id || null,
         agency_id: project?.agency_id || null,

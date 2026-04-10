@@ -333,15 +333,28 @@ export default function ProjectProductsPackages({ project }) {
         return true;
       });
 
+      // Validate nested product IDs inside packages still exist
+      const allProductsMap = new Map(allProductsRaw.map(p => [p.id, p]));
+      const cleanedPackages = validatedPackages.map(item => {
+        const invalidProducts = (item.products || []).filter(p => !allProductsMap.has(p.product_id));
+        if (invalidProducts.length > 0) {
+          const pkg = allPackagesRaw.find(p => p.id === item.package_id);
+          const pkgName = pkg?.name || item.package_id;
+          console.warn(`Package "${pkgName}" has ${invalidProducts.length} removed product(s) — stripping`);
+          return { ...item, products: (item.products || []).filter(p => allProductsMap.has(p.product_id)) };
+        }
+        return item;
+      });
+
       // Auto-strip orphaned/invalid items — update local state so UI reflects what was saved
-      if (validatedProducts.length < formState.products.length || validatedPackages.length < formState.packages.length) {
-        setFormState({ products: validatedProducts, packages: validatedPackages });
+      if (validatedProducts.length < formState.products.length || cleanedPackages !== validatedPackages) {
+        setFormState({ products: validatedProducts, packages: cleanedPackages });
       }
 
       // Normalize: remove standalone products that overlap with package contents
       const normalized = normalizeProjectItems(
         validatedProducts,
-        validatedPackages,
+        cleanedPackages,
         allProductsRaw,
         allPackagesRaw
       );
@@ -391,7 +404,9 @@ export default function ProjectProductsPackages({ project }) {
     }
   };
 
-  const hasChanges = JSON.stringify(formState) !== JSON.stringify({ products: project.products || [], packages: project.packages || [] });
+  // Sorted-key stringify to avoid false positives when key order differs
+  const stableStringify = (obj) => JSON.stringify(obj, Object.keys(obj || {}).sort());
+  const hasChanges = stableStringify(formState) !== stableStringify({ products: project.products || [], packages: project.packages || [] });
 
   return (
     <div className="space-y-4">
