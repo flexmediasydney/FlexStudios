@@ -245,7 +245,7 @@ export default function AIChat({ projectId, projectTitle }) {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-50 h-14 w-14 rounded-full bg-primary text-primary-foreground shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 flex items-center justify-center"
+        className="fixed bottom-6 right-6 z-[60] h-14 w-14 rounded-full bg-primary text-primary-foreground shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 flex items-center justify-center"
         title="Open AI Assistant"
         aria-label="Open AI Assistant"
       >
@@ -259,10 +259,10 @@ export default function AIChat({ projectId, projectTitle }) {
   return (
     <div
       className={cn(
-        "fixed z-50 flex flex-col bg-card border-l shadow-2xl",
+        "fixed z-[60] flex flex-col bg-card border-l shadow-2xl overflow-hidden",
         isMobile
           ? "inset-0"
-          : "top-16 right-0 w-96 h-[calc(100vh-4rem)]"
+          : "top-0 right-0 bottom-0 w-96"
       )}
     >
       {/* Header */}
@@ -384,7 +384,7 @@ export default function AIChat({ projectId, projectTitle }) {
       </ScrollArea>
 
       {/* Input area */}
-      <div className="border-t p-3 shrink-0 bg-card">
+      <div className="border-t p-3 shrink-0 bg-card relative z-10">
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
