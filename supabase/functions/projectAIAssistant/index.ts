@@ -124,10 +124,10 @@ async function executeTool(toolName: string, input: any, context: ToolContext): 
 
     case 'get_notes': {
       const limit = input?.limit || 10;
-      const notes = await entities.ProjectNote.filter({ project_id: projectId }, '-created_date', limit);
+      const notes = await entities.OrgNote.filter({ project_id: projectId }, '-created_at', limit);
       return notes.map((n: any) => ({
-        author: n.created_by_name,
-        content: n.note_content?.substring(0, 300),
+        author: n.author_name,
+        content: (n.content || n.content_html || '').substring(0, 300),
         created: n.created_at,
       }));
     }
@@ -152,14 +152,16 @@ async function executeTool(toolName: string, input: any, context: ToolContext): 
         })
         .filter(Boolean);
 
-      await entities.ProjectNote.create({
+      await entities.OrgNote.create({
         project_id: projectId,
-        note_content: input.content,
-        created_by_id: user.id,
-        created_by_name: user.full_name,
-        created_by_email: user.email,
-        mentions,
+        content: input.content,
+        content_html: input.content,
+        author_name: user.full_name || 'Unknown',
+        author_email: user.email || '',
         context_type: 'project',
+        context_label: project.title || project.property_address || '',
+        mentions,
+        is_pinned: false,
       });
       return { success: true, mentions_resolved: mentions.map((m: any) => m.userName) };
     }
@@ -406,7 +408,7 @@ Deno.serve(async (req) => {
 
     const allTasks = await entities.ProjectTask.filter({ project_id }, null, 20);
     const myTasks = allTasks.filter((t: any) => t.assigned_to === user.id && !t.is_deleted);
-    const recentNotes = await entities.ProjectNote.filter({ project_id }, '-created_date', 5);
+    const recentNotes = await entities.OrgNote.filter({ project_id }, '-created_at', 5);
 
     // ── 6. Load conversation history ─────────────────────────────────────────
     const conversationMessages: any[] = [];
