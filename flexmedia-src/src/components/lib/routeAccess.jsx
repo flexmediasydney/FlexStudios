@@ -80,6 +80,7 @@ export const ROUTE_ACCESS = {
   SettingsClients: ADMIN_EMPLOYEE,
   SettingsProjectRulebook: ADMIN_EMPLOYEE,
   SettingsTonomoWebhooks: ADMIN_EMPLOYEE,
+  SettingsAI: ADMIN_EMPLOYEE,
   BusinessRequirementsDocument: ADMIN_EMPLOYEE,
   HierarchyVisualization: ADMIN_EMPLOYEE,
 
@@ -91,6 +92,7 @@ export const ROUTE_ACCESS = {
   NotificationsPulse: ADMIN_ONLY,
   TeamPulsePage: ADMIN_ONLY,
   AdminTodoList: ADMIN_ONLY,
+  AIAuditLog: ADMIN_ONLY,
 };
 
 /**

@@ -27,6 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
+import AIChat from "@/components/ai/AIChat";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -270,6 +271,14 @@ function FieldModeInner({ user }) {
           })}
         </div>
       </nav>
+
+      {/* AI Assistant — visible when a project is selected */}
+      {selectedProject && (
+        <AIChat
+          projectId={selectedProject.id}
+          projectTitle={selectedProject.property_address || selectedProject.project_name}
+        />
+      )}
     </div>
   );
 }

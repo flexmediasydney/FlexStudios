@@ -48,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import TonomoTab from "@/components/tonomo/TonomoTab";
 import { createNotification, createNotificationsForUsers, writeFeedEvent } from "@/components/notifications/createNotification";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
+import AIChat from "@/components/ai/AIChat";
 
 
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
@@ -1544,6 +1545,9 @@ export default function ProjectDetails() {
            defaultSubject={project?.title || project?.property_address || ''}
          />
        )}
+
+       {/* AI Assistant */}
+       <AIChat projectId={projectId} projectTitle={project?.title || project?.property_address} />
        </div>
        );
        }

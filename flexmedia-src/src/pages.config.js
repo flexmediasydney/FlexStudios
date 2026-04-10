@@ -100,7 +100,9 @@ const SettingsTeamsUsers = React.lazy(() => import('./pages/SettingsTeamsUsers')
 const SettingsTonomoIntegration = React.lazy(() => import('./pages/SettingsTonomoIntegration'));
 const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMappings'));
 // SettingsStaffDefaults removed — now a subtab in SettingsTeamsUsers
+const SettingsAI = React.lazy(() => import('./pages/SettingsAI'));
 const SettingsTonomoWebhooks = React.lazy(() => import('./pages/SettingsTonomoWebhooks'));
+const AIAuditLog = React.lazy(() => import('./pages/AIAuditLog'));
 const TeamDetails = React.lazy(() => import('./pages/TeamDetails'));
 const TeamPulsePage = React.lazy(() => import('./pages/TeamPulsePage'));
 const TonomoIntegrationDashboard = React.lazy(() => import('./pages/TonomoIntegrationDashboard'));
@@ -110,6 +112,7 @@ const Users = React.lazy(() => import('./pages/Users'));
 
 export const PAGES = {
     "AdminTodoList": AdminTodoList,
+    "AIAuditLog": AIAuditLog,
     "Analytics": Analytics,
     "BountyBoard": BountyBoard,
     "BusinessIntelligence": BusinessIntelligence,
@@ -141,6 +144,7 @@ export const PAGES = {
     "Prospecting": Prospecting,
     "Reports": Reports,
     "Settings": Settings,
+    "SettingsAI": SettingsAI,
     "SettingsAutomationRules": SettingsAutomationRules,
     "SocialMedia": SocialMedia,
     "SettingsClients": SettingsClients,

@@ -27,6 +27,7 @@ import {
   UsersRound,
   Rss,
   Heart,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -269,6 +270,8 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsNotifications") && { name: "Notifications", href: "SettingsNotifications" },
           can("BusinessRequirementsDocument") && { name: "BRD", href: "BusinessRequirementsDocument" },
           can("SettingsTeamsUsers") && { name: "Teams & Users", href: "SettingsTeamsUsers" },
+          can("SettingsAI") && { name: "AI Settings", href: "SettingsAI", icon: Sparkles },
+          can("AIAuditLog") && { name: "AI Audit", href: "AIAuditLog", icon: Activity },
         ].filter(Boolean)
       },
     ].filter(Boolean);
