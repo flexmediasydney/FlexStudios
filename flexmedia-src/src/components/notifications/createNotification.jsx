@@ -1,5 +1,32 @@
 import { api } from "@/api/supabaseClient";
 
+/**
+ * Check whether a user's NotificationPreference allows in-app delivery
+ * for a given notification type / category.  Falls back to true (notify)
+ * when no preference row exists or the query fails.
+ */
+async function canNotify(userId, type, category) {
+  try {
+    const prefs = await api.entities.NotificationPreference.filter(
+      { user_id: userId },
+      null,
+      50
+    );
+    // 1) Exact type-level preference takes priority
+    const typePref = prefs.find(p => p.notification_type === type);
+    if (typePref !== undefined) return typePref.in_app_enabled !== false;
+    // 2) Category-level wildcard preference
+    const catPref = prefs.find(
+      p => p.category === category && (!p.notification_type || p.notification_type === '*')
+    );
+    if (catPref !== undefined) return catPref.in_app_enabled !== false;
+    // 3) No preference recorded — default to notify
+    return true;
+  } catch {
+    return true; // fail-open so notifications still work if prefs query breaks
+  }
+}
+
 // Mirrors NOTIFICATION_TYPES from notificationService.ts
 // Keep in sync if you add new types
 const TYPE_CONFIG = {
@@ -69,6 +96,10 @@ const TYPE_CONFIG = {
 export async function createNotification(params) {
   const cfg = TYPE_CONFIG[params.type] || { category: "system", severity: "info", ctaLabel: "View" };
   try {
+    // Respect per-user notification preferences before creating
+    const allowed = await canNotify(params.userId, params.type, cfg.category);
+    if (!allowed) return false;
+
     await api.entities.Notification.create({
       user_id:         params.userId,
       type:            params.type,

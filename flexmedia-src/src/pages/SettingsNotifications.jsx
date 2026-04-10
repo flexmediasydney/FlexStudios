@@ -22,29 +22,46 @@ const NOTIFICATION_CATEGORIES = {
   revision:   { label: "Revisions",  icon: "🔄", color: "bg-amber-100 text-amber-700" },
   tonomo:     { label: "Tonomo",     icon: "⚡", color: "bg-emerald-100 text-emerald-700" },
   financial:  { label: "Financial",  icon: "💰", color: "bg-green-100 text-green-700" },
+  email:      { label: "Email",      icon: "📧", color: "bg-orange-100 text-orange-700" },
   system:     { label: "System",     icon: "🔧", color: "bg-muted text-muted-foreground" },
 };
 
 const NOTIFICATION_TYPES_LIST = [
+  // Scheduling
   { type: "shoot_moved_to_onsite",        category: "scheduling", label: "Shoot moved to Onsite" },
   { type: "shoot_overdue",                category: "scheduling", label: "Shoot date overdue" },
   { type: "reschedule_advanced_stage",    category: "scheduling", label: "Reschedule on advanced project" },
   { type: "shoot_date_changed",           category: "scheduling", label: "Shoot date changed" },
+  { type: "calendar_event_conflict",      category: "scheduling", label: "Calendar event conflict" },
+  { type: "photographer_assigned",        category: "scheduling", label: "Photographer assigned" },
+  // Projects
   { type: "project_stage_changed",        category: "project",    label: "Project stage changed" },
   { type: "project_assigned_to_you",      category: "project",    label: "Project assigned to you" },
+  { type: "project_owner_assigned",       category: "project",    label: "Project owner assigned" },
   { type: "project_delivered",            category: "project",    label: "Project delivered" },
+  { type: "project_pricing_changed",      category: "project",    label: "Project pricing changed" },
+  { type: "booking_approved",             category: "project",    label: "Booking approved" },
   { type: "stale_production",             category: "project",    label: "Stale production alert" },
   { type: "stale_submitted",              category: "project",    label: "Stale submitted alert" },
+  // Tasks
   { type: "task_assigned",               category: "task",       label: "Task assigned to you" },
   { type: "task_overdue",                category: "task",       label: "Task overdue" },
   { type: "task_deadline_approaching",   category: "task",       label: "Task deadline approaching" },
   { type: "task_dependency_unblocked",   category: "task",       label: "Task unblocked" },
   { type: "task_completed",              category: "task",       label: "Task completed" },
+  { type: "all_tasks_completed",         category: "task",       label: "All tasks completed" },
+  { type: "tasks_auto_generated",        category: "task",       label: "Tasks auto-generated" },
+  { type: "task_generation_failed",      category: "task",       label: "Task generation failed" },
+  { type: "timer_running_warning",       category: "task",       label: "Timer still running" },
+  // Revisions
   { type: "revision_created",            category: "revision",   label: "New revision request" },
   { type: "revision_urgent",             category: "revision",   label: "Urgent revision" },
   { type: "revision_approved",           category: "revision",   label: "Revision approved" },
+  { type: "revision_cancelled",          category: "revision",   label: "Revision cancelled" },
   { type: "revision_stale_48h",          category: "revision",   label: "Revision open 48+ hours" },
+  { type: "revision_all_resolved",       category: "revision",   label: "All revisions resolved" },
   { type: "change_request_created",      category: "revision",   label: "New change request" },
+  // Tonomo / Bookings
   { type: "booking_arrived_pending_review", category: "tonomo",  label: "New booking pending review" },
   { type: "booking_cancellation",        category: "tonomo",     label: "Booking cancelled" },
   { type: "booking_urgent_review",       category: "tonomo",     label: "Urgent: shoot in 24h" },
@@ -52,14 +69,28 @@ const NOTIFICATION_TYPES_LIST = [
   { type: "booking_service_uncertainty", category: "tonomo",     label: "Service assignment uncertain" },
   { type: "booking_mapping_gaps",        category: "tonomo",     label: "Mapping gaps after approval" },
   { type: "booking_no_photographer",     category: "tonomo",     label: "No photographer assigned" },
+  { type: "booking_auto_approved",       category: "tonomo",     label: "Booking auto-approved" },
   { type: "booking_services_changed",    category: "tonomo",     label: "Services changed" },
+  { type: "booking_flow_unmapped",       category: "tonomo",     label: "Booking flow unmapped" },
+  { type: "booking_type_unmapped",       category: "tonomo",     label: "Booking type unmapped" },
+  { type: "booking_rescheduled",         category: "tonomo",     label: "Booking rescheduled" },
+  // Financial
   { type: "invoice_overdue_7d",          category: "financial",  label: "Invoice overdue (7+ days)" },
   { type: "invoice_overdue_14d",         category: "financial",  label: "Invoice overdue (14+ days)" },
   { type: "payment_received",            category: "financial",  label: "Payment received" },
+  { type: "payment_overdue_first",       category: "financial",  label: "Payment overdue (first notice)" },
+  // Email
+  { type: "email_received_from_client",  category: "email",      label: "Email from client" },
+  { type: "email_requires_reply",        category: "email",      label: "Email requires reply" },
+  { type: "email_sync_failed",           category: "email",      label: "Email sync failed" },
+  // System
   { type: "stale_project",               category: "system",     label: "Project stale (7+ days)" },
   { type: "pending_review_stale",        category: "system",     label: "Booking pending review 48h+" },
+  { type: "mapping_table_needs_update",  category: "system",     label: "Mapping table needs update" },
   { type: "schema_warning",              category: "system",     label: "Schema warning from Tonomo" },
   { type: "rule_engine_error",           category: "system",     label: "Automation rule error" },
+  { type: "pricing_recalculated",        category: "system",     label: "Pricing recalculated" },
+  { type: "engine_error",               category: "system",     label: "System engine error" },
 ];
 
 function MyPreferencesTab({ userId }) {
