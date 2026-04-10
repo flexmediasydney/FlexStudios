@@ -344,7 +344,7 @@ export default function Projects() {
       }
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
-  }, [allProjects, projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, allEmployeeRoles, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
+  }, [allProjects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, allEmployeeRoles, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
 
   // Column definitions for EntityDataTable (list view)
   const tableColumns = useMemo(() => {
