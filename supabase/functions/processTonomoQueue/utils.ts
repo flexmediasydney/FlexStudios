@@ -197,67 +197,44 @@ export function detectBookingTypes(serviceNames: string[]) {
 }
 
 export function assignStaffToProjectFields(resolvedPhotographers: any[], bookingTypes: any) {
-  const fields: Record<string, any> = {
-    project_owner_id:   null,
-    photographer_id:    null,
-    videographer_id:    null,
-    onsite_staff_1_id:  null,
-    onsite_staff_2_id:  null,
-  };
+  // Each person's default_staff_role determines their project slot.
+  // Webhook never sets project_owner — that comes from applyProjectRoleDefaults.
+  // Roles not covered by webhook staff are left null for defaults to fill.
+  const fields: Record<string, any> = {};
 
   if (resolvedPhotographers.length === 0) return fields;
 
-  if (resolvedPhotographers.length === 1) {
-    const person = resolvedPhotographers[0];
-    // Do NOT set project_owner from webhook — it should come from staff defaults
-    // fields.project_owner_id = person.userId;
+  // Map default_staff_role → project field
+  const roleToField: Record<string, { idField: string; onsiteField: string | null }> = {
+    photographer:     { idField: 'photographer_id',    onsiteField: 'onsite_staff_1_id' },
+    videographer:     { idField: 'videographer_id',    onsiteField: 'onsite_staff_2_id' },
+    drone_operator:   { idField: 'photographer_id',    onsiteField: 'onsite_staff_1_id' },
+    floor_plan:       { idField: 'photographer_id',    onsiteField: 'onsite_staff_1_id' },
+  };
 
-    if (bookingTypes.isVideoBooking && !bookingTypes.isPhotoBooking) {
-      fields.videographer_id   = person.userId;
-      fields.onsite_staff_2_id = person.userId;
-    } else {
-      fields.photographer_id   = person.userId;
-      fields.onsite_staff_1_id = person.userId;
-    }
-    return fields;
-  }
+  const assigned = new Set<string>();
 
-  const onsiteRoles  = ['photographer', 'videographer', 'drone_operator', 'floor_plan', null];
-  const onsiteStaff  = resolvedPhotographers.filter((p: any) => onsiteRoles.includes(p.role));
-
-  const declaredPhotographer = onsiteStaff.find((p: any) =>
-    p.role === 'photographer' || p.role === 'drone_operator' || p.role === 'floor_plan'
-  );
-  const declaredVideographer = onsiteStaff.find((p: any) => p.role === 'videographer');
-  const undeclared = onsiteStaff.filter((p: any) =>
-    p !== declaredPhotographer && p !== declaredVideographer
-  );
-
-  const toAssign: any[] = [];
-
-  if (declaredPhotographer) toAssign.push({ ...declaredPhotographer, assignedRole: 'photographer' });
-  if (declaredVideographer) toAssign.push({ ...declaredVideographer, assignedRole: 'videographer' });
-
-  for (const person of undeclared) {
-    if (bookingTypes.isVideoBooking && !fields.videographer_id && !declaredVideographer) {
-      toAssign.push({ ...person, assignedRole: 'videographer' });
-    } else {
-      toAssign.push({ ...person, assignedRole: 'photographer' });
+  // Pass 1: assign anyone with a declared default_staff_role
+  for (const person of resolvedPhotographers) {
+    const mapping = person.role ? roleToField[person.role] : null;
+    if (mapping && !fields[mapping.idField]) {
+      fields[mapping.idField] = person.userId;
+      if (mapping.onsiteField) fields[mapping.onsiteField] = person.userId;
+      assigned.add(person.userId);
     }
   }
 
-  // Do NOT set project_owner from webhook — it comes from staff defaults
-  // const firstOnsite = toAssign[0];
-  // if (firstOnsite) { fields.project_owner_id = firstOnsite.userId; }
-
-  for (const person of toAssign) {
-    if (person.assignedRole === 'photographer' && !fields.photographer_id) {
-      fields.photographer_id   = person.userId;
-      fields.onsite_staff_1_id = person.userId;
-    } else if (person.assignedRole === 'videographer' && !fields.videographer_id) {
+  // Pass 2: anyone without a role (or whose slot was already taken) — use booking type
+  for (const person of resolvedPhotographers) {
+    if (assigned.has(person.userId)) continue;
+    if (bookingTypes.isVideoBooking && !fields.videographer_id) {
       fields.videographer_id   = person.userId;
       fields.onsite_staff_2_id = person.userId;
+    } else if (!fields.photographer_id) {
+      fields.photographer_id   = person.userId;
+      fields.onsite_staff_1_id = person.userId;
     }
+    assigned.add(person.userId);
   }
 
   return fields;
