@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { api } from "@/api/supabaseClient";
-import { LRUBlobCache, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
+import { LRUBlobCache, fetchMediaProxy } from "@/utils/mediaPerf";
+import { downloadFile, preloadAdjacentImages, getVideoStreamUrl } from "@/utils/mediaActions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,7 +15,8 @@ import {
   ExternalLink, Clock, Grid2x2, Grid3x3, LayoutGrid,
   Tag, FolderOpen, Building2, ImageOff, Play, User,
   Activity, Filter, X, Plus, Trash2, Palette, Check,
-  ArrowUpDown, ChevronDown, Sparkles, StarOff
+  ArrowUpDown, ChevronDown, Sparkles, StarOff,
+  ChevronLeft, ChevronRight, Download, Loader2
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
 import { cn } from "@/lib/utils";
@@ -21,9 +24,6 @@ import { toast } from "sonner";
 import { formatDistanceToNow, format } from "date-fns";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // ---- CSS keyframes injected once ----
 const STYLE_ID = '__favorites-page-animations';
@@ -85,35 +85,12 @@ if (typeof document !== 'undefined' && !document.getElementById(STYLE_ID)) {
 }
 
 
-// ---- Image proxy with concurrency limiter + LRU blob cache ----
-// PERF: Reduced from 400 to 200 max entries; uses shared LRU class with proper URL.revokeObjectURL
+// ---- Image proxy with shared LRU blob cache ----
+// Delegates to fetchMediaProxy from mediaPerf (shared concurrency limiter + 503 retry)
 const blobCache = new LRUBlobCache(200);
-const pending = new Set();
 
-// PERF: Uses global concurrency limiter + img.decode() before caching
-async function fetchProxyImage(filePath, mode = 'thumb') {
-  const cacheKey = `${mode}::${filePath}`;
-  if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
-  if (pending.has(cacheKey)) return null;
-  pending.add(cacheKey);
-  try {
-    const url = await enqueueFetch(async () => {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-        body: JSON.stringify({ action: mode, file_path: filePath }),
-      });
-      if (!res.ok) return null;
-      const blob = await res.blob();
-      if (blob.size < 500) return null;
-      const blobUrl = URL.createObjectURL(blob);
-      if (mode === 'thumb') await decodeImage(blobUrl);
-      return blobUrl;
-    });
-    if (url) blobCache.set(cacheKey, url);
-    return url;
-  } catch { return null; }
-  finally { pending.delete(cacheKey); }
+function fetchProxyImage(filePath, mode = 'thumb') {
+  return fetchMediaProxy(blobCache, filePath, mode);
 }
 
 // ---- Dropbox preview URL builder ----
@@ -179,9 +156,240 @@ function useTagColorMap(mediaTags) {
 }
 
 
+// ================ LIGHTBOX COMPONENTS ================
+
+/**
+ * LightboxImage — full-res image / video viewer for a single file.
+ * Adapted from DeliveryFeed; uses file_path directly (already full proxy path).
+ */
+function LightboxImage({ file }) {
+  const [videoUrl, setVideoUrl] = useState(null);
+  const [fullResUrl, setFullResUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  const isImage = file.file_type === 'image';
+  const isVideo = file.file_type === 'video';
+  const proxyPath = file.file_path || null;
+
+  // Videos: instant streaming URL
+  useEffect(() => {
+    if (!isVideo || !proxyPath) { setVideoUrl(null); return; }
+    setVideoUrl(getVideoStreamUrl(proxyPath));
+  }, [isVideo, proxyPath]);
+
+  // Images: show thumb immediately, load full-res in background
+  useEffect(() => {
+    if (!isImage || !proxyPath) { setFullResUrl(null); setLoading(false); return; }
+    setFullResUrl(null);
+    const cached = blobCache.get(`proxy::${proxyPath}`);
+    if (cached) { setFullResUrl(cached); setLoading(false); return; }
+    setLoading(true);
+    fetchProxyImage(proxyPath, 'proxy').then(url => {
+      if (!mountedRef.current) return;
+      if (url) setFullResUrl(url);
+      setLoading(false);
+    });
+  }, [isImage, proxyPath]);
+
+  // Video rendering
+  if (isVideo) {
+    if (videoUrl) {
+      return <video src={videoUrl} controls autoPlay playsInline className="max-w-full max-h-full rounded-lg shadow-2xl" style={{ maxHeight: 'calc(100vh - 140px)' }} />;
+    }
+    return (
+      <div className="flex flex-col items-center gap-3 text-white/60">
+        <Film className="h-16 w-16 text-white/20" />
+        <p className="text-sm font-medium">{file.file_name}</p>
+        <p className="text-xs text-white/30">Video could not be loaded</p>
+      </div>
+    );
+  }
+
+  // Image rendering — thumb -> full-res with upgrade indicator
+  if (isImage) {
+    const thumbUrl = blobCache.get(`thumb::${proxyPath}`) || null;
+    const imgSrc = fullResUrl || thumbUrl;
+    if (imgSrc) {
+      const isUpgrading = loading && !fullResUrl && thumbUrl;
+      return (
+        <div className="relative">
+          <img src={imgSrc} alt={file.file_name} className={cn("max-w-full max-h-full object-contain p-4 rounded-lg", isUpgrading && "blur-[1px] opacity-80")} style={{ maxHeight: 'calc(100vh - 140px)' }} />
+          {isUpgrading && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white/80 text-xs px-3 py-1.5 rounded-full pointer-events-none">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading full resolution...
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (loading) {
+      return (
+        <div className="flex flex-col items-center gap-4 text-white/50">
+          <Loader2 className="h-10 w-10 animate-spin" />
+          <p className="text-sm">Loading image...</p>
+        </div>
+      );
+    }
+  }
+
+  // Document / other
+  const dropboxUrl = buildDropboxPreviewUrl(proxyPath);
+  return (
+    <div className="flex flex-col items-center gap-3 text-white/60">
+      <FileText className="h-16 w-16" />
+      <p className="text-sm">{file.file_name}</p>
+      {dropboxUrl && (
+        <button onClick={() => window.open(dropboxUrl, '_blank', 'noopener,noreferrer')}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/20 text-white/70 hover:text-white hover:bg-white/10 transition-colors text-xs">
+          <ExternalLink className="h-3.5 w-3.5" /> Open in Dropbox
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * LightboxThumb — filmstrip thumbnail for a favorite file.
+ */
+function LightboxThumb({ file }) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const started = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  const canThumb = file.file_type === 'image' || file.file_type === 'video' || file.file_type === 'document';
+  const proxyPath = file.file_path || null;
+
+  useEffect(() => {
+    if (!canThumb || !proxyPath || started.current) return;
+    const cached = blobCache.get(`thumb::${proxyPath}`);
+    if (cached) { setBlobUrl(cached); return; }
+    started.current = true;
+    fetchProxyImage(proxyPath).then(url => {
+      if (!mountedRef.current) return;
+      if (url) setBlobUrl(url);
+    });
+  }, [canThumb, proxyPath]);
+
+  if (blobUrl) return <img src={blobUrl} alt="" className="w-full h-full object-cover" />;
+  return (
+    <div className="w-full h-full bg-white/10 flex items-center justify-center">
+      {file.file_type === 'video' ? <Film className="h-3 w-3 text-white/40" /> : <FileText className="h-3 w-3 text-white/40" />}
+    </div>
+  );
+}
+
+/**
+ * MiniLightbox — fullscreen image/video viewer with filmstrip.
+ * Adapted from DeliveryFeed for favorites data shape:
+ * - file_path is already the full proxy path
+ * - file_name, file_type are top-level fields
+ */
+function MiniLightbox({ files, initialIndex, onClose }) {
+  const [index, setIndex] = useState(initialIndex);
+  const file = files[index];
+
+  // Lock body scroll while lightbox is open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // Predictive preloading
+  useEffect(() => {
+    if (files.length === 0) return;
+    preloadAdjacentImages(
+      files, index,
+      (f) => f.file_path || null,
+      fetchProxyImage,
+      blobCache,
+      (path, mode) => `${mode}::${path}`,
+    );
+  }, [index, files.length]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'ArrowRight') setIndex(i => Math.min(i + 1, files.length - 1));
+      if (e.key === 'ArrowLeft') setIndex(i => Math.max(i - 1, 0));
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [files.length, onClose]);
+
+  if (!file) return null;
+
+  const proxyPath = file.file_path || null;
+  const dropboxUrl = buildDropboxPreviewUrl(proxyPath);
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={onClose} role="dialog" aria-modal="true" aria-label="Media lightbox">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 text-white border-b border-white/10" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-sm font-medium truncate max-w-md">{file.file_name}</span>
+          <span className="text-xs text-white/40 tabular-nums">{index + 1} / {files.length}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {proxyPath && (
+            <button onClick={() => downloadFile(proxyPath, file.file_name)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title={`Download ${file.file_name}`} aria-label={`Download ${file.file_name}`}>
+              <Download className="h-4 w-4" />
+            </button>
+          )}
+          {dropboxUrl && (
+            <button onClick={() => window.open(dropboxUrl, '_blank', 'noopener,noreferrer')} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title="Open in Dropbox" aria-label="Open in Dropbox">
+              <ExternalLink className="h-4 w-4" />
+            </button>
+          )}
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Close lightbox">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 flex items-center justify-center relative min-h-0 px-16" onClick={e => e.stopPropagation()}>
+        {/* Nav arrows */}
+        {index > 0 && (
+          <button onClick={() => setIndex(i => i - 1)} className="absolute left-3 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/80 rounded-full text-white transition-all hover:scale-105 z-10 backdrop-blur-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Previous image">
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+        )}
+        {index < files.length - 1 && (
+          <button onClick={() => setIndex(i => i + 1)} className="absolute right-3 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/80 rounded-full text-white transition-all hover:scale-105 z-10 backdrop-blur-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Next image">
+            <ChevronRight className="h-6 w-6" />
+          </button>
+        )}
+        <LightboxImage key={`${file.file_path}-${index}`} file={file} />
+      </div>
+
+      {/* Filmstrip */}
+      <div className="flex gap-1.5 px-4 py-3 overflow-x-auto justify-center border-t border-white/10" onClick={e => e.stopPropagation()}>
+        {files.slice(0, 40).map((f, i) => (
+          <button key={f.file_path || i} onClick={() => setIndex(i)} onMouseEnter={() => {
+            const pp = f.file_path;
+            if (pp && f.file_type !== 'video' && !blobCache.has(`proxy::${pp}`)) fetchProxyImage(pp, 'proxy');
+          }} className={cn('shrink-0 w-14 h-10 rounded overflow-hidden border-2 transition-all duration-150', i === index ? 'border-white ring-1 ring-white/50 scale-105' : 'border-transparent opacity-50 hover:opacity-90')} aria-label={`View ${f.file_name}`}>
+            <LightboxThumb file={f} />
+          </button>
+        ))}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+
 // ================ FILE FAVORITE CARD ================
 
-function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, animDelay = 0 }) {
+function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, onOpenLightbox, animDelay = 0 }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -208,6 +416,8 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, anim
   }, [canThumb, proxyPath, isVisible]);
 
   const handleClick = () => {
+    if (onOpenLightbox) { onOpenLightbox(); return; }
+    // Fallback: open Dropbox preview if no lightbox handler
     if (proxyPath) {
       const dropboxUrl = buildDropboxPreviewUrl(proxyPath);
       if (dropboxUrl) { safeWindowOpen(dropboxUrl); return; }
@@ -317,12 +527,23 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, anim
           </div>
         </div>
 
-        {/* External link hint on hover */}
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-          <div className="bg-black/40 backdrop-blur-sm rounded-full p-1">
-            <ExternalLink className="h-3 w-3 text-white" />
-          </div>
-        </div>
+        {/* Open in Dropbox button on hover */}
+        {proxyPath && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              const url = buildDropboxPreviewUrl(proxyPath);
+              if (url) safeWindowOpen(url);
+            }}
+            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+            title="Open in Dropbox"
+          >
+            <div className="bg-black/40 backdrop-blur-sm rounded-full p-1 hover:bg-black/60 transition-colors">
+              <ExternalLink className="h-3 w-3 text-white" />
+            </div>
+          </button>
+        )}
 
         {/* Type badge for non-images */}
         {favorite.file_type !== 'image' && (
@@ -1296,6 +1517,7 @@ export default function SocialMedia() {
     return tags.length > 0 ? tags : [];
   });
   const [visibleCards, setVisibleCards] = useState(new Set());
+  const [lightboxIndex, setLightboxIndex] = useState(null);
   const [auditLimit, setAuditLimit] = useState(20);
   const gridRef = useRef(null);
 
@@ -1394,6 +1616,9 @@ export default function SocialMedia() {
     const allTags = new Set(favorites.flatMap(f => f.tags || []));
     return { files, projects, tags: allTags.size, total: favorites.length };
   }, [favorites]);
+
+  // File-only favorites for lightbox (excludes project favorites which have no media)
+  const fileFavorites = useMemo(() => filteredFavorites.filter(f => !!f.file_path), [filteredFavorites]);
 
   const hasActiveFilters = search.trim() || typeFilter !== 'all' || selectedTags.length > 0;
 
@@ -1591,6 +1816,10 @@ export default function SocialMedia() {
                     isVisible={visibleCards.has(favId)}
                     tagColorMap={tagColorMap}
                     onUnfavorite={handleUnfavorite}
+                    onOpenLightbox={() => {
+                      const fileIdx = fileFavorites.indexOf(fav);
+                      if (fileIdx >= 0) setLightboxIndex(fileIdx);
+                    }}
                     animDelay={Math.min(idx * 40, 400)}
                   />
                 ) : (
@@ -1658,6 +1887,15 @@ export default function SocialMedia() {
       )}
 
       </>)}
+
+      {/* Lightbox portal — rendered outside the DOM tree via createPortal */}
+      {lightboxIndex !== null && fileFavorites.length > 0 && (
+        <MiniLightbox
+          files={fileFavorites}
+          initialIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </div>
   );
 }
