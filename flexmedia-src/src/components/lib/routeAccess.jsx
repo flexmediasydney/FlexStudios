@@ -37,6 +37,9 @@ export const ROUTE_ACCESS = {
   // ── SOCIAL MEDIA ──────────────────────────────────────────
   SocialMedia: ALL_ROLES,
 
+  // ── FIELD MODE ────────────────────────────────────────────
+  FieldMode: ALL_ROLES,
+
   // ── ANALYTICS ─────────────────────────────────────────────
   Analytics: ADMIN_EMPLOYEE,
   Reports: ADMIN_EMPLOYEE,
@@ -53,6 +56,9 @@ export const ROUTE_ACCESS = {
   // ── TONOMO / BOOKINGS ─────────────────────────────────────
   TonomoIntegrationDashboard: ADMIN_EMPLOYEE,
   TonomoPulse: ADMIN_EMPLOYEE,
+
+  // ── FIELD MODE (mobile, all staff) ────────────────────────
+  FieldMode: ADMIN_EMPLOYEE,
 
   // ── PUBLIC / GALLERY ──────────────────────────────────────
   ClientGallery: ALL_ROLES,

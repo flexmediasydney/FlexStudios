@@ -78,6 +78,7 @@ const ClientGallery = React.lazy(() => import('./pages/ClientGallery'));
 const ClientMonitor = React.lazy(() => import('./pages/ClientMonitor'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard'));
 const EmployeeUtilization = React.lazy(() => import('./pages/EmployeeUtilization'));
+const FieldMode = React.lazy(() => import('./pages/FieldMode'));
 const NotificationsPage = React.lazy(() => import('./pages/NotificationsPage'));
 const NotificationsPulse = React.lazy(() => import('./pages/NotificationsPulse'));
 const OrgDetails = React.lazy(() => import('./pages/OrgDetails'));
@@ -120,6 +121,7 @@ export const PAGES = {
     "Dashboard": Dashboard,
     "EmailSyncSettings": EmailSyncSettings,
     "EmployeeUtilization": EmployeeUtilization,
+    "FieldMode": FieldMode,
     "HierarchyVisualization": HierarchyVisualization,
     "Inbox": Inbox,
     "InternalRoadmap": InternalRoadmap,

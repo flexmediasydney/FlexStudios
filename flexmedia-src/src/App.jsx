@@ -161,21 +161,39 @@ const AuthenticatedApp = () => {
           </RouteGuard>
         </LayoutWrapper>
       } />
-      {Object.entries(Pages).map(([path, Page]) => (
-        <Route
-          key={path}
-          path={`/${path}`}
-          element={
-            <LayoutWrapper currentPageName={path}>
-              <RouteGuard routeName={path}>
-                <ErrorBoundary fallbackLabel={path} resetKey={path}>
-                  <Page />
-                </ErrorBoundary>
-              </RouteGuard>
-            </LayoutWrapper>
-          }
-        />
-      ))}
+      {Object.entries(Pages).map(([path, Page]) => {
+        // Field Mode renders full-screen without the desktop Layout wrapper
+        if (path === 'FieldMode') {
+          return (
+            <Route
+              key={path}
+              path={`/${path}`}
+              element={
+                <RouteGuard routeName={path}>
+                  <ErrorBoundary fallbackLabel={path} resetKey={path}>
+                    <Page />
+                  </ErrorBoundary>
+                </RouteGuard>
+              }
+            />
+          );
+        }
+        return (
+          <Route
+            key={path}
+            path={`/${path}`}
+            element={
+              <LayoutWrapper currentPageName={path}>
+                <RouteGuard routeName={path}>
+                  <ErrorBoundary fallbackLabel={path} resetKey={path}>
+                    <Page />
+                  </ErrorBoundary>
+                </RouteGuard>
+              </LayoutWrapper>
+            }
+          />
+        );
+      })}
       <Route path="*" element={
         <LayoutWrapper currentPageName="404">
           <PageNotFound />
