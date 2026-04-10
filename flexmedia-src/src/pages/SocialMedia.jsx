@@ -240,6 +240,7 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, anim
             )}
             loading="lazy"
             onLoad={() => setImageLoaded(true)}
+            onError={() => setThumbFailed(true)}
           />
         ) : loading ? (
           <div className="w-full h-full bg-muted flex items-center justify-center">
@@ -249,10 +250,14 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, anim
             </div>
           </div>
         ) : thumbFailed && canThumb ? (
-          <div className="flex flex-col items-center gap-1.5 text-muted-foreground p-4">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setThumbFailed(false); started.current = false; }}
+            className="flex flex-col items-center gap-1.5 text-muted-foreground p-4 hover:text-amber-500 transition-colors"
+          >
             <ImageOff className="h-8 w-8 opacity-40 text-amber-500/60" />
-            <span className="text-[10px] font-medium uppercase tracking-wider text-amber-600/70">Re-star to fix</span>
-          </div>
+            <span className="text-[10px] font-medium uppercase tracking-wider text-amber-600/70">Tap to retry</span>
+          </button>
         ) : (
           <div className="flex flex-col items-center gap-1.5 text-muted-foreground p-4">
             <FileIcon type={favorite.file_type} className="h-8 w-8 opacity-40" />
@@ -469,6 +474,9 @@ function ProjectFavoriteCard({ favorite, tagColorMap, onUnfavorite, animDelay = 
                 #{tag}
               </span>
             ))}
+            {(favorite.tags || []).length > 3 && (
+              <span className="text-[10px] text-muted-foreground">+{(favorite.tags || []).length - 3}</span>
+            )}
           </div>
         )}
         <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
@@ -1288,6 +1296,7 @@ export default function SocialMedia() {
     return tags.length > 0 ? tags : [];
   });
   const [visibleCards, setVisibleCards] = useState(new Set());
+  const [auditLimit, setAuditLimit] = useState(20);
   const gridRef = useRef(null);
 
   // Load data
@@ -1298,11 +1307,12 @@ export default function SocialMedia() {
   const tagColorMap = useTagColorMap(mediaTags);
 
   // Filter audit logs to media_favorite entity type
-  const favoriteAuditLogs = useMemo(() => {
-    return auditLogs
-      .filter(log => log.entity_type === 'media_favorite')
-      .slice(0, 20);
+  const allFavoriteAuditLogs = useMemo(() => {
+    return auditLogs.filter(log => log.entity_type === 'media_favorite');
   }, [auditLogs]);
+  const favoriteAuditLogs = useMemo(() => {
+    return allFavoriteAuditLogs.slice(0, auditLimit);
+  }, [allFavoriteAuditLogs, auditLimit]);
 
   // Tag toggle handler
   const toggleTag = useCallback((tagName) => {
@@ -1359,7 +1369,7 @@ export default function SocialMedia() {
 
       if (selectedTags.length > 0) {
         const favTags = fav.tags || [];
-        if (!selectedTags.some(t => favTags.includes(t))) return false;
+        if (!selectedTags.every(t => favTags.includes(t))) return false;
       }
 
       if (search.trim()) {
@@ -1637,6 +1647,11 @@ export default function SocialMedia() {
               {favoriteAuditLogs.map((entry, idx) => (
                 <TimelineEntry key={entry.id} entry={entry} index={idx} />
               ))}
+              {allFavoriteAuditLogs.length > auditLimit && (
+                <button onClick={() => setAuditLimit(l => l + 20)} className="text-xs text-primary hover:underline mx-auto block mt-2">
+                  Show more ({allFavoriteAuditLogs.length - auditLimit} remaining)
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -12,7 +12,7 @@
  * - sm/md/lg size variants with proportional click areas
  */
 
-import React, { useCallback, useState, useRef, useEffect } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Star } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -52,20 +52,11 @@ export default function FavoriteButton({
   const { isFavorited, toggleFavorite } = useFavorites();
   const serverActive = isFavorited(filePath, projectId);
 
-  // Local optimistic state: null means "follow server", boolean means "override"
-  const [optimistic, setOptimistic] = useState(null);
   const [isToggling, setIsToggling] = useState(false);
   const [flashKey, setFlashKey] = useState(0); // Increment to trigger color flash
   const togglingRef = useRef(false);
 
-  // Sync local optimistic state back to server truth once the hook data catches up
-  useEffect(() => {
-    if (optimistic !== null && optimistic === serverActive) {
-      setOptimistic(null);
-    }
-  }, [serverActive, optimistic]);
-
-  const active = optimistic !== null ? optimistic : serverActive;
+  const active = serverActive;
 
   const handleClick = useCallback((e) => {
     e.stopPropagation();
@@ -76,8 +67,7 @@ export default function FavoriteButton({
     togglingRef.current = true;
     setIsToggling(true);
 
-    // Flip the star instantly + trigger color flash
-    setOptimistic(!active);
+    // Trigger color flash (optimistic state is handled by the hook)
     setFlashKey(k => k + 1);
 
     toggleFavorite({
@@ -88,14 +78,11 @@ export default function FavoriteButton({
       projectTitle,
       propertyAddress,
       tonomoBasePath,
-    }).catch(() => {
-      // On failure, revert to server state
-      setOptimistic(null);
     }).finally(() => {
       togglingRef.current = false;
       setIsToggling(false);
     });
-  }, [active, filePath, projectId, fileName, fileType, projectTitle, propertyAddress, tonomoBasePath, toggleFavorite]);
+  }, [filePath, projectId, fileName, fileType, projectTitle, propertyAddress, tonomoBasePath, toggleFavorite]);
 
   const iconSize = ICON_SIZES[size] || ICON_SIZES.sm;
 

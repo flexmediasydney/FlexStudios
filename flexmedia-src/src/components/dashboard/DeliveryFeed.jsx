@@ -799,6 +799,8 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
             filePath={tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)}
             fileName={file.name}
             fileType={file.type}
+            projectId={project?.id}
+            projectTitle={project?.title || project?.property_address}
             tonomoBasePath={tonomoBase}
             propertyAddress={project?.property_address || project?.title}
             size="sm"
@@ -907,6 +909,8 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
             filePath={tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)}
             fileName={file.name}
             fileType={file.type}
+            projectId={project?.id}
+            projectTitle={project?.title || project?.property_address}
             tonomoBasePath={tonomoBase}
             propertyAddress={project?.property_address || project?.title}
             size="sm"

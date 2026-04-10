@@ -154,6 +154,16 @@ export function useFavorites() {
 
       try {
         await api.entities.MediaFavorite.delete(existing.id);
+        // Decrement usage_count for each tag on the deleted favorite
+        if (existing.tags?.length > 0) {
+          const freshTags = await api.entities.MediaTag.list('-created_date', 200).catch(() => []);
+          for (const tagName of existing.tags) {
+            const tag = freshTags.find(t => t.name === tagName);
+            if (tag && tag.usage_count > 0) {
+              api.entities.MediaTag.update(tag.id, { usage_count: tag.usage_count - 1 }).catch(() => {});
+            }
+          }
+        }
         api.entities.AuditLog.create({
           entity_type: 'media_favorite',
           entity_id: existing.id,
@@ -170,7 +180,7 @@ export function useFavorites() {
             property_address: propertyAddress || null,
             tonomo_base_path: tonomoBasePath || null,
           },
-        }).catch(() => {}); // fire-and-forget audit log — swallow rejection to avoid unhandled promise
+        }).catch(err => { console.warn('[useFavorites] Audit log failed:', err?.message); });
       } catch (err) {
         // Revert optimistic state on failure
         inFlightKeys.current.delete(optimisticKey);
@@ -184,6 +194,8 @@ export function useFavorites() {
         toast.error('Failed to remove favorite', {
           description: err?.message || `Could not unfavorite "${displayName}". Please try again.`,
         });
+        // Refetch to sync with server truth after failed optimistic revert
+        try { await refetchEntityList('MediaFavorite'); } catch {}
         return true; // still favorited
       }
     } else {
@@ -234,7 +246,7 @@ export function useFavorites() {
             property_address: propertyAddress || null,
             tonomo_base_path: tonomoBasePath || null,
           },
-        }).catch(() => {}); // fire-and-forget audit log — swallow rejection to avoid unhandled promise
+        }).catch(err => { console.warn('[useFavorites] Audit log failed:', err?.message); });
       } catch (err) {
         // Revert optimistic state on failure
         inFlightKeys.current.delete(optimisticKey);
@@ -248,6 +260,8 @@ export function useFavorites() {
         toast.error('Failed to add favorite', {
           description: err?.message || `Could not favorite "${displayName}". Please try again.`,
         });
+        // Refetch to sync with server truth after failed optimistic revert
+        try { await refetchEntityList('MediaFavorite'); } catch {}
         return false; // still not favorited
       }
     }
@@ -349,8 +363,14 @@ export function useFavorites() {
         description: err?.message || 'Could not complete the bulk operation.',
       });
     } finally {
-      // Always clear all optimistic state after batch completes, even on partial failure
-      setOptimisticToggles({});
+      setOptimisticToggles(prev => {
+        const next = { ...prev };
+        for (const item of itemsToToggle) {
+          const key = item.filePath ? `file:${item.filePath}` : `project:${item.projectId}`;
+          delete next[key];
+        }
+        return next;
+      });
     }
 
     return toggledCount;
@@ -431,7 +451,7 @@ export function useFavorites() {
           added_tags: added,
           removed_tags: removed,
         },
-      }).catch(() => {}); // swallow rejection to avoid unhandled promise
+      }).catch(err => { console.warn('[useFavorites] Audit log failed:', err?.message); });
 
       // Refresh caches
       await Promise.all([
