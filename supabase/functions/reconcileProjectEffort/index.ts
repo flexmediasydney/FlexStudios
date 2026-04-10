@@ -90,7 +90,7 @@ Deno.serve(async (req) => {
         for (const task of tasks) {
           const role = task.auto_assign_role;
           if (!role || role === 'none') continue;
-          const estSecs = (task.estimated_minutes || 0) * 60;
+          const estSecs = Math.max(0, task.estimated_minutes || 0) * 60;
           if (estSecs > 0) estimatedByRole[role] = (estimatedByRole[role] || 0) + estSecs;
         }
 

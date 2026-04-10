@@ -56,27 +56,43 @@ function useProjectEffortData(projectId, project = null) {
     // BUG FIX (subscription audit): UPDATE and DELETE handlers were not filtering
     // by project_id. An update to a time log for a DIFFERENT project would overwrite
     // a matching ID in this project's list. DELETE similarly could remove wrong entries.
-    const unsub = api.entities.TaskTimeLog.subscribe(ev => {
-      if (!mounted) return;
-      if (ev.type === 'create' && ev.data?.project_id === projectId) {
-        // Prevent duplicates from race between fetchTimeLogs and subscription
-        setTimeLogs(prev => prev.some(l => l.id === ev.data.id) ? prev : [...prev, ev.data]);
-      } else if (ev.type === 'update') {
-        // Only update if this log belongs to our project OR is already in our list
-        setTimeLogs(prev => {
-          const inList = prev.some(l => l.id === ev.id);
-          if (!inList) return prev; // Not our project's log
-          if (ev.data?.project_id !== projectId) {
-            // Log was reassigned to different project — remove it
-            return prev.filter(l => l.id !== ev.id);
-          }
-          return prev.map(l => l.id === ev.id ? ev.data : l);
-        });
-      } else if (ev.type === 'delete') {
-        setTimeLogs(prev => prev.filter(l => l.id !== ev.id));
-      }
-    });
-    return () => { mounted = false; unsub(); };
+    let unsub = null;
+
+    function connect() {
+      if (unsub) { try { unsub(); } catch {} }
+      unsub = api.entities.TaskTimeLog.subscribe(ev => {
+        if (!mounted) return;
+        if (ev.type === 'create' && ev.data?.project_id === projectId) {
+          // Prevent duplicates from race between fetchTimeLogs and subscription
+          setTimeLogs(prev => prev.some(l => l.id === ev.data.id) ? prev : [...prev, ev.data]);
+        } else if (ev.type === 'update') {
+          // Only update if this log belongs to our project OR is already in our list
+          setTimeLogs(prev => {
+            const inList = prev.some(l => l.id === ev.id);
+            if (!inList) return prev; // Not our project's log
+            if (ev.data?.project_id !== projectId) {
+              // Log was reassigned to different project — remove it
+              return prev.filter(l => l.id !== ev.id);
+            }
+            return prev.map(l => l.id === ev.id ? ev.data : l);
+          });
+        } else if (ev.type === 'delete') {
+          setTimeLogs(prev => prev.filter(l => l.id !== ev.id));
+        }
+      });
+    }
+    connect();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') connect();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      mounted = false;
+      if (typeof unsub === 'function') unsub();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [projectId]);
 
   // Fetch project tasks with retry (re-fetches when products change)
