@@ -209,7 +209,8 @@ export function assignStaffToProjectFields(resolvedPhotographers: any[], booking
 
   if (resolvedPhotographers.length === 1) {
     const person = resolvedPhotographers[0];
-    fields.project_owner_id = person.userId;
+    // Do NOT set project_owner from webhook — it should come from staff defaults
+    // fields.project_owner_id = person.userId;
 
     if (bookingTypes.isVideoBooking && !bookingTypes.isPhotoBooking) {
       fields.videographer_id   = person.userId;
@@ -245,10 +246,9 @@ export function assignStaffToProjectFields(resolvedPhotographers: any[], booking
     }
   }
 
-  const firstOnsite = toAssign[0];
-  if (firstOnsite) {
-    fields.project_owner_id = firstOnsite.userId;
-  }
+  // Do NOT set project_owner from webhook — it comes from staff defaults
+  // const firstOnsite = toAssign[0];
+  // if (firstOnsite) { fields.project_owner_id = firstOnsite.userId; }
 
   for (const person of toAssign) {
     if (person.assignedRole === 'photographer' && !fields.photographer_id) {

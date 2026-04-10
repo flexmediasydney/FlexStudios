@@ -31,6 +31,7 @@ const roleConfig = {
 const providerLabel = { email: "Email/Password", google: "Google", phone: "Phone OTP" };
 
 const STAFF_ROLE_OPTIONS = [
+  { value: "project_owner", label: "Project Owner" },
   { value: "photographer", label: "Photographer" },
   { value: "videographer", label: "Videographer" },
   { value: "drone_operator", label: "Drone Operator" },
@@ -41,6 +42,7 @@ const STAFF_ROLE_OPTIONS = [
 ];
 
 const STAFF_ROLE_COLORS = {
+  project_owner:    "bg-emerald-100 text-emerald-700 border-emerald-200",
   photographer:     "bg-blue-100 text-blue-700 border-blue-200",
   videographer:     "bg-purple-100 text-purple-700 border-purple-200",
   drone_operator:   "bg-pink-100 text-pink-700 border-pink-200",
