@@ -273,7 +273,11 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
         syncFailCountRef.current += 1;
         console.warn(`Sync failed (attempt ${syncFailCountRef.current}):`, e);
         if (syncFailCountRef.current >= 3) {
-          setError('Sync failed — your timer is still running locally but changes are not being saved. Check your connection.');
+          // Auto-pause to prevent data loss on persistent sync failure
+          try {
+            await api.entities.TaskTimeLog.update(log.id, { status: 'paused', pause_time: new Date().toISOString() });
+          } catch {}
+          setError('Sync failed — timer paused to prevent data loss. Check your connection.');
         }
       }
     }, DB_SYNC_INTERVAL);

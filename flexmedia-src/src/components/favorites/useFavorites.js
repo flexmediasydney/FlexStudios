@@ -405,7 +405,7 @@ export function useFavorites() {
 
       // Upsert new tags into the registry.
       // Re-fetch fresh tag list to avoid stale usage_count from concurrent updateTags calls.
-      const freshTags = await refetchEntityList('MediaTag') || allTags || [];
+      const freshTags = await refetchEntityList('MediaTag') || [];
       for (const tagName of added) {
         const existing = freshTags.find(t => t.name === tagName);
         if (existing) {
@@ -483,7 +483,7 @@ export function useFavorites() {
       // Re-throw so callers can handle if needed
       throw err;
     }
-  }, [userId, user, allFavorites, allTags]);
+  }, [userId, user, allFavorites]);
 
   /**
    * Ensure a MediaFavorite record exists for a file, then apply tags.

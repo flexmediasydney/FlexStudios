@@ -117,7 +117,8 @@ Deno.serve(async (req) => {
     // Parse as Sydney wall-clock time by trying AEDT (+11) then AEST (+10).
     const shootStart = (() => {
       if (!project.shoot_date) return new Date().toISOString();
-      const timeStr = project.shoot_time || '09:00';
+      const rawTime = project.shoot_time || '09:00';
+      const timeStr = /^\d{1,2}:\d{2}$/.test(rawTime) ? rawTime : '09:00';
       const naiveDateStr = `${project.shoot_date}T${timeStr}:00`;
       const targetHour = parseInt(timeStr.split(':')[0], 10);
       const tryOffset = (offset: string) => {
@@ -130,7 +131,10 @@ Deno.serve(async (req) => {
         const localHour = parseInt(parts.find((p: any) => p.type === 'hour')?.value ?? '0', 10);
         return Math.abs(localHour - targetHour) <= 1 ? d.toISOString() : null;
       };
-      return tryOffset('+11:00') || tryOffset('+10:00') || new Date(`${naiveDateStr}+10:00`).toISOString();
+      const aedt = tryOffset('+11:00');
+      if (aedt) return aedt;
+      console.warn(`[logOnsiteEffort] project ${project_id}: using AEST fallback (+10:00) — DST ambiguity`);
+      return tryOffset('+10:00') || new Date(`${naiveDateStr}+10:00`).toISOString();
     })();
 
     let completed = 0;
@@ -152,14 +156,7 @@ Deno.serve(async (req) => {
         ? new Date(new Date(shootStart).getTime() + taskSeconds * 1000).toISOString()
         : shootStart;
 
-      // Mark task as completed + locked + record effort
-      await entities.ProjectTask.update(task.id, {
-        is_completed: true,
-        is_locked: true,
-        total_effort_logged: taskSeconds,
-      });
-
-      // Create time log only if one doesn't already exist for this task
+      // Create time log FIRST — if this fails, task stays unlocked for retry
       if (staffId && taskSeconds > 0) {
         const existingLogs = await entities.TaskTimeLog.filter({ task_id: task.id }, null, 10);
         if (existingLogs.length === 0) {
@@ -181,6 +178,13 @@ Deno.serve(async (req) => {
           console.log(`Time log already exists for task ${task.id} (${role}), skipping`);
         }
       }
+
+      // Mark task as completed + locked AFTER time log is created
+      await entities.ProjectTask.update(task.id, {
+        is_completed: true,
+        is_locked: true,
+        total_effort_logged: taskSeconds,
+      });
 
       completed++;
     }

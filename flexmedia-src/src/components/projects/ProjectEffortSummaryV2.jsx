@@ -159,7 +159,7 @@ function calculateEffortMetrics(timeLogs, projectTasks, projectRevisions) {
   projectRevisions.forEach(revision => {
     if (revision.status === 'completed' || revision.status === 'rejected') return;
     projectTasks.forEach(task => {
-      if (task.title?.startsWith(`[Revision #${revision.revision_number}]`)) {
+      if (task.revision_id === revision.id || task.title?.startsWith(`[Revision #${revision.revision_number}]`)) {
         revisionTaskIds.add(task.id);
       }
     });
@@ -217,6 +217,7 @@ function calculateEffortMetrics(timeLogs, projectTasks, projectRevisions) {
       actualByRole: taskActByRole,
       actualTotal: taskActTotal,
       utilization: taskEstTotal > 0 ? Math.min(Math.round((taskActTotal / taskEstTotal) * 100), 999) : 0,
+      isOverCap: taskEstTotal > 0 && taskActTotal > taskEstTotal * 9.99,
     },
     revision: {
       estimatedByRole: revisionEstByRole,
@@ -224,6 +225,7 @@ function calculateEffortMetrics(timeLogs, projectTasks, projectRevisions) {
       actualByRole: revisionActByRole,
       actualTotal: revisionActTotal,
       utilization: revisionEstTotal > 0 ? Math.min(Math.round((revisionActTotal / revisionEstTotal) * 100), 999) : 0,
+      isOverCap: revisionEstTotal > 0 && revisionActTotal > revisionEstTotal * 9.99,
     },
   };
 }
@@ -234,12 +236,14 @@ function buildRoleList(actualByRole, estimatedByRole) {
     .map(role => {
       const actual = actualByRole[role] || 0;
       const estimated = estimatedByRole[role] || 0;
+      const utilization = estimated > 0 ? Math.min(Math.round((actual / estimated) * 100), 999) : 0;
       return {
         role,
         name: ROLE_LABELS[role] || role.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
         actual,
         estimated,
-        utilization: estimated > 0 ? Math.min(Math.round((actual / estimated) * 100), 999) : 0,
+        utilization,
+        isOverCap: estimated > 0 && actual > estimated * 9.99,
       };
     })
     .filter(r => r.actual > 0 || r.estimated > 0)
@@ -302,6 +306,9 @@ export function useProjectEffortSummary(projectId, project = null) {
       .sort((a, b) => b.actual - a.actual);
   }, [timeLogs, projectTasks, tick]);
 
+  const totalUtilization = totalEst > 0 ? Math.min(Math.round((totalAct / totalEst) * 100), 999) : 0;
+  const totalIsOverCap = totalEst > 0 && totalAct > totalEst * 9.99;
+
   return {
     task: metrics.task,
     revision: metrics.revision,
@@ -309,7 +316,8 @@ export function useProjectEffortSummary(projectId, project = null) {
     revisionRoleList,
     totalEstimated: totalEst,
     totalActual: totalAct,
-    totalUtilization: totalEst > 0 ? Math.min(Math.round((totalAct / totalEst) * 100), 999) : 0,
+    totalUtilization,
+    totalIsOverCap,
     hasRunning: hasRunningTimer,
     runningTimers,
     perTaskBreakdown,
@@ -368,7 +376,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
               <div className="flex items-center justify-between mb-1.5">
                 <p className="text-xs font-medium text-muted-foreground">Util</p>
                 <p className={cn('text-xs font-bold', data.totalUtilization >= 100 ? 'text-orange-600' : 'text-green-600')}>
-                  {data.totalUtilization}%
+                  {data.totalUtilization}%{data.totalIsOverCap && <span className="text-red-600 ml-0.5" title="Actual effort exceeds 9x estimate"> 9x+</span>}
                 </p>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -399,7 +407,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
               <div className="flex items-center justify-between mb-1.5">
                 <p className="text-xs font-medium text-muted-foreground">Util</p>
                 <p className={cn('text-xs font-bold', data.task.utilization >= 100 ? 'text-orange-600' : 'text-green-600')}>
-                  {data.task.utilization}%
+                  {data.task.utilization}%{data.task.isOverCap && <span className="text-red-600 ml-0.5" title="Actual effort exceeds 9x estimate"> 9x+</span>}
                 </p>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -430,7 +438,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
               <div className="flex items-center justify-between mb-1.5">
                 <p className="text-xs font-medium text-muted-foreground">Util</p>
                 <p className={cn('text-xs font-bold', data.revision.utilization >= 100 ? 'text-orange-600' : 'text-green-600')}>
-                  {data.revision.utilization}%
+                  {data.revision.utilization}%{data.revision.isOverCap && <span className="text-red-600 ml-0.5" title="Actual effort exceeds 9x estimate"> 9x+</span>}
                 </p>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -467,7 +475,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
                       <p className="font-medium text-sm">{role.name}</p>
                       {role.estimated > 0 && (
                         <p className={cn('font-bold text-xs', role.utilization >= 100 ? 'text-orange-600' : 'text-green-600')}>
-                          {role.utilization}%
+                          {role.utilization}%{role.isOverCap && <span className="text-red-600 ml-0.5"> 9x+</span>}
                         </p>
                       )}
                     </div>
@@ -490,7 +498,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
                       <p className="font-medium text-sm">{role.name}</p>
                       {role.estimated > 0 && (
                         <p className={cn('font-bold text-xs', role.utilization >= 100 ? 'text-orange-600' : 'text-green-600')}>
-                          {role.utilization}%
+                          {role.utilization}%{role.isOverCap && <span className="text-red-600 ml-0.5"> 9x+</span>}
                         </p>
                       )}
                     </div>
