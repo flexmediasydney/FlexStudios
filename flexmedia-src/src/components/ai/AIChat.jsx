@@ -369,12 +369,19 @@ export default function AIChat({ projectId, projectTitle }) {
             </div>
           )}
 
-          {/* Loading indicator */}
+          {/* Loading indicator with processing steps */}
           {isLoading && (
             <div className="flex justify-start">
-              <div className="bg-muted rounded-lg px-3 py-2 flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">Thinking...</span>
+              <div className="bg-muted rounded-lg px-3 py-2.5 space-y-1.5 min-w-[160px]">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                  <span className="text-xs font-medium text-foreground">Processing...</span>
+                </div>
+                <div className="space-y-1 pl-5.5">
+                  <p className="text-[10px] text-muted-foreground animate-pulse">Understanding your request</p>
+                  <p className="text-[10px] text-muted-foreground/50 animate-pulse" style={{ animationDelay: '0.5s' }}>Checking project context</p>
+                  <p className="text-[10px] text-muted-foreground/30 animate-pulse" style={{ animationDelay: '1s' }}>Executing actions...</p>
+                </div>
               </div>
             </div>
           )}

@@ -159,7 +159,7 @@ async function executeTool(toolName: string, input: any, context: ToolContext): 
         created_by_name: user.full_name,
         created_by_email: user.email,
         mentions,
-        contextType: 'project',
+        context_type: 'project',
       });
       return { success: true, mentions_resolved: mentions.map((m: any) => m.userName) };
     }
@@ -602,6 +602,9 @@ Deno.serve(async (req) => {
         output_tokens: outputTokens,
         estimated_cost: (inputTokens * 0.003 + outputTokens * 0.015) / 1000,
         duration_ms: Date.now() - startTime,
+        error_message: results.some((r: any) => !r.success)
+          ? results.filter((r: any) => !r.success).map((r: any) => `${r.tool}: ${r.result?.error || 'failed'}`).join('; ')
+          : null,
       });
     } catch (logErr: any) {
       console.error('Failed to write ai_action_logs:', logErr.message);
