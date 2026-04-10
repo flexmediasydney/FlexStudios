@@ -257,13 +257,13 @@ export async function invokeFunction(functionName: string, params: Record<string
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'apikey': SUPABASE_ANON_KEY,
       'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
     },
     body: JSON.stringify(params),
   });
 
   if (!res.ok) {
-    // Clone before reading so the body isn't consumed twice
     const text = await res.clone().text().catch(() => 'Unknown error');
     throw new Error(`Function ${functionName} failed (${res.status}): ${text}`);
   }
