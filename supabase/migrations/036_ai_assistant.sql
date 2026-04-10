@@ -70,7 +70,7 @@ CREATE POLICY "admin_all_ai_logs" ON ai_action_logs FOR ALL
 CREATE POLICY "user_own_ai_logs" ON ai_action_logs FOR SELECT
   USING (user_id = auth.uid());
 CREATE POLICY "service_write_ai_logs" ON ai_action_logs FOR INSERT
-  USING (true);
+  WITH CHECK (true);
 
 -- Seed global settings row
 INSERT INTO ai_settings (setting_scope, user_id, enabled, daily_limit, confirmation_level)
