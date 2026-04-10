@@ -40,9 +40,13 @@ const TeamWorkloadChart = React.lazy(() => import('@/components/dashboard/TeamWo
 const RevenueComparisonChart = React.lazy(() => import('@/components/dashboard/RevenueComparisonChart'));
 import ErrorBoundary from '@/components/common/ErrorBoundary';
 
+const OperationsPulse = React.lazy(() => import('@/components/dashboard/OperationsPulse'));
+const BusinessIntelDash = React.lazy(() => import('@/components/dashboard/BusinessIntelDash'));
+const TeamCapacityDash = React.lazy(() => import('@/components/dashboard/TeamCapacityDash'));
+
 const VALID_DASHBOARD_TABS = new Set([
-  'overview', 'deadlines', 'tasks', 'files', 'today',
-  'pipeline', 'territory', 'deliveries', 'revenue'
+  'pulse', 'overview', 'deadlines', 'tasks', 'files', 'today',
+  'pipeline', 'territory', 'deliveries', 'revenue', 'intel', 'team'
 ]);
 
 export default function Dashboard() {
@@ -54,7 +58,7 @@ export default function Dashboard() {
   // Tab persistence via URL — defaults to "overview", survives navigation
   const activeTab = VALID_DASHBOARD_TABS.has(searchParams.get('tab'))
     ? searchParams.get('tab')
-    : 'overview';
+    : 'pulse';
 
   const handleDashboardTabChange = useCallback((tab) => {
     setSearchParams(prev => {
@@ -479,9 +483,16 @@ export default function Dashboard() {
       <Tabs value={activeTab} onValueChange={handleDashboardTabChange} className="space-y-4">
        <div className="sticky top-14 lg:top-16 z-10 bg-gradient-to-b from-background to-background/80 pb-2">
          <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap -webkit-overflow-scrolling-touch" style={{ WebkitOverflowScrolling: 'touch' }}>
-           <TabsTrigger 
-             value="overview" 
-             title="Main dashboard overview (Ctrl+1)" 
+           <TabsTrigger
+             value="pulse"
+             title="Operations pulse — what needs attention now"
+             className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent"
+           >
+             Pulse
+           </TabsTrigger>
+           <TabsTrigger
+             value="overview"
+             title="Main dashboard overview"
              className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent"
            >
              Overview
@@ -542,6 +553,20 @@ export default function Dashboard() {
              className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent"
            >
              Revenue
+           </TabsTrigger>
+           <TabsTrigger
+             value="intel"
+             title="Business intelligence — revenue, velocity, delivery quality"
+             className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent"
+           >
+             Intel
+           </TabsTrigger>
+           <TabsTrigger
+             value="team"
+             title="Team capacity and utilization"
+             className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent"
+           >
+             Team
            </TabsTrigger>
            </TabsList>
        </div>
@@ -713,6 +738,24 @@ export default function Dashboard() {
         <TabsContent value="revenue" className="space-y-6 mt-0">
           <ErrorBoundary fallbackLabel="Revenue Intelligence">
             <RevenueIntelligence />
+          </ErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="pulse" className="space-y-6 mt-0">
+          <ErrorBoundary fallbackLabel="Operations Pulse">
+            <OperationsPulse />
+          </ErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="intel" className="space-y-6 mt-0">
+          <ErrorBoundary fallbackLabel="Business Intelligence">
+            <BusinessIntelDash />
+          </ErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="team" className="space-y-6 mt-0">
+          <ErrorBoundary fallbackLabel="Team Capacity">
+            <TeamCapacityDash />
           </ErrorBoundary>
         </TabsContent>
       </Tabs>
