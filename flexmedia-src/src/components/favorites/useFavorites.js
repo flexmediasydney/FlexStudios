@@ -485,14 +485,57 @@ export function useFavorites() {
     }
   }, [userId, user, allFavorites, allTags]);
 
+  /**
+   * Ensure a MediaFavorite record exists for a file, then apply tags.
+   * If no favorite exists yet, creates one automatically (so users can
+   * tag any file without explicitly favoriting first). Returns the
+   * favorite ID.
+   */
+  const ensureFavoriteAndTag = useCallback(async (
+    { filePath, fileName, fileType, projectId, projectTitle, propertyAddress, tonomoBasePath },
+    newTags
+  ) => {
+    if (!userId) return null;
+    let fav = getFavorite(filePath, null);
+    if (!fav) {
+      // Auto-create favorite record for tagging
+      fav = await api.entities.MediaFavorite.create({
+        user_id: userId,
+        file_path: filePath,
+        file_name: fileName,
+        file_type: fileType,
+        project_id: projectId || null,
+        project_title: projectTitle || null,
+        property_address: propertyAddress || null,
+        tonomo_base_path: tonomoBasePath || null,
+        favorited_by_name: user?.full_name || user?.email || 'Unknown',
+        tags: [],
+      });
+      await refetchEntityList('MediaFavorite');
+    }
+    if (fav?.id && newTags) {
+      await updateTags(fav.id, newTags);
+    }
+    return fav?.id;
+  }, [userId, user, getFavorite, updateTags]);
+
+  // Build a tag → color map from the registry for convenience
+  const tagColorMap = useMemo(() => {
+    const map = {};
+    (allTags || []).forEach(t => { map[t.name] = t.color || '#3b82f6'; });
+    return map;
+  }, [allTags]);
+
   return {
     favorites,
     allTags: allTags || [],
+    tagColorMap,
     isFavorited,
     getFavorite,
     toggleFavorite,
     toggleMultiple,
     updateTags,
+    ensureFavoriteAndTag,
     loading: favLoading || tagsLoading,
   };
 }

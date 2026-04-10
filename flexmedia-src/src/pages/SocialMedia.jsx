@@ -19,6 +19,7 @@ import {
   ChevronLeft, ChevronRight, Download, Loader2
 } from "lucide-react";
 import { safeWindowOpen } from "@/utils/sanitizeHtml";
+import TagManager from "@/components/favorites/TagManager";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { formatDistanceToNow, format } from "date-fns";
@@ -335,6 +336,22 @@ function MiniLightbox({ files, initialIndex, onClose }) {
       <div className="flex items-center justify-between px-4 py-3 text-white border-b border-white/10" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3 min-w-0">
           <span className="text-sm font-medium truncate max-w-md">{file.file_name}</span>
+          {file.property_address && (
+            file.project_id ? (
+              <a
+                href={createPageUrl("ProjectDetails") + `?id=${file.project_id}`}
+                className="text-xs text-white/50 hover:text-white/80 hover:underline transition-colors truncate max-w-[200px]"
+                onClick={(e) => { e.stopPropagation(); }}
+              >
+                {file.property_address}
+              </a>
+            ) : (
+              <span className="text-xs text-white/50 truncate max-w-[200px]">{file.property_address}</span>
+            )
+          )}
+          {file.favorited_by_name && (
+            <span className="text-xs text-white/30 truncate">by {file.favorited_by_name}</span>
+          )}
           <span className="text-xs text-white/40 tabular-nums">{index + 1} / {files.length}</span>
         </div>
         <div className="flex items-center gap-1">
@@ -559,34 +576,53 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, onOp
       <div className="p-2.5 space-y-1">
         <p className="text-xs font-medium truncate leading-tight" title={favorite.file_name}>{favorite.file_name}</p>
         {favorite.property_address && (
-          <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70 truncate">
-            <Building2 className="h-2.5 w-2.5 shrink-0" />
-            <span className="truncate">{favorite.property_address}</span>
-          </div>
-        )}
-        {/* Tag pills with registry colors */}
-        {favorite.tags?.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1">
-            {favorite.tags.slice(0, 3).map(tag => (
-              <span
-                key={tag}
-                className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border"
-                style={{
-                  color: tagColorMap[tag] || '#3b82f6',
-                  borderColor: (tagColorMap[tag] || '#3b82f6') + '40',
-                  backgroundColor: (tagColorMap[tag] || '#3b82f6') + '10',
-                }}
+          <p className="text-[11px] text-muted-foreground truncate">
+            {favorite.project_id ? (
+              <a
+                href={createPageUrl("ProjectDetails") + `?id=${favorite.project_id}`}
+                onClick={(e) => { e.stopPropagation(); }}
+                className="hover:text-primary hover:underline transition-colors"
               >
-                #{tag}
-              </span>
-            ))}
-            {favorite.tags.length > 3 && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-                +{favorite.tags.length - 3}
-              </span>
+                {favorite.property_address}
+              </a>
+            ) : (
+              favorite.property_address
             )}
-          </div>
+          </p>
         )}
+        {favorite.favorited_by_name && (
+          <p className="text-[10px] text-muted-foreground/60 truncate">
+            by {favorite.favorited_by_name}
+          </p>
+        )}
+        {/* Tag pills with registry colors + inline TagManager */}
+        <div className="flex flex-wrap items-center gap-1 mt-1">
+          {(favorite.tags || []).slice(0, 3).map(tag => (
+            <span
+              key={tag}
+              className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border"
+              style={{
+                color: tagColorMap[tag] || '#3b82f6',
+                borderColor: (tagColorMap[tag] || '#3b82f6') + '40',
+                backgroundColor: (tagColorMap[tag] || '#3b82f6') + '10',
+              }}
+            >
+              #{tag}
+            </span>
+          ))}
+          {(favorite.tags || []).length > 3 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+              +{favorite.tags.length - 3}
+            </span>
+          )}
+          <div onClick={(e) => e.stopPropagation()}>
+            <TagManager
+              favoriteId={favorite.id}
+              currentTags={favorite.tags || []}
+              onTagsChanged={() => {}}
+            />
+          </div>
+        </div>
         <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
           {(favorite.favorited_by_name || favorite.created_by_name) && (
             <>
@@ -679,27 +715,32 @@ function ProjectFavoriteCard({ favorite, tagColorMap, onUnfavorite, animDelay = 
             <span className="truncate">{favorite.property_address}</span>
           </div>
         )}
-        {/* Tags */}
-        {favorite.tags?.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1">
-            {favorite.tags.slice(0, 3).map(tag => (
-              <span
-                key={tag}
-                className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border"
-                style={{
-                  color: tagColorMap[tag] || '#3b82f6',
-                  borderColor: (tagColorMap[tag] || '#3b82f6') + '40',
-                  backgroundColor: (tagColorMap[tag] || '#3b82f6') + '10',
-                }}
-              >
-                #{tag}
-              </span>
-            ))}
-            {(favorite.tags || []).length > 3 && (
-              <span className="text-[10px] text-muted-foreground">+{(favorite.tags || []).length - 3}</span>
-            )}
+        {/* Tags + inline TagManager */}
+        <div className="flex flex-wrap items-center gap-1 mt-1">
+          {(favorite.tags || []).slice(0, 3).map(tag => (
+            <span
+              key={tag}
+              className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border"
+              style={{
+                color: tagColorMap[tag] || '#3b82f6',
+                borderColor: (tagColorMap[tag] || '#3b82f6') + '40',
+                backgroundColor: (tagColorMap[tag] || '#3b82f6') + '10',
+              }}
+            >
+              #{tag}
+            </span>
+          ))}
+          {(favorite.tags || []).length > 3 && (
+            <span className="text-[10px] text-muted-foreground">+{(favorite.tags || []).length - 3}</span>
+          )}
+          <div onClick={(e) => e.stopPropagation()}>
+            <TagManager
+              favoriteId={favorite.id}
+              currentTags={favorite.tags || []}
+              onTagsChanged={() => {}}
+            />
           </div>
-        )}
+        </div>
         <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
           {(favorite.favorited_by_name || favorite.created_by_name) && (
             <>

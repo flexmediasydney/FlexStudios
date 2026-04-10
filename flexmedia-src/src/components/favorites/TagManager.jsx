@@ -70,7 +70,7 @@ function TagPill({ tag, color, onRemove, isRemoving }) {
   );
 }
 
-export default function TagManager({ favoriteId, currentTags = [], onTagsChanged }) {
+export default function TagManager({ favoriteId, currentTags = [], onTagsChanged, onEnsureAndTag }) {
   const { allTags, updateTags } = useFavorites();
   const [input, setInput] = useState('');
   const [open, setOpen] = useState(false);
@@ -113,6 +113,16 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
       .slice(0, 5);
   }, [allTags, currentTags]);
 
+  // Persist tag changes: if favoriteId exists, use updateTags directly.
+  // If no favoriteId yet, use onEnsureAndTag to auto-create the favorite first.
+  const persistTags = useCallback(async (newTags) => {
+    if (favoriteId) {
+      await updateTags(favoriteId, newTags);
+    } else if (onEnsureAndTag) {
+      await onEnsureAndTag(newTags);
+    }
+  }, [favoriteId, updateTags, onEnsureAndTag]);
+
   const addTag = useCallback(async (tagName) => {
     if (isSaving) return;
     const trimmed = tagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, ' ').replace(/^[-_ ]+|[-_ ]+$/g, '').trim();
@@ -124,14 +134,14 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
     setIsSaving(true);
     onTagsChanged?.(newTags);
     try {
-      await updateTags(favoriteId, newTags);
+      await persistTags(newTags);
     } catch {
-      // updateTags already shows a toast.error; revert local state
+      // persistTags / updateTags already shows a toast.error; revert local state
       onTagsChanged?.(currentTags);
     } finally {
       setIsSaving(false);
     }
-  }, [currentTags, favoriteId, updateTags, onTagsChanged, isSaving]);
+  }, [currentTags, persistTags, onTagsChanged, isSaving]);
 
   const removeTag = useCallback(async (tagName) => {
     if (isSaving) return;
@@ -140,15 +150,15 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
     const newTags = currentTags.filter(t => t !== tagName);
     onTagsChanged?.(newTags);
     try {
-      await updateTags(favoriteId, newTags);
+      await persistTags(newTags);
     } catch {
-      // updateTags already shows a toast.error; revert local state
+      // persistTags / updateTags already shows a toast.error; revert local state
       onTagsChanged?.(currentTags);
     } finally {
       setRemovingTag(null);
       setIsSaving(false);
     }
-  }, [currentTags, favoriteId, updateTags, onTagsChanged, isSaving]);
+  }, [currentTags, persistTags, onTagsChanged, isSaving]);
 
   const handleKeyDown = useCallback((e) => {
     const hasSuggestions = suggestions.length > 0;

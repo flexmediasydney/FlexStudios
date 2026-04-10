@@ -25,6 +25,7 @@ import { createPageUrl } from "@/utils";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, differenceInDays, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
+import TagManager from "@/components/favorites/TagManager";
 import { LRUBlobCache, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -590,7 +591,7 @@ function MediaLightbox({ files, initialIndex, onClose }) {
 // =====================================================================
 // FeedCard: media card with hover lift, fade-in, overlays, tag pills
 // =====================================================================
-const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFile }) {
+const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFile, getFavorite, ensureFavoriteAndTag }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -721,6 +722,16 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
               size="sm"
               className="bg-black/30 hover:bg-black/50 rounded-full p-1 text-white backdrop-blur-sm"
             />
+            {item.proxyPath && (
+              <div className="bg-black/30 hover:bg-black/50 rounded-full text-white backdrop-blur-sm [&_button]:p-1 [&_button]:text-white" onClick={(e) => e.stopPropagation()}>
+                <TagManager
+                  favoriteId={getFavorite?.(item.proxyPath)?.id}
+                  currentTags={getFavorite?.(item.proxyPath)?.tags || []}
+                  onTagsChanged={() => {}}
+                  onEnsureAndTag={(newTags) => ensureFavoriteAndTag?.({ filePath: item.proxyPath, fileName: item.name, fileType: item.type, projectId: item.projectId, projectTitle: item.projectName, propertyAddress: item.projectName, tonomoBasePath: item.tonomoBasePath }, newTags)}
+                />
+              </div>
+            )}
             {item.proxyPath && (
               <button
                 onClick={(e) => { e.stopPropagation(); downloadFile(item.proxyPath, item.name); }}
@@ -960,7 +971,7 @@ export default function LiveMediaFeed() {
   const gridRef = useRef(null);
 
   // Favorites + tags
-  const { favorites, allTags: tagRegistry } = useFavorites();
+  const { favorites, allTags: tagRegistry, getFavorite, ensureFavoriteAndTag } = useFavorites();
 
   // PERF: Pre-index favorites and tags for O(1) lookups instead of O(n) find per card
   const favByPath = useMemo(() => {
@@ -1357,6 +1368,8 @@ export default function LiveMediaFeed() {
                     isVisible={visibleCards.has(feedId)}
                     onClick={() => setLightbox({ files: feedItems, index: idx })}
                     getTagsForFile={getTagsForFile}
+                    getFavorite={getFavorite}
+                    ensureFavoriteAndTag={ensureFavoriteAndTag}
                   />
                 </div>
               );

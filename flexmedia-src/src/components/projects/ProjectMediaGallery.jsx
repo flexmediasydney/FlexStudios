@@ -17,6 +17,7 @@ import { openInDropbox, downloadFile, buildProxyPath as buildProxyPathUtil, getV
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
+import TagManager from "@/components/favorites/TagManager";
 import { useFavorites } from "@/components/favorites/useFavorites";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -662,6 +663,16 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, deli
               size="sm"
               className="bg-white/15 hover:bg-white/30 rounded-full p-1 text-white backdrop-blur-sm"
             />
+            {proxyPath && (
+              <div className="bg-white/15 hover:bg-white/30 rounded-full text-white backdrop-blur-sm [&_button]:p-1 [&_button]:text-white" onClick={(e) => e.stopPropagation()}>
+                <TagManager
+                  favoriteId={getFavorite(proxyPath)?.id}
+                  currentTags={getFavorite(proxyPath)?.tags || []}
+                  onTagsChanged={() => {}}
+                  onEnsureAndTag={(newTags) => ensureFavoriteAndTag({ filePath: proxyPath, fileName: file.name, fileType: file.type, projectId: project?.id, projectTitle: project?.title || project?.property_address, propertyAddress: project?.property_address || project?.title, tonomoBasePath }, newTags)}
+                />
+              </div>
+            )}
             {deliverableLink && (
               <button
                 onClick={(e) => { e.stopPropagation(); openInDropbox(deliverableLink); }}
@@ -914,7 +925,7 @@ export default function ProjectMediaGallery({ project }) {
   const [gridSize, setGridSize] = useState('md');
   const [lightbox, setLightbox] = useState(null);
 
-  const { favorites, allTags: tagRegistry } = useFavorites();
+  const { favorites, allTags: tagRegistry, getFavorite, ensureFavoriteAndTag } = useFavorites();
 
   // PERF: Pre-index favorites by file_path and tags by name for O(1) lookups
   // instead of O(n) array.find() on every card render

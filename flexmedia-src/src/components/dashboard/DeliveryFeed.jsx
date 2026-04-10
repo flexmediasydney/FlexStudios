@@ -25,6 +25,7 @@ import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import { format, formatDistanceToNow, differenceInDays, differenceInHours, isToday, isYesterday } from 'date-fns';
 import FavoriteButton from '@/components/favorites/FavoriteButton';
+import TagManager from '@/components/favorites/TagManager';
 
 // ─── CSS-in-JS animations injected once ──────────────────────────────────────
 const DELIVERY_STYLES_ID = 'delivery-feed-animations';
@@ -671,7 +672,7 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
 }
 
 // ─── LazyThumbFileCard: a single file card with on-demand thumbnail loading ──
-function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, project, getTagsForFile }) {
+function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, project, getTagsForFile, getFavorite, ensureFavoriteAndTag }) {
   const { ref: cardRef, thumbnail, loading } = useLazyThumbnail(file, shareUrl, folder.name);
   const [blobUrl, setBlobUrl] = useState(null);
   const [proxyLoading, setProxyLoading] = useState(false);
@@ -794,19 +795,32 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
 
       {/* Hover actions top-right */}
       <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-        {tonomoBase && file.path && (
-          <FavoriteButton
-            filePath={tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)}
-            fileName={file.name}
-            fileType={file.type}
-            projectId={project?.id}
-            projectTitle={project?.title || project?.property_address}
-            tonomoBasePath={tonomoBase}
-            propertyAddress={project?.property_address || project?.title}
-            size="sm"
-            className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
-          />
-        )}
+        {tonomoBase && file.path && (() => {
+          const fullPath = tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path);
+          return (
+            <>
+              <FavoriteButton
+                filePath={fullPath}
+                fileName={file.name}
+                fileType={file.type}
+                projectId={project?.id}
+                projectTitle={project?.title || project?.property_address}
+                tonomoBasePath={tonomoBase}
+                propertyAddress={project?.property_address || project?.title}
+                size="sm"
+                className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
+              />
+              <div className="bg-black/40 hover:bg-black/60 rounded-full text-white backdrop-blur-sm [&_button]:p-1 [&_button]:text-white" onClick={(e) => e.stopPropagation()}>
+                <TagManager
+                  favoriteId={getFavorite?.(fullPath)?.id}
+                  currentTags={getFavorite?.(fullPath)?.tags || []}
+                  onTagsChanged={() => {}}
+                  onEnsureAndTag={(newTags) => ensureFavoriteAndTag?.({ filePath: fullPath, fileName: file.name, fileType: file.type, projectId: project?.id, projectTitle: project?.title || project?.property_address, propertyAddress: project?.property_address || project?.title, tonomoBasePath: tonomoBase }, newTags)}
+                />
+              </div>
+            </>
+          );
+        })()}
         {tonomoBase && file.path && (
           <button
             onClick={(e) => { e.stopPropagation(); downloadFile(tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path), file.name); }}
@@ -831,7 +845,7 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
 }
 
 // ─── ProxyFileCard: inline file card with proxy image support ───────────────
-function ProxyFileCard({ file, project, getTagsForFile }) {
+function ProxyFileCard({ file, project, getTagsForFile, getFavorite, ensureFavoriteAndTag }) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const started = useRef(false);
@@ -903,28 +917,39 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
         );
       })()}
       {/* Hover actions top-right */}
-      {tonomoBase && file.path && (
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-          <FavoriteButton
-            filePath={tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path)}
-            fileName={file.name}
-            fileType={file.type}
-            projectId={project?.id}
-            projectTitle={project?.title || project?.property_address}
-            tonomoBasePath={tonomoBase}
-            propertyAddress={project?.property_address || project?.title}
-            size="sm"
-            className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
-          />
-          <button
-            onClick={(e) => { e.stopPropagation(); downloadFile(tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path), file.name); }}
-            className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
-            title={`Download ${file.name}`}
-          >
-            <Download className="h-3 w-3" />
-          </button>
-        </div>
-      )}
+      {tonomoBase && file.path && (() => {
+        const fullPath = tonomoBase + (file.path.startsWith('/') ? file.path : '/' + file.path);
+        return (
+          <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+            <FavoriteButton
+              filePath={fullPath}
+              fileName={file.name}
+              fileType={file.type}
+              projectId={project?.id}
+              projectTitle={project?.title || project?.property_address}
+              tonomoBasePath={tonomoBase}
+              propertyAddress={project?.property_address || project?.title}
+              size="sm"
+              className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
+            />
+            <div className="bg-black/40 hover:bg-black/60 rounded-full text-white backdrop-blur-sm [&_button]:p-1 [&_button]:text-white" onClick={(e) => e.stopPropagation()}>
+              <TagManager
+                favoriteId={getFavorite?.(fullPath)?.id}
+                currentTags={getFavorite?.(fullPath)?.tags || []}
+                onTagsChanged={() => {}}
+                onEnsureAndTag={(newTags) => ensureFavoriteAndTag?.({ filePath: fullPath, fileName: file.name, fileType: file.type, projectId: project?.id, projectTitle: project?.title || project?.property_address, propertyAddress: project?.property_address || project?.title, tonomoBasePath: tonomoBase }, newTags)}
+              />
+            </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); downloadFile(fullPath, file.name); }}
+              className="bg-black/40 hover:bg-black/60 rounded-full p-1 text-white backdrop-blur-sm"
+              title={`Download ${file.name}`}
+            >
+              <Download className="h-3 w-3" />
+            </button>
+          </div>
+        );
+      })()}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-colors">
         <p className="text-white text-[9px] truncate">{file.name}</p>
         <div className="flex items-center gap-1.5 text-[7px] text-white/60">
@@ -943,7 +968,7 @@ function ProxyFileCard({ file, project, getTagsForFile }) {
 }
 
 // ─── FolderGallery: renders a subfolder's files as a thumbnail grid ─────────
-function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFile }) {
+function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFile, getFavorite, ensureFavoriteAndTag }) {
   const style = getFolderStyle(folder.name);
   const FolderIcon = style.icon;
   const totalSize = folder.files.reduce((s, f) => s + (f.size || 0), 0);
@@ -985,6 +1010,8 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFi
             onOpenLightbox={onOpenLightbox}
             project={project}
             getTagsForFile={getTagsForFile}
+            getFavorite={getFavorite}
+            ensureFavoriteAndTag={ensureFavoriteAndTag}
           />
         ))}
       </div>
@@ -1005,7 +1032,7 @@ function getPrimaryState(project) {
 }
 
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
-function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newestFileDateMap, projectRevisions }) {
+function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, getFavorite, ensureFavoriteAndTag, newestFileDateMap, projectRevisions }) {
   const [expanded, setExpanded] = useState(false);
   const [mediaResult, setMediaResult] = useState(null); // { folders: [...] } or null
   const [flatFiles, setFlatFiles] = useState([]); // backward compat for flat response
@@ -1339,6 +1366,8 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, newest
                   onOpenLightbox={(files, index) => setLightbox({ files, index })}
                   project={project}
                   getTagsForFile={getTagsForFile}
+                  getFavorite={getFavorite}
+                  ensureFavoriteAndTag={ensureFavoriteAndTag}
                 />
               ))}
             </div>
@@ -1538,7 +1567,7 @@ export default function DeliveryFeed() {
   }, [allRevisions]);
 
   // Favorites + tags: call once at parent level, pass helper down
-  const { favorites, allTags: tagRegistry } = useFavorites();
+  const { favorites, allTags: tagRegistry, getFavorite, ensureFavoriteAndTag } = useFavorites();
 
   const getTagsForFile = useCallback((filePath) => {
     if (!filePath) return [];
@@ -1856,7 +1885,7 @@ export default function DeliveryFeed() {
                 </span>
               </div>
               <div className="space-y-2" role="list">
-                {projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} newestFileDateMap={newestFileDate} projectRevisions={revisionsByProject.get(p.id)} />)}
+                {projects.filter(p => !emptyProjectIds.has(p.id) || parseDeliveredFiles(p.tonomo_delivered_files).length > 0).map(p => <DeliveryCard key={p.id} project={p} isNew={newDeliveryIds.has(p.id)} onFileCountKnown={handleFileCountKnown} getTagsForFile={getTagsForFile} getFavorite={getFavorite} ensureFavoriteAndTag={ensureFavoriteAndTag} newestFileDateMap={newestFileDate} projectRevisions={revisionsByProject.get(p.id)} />)}
               </div>
             </section>
           ))}
