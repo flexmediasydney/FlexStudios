@@ -1,7 +1,8 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
+    if (await isQuietHours(userId)) return false;
     const prefs = await entities.NotificationPreference.filter({ user_id: userId }, null, 50);
     const typePref = prefs.find((p: any) => p.notification_type === type);
     if (typePref !== undefined) return typePref.in_app_enabled !== false;

@@ -299,6 +299,60 @@ export async function fireNotif(params: {
   }
 }
 
+// ─── Quiet hours helper ──────────────────────────────────────────────────────
+
+/**
+ * Check if a user is currently in quiet hours (Australia/Sydney timezone).
+ * Reads `notification_digest_settings` for the user and compares the current
+ * time against quiet_hours_start / quiet_hours_end.
+ * Handles the overnight case (e.g. 22:00 → 08:00).
+ * Returns true if notifications should be suppressed.
+ */
+export async function isQuietHours(userId: string): Promise<boolean> {
+  try {
+    const admin = getAdminClient();
+    const { data } = await admin
+      .from('notification_digest_settings')
+      .select('quiet_hours_enabled, quiet_hours_start, quiet_hours_end')
+      .eq('user_id', userId)
+      .single();
+
+    if (!data?.quiet_hours_enabled) return false;
+
+    const start = data.quiet_hours_start; // e.g. "22:00"
+    const end = data.quiet_hours_end;     // e.g. "08:00"
+    if (!start || !end) return false;
+
+    // Current time in Sydney
+    const now = new Date();
+    const sydneyTime = new Intl.DateTimeFormat('en-AU', {
+      timeZone: 'Australia/Sydney',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(now); // e.g. "23:15"
+
+    const toMinutes = (hhmm: string): number => {
+      const [h, m] = hhmm.split(':').map(Number);
+      return h * 60 + m;
+    };
+
+    const nowMin = toMinutes(sydneyTime);
+    const startMin = toMinutes(start);
+    const endMin = toMinutes(end);
+
+    if (startMin <= endMin) {
+      // Same-day range, e.g. 09:00 → 17:00
+      return nowMin >= startMin && nowMin < endMin;
+    } else {
+      // Overnight range, e.g. 22:00 → 08:00
+      return nowMin >= startMin || nowMin < endMin;
+    }
+  } catch {
+    return false; // fail open — don't suppress on error
+  }
+}
+
 // ─── Response helpers ─────────────────────────────────────────────────────────
 
 export function jsonResponse(data: any, status = 200, req?: Request): Response {

@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, isQuietHours } from '../_shared/supabase.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NOTIFICATION TYPE REGISTRY
@@ -220,6 +220,8 @@ async function createNotificationForUser(
 
   const allowed = await checkPreference(entities, params.userId, params.type, category);
   if (!allowed) return { skipped: true, reason: 'preference_disabled' };
+
+  if (await isQuietHours(params.userId)) return { skipped: true, reason: 'quiet_hours' };
 
   if (params.idempotencyKey) {
     const dup = await isDuplicate(entities, params.idempotencyKey, params.userId);

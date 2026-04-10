@@ -7,12 +7,35 @@ const NotificationContext = createContext(null);
 const POLL_INTERVAL_MS = 60_000; // Reduced polling since we have realtime
 const MAX_DISPLAY = 50;
 
+function playNotificationBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 800;
+    gain.gain.value = 0.1;
+    osc.start();
+    osc.stop(ctx.currentTime + 0.15);
+  } catch {}
+}
+
 export function NotificationProvider({ children }) {
   const { data: currentUser } = useCurrentUser();
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [lastFetched, setLastFetched] = useState(null);
+  const [digestSettings, setDigestSettings] = useState({
+    sound_enabled: false,
+    show_previews: true,
+    quiet_hours_enabled: false,
+    quiet_hours_start: "22:00",
+    quiet_hours_end: "08:00",
+  });
+  const digestRef = useRef(digestSettings);
+  digestRef.current = digestSettings;
   const pollRef = useRef(null);
 
   const fetchNotifications = useCallback(async (silent = false) => {
@@ -36,6 +59,21 @@ export function NotificationProvider({ children }) {
     if (currentUser?.id) fetchNotifications();
   }, [currentUser?.id, fetchNotifications]);
 
+  // Fetch digest settings (sound_enabled, show_previews, etc.) once per user
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await api.entities.NotificationDigestSettings.list("-created_date", 10);
+        if (cancelled) return;
+        const mine = rows.find(d => d.user_id === currentUser.id);
+        if (mine) setDigestSettings(mine);
+      } catch { /* silent fail — defaults are safe */ }
+    })();
+    return () => { cancelled = true; };
+  }, [currentUser?.id]);
+
   // Realtime subscription — listen for INSERT/UPDATE/DELETE on notifications table
   // and update local state immediately without waiting for the next poll
   useEffect(() => {
@@ -58,6 +96,11 @@ export function NotificationProvider({ children }) {
           queueMicrotask(() => setUnreadCount(newUnread));
           return updated;
         });
+
+        // Play notification beep if sound_enabled (read from ref to avoid stale closure)
+        if (digestRef.current.sound_enabled) {
+          playNotificationBeep();
+        }
       } else if (event.type === 'update' && event.data) {
         // Only process if this is our notification
         if (event.data.user_id !== currentUser.id) return;
@@ -185,11 +228,12 @@ export function NotificationProvider({ children }) {
     criticalUnread,
     loading,
     lastFetched,
+    digestSettings,
     markRead,
     markAllRead,
     dismiss,
     refresh,
-  }), [notifications, unreadCount, criticalUnread, loading, lastFetched, markRead, markAllRead, dismiss, refresh]);
+  }), [notifications, unreadCount, criticalUnread, loading, lastFetched, digestSettings, markRead, markAllRead, dismiss, refresh]);
 
   return (
     <NotificationContext.Provider value={contextValue}>

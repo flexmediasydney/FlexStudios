@@ -5,7 +5,7 @@ import { createPageUrl } from "@/utils";
 import { useNotifications } from "./NotificationContext";
 
 export default function NotificationToast() {
-  const { notifications, markRead } = useNotifications();
+  const { notifications, digestSettings, markRead } = useNotifications();
   const [toasts, setToasts] = useState([]);
   const seenRef = useRef(new Set());
   const dismissTimersRef = useRef(new Set());
@@ -65,7 +65,7 @@ export default function NotificationToast() {
           <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-sm leading-snug">{toast.title}</p>
-            {toast.message && (
+            {digestSettings?.show_previews !== false && toast.message && (
               <p className="text-red-100 text-xs mt-0.5 line-clamp-2">{toast.message}</p>
             )}
             {toast.cta_url && (

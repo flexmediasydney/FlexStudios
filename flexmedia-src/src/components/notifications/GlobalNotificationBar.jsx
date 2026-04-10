@@ -49,13 +49,13 @@ const CATEGORY_ICON = {
   system:     "🔧",
 };
 
-function CriticalBanner({ notifications, onMarkRead, onDismiss, onNavigate }) {
+function CriticalBanner({ notifications, onMarkRead, onDismiss, onNavigate, showPreviews = true }) {
   if (!notifications.length) return null;
   const n = notifications[0];
   return (
     <div className="bg-gradient-to-r from-red-600 to-red-500 text-white px-4 py-2.5 flex items-center gap-3 text-sm animate-in slide-in-from-top shadow-lg">
       <AlertCircle className="h-4 w-4 shrink-0 animate-pulse" />
-      <span className="flex-1 font-semibold">{n.title} — {n.message}</span>
+      <span className="flex-1 font-semibold">{n.title}{showPreviews && n.message ? ` — ${n.message}` : ""}</span>
       {n.cta_url && (
         <button
           className="underline text-red-100 hover:text-white text-xs shrink-0 font-medium hover:bg-card/10 px-2 py-1 rounded transition-colors"
@@ -71,7 +71,7 @@ function CriticalBanner({ notifications, onMarkRead, onDismiss, onNavigate }) {
   );
 }
 
-function NotificationItem({ n, onMarkRead, onDismiss, onNavigate }) {
+function NotificationItem({ n, onMarkRead, onDismiss, onNavigate, showPreviews = true }) {
   return (
     <div
       className={`px-4 py-3 hover:bg-muted/60 transition-all cursor-pointer group border-b border-border/50 last:border-0 active:bg-muted ${
@@ -102,7 +102,7 @@ function NotificationItem({ n, onMarkRead, onDismiss, onNavigate }) {
               </button>
             </div>
           </div>
-          {n.message && (
+          {showPreviews && n.message && (
             <p className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-relaxed">{n.message}</p>
           )}
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
@@ -130,7 +130,7 @@ function NotificationItem({ n, onMarkRead, onDismiss, onNavigate }) {
  * Designed to be placed inside a header bar.
  */
 export function NotificationBell() {
-  const { notifications, unreadCount, criticalUnread, markRead, markAllRead, dismiss, refresh } =
+  const { notifications, unreadCount, criticalUnread, digestSettings, markRead, markAllRead, dismiss, refresh } =
     useNotifications();
   const [open, setOpen] = useState(false);
   const [prevUnread, setPrevUnread] = useState(0);
@@ -236,6 +236,7 @@ export function NotificationBell() {
                         onMarkRead={markRead}
                         onDismiss={dismiss}
                         onNavigate={handleNavigate}
+                        showPreviews={digestSettings?.show_previews !== false}
                       />
                     ))}
                   </div>
@@ -270,7 +271,7 @@ export function NotificationBell() {
  * placement inside header bars.
  */
 export default function GlobalNotificationBar() {
-  const { criticalUnread, markRead, dismiss } = useNotifications();
+  const { criticalUnread, digestSettings, markRead, dismiss } = useNotifications();
   const navigate = useNavigate();
 
   function handleNavigate(n) {
@@ -288,6 +289,7 @@ export default function GlobalNotificationBar() {
       onMarkRead={markRead}
       onDismiss={dismiss}
       onNavigate={handleNavigate}
+      showPreviews={digestSettings?.show_previews !== false}
     />
   );
 }

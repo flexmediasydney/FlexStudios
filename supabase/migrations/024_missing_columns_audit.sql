@@ -86,9 +86,17 @@ CREATE TABLE IF NOT EXISTS email_link_clicks (
 
 -- RLS
 ALTER TABLE scheduled_emails ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "Allow all for authenticated" ON scheduled_emails FOR ALL USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='scheduled_emails' AND policyname='Allow all for authenticated') THEN
+    CREATE POLICY "Allow all for authenticated" ON scheduled_emails FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+END $$;
 ALTER TABLE email_link_clicks ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "Allow all for authenticated" ON email_link_clicks FOR ALL USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='email_link_clicks' AND policyname='Allow all for authenticated') THEN
+    CREATE POLICY "Allow all for authenticated" ON email_link_clicks FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+END $$;
 
 -- Refresh PostgREST schema cache
 NOTIFY pgrst, 'reload schema';
