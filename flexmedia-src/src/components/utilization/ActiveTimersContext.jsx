@@ -23,7 +23,6 @@ export function ActiveTimersProvider({ children, currentUser }) {
         const logs = await api.entities.TaskTimeLog.filter({
           user_id: currentUser.id,
           is_active: true,
-          status: 'running'
         });
         if (isMounted) setActiveTimers(logs);
       } catch (err) {

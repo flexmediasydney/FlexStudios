@@ -89,7 +89,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   // Detect if this user already has a running timer on a different task
   const { activeTimers } = useActiveTimers();
   const hasOtherActiveTimer = activeTimers.some(
-    t => t.user_id === currentUser?.id && t.task_id !== task.id && t.is_active && t.status === 'running'
+    t => t.user_id === currentUser?.id && t.task_id !== task.id && t.is_active && t.status === 'running' && t.project_id === project?.id
   );
 
   // CRITICAL: Initialize from DB on mount - load active log for this task

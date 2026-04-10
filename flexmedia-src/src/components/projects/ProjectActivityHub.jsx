@@ -203,32 +203,77 @@ export default function ProjectActivityHub({ projectId, project }) {
 
   useEffect(() => {
     if (!projectId) return;
-    const unsub = api.entities.ProjectActivity.subscribe((event) => {
-      if (event.data?.project_id === projectId) {
-        refetchActivities();
-      }
-    });
-    return typeof unsub === 'function' ? unsub : undefined;
+    let unsub = null;
+
+    function connect() {
+      if (unsub) { try { unsub(); } catch {} }
+      unsub = api.entities.ProjectActivity.subscribe((event) => {
+        if (event.data?.project_id === projectId) {
+          refetchActivities();
+        }
+      });
+    }
+    connect();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') connect();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      if (typeof unsub === 'function') unsub();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [projectId, refetchActivities]);
 
   useEffect(() => {
     if (!projectId) return;
-    const unsub = api.entities.OrgNote.subscribe((event) => {
-      if (event.data?.project_id === projectId) {
-        refetchNotes();
-      }
-    });
-    return typeof unsub === 'function' ? unsub : undefined;
+    let unsub = null;
+
+    function connect() {
+      if (unsub) { try { unsub(); } catch {} }
+      unsub = api.entities.OrgNote.subscribe((event) => {
+        if (event.data?.project_id === projectId) {
+          refetchNotes();
+        }
+      });
+    }
+    connect();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') connect();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      if (typeof unsub === 'function') unsub();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [projectId, refetchNotes]);
 
   useEffect(() => {
     if (!projectId) return;
-    const unsub = api.entities.EmailMessage.subscribe((event) => {
-      if (event.data?.project_id === projectId) {
-        refetchEmails();
-      }
-    });
-    return typeof unsub === 'function' ? unsub : undefined;
+    let unsub = null;
+
+    function connect() {
+      if (unsub) { try { unsub(); } catch {} }
+      unsub = api.entities.EmailMessage.subscribe((event) => {
+        if (event.data?.project_id === projectId) {
+          refetchEmails();
+        }
+      });
+    }
+    connect();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') connect();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      if (typeof unsub === 'function') unsub();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [projectId, refetchEmails]);
 
   // ── Pinned notes ──

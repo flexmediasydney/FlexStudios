@@ -39,12 +39,21 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
 
   const allMappings = await loadMappingTable(entities);
 
+  // Pre-resolve agency from brokerage code so auto-created agents get agency_id
+  let preResolvedAgencyId: string | null = null;
+  if (brokerageCode) {
+    try {
+      const agencies = await entities.Agency.filter({ brokerage_code: brokerageCode }, null, 1);
+      if (agencies?.[0]?.id) preResolvedAgencyId = agencies[0].id;
+    } catch { /* non-fatal */ }
+  }
+
   const servicesA = p.order?.services_a_la_cart || p.services_a_la_cart || [];
   const servicesB = p.order?.services || p.services || [];
   const services = [...new Set([...servicesA, ...servicesB])].filter(Boolean);
 
   const { agentId, resolvedPhotographers, unresolvedPhotographers, mappingConfidence, mappingGaps } =
-    await resolveMappingsMulti(entities, { agent, photographers }, allMappings);
+    await resolveMappingsMulti(entities, { agent, photographers, agencyId: preResolvedAgencyId }, allMappings);
 
   const serviceIds = p.serviceIds || [];
   const serviceAssignmentUncertain = serviceIds.length === 0 && services.length > 0;

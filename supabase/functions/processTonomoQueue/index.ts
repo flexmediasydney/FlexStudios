@@ -143,7 +143,7 @@ Deno.serve(async (req) => {
         // Include event_id only when present to avoid collapsing unrelated order-level events.
         const key = item.event_id
           ? `${item.action}:${item.order_id}:${item.event_id}`
-          : `${item.action}:${item.order_id}`;
+          : `${item.action}:${item.id}`; // Use queue item ID as fallback for uniqueness
         if (seen.has(key)) toSupersede.push(seen.get(key).id);
         seen.set(key, item);
       }

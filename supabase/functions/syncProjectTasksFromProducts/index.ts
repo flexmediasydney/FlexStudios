@@ -297,6 +297,18 @@ Deno.serve(async (req) => {
       ));
     }
 
+    // Unblock tasks that depend on any orphaned (now soft-deleted) task
+    const orphanedIds = new Set(orphanedTasks.map((t: any) => t.id));
+    if (orphanedIds.size > 0) {
+      const dependentTasks = allTasks.filter((t: any) =>
+        !t.is_deleted && (t.depends_on_task_ids || []).some((depId: string) => orphanedIds.has(depId))
+      );
+      for (const task of dependentTasks) {
+        const cleaned = (task.depends_on_task_ids || []).filter((id: string) => !orphanedIds.has(id));
+        await entities.ProjectTask.update(task.id, { depends_on_task_ids: cleaned }).catch(() => {});
+      }
+    }
+
     const tasksOnlyCreate = tasksToCreate.filter((t: any) => t.type === 'create').map(({ type, ...data }: any) => data);
     const tasksToReactivate = tasksToCreate.filter((t: any) => t.type === 'reactivate');
 

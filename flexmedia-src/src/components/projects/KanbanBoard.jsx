@@ -573,8 +573,10 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
   });
 
   const [pendingDrag, setPendingDrag] = useState(null);
+  const [draggingId, setDraggingId] = useState(null);
 
   const onDragEnd = (result) => {
+    setDraggingId(null);
     if (!result.destination) return;
     // Race condition fix: block drag while a status update is already in flight
     if (updateStatusMutation.isPending) return;
@@ -610,6 +612,10 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
     }
 
     updateStatusMutation.mutate({ projectId, newStatus, project });
+  };
+
+  const onDragStart = (start) => {
+    setDraggingId(start.draggableId);
   };
 
   const confirmBackwardDrag = () => {
@@ -674,7 +680,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
 
       {/* ── Full kanban view ── */}
       {viewMode === 'full' && (
-        <DragDropContext onDragEnd={onDragEnd}>
+        <DragDropContext onDragStart={onDragStart} onDragEnd={onDragEnd}>
           <div
             className={`flex gap-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))] ${fitToScreen ? "overflow-x-hidden" : "overflow-x-auto scroll-smooth"}`}
             style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch', scrollSnapType: 'x proximity' }}
@@ -931,7 +937,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                           const urgencyClass = urgencyBorderClass[urgency] || 'urgency-border-none';
 
                           return (
-                            <Draggable key={project.id} draggableId={project.id} index={index}>
+                            <Draggable key={project.id} draggableId={project.id} index={index} isDragDisabled={!!draggingId && draggingId !== project.id}>
                               {(provided, snapshot) => (
                                 <Card
                                   ref={provided.innerRef}

@@ -421,7 +421,7 @@ export async function resolveProductsFromTiers(entities: any, tiers: any[], allM
   };
 }
 
-export async function resolveMappingsMulti(entities: any, { agent, photographers = [] }: any, allMappings: any[]) {
+export async function resolveMappingsMulti(entities: any, { agent, photographers = [], agencyId = null }: any, allMappings: any[]) {
   let agentId = null;
   const resolvedPhotographers: any[] = [];
   const unresolvedPhotographers: string[] = [];
@@ -436,7 +436,7 @@ export async function resolveMappingsMulti(entities: any, { agent, photographers
 
   if (agent) {
     totalCount++;
-    const result = await resolveEntity(entities, agent.uid, agent.email, agent.displayName, 'agent', 'Agent', allMappings);
+    const result = await resolveEntity(entities, agent.uid, agent.email, agent.displayName, 'agent', 'Agent', allMappings, agencyId);
     if (result.entityId) { agentId = result.entityId; resolvedCount++; }
     else mappingGaps.push(`agent:${agent.email || agent.displayName || agent.uid}`);
   }
@@ -477,7 +477,7 @@ export async function resolveMappingsMulti(entities: any, { agent, photographers
   return { agentId, resolvedPhotographers, unresolvedPhotographers, mappingConfidence, mappingGaps };
 }
 
-export async function resolveEntity(entities: any, tonomoUid: string, email: string, name: string, mappingType: string, entityDbName: string, allMappings: any[]) {
+export async function resolveEntity(entities: any, tonomoUid: string, email: string, name: string, mappingType: string, entityDbName: string, allMappings: any[], agencyId: string | null = null) {
   if (!tonomoUid) return { entityId: null };
 
   const confirmed = allMappings.find((m: any) => m.tonomo_id === tonomoUid && m.mapping_type === mappingType && m.is_confirmed === true);
@@ -498,6 +498,7 @@ export async function resolveEntity(entities: any, tonomoUid: string, email: str
         email: email || null,
         source: 'tonomo',
         tonomo_uid: tonomoUid,
+        current_agency_id: agencyId || null,
       });
       if (newAgent?.id) {
         match = newAgent;

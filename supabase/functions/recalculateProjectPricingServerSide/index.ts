@@ -79,7 +79,7 @@ Deno.serve(async (req) => {
 
     const priceDelta = Math.abs(newPrice - oldPrice);
     const pctDelta = oldPrice > 0 ? (priceDelta / oldPrice) * 100 : 0;
-    if (oldPrice > 0 && (priceDelta >= 50 || pctDelta >= 5)) {
+    if (oldPrice > 0 && priceDelta >= 50 && pctDelta >= 5) {
       const projectName = project.title || project.property_address || 'Project';
       const notifyUsers: string[] = [project.project_owner_id].filter(Boolean);
       entities.User.list('-created_date', 200).then(async (users: any[]) => {
