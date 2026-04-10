@@ -124,11 +124,11 @@ export default function BusinessIntelDash() {
 
   // Revenue by agency — top 10
   const agencyRevenue = revenue?.by_agency ?? [];
-  const topAgencies = [...agencyRevenue].sort((a, b) => b.total - a.total).slice(0, 10);
-  const maxAgencyRev = topAgencies[0]?.total || 1;
+  const topAgencies = [...agencyRevenue].sort((a, b) => (b.revenue ?? 0) - (a.revenue ?? 0)).slice(0, 10);
+  const maxAgencyRev = topAgencies[0]?.revenue || 1;
 
   // Velocity weeks
-  const weeks = velocity?.weeks ?? [];
+  const weeks = velocity?.weekly ?? [];
 
   return (
     <div className="space-y-6">
@@ -136,27 +136,27 @@ export default function BusinessIntelDash() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Month-to-Date"
-          value={`$${((revenue?.mtd ?? 0) / 1000).toFixed(1)}k`}
-          sub={revenue?.mtd_growth != null ? `${revenue.mtd_growth >= 0 ? "+" : ""}${revenue.mtd_growth}% vs last month` : undefined}
+          value={`$${((revenue?.mtd_revenue ?? 0) / 1000).toFixed(1)}k`}
+          sub={revenue?.growth_pct != null ? `${revenue.growth_pct >= 0 ? "+" : ""}${revenue.growth_pct}% vs last month` : undefined}
           icon={DollarSign}
           color="text-emerald-600"
         />
         <StatCard
           label="Total Revenue"
-          value={`$${((revenue?.total ?? 0) / 1000).toFixed(1)}k`}
+          value={`$${((revenue?.total_revenue ?? 0) / 1000).toFixed(1)}k`}
           icon={DollarSign}
           color="text-blue-600"
         />
         <StatCard
           label="Avg Project Value"
-          value={`$${((revenue?.avg ?? 0) / 1000).toFixed(1)}k`}
+          value={`$${((revenue?.avg_project_value ?? 0) / 1000).toFixed(1)}k`}
           icon={TrendingUp}
           color="text-violet-600"
         />
         <StatCard
           label="At Risk"
-          value={`$${((pipeline?.at_risk_value ?? 0) / 1000).toFixed(1)}k`}
-          sub={pipeline?.at_risk_count != null ? `${pipeline.at_risk_count} project${pipeline.at_risk_count !== 1 ? "s" : ""}` : undefined}
+          value={`$${((revenue?.revenue_at_risk ?? 0) / 1000).toFixed(1)}k`}
+          sub={pipeline?.needs_attention?.length ? `${pipeline.needs_attention.length} project${pipeline.needs_attention.length !== 1 ? "s" : ""}` : undefined}
           icon={AlertTriangle}
           color="text-red-600"
         />
@@ -171,9 +171,9 @@ export default function BusinessIntelDash() {
           <CardContent className="space-y-2">
             {topAgencies.map((a) => (
               <HorizontalBar
-                key={a.name}
-                label={a.name}
-                value={a.total}
+                key={a.agency_name}
+                label={a.agency_name}
+                value={a.revenue ?? 0}
                 maxValue={maxAgencyRev}
                 color="bg-blue-500"
               />
@@ -215,7 +215,7 @@ export default function BusinessIntelDash() {
               </div>
               <div className="text-center">
                 <p className="text-2xl font-bold">
-                  {delivery.avg_turnaround != null ? `${delivery.avg_turnaround}d` : "--"}
+                  {delivery.avg_turnaround_days != null ? `${delivery.avg_turnaround_days}d` : "--"}
                 </p>
                 <p className="text-xs text-muted-foreground">Avg Turnaround</p>
               </div>

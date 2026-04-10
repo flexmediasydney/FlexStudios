@@ -158,16 +158,22 @@ function computePipeline(projects: any[], tasks: any[], now: Date): StatGroup {
     }
   }
 
-  // Needs attention: overdue, stale >7d, or missing staff
+  // Needs attention: overdue, stale >7d, or missing staff — with individual counts
   const sevenDaysAgo = new Date(now.getTime() - 7 * 86_400_000);
   let needsAttention = 0;
+  let overdueProjects = 0;
+  let staleProjects = 0;
+  let missingPhotographer = 0;
 
   for (const p of projects) {
     if (p.status === 'cancelled' || p.status === 'delivered') continue;
     const isOverdue = p.delivery_date && new Date(p.delivery_date) < now;
     const isStale = new Date(p.updated_at) < sevenDaysAgo;
-    const missingStaff = !p.photographer_id && !p.project_owner_id;
-    if (isOverdue || isStale || missingStaff) needsAttention++;
+    const noPhotographer = !p.photographer_id;
+    if (isOverdue) overdueProjects++;
+    if (isStale) staleProjects++;
+    if (noPhotographer) missingPhotographer++;
+    if (isOverdue || isStale || noPhotographer) needsAttention++;
   }
 
   // Pending review
@@ -184,6 +190,9 @@ function computePipeline(projects: any[], tasks: any[], now: Date): StatGroup {
       by_stage: byStage,
       bottlenecks,
       needs_attention: needsAttention,
+      overdue_projects: overdueProjects,
+      stale_projects_7d: staleProjects,
+      missing_photographer: missingPhotographer,
       pending_review_count: pendingReview.length,
       pending_review_avg_wait_hours: safeAvg(pendingWaitHours),
       active_count: projects.filter((p: any) => activeStatuses.includes(p.status)).length,

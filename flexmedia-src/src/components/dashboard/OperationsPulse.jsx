@@ -173,35 +173,53 @@ export default function OperationsPulse() {
     return { todayShoots: today, tomorrowShoots: tomorrow };
   }, [upcomingShoots]);
 
-  // Extract KPI values from stats
+  // Extract KPI values from stats (nested structure from useDashboardStats)
   const s = stats || {};
-  const revenue        = parseNumeric(s.revenue_mtd);
-  const revenueTrend   = parseTrend(s.revenue_mtd);
-  const revenuePct     = parsePct(s.revenue_mtd);
-  const pipeline       = parseNumeric(s.pipeline_value);
-  const pipelineTrend  = parseTrend(s.pipeline_value);
-  const pipelinePct    = parsePct(s.pipeline_value);
-  const overdue        = parseNumeric(s.overdue_tasks);
-  const overdueTrend   = parseTrend(s.overdue_tasks);
-  const overduePct     = parsePct(s.overdue_tasks);
-  const deliveryRate   = parseNumeric(s.delivery_rate);
-  const deliveryTrend  = parseTrend(s.delivery_rate);
-  const deliveryPct    = parsePct(s.delivery_rate);
 
-  // Build attention items from stats
+  // Revenue KPI
+  const revenue        = parseNumeric(s.revenue?.mtd_revenue);
+  const revenuePct     = parseNumeric(s.revenue?.growth_pct);
+
+  // Pipeline value: sum revenue across all stages
+  const pipeline       = Object.values(s.pipeline?.by_stage ?? {})
+    .reduce((sum, stage) => sum + parseNumeric(stage?.revenue), 0);
+  const pipelinePct    = 0; // no growth field available for pipeline
+
+  // Overdue tasks
+  const overdue        = parseNumeric(s.tasks?.overdue_tasks);
+  const overduePct     = 0; // no trend field available
+
+  // Delivery rate
+  const deliveryRate   = parseNumeric(s.delivery?.on_time_pct);
+  const deliveryPct    = 0; // no trend field available
+
+  // Sparkline data from velocity.weekly
+  const weeklyData     = Array.isArray(s.velocity?.weekly) ? s.velocity.weekly : [];
+  const revenueTrend   = weeklyData.map(w => parseNumeric(w?.completed));
+  const pipelineTrend  = weeklyData.map(w => parseNumeric(w?.created));
+  const overdueTrend   = weeklyData.map(w => parseNumeric(w?.created));
+  const deliveryTrend  = weeklyData.map(w => parseNumeric(w?.completed));
+
+  // Build attention items from stats (using nested structure)
   const attentionItems = useMemo(() => {
     const items = [];
-    const pendingReview = parseNumeric(s.pending_review_48h);
+
+    // Pending reviews
+    const pendingReview = parseNumeric(s.pipeline?.pending_review_count);
+    const avgWaitHours = parseNumeric(s.pipeline?.avg_pending_wait_hours);
     if (pendingReview > 0) {
+      const hourLabel = avgWaitHours > 0 ? ` (avg ${Math.round(avgWaitHours)}h wait)` : "";
       items.push({
         severity: "critical",
         icon: Clock,
-        label: `${pendingReview} project${pendingReview !== 1 ? "s" : ""} pending review for 48+ hours`,
+        label: `${pendingReview} project${pendingReview !== 1 ? "s" : ""} pending review${hourLabel}`,
         count: pendingReview,
         link: createPageUrl("Projects"),
       });
     }
-    const overdueTasks = parseNumeric(s.overdue_tasks);
+
+    // Overdue tasks
+    const overdueTasks = parseNumeric(s.tasks?.overdue_tasks);
     if (overdueTasks > 0) {
       items.push({
         severity: overdueTasks >= 5 ? "critical" : "warning",
@@ -211,26 +229,31 @@ export default function OperationsPulse() {
         link: createPageUrl("Projects"),
       });
     }
-    const missingStaff = parseNumeric(s.missing_photographer);
-    if (missingStaff > 0) {
+
+    // Needs attention (aggregate from pipeline)
+    const needsAttention = parseNumeric(s.pipeline?.needs_attention);
+    if (needsAttention > 0) {
       items.push({
         severity: "warning",
         icon: UserX,
-        label: `${missingStaff} project${missingStaff !== 1 ? "s" : ""} missing photographer`,
-        count: missingStaff,
+        label: `${needsAttention} project${needsAttention !== 1 ? "s" : ""} need attention`,
+        count: needsAttention,
         link: createPageUrl("Projects"),
       });
     }
-    const staleProjects = parseNumeric(s.stale_stage_7d);
-    if (staleProjects > 0) {
+
+    // Overall completion rate (show if below 80%)
+    const completionRate = parseNumeric(s.tasks?.completion_rate_pct);
+    if (completionRate > 0 && completionRate < 80) {
       items.push({
         severity: "warning",
         icon: Package,
-        label: `${staleProjects} project${staleProjects !== 1 ? "s" : ""} stale for 7+ days`,
-        count: staleProjects,
+        label: `Task completion rate at ${completionRate.toFixed(0)}%`,
+        count: `${completionRate.toFixed(0)}%`,
         link: createPageUrl("Projects"),
       });
     }
+
     return items;
   }, [s]);
 

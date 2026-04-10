@@ -87,11 +87,11 @@ export default function TeamCapacityDash() {
 
   const utilization = stats?.utilization;
   const byUser = utilization?.by_user ?? [];
-  const byRole = utilization?.by_role ?? [];
+  const byRole = stats?.tasks?.by_role ?? [];
 
   if (byUser.length === 0) return <EmptyState />;
 
-  const overallPct = utilization?.overall_pct ?? 0;
+  const overallPct = utilization?.overall_utilization_pct ?? 0;
   const overloaded = byUser.filter((u) => u.utilization_pct > 90).length;
   const underloaded = byUser.filter((u) => u.utilization_pct < 40).length;
 
