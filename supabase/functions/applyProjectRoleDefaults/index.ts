@@ -65,9 +65,15 @@ Deno.serve(async (req) => {
     const allUsers = await entities.User.list('-created_date', 500).catch(() => []);
     const usersById = new Map(allUsers.map((u: any) => [u.id, u]));
 
-    // Load teams if we have any fallback team configured
+    // Load teams for fallback resolution and name display
     const hasFallbackTeams = defaults.owner_fallback_team_id ||
-      defaults.onsite_fallback_team_id || defaults.editing_fallback_team_id;
+      defaults.onsite_fallback_team_id || defaults.editing_fallback_team_id ||
+      defaults.photographer_fallback_team_id || defaults.videographer_fallback_team_id;
+
+    const allTeams = hasFallbackTeams
+      ? await entities.InternalTeam.list('-created_date', 100).catch(() => [])
+      : [];
+    const teamsById = new Map(allTeams.map((t: any) => [t.id, t]));
 
     const usersByTeam = new Map<string, any[]>();
     if (hasFallbackTeams) {
@@ -131,8 +137,9 @@ Deno.serve(async (req) => {
       }
 
       // Assign the fallback team to this role
+      const fallbackTeam = teamsById.get(fallbackTeamId);
       updates[slot.idField] = fallbackTeamId;
-      if (slot.nameField) updates[slot.nameField] = '(Team fallback)';
+      if (slot.nameField) updates[slot.nameField] = fallbackTeam?.name || 'Unassigned';
       if (slot.typeField) updates[slot.typeField] = 'team';
       // For roles without a typeField, use the corresponding _type column
       if (!slot.typeField && slot.role !== 'project_owner') {
