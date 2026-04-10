@@ -80,7 +80,9 @@ function AttentionRow({ severity, icon: Icon, label, count, link }) {
 
 function ShootRow({ project }) {
   const time = project.shoot_time || "TBD";
-  const location = project.address || project.suburb || "";
+  const title = project.title || project.property_address || "Untitled";
+  const subtitle = project.property_address && project.title !== project.property_address
+    ? project.property_address : (project.photographer_name || project.status || "");
   return (
     <Link
       to={createPageUrl(`ProjectDetails?id=${project.id}`)}
@@ -90,11 +92,9 @@ function ShootRow({ project }) {
         <Camera className="h-4 w-4" />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">
-          {project.project_name || project.address || "Untitled"}
-        </div>
-        {location && (
-          <div className="text-xs text-muted-foreground truncate">{location}</div>
+        <div className="text-sm font-medium truncate">{title}</div>
+        {subtitle && (
+          <div className="text-xs text-muted-foreground truncate">{subtitle}</div>
         )}
       </div>
       <div className="text-xs font-mono text-muted-foreground shrink-0">{time}</div>
