@@ -63,7 +63,7 @@ export default function Dashboard() {
   const handleDashboardTabChange = useCallback((tab) => {
     setSearchParams(prev => {
       const next = new URLSearchParams(prev);
-      if (tab === 'overview') {
+      if (tab === 'pulse') {
         next.delete('tab'); // keep URL clean for the default tab
       } else {
         next.set('tab', tab);
