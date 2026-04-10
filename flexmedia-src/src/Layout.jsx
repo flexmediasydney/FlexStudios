@@ -15,7 +15,6 @@ import {
   Bot,
   Activity,
   Bell,
-  BarChart2,
   Search,
   UserCheck,
   ChevronRight,
@@ -146,13 +145,12 @@ function LayoutContent({ currentPageName, children }) {
         operations: true,
         bookings: true,
         contacts: true,
-        analytics: true,
         social: true,
         growth: false,
         settings: false
       };
     } catch {
-      return { workspace: true, operations: true, bookings: true, contacts: true, analytics: true, social: true, growth: false, settings: false };
+      return { workspace: true, operations: true, bookings: true, contacts: true, social: true, growth: false, settings: false };
     }
   });
 
@@ -226,14 +224,6 @@ function LayoutContent({ currentPageName, children }) {
           can("Organisations") && { name: "Organisations", href: "Organisations", icon: Building2 },
           can("Teams") && { name: "Teams", href: "Teams", icon: UsersRound },
           can("People") && { name: "People", href: "People", icon: UserRound },
-        ].filter(Boolean)
-      },
-      can("Analytics") && {
-        id: 'analytics',
-        label: 'Analytics',
-        collapsible: true,
-        items: [
-          can("Analytics") && { name: "Analytics", href: "Analytics", icon: BarChart2 },
         ].filter(Boolean)
       },
       can("SocialMedia") && {

@@ -23,7 +23,7 @@ const PAGE_SECTIONS = [
   { label: "Workspace", pages: ["Dashboard","Calendar","Inbox","NotificationsPage","UserSettings"] },
   { label: "Projects", pages: ["Projects","ProjectDetails"] },
   { label: "Contacts & CRM", pages: ["ClientAgents","Organisations","Teams","People","PersonDetails","OrgDetails","TeamDetails","Prospecting","ProspectDetails","ClientMonitor"] },
-  { label: "Analytics", pages: ["Analytics","BusinessIntelligence","Reports","EmployeeUtilization"] },
+  { label: "Analytics", pages: ["Reports"] },
   { label: "Products & Pricing", pages: ["Products","Packages","PriceMatrix","SettingsProductsPackages","SettingsPriceMatrix"] },
   { label: "Bookings", pages: ["TonomoIntegrationDashboard","TonomoPulse"] },
   { label: "Settings", pages: ["Settings","SettingsOrganisation","SettingsAutomationRules","SettingsRevisionTemplates","SettingsIntegrations","EmailSyncSettings","SettingsTonomoIntegration","SettingsTonomoMappings","SettingsNotifications","SettingsClients","SettingsProjectRulebook","SettingsTonomoWebhooks","BusinessRequirementsDocument","HierarchyVisualization","SettingsTeamsUsers"] },

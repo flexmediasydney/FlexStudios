@@ -41,10 +41,7 @@ export const ROUTE_ACCESS = {
   FieldMode: ALL_ROLES,
 
   // ── ANALYTICS ─────────────────────────────────────────────
-  Analytics: ADMIN_EMPLOYEE,
   Reports: ADMIN_EMPLOYEE,
-  BusinessIntelligence: ADMIN_ONLY,
-  EmployeeUtilization: ADMIN_ONLY,
 
   // ── PRODUCTS & PRICING ────────────────────────────────────
   Products: ADMIN_EMPLOYEE,
@@ -90,7 +87,6 @@ export const ROUTE_ACCESS = {
   SettingsTeamsUsers: ADMIN_ONLY,
   Users: ADMIN_ONLY,
   NotificationsPulse: ADMIN_ONLY,
-  TeamPulsePage: ADMIN_ONLY,
   AdminTodoList: ADMIN_ONLY,
   AIAuditLog: ADMIN_ONLY,
 };

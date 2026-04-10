@@ -27,14 +27,12 @@ describe('canAccessRoute', () => {
 
   it('master_admin can access ADMIN_EMPLOYEE routes', () => {
     expect(canAccessRoute('ClientAgents', 'master_admin')).toBe(true);
-    expect(canAccessRoute('Analytics', 'master_admin')).toBe(true);
     expect(canAccessRoute('Settings', 'master_admin')).toBe(true);
   });
 
   it('master_admin can access ADMIN_ONLY routes', () => {
     expect(canAccessRoute('Users', 'master_admin')).toBe(true);
     expect(canAccessRoute('SettingsTeamsUsers', 'master_admin')).toBe(true);
-    expect(canAccessRoute('BusinessIntelligence', 'master_admin')).toBe(true);
     expect(canAccessRoute('AdminTodoList', 'master_admin')).toBe(true);
   });
 
@@ -53,18 +51,14 @@ describe('canAccessRoute', () => {
   it('employee can access ADMIN_EMPLOYEE routes', () => {
     expect(canAccessRoute('ClientAgents', 'employee')).toBe(true);
     expect(canAccessRoute('Organisations', 'employee')).toBe(true);
-    expect(canAccessRoute('Analytics', 'employee')).toBe(true);
     expect(canAccessRoute('Settings', 'employee')).toBe(true);
   });
 
   it('employee is blocked from ADMIN_ONLY routes', () => {
     expect(canAccessRoute('Users', 'employee')).toBe(false);
     expect(canAccessRoute('SettingsTeamsUsers', 'employee')).toBe(false);
-    expect(canAccessRoute('BusinessIntelligence', 'employee')).toBe(false);
-    expect(canAccessRoute('EmployeeUtilization', 'employee')).toBe(false);
     expect(canAccessRoute('AdminTodoList', 'employee')).toBe(false);
     expect(canAccessRoute('NotificationsPulse', 'employee')).toBe(false);
-    expect(canAccessRoute('TeamPulsePage', 'employee')).toBe(false);
   });
 
   it('employee is blocked from unlisted routes (defaults to admin-only)', () => {
@@ -89,8 +83,8 @@ describe('getAccessLevel', () => {
   });
 
   it('returns "full" for employee on ADMIN_EMPLOYEE routes', () => {
-    expect(getAccessLevel('Analytics', 'employee')).toBe('full');
     expect(getAccessLevel('Settings', 'employee')).toBe('full');
+    expect(getAccessLevel('Reports', 'employee')).toBe('full');
   });
 
   it('returns "none" for blocked routes', () => {

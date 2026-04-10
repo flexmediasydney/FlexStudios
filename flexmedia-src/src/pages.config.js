@@ -1,29 +1,29 @@
 /**
  * pages.config.js - Page routing configuration
- * 
+ *
  * This file is AUTO-GENERATED. Do not add imports or modify PAGES manually.
  * Pages are auto-registered when you create files in the ./pages/ folder.
- * 
+ *
  * THE ONLY EDITABLE VALUE: mainPage
  * This controls which page is the landing page (shown when users visit the app).
- * 
+ *
  * Example file structure:
- * 
+ *
  *   import HomePage from './pages/HomePage';
  *   import Dashboard from './pages/Dashboard';
  *   import Settings from './pages/Settings';
- *   
+ *
  *   export const PAGES = {
  *       "HomePage": HomePage,
  *       "Dashboard": Dashboard,
  *       "Settings": Settings,
  *   }
- *   
+ *
  *   export const pagesConfig = {
  *       mainPage: "HomePage",
  *       Pages: PAGES,
  *   };
- * 
+ *
  * Example with Layout (wraps all pages):
  *
  *   import Home from './pages/Home';
@@ -48,7 +48,6 @@
  * The mainPage value must match a key in the PAGES object exactly.
  */
 import AdminTodoList from './pages/AdminTodoList';
-import Analytics from './pages/Analytics';
 import BountyBoard from './pages/BountyBoard';
 import EmailSyncSettings from './pages/EmailSyncSettings';
 import HierarchyVisualization from './pages/HierarchyVisualization';
@@ -70,14 +69,12 @@ import React from 'react';
 import __Layout from './Layout.jsx';
 
 // Lazy-loaded pages (code-split into separate chunks)
-const BusinessIntelligence = React.lazy(() => import('./pages/BusinessIntelligence'));
 const BusinessRequirementsDocument = React.lazy(() => import('./pages/BusinessRequirementsDocument'));
 const Calendar = React.lazy(() => import('./pages/Calendar'));
 const ClientAgents = React.lazy(() => import('./pages/ClientAgents'));
 const ClientGallery = React.lazy(() => import('./pages/ClientGallery'));
 const ClientMonitor = React.lazy(() => import('./pages/ClientMonitor'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard'));
-const EmployeeUtilization = React.lazy(() => import('./pages/EmployeeUtilization'));
 const FieldMode = React.lazy(() => import('./pages/FieldMode'));
 const NotificationsPage = React.lazy(() => import('./pages/NotificationsPage'));
 const NotificationsPulse = React.lazy(() => import('./pages/NotificationsPulse'));
@@ -104,7 +101,6 @@ const SettingsAI = React.lazy(() => import('./pages/SettingsAI'));
 const SettingsTonomoWebhooks = React.lazy(() => import('./pages/SettingsTonomoWebhooks'));
 const AIAuditLog = React.lazy(() => import('./pages/AIAuditLog'));
 const TeamDetails = React.lazy(() => import('./pages/TeamDetails'));
-const TeamPulsePage = React.lazy(() => import('./pages/TeamPulsePage'));
 const TonomoIntegrationDashboard = React.lazy(() => import('./pages/TonomoIntegrationDashboard'));
 const TonomoPulse = React.lazy(() => import('./pages/TonomoPulse'));
 const Users = React.lazy(() => import('./pages/Users'));
@@ -113,9 +109,7 @@ const Users = React.lazy(() => import('./pages/Users'));
 export const PAGES = {
     "AdminTodoList": AdminTodoList,
     "AIAuditLog": AIAuditLog,
-    "Analytics": Analytics,
     "BountyBoard": BountyBoard,
-    "BusinessIntelligence": BusinessIntelligence,
     "BusinessRequirementsDocument": BusinessRequirementsDocument,
     "Calendar": Calendar,
     "ClientAgents": ClientAgents,
@@ -123,7 +117,6 @@ export const PAGES = {
     "ClientMonitor": ClientMonitor,
     "Dashboard": Dashboard,
     "EmailSyncSettings": EmailSyncSettings,
-    "EmployeeUtilization": EmployeeUtilization,
     "FieldMode": FieldMode,
     "HierarchyVisualization": HierarchyVisualization,
     "Inbox": Inbox,
@@ -161,7 +154,6 @@ export const PAGES = {
     "SettingsTonomoWebhooks": SettingsTonomoWebhooks,
     "SoldWithFlex": SoldWithFlex,
     "TeamDetails": TeamDetails,
-    "TeamPulsePage": TeamPulsePage,
     "Teams": Teams,
     "TonomoIntegrationDashboard": TonomoIntegrationDashboard,
     "TonomoPulse": TonomoPulse,

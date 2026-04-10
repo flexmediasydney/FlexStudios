@@ -167,6 +167,11 @@ const AuthenticatedApp = () => {
           </RouteGuard>
         </LayoutWrapper>
       } />
+      {/* Redirects for deleted pages */}
+      <Route path="/Analytics" element={<Navigate to="/Dashboard" replace />} />
+      <Route path="/BusinessIntelligence" element={<Navigate to="/Dashboard?tab=revenue" replace />} />
+      <Route path="/EmployeeUtilization" element={<Navigate to="/Dashboard?tab=team" replace />} />
+      <Route path="/TeamPulsePage" element={<Navigate to="/Dashboard?tab=team" replace />} />
       {Object.entries(Pages).map(([path, Page]) => {
         // Field Mode renders full-screen without the desktop Layout wrapper
         if (path === 'FieldMode') {
