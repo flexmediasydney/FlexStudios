@@ -80,7 +80,16 @@ async function _createNotif(entities: any, p: any): Promise<boolean> {
 // ─── END NOTIFICATION HELPERS ─────────────────────────────────────────
 
 function toSydney(date: Date): Date {
-  return new Date(date.toLocaleString("en-AU", { timeZone: "Australia/Sydney" }));
+  // Use Intl formatter to get Sydney time components, then reconstruct a Date
+  // that represents the wall-clock time in Sydney (avoids locale parsing ambiguity)
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+  const parts: Record<string, string> = {};
+  fmt.formatToParts(date).forEach(p => { if (p.type !== 'literal') parts[p.type] = p.value; });
+  return new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`);
 }
 
 Deno.serve(async (req) => {

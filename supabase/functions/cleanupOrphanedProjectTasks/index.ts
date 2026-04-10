@@ -80,6 +80,23 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Deactivate time logs for orphaned tasks so they don't skew utilization
+    if (orphanedTasks.length > 0) {
+      const orphanedIds = orphanedTasks.map((t: any) => t.id);
+      try {
+        const allLogs = await entities.TaskTimeLog.filter({ project_id }, null, 2000);
+        const orphanedLogs = allLogs.filter((l: any) => l.is_active && orphanedIds.includes(l.task_id));
+        for (const log of orphanedLogs) {
+          await entities.TaskTimeLog.update(log.id, {
+            is_active: false, status: 'completed',
+            end_time: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      } catch (err: any) {
+        console.warn('Failed to deactivate orphaned task logs:', err?.message);
+      }
+    }
+
     // Trigger onsite task sync (fire-and-forget)
     invokeFunction('syncOnsiteEffortTasks', { project_id })
       .catch((err: any) => console.warn('syncOnsiteEffortTasks skipped:', err?.message));

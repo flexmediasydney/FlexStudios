@@ -63,6 +63,7 @@ Deno.serve(async (req) => {
     }
 
     // Step 2: Enqueue — skip test payloads and unparseable events
+    let queued = false;
     if (logId && !parseError && action !== 'unknown' && action !== 'test') {
       try {
         await entities.TonomoProcessingQueue.create({
@@ -75,12 +76,25 @@ Deno.serve(async (req) => {
           processor_version: PROCESSOR_VERSION,
           created_at: receivedAt,
         });
+        queued = true;
       } catch (qErr: any) {
-        console.error('Failed to enqueue:', qErr.message);
+        console.error(`CRITICAL: Failed to enqueue webhook ${logId} (action=${action}, order=${orderId}):`, qErr.message);
+        // Attempt retry once after brief delay
+        try {
+          await new Promise(r => setTimeout(r, 500));
+          await entities.TonomoProcessingQueue.create({
+            webhook_log_id: logId, action, order_id: orderId,
+            event_id: payload.id || null, status: 'pending',
+            retry_count: 0, processor_version: PROCESSOR_VERSION, created_at: receivedAt,
+          });
+          queued = true;
+        } catch (retryErr: any) {
+          console.error(`CRITICAL: Retry enqueue also failed for ${logId}:`, retryErr.message);
+        }
       }
     }
 
-    return jsonResponse({ received: true, action, log_id: logId }, 200);
+    return jsonResponse({ received: true, action, log_id: logId, queued }, 200);
 
   } catch (err: any) {
     // Always return 200 to prevent Tonomo retries on our errors

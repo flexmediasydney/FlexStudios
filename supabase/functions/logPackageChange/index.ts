@@ -108,10 +108,12 @@ Deno.serve(async (req) => {
           if (['delivered', 'cancelled'].includes(p.status)) return false;
           return (p.packages || []).some((pkg: any) => pkg.package_id === packageId);
         });
-        for (const project of affectedProjects.slice(0, 100)) {
-          invokeFunction('recalculateProjectPricingServerSide', {
-            project_id: project.id,
-          }).catch(() => {});
+        // Process ALL affected projects in batches of 10
+        for (let i = 0; i < affectedProjects.length; i += 10) {
+          const batch = affectedProjects.slice(i, i + 10);
+          await Promise.allSettled(batch.map((project: any) =>
+            invokeFunction('recalculateProjectPricingServerSide', { project_id: project.id })
+          ));
         }
       } catch { /* non-fatal */ }
     }

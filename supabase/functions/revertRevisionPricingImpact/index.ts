@@ -25,27 +25,28 @@ Deno.serve(async (req) => {
       return errorResponse('No applied pricing impact to revert', 400);
     }
 
-    // Restore original state
+    // Restore original state — sequential to prevent partial-success corruption
     const revertedProducts = pi.pre_impact_products || [];
     const revertedPackages = pi.pre_impact_packages || [];
     const revertedPrice = pi.pre_impact_price;
 
-    await Promise.all([
-      entities.Project.update(project_id, {
-        products: revertedProducts,
-        packages: revertedPackages,
-        calculated_price: revertedPrice,
-      }),
-      entities.ProjectRevision.update(revision_id, {
-        pricing_impact: {
-          ...revision.pricing_impact,
-          applied: false,
-          applied_date: null,
-          applied_details: null,
-          reverted_date: new Date().toISOString(),
-        },
-      }),
-    ]);
+    // Step 1: Update project first (the critical data)
+    await entities.Project.update(project_id, {
+      products: revertedProducts,
+      packages: revertedPackages,
+      calculated_price: revertedPrice,
+    });
+
+    // Step 2: Mark revision as reverted (if this fails, project is correct but revision flag is stale — safer)
+    await entities.ProjectRevision.update(revision_id, {
+      pricing_impact: {
+        ...revision.pricing_impact,
+        applied: false,
+        applied_date: null,
+        applied_details: null,
+        reverted_date: new Date().toISOString(),
+      },
+    });
 
     // Sync tasks and effort after pricing revert
     invokeFunction('syncProjectTasksFromProducts', { project_id }).catch(() => {});

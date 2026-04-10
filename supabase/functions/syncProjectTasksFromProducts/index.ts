@@ -1,5 +1,17 @@
 import { getAdminClient, getUserFromReq, createEntities, invokeFunction, handleCors, jsonResponse, errorResponse, isQuietHours } from '../_shared/supabase.ts';
 
+function hasCycle(taskId: string, depsMap: Map<string, string[]>, visited = new Set<string>(), stack = new Set<string>()): boolean {
+  if (stack.has(taskId)) return true;
+  if (visited.has(taskId)) return false;
+  visited.add(taskId);
+  stack.add(taskId);
+  for (const dep of (depsMap.get(taskId) || [])) {
+    if (hasCycle(dep, depsMap, visited, stack)) return true;
+  }
+  stack.delete(taskId);
+  return false;
+}
+
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
     if (await isQuietHours(userId)) return false;
@@ -314,7 +326,7 @@ Deno.serve(async (req) => {
       // Resolve dependencies
       if (pendingDependencies.length > 0 && created.length > 0) {
         const templateToCreatedId = new Map(created.map((t: any) => [t.template_id, t.id]));
-        const depUpdatePromises: Promise<any>[] = [];
+        const depUpdatePromises: { childId: string; depTaskIds: string[] }[] = [];
         for (const pending of pendingDependencies) {
           const childTemplateId = tasksOnlyCreate[pending.taskArrayIndex]?.template_id;
           const childId = childTemplateId ? templateToCreatedId.get(childTemplateId) : null;
@@ -327,13 +339,28 @@ Deno.serve(async (req) => {
             else { const existing = existingTasks.find((t: any) => t.template_id === depTemplateId); if (existing) depTaskIds.push(existing.id); }
           }
           if (depTaskIds.length > 0) {
-            depUpdatePromises.push(entities.ProjectTask.update(childId, { depends_on_task_ids: depTaskIds, is_blocked: true }));
+            depUpdatePromises.push({ childId, depTaskIds });
           }
         }
-        if (depUpdatePromises.length > 0) {
-          for (let di = 0; di < depUpdatePromises.length; di += batchSize) {
-            await Promise.all(depUpdatePromises.slice(di, di + batchSize));
-            if (di + batchSize < depUpdatePromises.length) await new Promise(r => setTimeout(r, 50));
+        // Cycle detection: build a dependency map and clear circular deps
+        const depsMap = new Map<string, string[]>();
+        for (const entry of depUpdatePromises) {
+          depsMap.set(entry.childId, entry.depTaskIds);
+        }
+        for (const entry of depUpdatePromises) {
+          if (hasCycle(entry.childId, depsMap)) {
+            console.warn(`Circular dependency detected for task ${entry.childId}, clearing depends_on_task_ids`);
+            entry.depTaskIds = [];
+            depsMap.set(entry.childId, []);
+          }
+        }
+        const depUpdateDbPromises: Promise<any>[] = depUpdatePromises
+          .filter(entry => entry.depTaskIds.length > 0)
+          .map(entry => entities.ProjectTask.update(entry.childId, { depends_on_task_ids: entry.depTaskIds, is_blocked: true }));
+        if (depUpdateDbPromises.length > 0) {
+          for (let di = 0; di < depUpdateDbPromises.length; di += batchSize) {
+            await Promise.all(depUpdateDbPromises.slice(di, di + batchSize));
+            if (di + batchSize < depUpdateDbPromises.length) await new Promise(r => setTimeout(r, 50));
           }
         }
       }

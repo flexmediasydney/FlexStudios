@@ -84,13 +84,17 @@ Deno.serve(async (req) => {
     // Fallback to settings-based lock if advisory lock RPC not available
     const gotAdvisoryLock = lockResult === true;
     if (!gotAdvisoryLock) {
-      // Fallback: settings-based lock (original approach, kept for compatibility)
-      if (s?.processing_lock_at) {
-        const lockStr = s.processing_lock_at.replace(/Z$/, '') + 'Z';
-        const lockAge = (Date.now() - new Date(lockStr).getTime()) / 1000;
-        if (!isNaN(lockAge) && lockAge < LOCK_TTL_SECONDS) {
-          return jsonResponse({ skipped: true, reason: 'lock_active', lock_age: lockAge });
-        }
+      // Fallback: atomic conditional update to prevent TOCTOU race
+      const lockCutoff = new Date(Date.now() - LOCK_TTL_SECONDS * 1000).toISOString();
+      const { data: claimed, error: claimErr } = await admin
+        .from('tonomo_integration_settings')
+        .update({ processing_lock_at: new Date().toISOString() })
+        .or(`processing_lock_at.is.null,processing_lock_at.lt.${lockCutoff}`)
+        .select('id')
+        .limit(1);
+
+      if (claimErr || !claimed?.length) {
+        return jsonResponse({ skipped: true, reason: 'lock_active' });
       }
     }
 

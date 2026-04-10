@@ -74,7 +74,9 @@ Deno.serve(async (req) => {
           actualByRole[role] = (actualByRole[role] || 0) + (log.total_seconds || 0);
         } else if (log.is_active && log.status === 'running' && log.start_time) {
           const role = log.role || 'admin';
-          const elapsed = Math.floor((Date.now() - new Date(log.start_time).getTime()) / 1000);
+          // Ensure timestamp is treated as UTC (Supabase may omit the Z suffix)
+          const startStr = String(log.start_time).endsWith('Z') ? log.start_time : log.start_time + 'Z';
+          const elapsed = Math.floor((Date.now() - new Date(startStr).getTime()) / 1000);
           const net = Math.max(0, elapsed - (log.paused_duration || 0));
           actualByRole[role] = (actualByRole[role] || 0) + net;
         } else if (log.is_active && log.status === 'paused') {

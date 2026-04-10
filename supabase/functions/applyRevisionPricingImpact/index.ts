@@ -42,8 +42,12 @@ Deno.serve(async (req) => {
     if (!revision || !project) return errorResponse('Revision or project not found', 404);
 
     const pi = revision.pricing_impact;
-    if (!pi || !pi.has_impact || pi.applied) {
-      return errorResponse('No pricing impact to apply', 400);
+    if (!pi || pi.applied === true) {
+      return jsonResponse({
+        success: true,
+        skipped: true,
+        reason: pi?.applied ? 'already_applied' : 'no_pricing_impact',
+      });
     }
 
     // Store original state for audit trail

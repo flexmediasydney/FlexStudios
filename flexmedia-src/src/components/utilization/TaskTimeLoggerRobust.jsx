@@ -546,6 +546,12 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
         return;
       }
 
+      // Enforce session cap on resume — prevent bypass via pause/resume cycles
+      if ((activeLog.total_seconds || 0) >= MAX_SESSION_DURATION) {
+        setError('Session cap reached (8 hours). Please finish this timer and start a new one.');
+        return;
+      }
+
       // Calculate pause duration and add to cumulative
       const pauseDuration = activeLog.pause_time
         ? Math.floor((Date.now() - new Date(fixTimestamp(activeLog.pause_time)).getTime()) / 1000)
