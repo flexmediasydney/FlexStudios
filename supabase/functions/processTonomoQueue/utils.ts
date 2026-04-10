@@ -696,6 +696,17 @@ export async function fireRoleNotif(entities: any, roles: string[], params: any,
 
 export async function fireNotif(entities: any, p: any) {
   try {
+    // Preference check
+    if (p.userId && p.type && p.category) {
+      try {
+        const prefs = await entities.NotificationPreference.filter({ user_id: p.userId }, null, 50);
+        const typePref = prefs.find((pr: any) => pr.notification_type === p.type);
+        if (typePref !== undefined && typePref.in_app_enabled === false) return;
+        const catPref = prefs.find((pr: any) => pr.category === p.category && (!pr.notification_type || pr.notification_type === '*'));
+        if (catPref !== undefined && catPref.in_app_enabled === false) return;
+      } catch { /* allow if pref check fails */ }
+    }
+
     if (p.idempotencyKey) {
       const existing = await entities.Notification.filter(
         { idempotency_key: p.idempotencyKey }, null, 1
@@ -717,6 +728,7 @@ export async function fireNotif(entities: any, p: any) {
       is_dismissed: false,
       source: p.source || 'system',
       idempotency_key: p.idempotencyKey || null,
+      created_date: new Date().toISOString(),
     });
   } catch (e: any) {
     console.warn('fireNotif error:', e.message);

@@ -128,12 +128,15 @@ export function NotificationProvider({ children }) {
   // avoiding stale closure over `notifications` which caused markAllRead
   // to miss notifications that arrived between the last render and the click.
   const markAllRead = useCallback(async () => {
-    const unread = notifications.filter(n => !n.is_read);
+    // Read current state via ref-like pattern to avoid stale closure
+    let unread = [];
+    setNotifications(prev => {
+      unread = prev.filter(n => !n.is_read);
+      return unread.length > 0 ? prev.map(n => ({ ...n, is_read: true })) : prev;
+    });
     if (unread.length === 0) return;
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
     setUnreadCount(0);
     try {
-      // Batch in chunks of 20 to avoid overwhelming the API
       const CHUNK_SIZE = 20;
       const now = new Date().toISOString();
       for (let i = 0; i < unread.length; i += CHUNK_SIZE) {

@@ -1,5 +1,16 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
+async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
+  try {
+    const prefs = await entities.NotificationPreference.filter({ user_id: userId }, null, 50);
+    const typePref = prefs.find((p: any) => p.notification_type === type);
+    if (typePref !== undefined) return typePref.in_app_enabled !== false;
+    const catPref = prefs.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
+    if (catPref !== undefined) return catPref.in_app_enabled !== false;
+    return true;
+  } catch { return true; }
+}
+
 const retryWithBackoff = async <T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> => {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -144,22 +155,24 @@ Deno.serve(async (req) => {
       const reconciledProject = projects[0];
       if (reconciledProject?.project_owner_id) {
         const projectName = reconciledProject.title || reconciledProject.property_address || 'Project';
-        await entities.Notification.create({
-          user_id: reconciledProject.project_owner_id,
-          type: 'task_completed',
-          category: 'task',
-          severity: 'info',
-          title: `Effort records reconciled — ${projectName}`,
-          message: `${repairedEffortRecords} effort record${repairedEffortRecords > 1 ? 's' : ''} were repaired for accuracy.`,
-          project_id: targetProjectId,
-          project_name: projectName,
-          cta_label: 'View Project',
-          is_read: false,
-          is_dismissed: false,
-          source: 'reconcileProjectEffort',
-          idempotency_key: `effort_reconciled:${targetProjectId}:${new Date().toISOString().slice(0, 13)}`,
-          created_date: new Date().toISOString(),
-        }).catch(() => {});
+        if (await _canNotify(entities, reconciledProject.project_owner_id, 'task_completed', 'task')) {
+          await entities.Notification.create({
+            user_id: reconciledProject.project_owner_id,
+            type: 'task_completed',
+            category: 'task',
+            severity: 'info',
+            title: `Effort records reconciled — ${projectName}`,
+            message: `${repairedEffortRecords} effort record${repairedEffortRecords > 1 ? 's' : ''} were repaired for accuracy.`,
+            project_id: targetProjectId,
+            project_name: projectName,
+            cta_label: 'View Project',
+            is_read: false,
+            is_dismissed: false,
+            source: 'reconcileProjectEffort',
+            idempotency_key: `effort_reconciled:${targetProjectId}:${new Date().toISOString().slice(0, 13)}`,
+            created_date: new Date().toISOString(),
+          }).catch(() => {});
+        }
       }
     }
 

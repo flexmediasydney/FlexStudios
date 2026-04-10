@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
           is_dismissed: false,
           source: 'at_risk_detection',
           idempotency_key: `at_risk_daily:${new Date().toISOString().slice(0, 10)}`,
-          created_at: new Date().toISOString(),
+          created_date: new Date().toISOString(),
         }).catch(() => {});
       }
     }

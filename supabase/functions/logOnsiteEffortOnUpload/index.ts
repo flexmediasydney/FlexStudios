@@ -1,5 +1,16 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
+async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
+  try {
+    const prefs = await entities.NotificationPreference.filter({ user_id: userId }, null, 50);
+    const typePref = prefs.find((p: any) => p.notification_type === type);
+    if (typePref !== undefined) return typePref.in_app_enabled !== false;
+    const catPref = prefs.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
+    if (catPref !== undefined) return catPref.in_app_enabled !== false;
+    return true;
+  } catch { return true; }
+}
+
 /**
  * Triggered when a project moves to "uploaded" or further.
  * Finds the existing onsite tasks (created by syncOnsiteEffortTasks),
@@ -185,22 +196,24 @@ Deno.serve(async (req) => {
     // Notify project owner that onsite effort was auto-logged
     if (completed > 0 && project.project_owner_id) {
       const projectName = project.title || project.property_address || 'Project';
-      await entities.Notification.create({
-        user_id: project.project_owner_id,
-        type: 'task_completed',
-        category: 'task',
-        severity: 'info',
-        title: `Onsite effort logged — ${projectName}`,
-        message: `${completed} onsite task${completed > 1 ? 's' : ''} automatically completed and effort logged on upload.`,
-        project_id: project_id,
-        project_name: projectName,
-        cta_label: 'View Project',
-        is_read: false,
-        is_dismissed: false,
-        source: 'logOnsiteEffortOnUpload',
-        idempotency_key: `onsite_effort_logged:${project_id}:${new Date().toISOString().slice(0, 10)}`,
-        created_date: new Date().toISOString(),
-      }).catch(() => {});
+      if (await _canNotify(entities, project.project_owner_id, 'task_completed', 'task')) {
+        await entities.Notification.create({
+          user_id: project.project_owner_id,
+          type: 'task_completed',
+          category: 'task',
+          severity: 'info',
+          title: `Onsite effort logged — ${projectName}`,
+          message: `${completed} onsite task${completed > 1 ? 's' : ''} automatically completed and effort logged on upload.`,
+          project_id: project_id,
+          project_name: projectName,
+          cta_label: 'View Project',
+          is_read: false,
+          is_dismissed: false,
+          source: 'logOnsiteEffortOnUpload',
+          idempotency_key: `onsite_effort_logged:${project_id}:${new Date().toISOString().slice(0, 10)}`,
+          created_date: new Date().toISOString(),
+        }).catch(() => {});
+      }
     }
 
     return jsonResponse({ success: true, project_id, completed });

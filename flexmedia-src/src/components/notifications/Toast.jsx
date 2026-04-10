@@ -33,10 +33,3 @@ export function showInfo(message, duration = 4000) {
   return showToast("info", message, duration);
 }
 
-export function showPromise(promise, messages = {}) {
-  return toast.promise(promise, {
-    loading: messages.loading || "Loading...",
-    success: messages.success || "Success!",
-    error: messages.error || "Error occurred",
-  });
-}

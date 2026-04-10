@@ -1,5 +1,16 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
+async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
+  try {
+    const prefs = await entities.NotificationPreference.filter({ user_id: userId }, null, 50);
+    const typePref = prefs.find((p: any) => p.notification_type === type);
+    if (typePref !== undefined) return typePref.in_app_enabled !== false;
+    const catPref = prefs.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
+    if (catPref !== undefined) return catPref.in_app_enabled !== false;
+    return true;
+  } catch { return true; }
+}
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
@@ -94,10 +105,10 @@ Deno.serve(async (req) => {
     // Notify project owner
     try {
       const ownerId = project.project_owner_id;
-      if (ownerId) {
+      if (ownerId && await _canNotify(entities, ownerId, 'project_stage_changed', 'project')) {
         await entities.Notification.create({
           user_id: ownerId,
-          type: 'project_archived',
+          type: 'project_stage_changed',
           category: 'project',
           severity: 'info',
           title: `Project archived: ${project.title || project.property_address}`,
@@ -113,7 +124,7 @@ Deno.serve(async (req) => {
           source_user_id: null,
           is_read: false,
           is_dismissed: false,
-          idempotency_key: `archived:${project_id}`,
+          idempotency_key: `archived:${project_id}:${new Date().toISOString().slice(0, 10)}`,
           created_date: new Date().toISOString(),
         });
       }

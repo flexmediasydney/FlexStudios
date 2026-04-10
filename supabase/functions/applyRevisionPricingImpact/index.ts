@@ -1,5 +1,16 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
+async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
+  try {
+    const prefs = await entities.NotificationPreference.filter({ user_id: userId }, null, 50);
+    const typePref = prefs.find((p: any) => p.notification_type === type);
+    if (typePref !== undefined) return typePref.in_app_enabled !== false;
+    const catPref = prefs.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
+    if (catPref !== undefined) return catPref.in_app_enabled !== false;
+    return true;
+  } catch { return true; }
+}
+
 /** Remove standalone products that overlap with package contents. */
 function deduplicateProjectItems(products: any[], packages: any[]) {
   const packageProductIds = new Set<string>();
@@ -158,6 +169,8 @@ Deno.serve(async (req) => {
         users.filter((u: any) => u.role === 'master_admin' || u.role === 'admin')
           .forEach((u: any) => notifyUserIds.push(u.id));
         for (const userId of [...new Set(notifyUserIds)]) {
+          const allowed = await _canNotify(entities, userId as string, 'project_pricing_changed', 'project');
+          if (!allowed) continue;
           entities.Notification.create({
             user_id: userId,
             type: 'project_pricing_changed',

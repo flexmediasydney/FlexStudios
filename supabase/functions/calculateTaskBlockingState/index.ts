@@ -1,5 +1,16 @@
 import { getAdminClient, getUserFromReq, createEntities, invokeFunction, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
+async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
+  try {
+    const prefs = await entities.NotificationPreference.filter({ user_id: userId }, null, 50);
+    const typePref = prefs.find((p: any) => p.notification_type === type);
+    if (typePref !== undefined) return typePref.in_app_enabled !== false;
+    const catPref = prefs.find((p: any) => p.category === category && (!p.notification_type || p.notification_type === '*'));
+    if (catPref !== undefined) return catPref.in_app_enabled !== false;
+    return true;
+  } catch { return true; }
+}
+
 // ─── INLINED UTILS ───────────────────────────────────────────────────────────
 const APP_TIMEZONE = 'Australia/Sydney';
 
@@ -275,24 +286,26 @@ Deno.serve(async (req) => {
         if (!task?.assigned_to) continue;
         if (task.assigned_to_team_id) continue;
 
-        await entities.Notification.create({
-          user_id: task.assigned_to,
-          type: 'task_dependency_unblocked',
-          category: 'task',
-          severity: 'info',
-          title: `Task unlocked: "${task.title || 'Task'}"`,
-          message: `Your task on ${projectName} is now unblocked and ready to start.`,
-          project_id: project_id,
-          project_name: projectName,
-          entity_type: 'task',
-          entity_id: task.id,
-          cta_label: 'View Project',
-          is_read: false,
-          is_dismissed: false,
-          source: 'task_blocking',
-          idempotency_key: `task_unblocked:${task.id}:${todayStr}`,
-          created_date: new Date().toISOString(),
-        }).catch(() => {});
+        if (await _canNotify(entities, task.assigned_to, 'task_dependency_unblocked', 'task')) {
+          await entities.Notification.create({
+            user_id: task.assigned_to,
+            type: 'task_dependency_unblocked',
+            category: 'task',
+            severity: 'info',
+            title: `Task unlocked: "${task.title || 'Task'}"`,
+            message: `Your task on ${projectName} is now unblocked and ready to start.`,
+            project_id: project_id,
+            project_name: projectName,
+            entity_type: 'task',
+            entity_id: task.id,
+            cta_label: 'View Project',
+            is_read: false,
+            is_dismissed: false,
+            source: 'task_blocking',
+            idempotency_key: `task_unblocked:${task.id}:${todayStr}`,
+            created_date: new Date().toISOString(),
+          }).catch(() => {});
+        }
       }
     }
 

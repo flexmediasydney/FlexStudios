@@ -178,7 +178,7 @@ Deno.serve(async (req) => {
       const projectName = project.title || project.property_address || 'Project';
       const oldLabel = STAGE_LABELS[oldStatus] || oldStatus;
       const newLabel = STAGE_LABELS[newStatus] || newStatus;
-      const idemSuffix = `${project.id}:${oldStatus}:${newStatus}:${Date.now().toString().slice(0, -4)}`;
+      const idemSuffix = `${project.id}:${newStatus}:${new Date().toISOString().slice(0, 10)}`;
 
       const resolveRoleUsers = async (roles: string[]) => {
         const ids = new Set<string>();
