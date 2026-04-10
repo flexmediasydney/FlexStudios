@@ -3,7 +3,7 @@ import { Toaster } from "@/components/ui/toaster"
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/components/lib/query-client'
 import { pagesConfig } from './pages.config'
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import { BrowserRouter as Router, Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import ErrorBoundary from '@/components/common/ErrorBoundary';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
@@ -110,6 +110,12 @@ function RouteGuard({ routeName, children }) {
   return children;
 }
 
+function RedirectToLogin() {
+  const location = useLocation();
+  const returnTo = location.pathname === '/' ? '' : `?redirect=${encodeURIComponent(location.pathname)}`;
+  return <Navigate to={`/login${returnTo}`} replace />;
+}
+
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isAuthenticated, authError } = useAuth();
 
@@ -132,7 +138,7 @@ const AuthenticatedApp = () => {
     }
   }
 
-  // Not authenticated — show login page
+  // Not authenticated — redirect to login with return URL
   if (!isAuthenticated) {
     return (
       <Routes>
@@ -140,7 +146,7 @@ const AuthenticatedApp = () => {
         <Route path="/register" element={<Register />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/auth/reset-password" element={<ResetPassword />} />
-        <Route path="*" element={<Login />} />
+        <Route path="*" element={<RedirectToLogin />} />
       </Routes>
     );
   }
