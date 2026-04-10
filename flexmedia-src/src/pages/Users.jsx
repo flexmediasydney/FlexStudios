@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import DeleteConfirmationDialog from "@/components/common/DeleteConfirmationDialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -59,6 +59,8 @@ export default function UsersManagement() {
   const [searchQuery, setSearchQuery] = useState("");
   const [editingUser, setEditingUser] = useState(null);
   const [deletingUser, setDeletingUser] = useState(null);
+  const [deleteImpact, setDeleteImpact] = useState(null);
+  const [impactLoading, setImpactLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("users"); // users | codes
   // Admin operations go through edge functions now (no service role key in frontend)
 
@@ -133,9 +135,53 @@ export default function UsersManagement() {
       refetchEntityList("User");
       toast.success("User deleted");
       setDeletingUser(null);
+      setDeleteImpact(null);
     },
     onError: (err) => toast.error(err?.message || "Failed to delete"),
   });
+
+  const handleDeleteClick = async (user) => {
+    setDeletingUser(user);
+    setDeleteImpact(null);
+    setImpactLoading(true);
+    try {
+      const userId = user.id;
+      const [projects, tasks, roles] = await Promise.all([
+        api.entities.Project.filter({}, null, 2000),
+        api.entities.ProjectTask.filter({ assigned_to: userId }, null, 500),
+        api.entities.EmployeeRole.filter({ user_id: userId }, null, 50),
+      ]);
+      const assignedProjects = projects.filter(p =>
+        !["delivered", "cancelled"].includes(p.status) &&
+        [p.photographer_id, p.videographer_id, p.image_editor_id, p.video_editor_id, p.project_owner_id, p.onsite_staff_1_id, p.onsite_staff_2_id].includes(userId)
+      );
+      const affectedEntities = {};
+      if (assignedProjects.length > 0) {
+        affectedEntities.projects = {
+          count: assignedProjects.length,
+          items: assignedProjects.map(p => ({ name: p.address || p.title || p.id })),
+        };
+      }
+      if (tasks.length > 0) {
+        affectedEntities.tasks = {
+          count: tasks.length,
+          items: tasks.map(t => ({ name: t.title || 'Untitled task' })),
+        };
+      }
+      if (roles.length > 0) {
+        affectedEntities['employee roles'] = {
+          count: roles.length,
+          items: roles.map(r => ({ name: r.role || 'Role' })),
+        };
+      }
+      const totalAffected = assignedProjects.length + tasks.length + roles.length;
+      setDeleteImpact({ totalAffected, affectedEntities });
+    } catch {
+      setDeleteImpact({ totalAffected: 0, affectedEntities: {} });
+    } finally {
+      setImpactLoading(false);
+    }
+  };
 
   const handleSendPasswordReset = async (email) => {
     try {
@@ -375,7 +421,7 @@ export default function UsersManagement() {
                                 {user.is_active ? <><UserX className="h-3.5 w-3.5 mr-2" /> Deactivate</> : <><UserCheck className="h-3.5 w-3.5 mr-2" /> Activate</>}
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
-                              <DropdownMenuItem onClick={() => setDeletingUser(user)} className="text-red-600 focus:text-red-600">
+                              <DropdownMenuItem onClick={() => handleDeleteClick(user)} className="text-red-600 focus:text-red-600">
                                 <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete User
                               </DropdownMenuItem>
                             </DropdownMenuContent>
@@ -472,29 +518,15 @@ export default function UsersManagement() {
         </Dialog>
       )}
 
-      {/* Delete Confirmation */}
-      {deletingUser && (
-        <AlertDialog open={!!deletingUser} onOpenChange={() => setDeletingUser(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete User?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will permanently delete <strong>{deletingUser.full_name}</strong>'s account ({deletingUser.email}) and remove them from all assigned projects. This cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => deleteUserMutation.mutate(deletingUser.id)}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                disabled={!canEdit || deleteUserMutation.isPending}
-              >
-                {deleteUserMutation.isPending ? "Deleting..." : "Delete"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
+      <DeleteConfirmationDialog
+        open={!!deletingUser}
+        itemName={deletingUser?.full_name || ''}
+        itemType="user"
+        impact={deleteImpact}
+        isLoading={impactLoading || deleteUserMutation.isPending}
+        onConfirm={() => deleteUserMutation.mutate(deletingUser.id)}
+        onCancel={() => { setDeletingUser(null); setDeleteImpact(null); }}
+      />
     </div>
   );
 }

@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import DeleteConfirmationDialog from "@/components/common/DeleteConfirmationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
@@ -23,6 +23,8 @@ export default function InternalTeamsManagement() {
   const [showDialog, setShowDialog] = useState(false);
   const [editingTeam, setEditingTeam] = useState(null);
   const [deletingTeam, setDeletingTeam] = useState(null);
+  const [teamDeleteImpact, setTeamDeleteImpact] = useState(null);
+  const [teamImpactLoading, setTeamImpactLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -81,6 +83,27 @@ export default function InternalTeamsManagement() {
       toast.error(err?.message || 'Failed to delete team');
     },
   });
+
+  const handleTeamDeleteClick = async (team) => {
+    setDeletingTeam(team);
+    setTeamDeleteImpact(null);
+    setTeamImpactLoading(true);
+    try {
+      const members = (users || []).filter(u => u.internal_team_id === team.id);
+      const affectedEntities = {};
+      if (members.length > 0) {
+        affectedEntities.members = {
+          count: members.length,
+          items: members.map(m => ({ name: m.full_name || m.email || 'Unknown' })),
+        };
+      }
+      setTeamDeleteImpact({ totalAffected: members.length, affectedEntities });
+    } catch {
+      setTeamDeleteImpact({ totalAffected: 0, affectedEntities: {} });
+    } finally {
+      setTeamImpactLoading(false);
+    }
+  };
 
   const handleOpen = (team = null) => {
     if (team) {
@@ -302,7 +325,7 @@ export default function InternalTeamsManagement() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => setDeletingTeam(team)}
+                          onClick={() => handleTeamDeleteClick(team)}
                           className="text-destructive hover:text-destructive hover:bg-destructive/10"
                           title="Delete team"
                           disabled={!canEdit}
@@ -399,22 +422,15 @@ export default function InternalTeamsManagement() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deletingTeam} onOpenChange={() => setDeletingTeam(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Team?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete {deletingTeam?.name}. Team members will not be deleted.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => deleteMutation.mutate(deletingTeam.id)} className="bg-destructive text-destructive-foreground" disabled={!canEdit || deleteMutation.isPending}>
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteConfirmationDialog
+        open={!!deletingTeam}
+        itemName={deletingTeam?.name || ''}
+        itemType="team"
+        impact={teamDeleteImpact}
+        isLoading={teamImpactLoading || deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate(deletingTeam.id)}
+        onCancel={() => { setDeletingTeam(null); setTeamDeleteImpact(null); }}
+      />
     </div>
   );
 }

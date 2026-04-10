@@ -185,6 +185,7 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, anim
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [thumbFailed, setThumbFailed] = useState(false);
   const started = useRef(false);
 
   const canThumb = favorite.file_type === 'image' || favorite.file_type === 'video' || favorite.file_type === 'document';
@@ -201,6 +202,7 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, anim
     setLoading(true);
     fetchProxyImage(proxyPath, 'thumb').then(url => {
       if (url) setBlobUrl(url);
+      else setThumbFailed(true);
       setLoading(false);
     });
   }, [canThumb, proxyPath, isVisible]);
@@ -245,6 +247,11 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, anim
               <Camera className="h-6 w-6 text-muted-foreground/20" />
               <div className="absolute inset-0 rounded-full border-2 border-primary/20 border-t-primary/60 animate-spin" style={{ width: 32, height: 32, left: -4, top: -4 }} />
             </div>
+          </div>
+        ) : thumbFailed && canThumb ? (
+          <div className="flex flex-col items-center gap-1.5 text-muted-foreground p-4">
+            <ImageOff className="h-8 w-8 opacity-40 text-amber-500/60" />
+            <span className="text-[10px] font-medium uppercase tracking-wider text-amber-600/70">Re-star to fix</span>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-1.5 text-muted-foreground p-4">

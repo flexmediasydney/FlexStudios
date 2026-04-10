@@ -180,29 +180,6 @@ export default function Projects() {
     return map;
   }, [allTasks]);
 
-  // Pre-compute maps so table cells don't need O(n) filter per row.
-  // Declared before filteredProjects because it uses tasksByProject in its sort.
-  const tasksByProject = useMemo(() => {
-    const map = {};
-    allTasks.forEach(t => {
-      if (!t.parent_task_id) {
-        if (!map[t.project_id]) map[t.project_id] = [];
-        map[t.project_id].push(t);
-      }
-    });
-    return map;
-  }, [allTasks]);
-
-  // All tasks (including subtasks) indexed by project — used for assignment filters
-  const allTasksByProject = useMemo(() => {
-    const map = {};
-    allTasks.forEach(t => {
-      if (!map[t.project_id]) map[t.project_id] = [];
-      map[t.project_id].push(t);
-    });
-    return map;
-  }, [allTasks]);
-
   const timeLogsByProject = useMemo(() => {
     const map = {};
     allTimeLogs.forEach(l => {
@@ -368,17 +345,6 @@ export default function Projects() {
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
   }, [allProjects, projects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, allEmployeeRoles, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
-
-  // tasksByProject is now computed above filteredProjects (Bug fix #7)
-
-  const timeLogsByProject = useMemo(() => {
-    const map = {};
-    allTimeLogs.forEach(l => {
-      if (!map[l.project_id]) map[l.project_id] = [];
-      map[l.project_id].push(l);
-    });
-    return map;
-  }, [allTimeLogs]);
 
   // Column definitions for EntityDataTable (list view)
   const tableColumns = useMemo(() => {

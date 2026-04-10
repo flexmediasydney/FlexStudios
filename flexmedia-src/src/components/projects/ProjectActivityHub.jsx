@@ -231,18 +231,6 @@ export default function ProjectActivityHub({ projectId, project }) {
     return typeof unsub === 'function' ? unsub : undefined;
   }, [projectId, refetchEmails]);
 
-  // ── Build reply map (parent_note_id → replies[]) ──
-  const replyMap = useMemo(() => {
-    const map = {};
-    for (const n of notes) {
-      if (n.parent_note_id) {
-        if (!map[n.parent_note_id]) map[n.parent_note_id] = [];
-        map[n.parent_note_id].push(n);
-      }
-    }
-    return map;
-  }, [notes]);
-
   // ── Pinned notes ──
   const pinnedNotes = useMemo(
     () => notes.filter(n => n.is_pinned && !n.parent_note_id),
