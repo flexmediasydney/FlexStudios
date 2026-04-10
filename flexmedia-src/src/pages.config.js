@@ -95,7 +95,6 @@ const Reports = React.lazy(() => import('./pages/Reports'));
 const SocialMedia = React.lazy(() => import('./pages/SocialMedia'));
 const SettingsAutomationRules = React.lazy(() => import('./pages/SettingsAutomationRules'));
 const SettingsNotifications = React.lazy(() => import('./pages/SettingsNotifications'));
-const SettingsSystemHealth = React.lazy(() => import('./pages/SettingsSystemHealth'));
 const SettingsTeamsUsers = React.lazy(() => import('./pages/SettingsTeamsUsers'));
 const SettingsTonomoIntegration = React.lazy(() => import('./pages/SettingsTonomoIntegration'));
 const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMappings'));
@@ -150,7 +149,6 @@ export const PAGES = {
     "SettingsProductsPackages": SettingsProductsPackages,
     "SettingsProjectRulebook": SettingsProjectRulebook,
     "SettingsRevisionTemplates": SettingsRevisionTemplates,
-    "SettingsSystemHealth": SettingsSystemHealth,
     "SettingsTeamsUsers": SettingsTeamsUsers,
     "SettingsTonomoIntegration": SettingsTonomoIntegration,
     "SettingsTonomoMappings": SettingsTonomoMappings,

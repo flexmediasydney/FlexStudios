@@ -65,7 +65,6 @@ describe('canAccessRoute', () => {
     expect(canAccessRoute('AdminTodoList', 'employee')).toBe(false);
     expect(canAccessRoute('NotificationsPulse', 'employee')).toBe(false);
     expect(canAccessRoute('TeamPulsePage', 'employee')).toBe(false);
-    expect(canAccessRoute('SettingsSystemHealth', 'employee')).toBe(false);
   });
 
   it('employee is blocked from unlisted routes (defaults to admin-only)', () => {

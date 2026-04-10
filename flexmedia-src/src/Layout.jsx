@@ -268,7 +268,6 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsTonomoMappings") && { name: "Mappings", href: "SettingsTonomoMappings" },
           can("SettingsNotifications") && { name: "Notifications", href: "SettingsNotifications" },
           can("BusinessRequirementsDocument") && { name: "BRD", href: "BusinessRequirementsDocument" },
-          can("SettingsSystemHealth") && { name: "System Diagnostics", href: "SettingsSystemHealth" },
           can("SettingsTeamsUsers") && { name: "Teams & Users", href: "SettingsTeamsUsers" },
         ].filter(Boolean)
       },
