@@ -79,8 +79,20 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
 
   if (agent) {
     const { agentId } = await resolveMappingsMulti(entities, { agent }, allMappings);
-    if (agentId && !overriddenFields.includes('agent_id')) updates.agent_id = agentId;
-    else if (!agentId) reviewReasons.push(`Agent reassigned to "${agent.displayName || agent.email || 'unknown'}" but not found — manual assignment required`);
+    if (agentId && !overriddenFields.includes('agent_id')) {
+      updates.agent_id = agentId;
+      // Denormalize agent name and agency (matching handleScheduled pattern)
+      try {
+        const agentRecord = await entities.Agent.get(agentId);
+        if (agentRecord) {
+          updates.agent_name = agentRecord.name || null;
+          if (agentRecord.current_agency_id) {
+            updates.agency_id = agentRecord.current_agency_id;
+            updates.agency_name = agentRecord.current_agency_name || null;
+          }
+        }
+      } catch { /* non-fatal */ }
+    } else if (!agentId) reviewReasons.push(`Agent reassigned to "${agent.displayName || agent.email || 'unknown'}" but not found — manual assignment required`);
   }
 
   // Update address if changed in Tonomo
@@ -217,7 +229,27 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     const { autoProducts: newProducts, autoPackages: newPackages, mappingGaps: newGaps } =
       await resolveProductsFromTiers(entities, rawTiersChanged, allMappings);
 
-    if (newProducts.length > 0 || newPackages.length > 0) {
+    // Compare old vs new to detect removals
+    const oldProductIds = new Set((project.products || []).map((p: any) => p.product_id));
+    const newProductIds = new Set(newProducts.map((p: any) => p.product_id));
+    const oldPackageIds = new Set((project.packages || []).map((p: any) => p.package_id));
+    const newPackageIds = new Set(newPackages.map((p: any) => p.package_id));
+
+    const removedProducts = [...oldProductIds].filter(id => !newProductIds.has(id));
+    const removedPackages = [...oldPackageIds].filter(id => !newPackageIds.has(id));
+
+    if (removedProducts.length > 0 || removedPackages.length > 0) {
+      reviewReasons.push(`${removedProducts.length} product(s) and ${removedPackages.length} package(s) removed from Tonomo order`);
+      // The existing cleanupOrphanedProjectTasks call (later in the handler) will soft-delete tasks for removed products
+    }
+
+    // Also handle the case where ALL products are removed (empty tiers):
+    if (newProducts.length === 0 && newPackages.length === 0 && (project.products?.length > 0 || project.packages?.length > 0)) {
+      reviewReasons.push('All products/packages removed from Tonomo order — manual review required');
+      updates.pending_review_type = 'products_removed';
+    }
+
+    if (newProducts.length > 0 || newPackages.length > 0 || removedProducts.length > 0 || removedPackages.length > 0) {
       const dedupedChanged = deduplicateProjectItems(newProducts, newPackages,
         await entities.Product.list(null, 500).catch(() => []),
         await entities.Package.list(null, 200).catch(() => [])
@@ -243,6 +275,12 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
   if (p.order?.package?.name && !overriddenFields.includes('tonomo_package')) updates.tonomo_package = p.order.package.name;
   if (p.invoice_amount != null && !overriddenFields.includes('tonomo_invoice_amount')) updates.tonomo_invoice_amount = p.invoice_amount ? parseFloat(p.invoice_amount) : null;
   if (p.order?.orderStatus) updates.tonomo_order_status = p.order.orderStatus;
+
+  // Capture Tonomo quoted price on change events (same pattern as handleScheduled)
+  const tonomoPrice = p.totalPrice || p.order?.totalPrice || p.order?.invoice_amount || p.invoice_amount || null;
+  if (tonomoPrice != null) {
+    updates.tonomo_quoted_price = Number(tonomoPrice);
+  }
 
   if (reviewReasons.length > 0) {
     if (project.status !== 'pending_review') updates.pre_revision_stage = project.status;
@@ -299,6 +337,10 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     invokeFunction('recalculateProjectPricingServerSide', { project_id: project.id }).catch((err: any) => {
       console.error('Pricing recalc after change event failed (non-fatal):', err?.message);
     });
+
+    // Sync quantity changes to task estimates
+    invokeFunction('syncProjectTasksFromProducts', { project_id: project.id })
+      .catch((err: any) => console.warn('Task sync after qty change failed:', err?.message));
   }
 
   return { summary: `Updated project for changed order ${orderId}` };

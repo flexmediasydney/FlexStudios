@@ -143,6 +143,12 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
   if (!overriddenFields.includes('tonomo_invoice_amount')) updates.tonomo_invoice_amount = p.invoice_amount ? parseFloat(p.invoice_amount) : project.tonomo_invoice_amount;
   if (!overriddenFields.includes('tonomo_payment_status')) updates.tonomo_payment_status = p.paymentStatus || project.tonomo_payment_status;
 
+  // Capture Tonomo quoted price on order update events (same pattern as handleScheduled)
+  const tonomoPrice = p.totalPrice || p.order?.totalPrice || p.order?.invoice_amount || p.invoice_amount || null;
+  if (tonomoPrice != null) {
+    updates.tonomo_quoted_price = Number(tonomoPrice);
+  }
+
   // Sync Tonomo payment status to main payment_status field
   const incomingPaymentRaw = p.paymentStatus || project.tonomo_payment_status;
   if (incomingPaymentRaw && !overriddenFields.includes('payment_status')) {

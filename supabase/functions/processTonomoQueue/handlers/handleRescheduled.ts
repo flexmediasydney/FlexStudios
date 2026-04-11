@@ -1,3 +1,4 @@
+import { invokeFunction } from '../../_shared/supabase.ts';
 import { ACTIVE_STAGES } from '../types.ts';
 import {
   detectBookingTypes,
@@ -77,6 +78,12 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
     }
   }
 
+  // Capture Tonomo quoted price on reschedule events (same pattern as handleScheduled)
+  const tonomoPrice = p.totalPrice || p.order?.totalPrice || p.order?.invoice_amount || p.invoice_amount || null;
+  if (tonomoPrice != null) {
+    updates.tonomo_quoted_price = Number(tonomoPrice);
+  }
+
   if (startTime) {
     const hoursUntilShoot = (startTime - Date.now()) / 3600000;
     updates.urgent_review = hoursUntilShoot <= 24 && hoursUntilShoot > 0;
@@ -89,6 +96,14 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
   }
 
   await entities.Project.update(project.id, updates);
+
+  // Recalculate task deadlines relative to new shoot date
+  if (updates.shoot_date) {
+    invokeFunction('calculateProjectTaskDeadlines', {
+      project_id: project.id,
+      trigger_event: 'rescheduled',
+    }).catch((err: any) => console.warn('Task deadline recalc after reschedule failed:', err?.message));
+  }
 
   if (eventId && startTime) {
     try {
