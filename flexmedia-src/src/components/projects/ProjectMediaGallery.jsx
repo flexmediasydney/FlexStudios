@@ -670,6 +670,7 @@ const MediaThumbnail = memo(function MediaThumbnail({ file, tonomoBasePath, deli
                   currentTags={getFavorite(proxyPath)?.tags || []}
                   onTagsChanged={() => {}}
                   onEnsureAndTag={(newTags) => ensureFavoriteAndTag({ filePath: proxyPath, fileName: file.name, fileType: file.type, projectId: project?.id, projectTitle: project?.title || project?.property_address, propertyAddress: project?.property_address || project?.title, tonomoBasePath }, newTags)}
+                  allowCreation={false}
                 />
               </div>
             )}

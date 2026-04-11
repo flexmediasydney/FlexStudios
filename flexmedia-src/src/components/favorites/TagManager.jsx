@@ -70,7 +70,7 @@ function TagPill({ tag, color, onRemove, isRemoving }) {
   );
 }
 
-export default function TagManager({ favoriteId, currentTags = [], onTagsChanged, onEnsureAndTag }) {
+export default function TagManager({ favoriteId, currentTags = [], onTagsChanged, onEnsureAndTag, allowCreation = true }) {
   const { allTags, updateTags } = useFavorites();
   const [input, setInput] = useState('');
   const [open, setOpen] = useState(false);
@@ -128,6 +128,15 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
     const trimmed = tagName.trim().toLowerCase().replace(/[^a-z0-9-_ ]/g, '').replace(/\s+/g, ' ').replace(/^[-_ ]+|[-_ ]+$/g, '').trim();
     if (!trimmed || trimmed.length > 50 || currentTags.some(t => t.toLowerCase() === trimmed)) return;
 
+    // When creation is disabled, only allow selecting existing tags from the registry
+    if (!allowCreation) {
+      const exists = (allTags || []).some(t => t.name.toLowerCase() === trimmed.toLowerCase());
+      if (!exists) {
+        toast.error('Tag not found — create new tags in Favorites');
+        return;
+      }
+    }
+
     const newTags = [...currentTags, trimmed];
     setInput('');
     setFocusedIndex(-1);
@@ -141,7 +150,7 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
     } finally {
       setIsSaving(false);
     }
-  }, [currentTags, persistTags, onTagsChanged, isSaving]);
+  }, [currentTags, persistTags, onTagsChanged, isSaving, allowCreation, allTags]);
 
   const removeTag = useCallback(async (tagName) => {
     if (isSaving) return;
@@ -333,10 +342,14 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
             )}
           </AnimatePresence>
 
-          {/* "Press Enter to create" hint */}
+          {/* Hint when typing with no suggestions */}
           {input.trim() && suggestions.length === 0 && !currentTags.includes(input.trim().toLowerCase()) && (
             <p className="text-[11px] text-muted-foreground px-1">
-              Press <kbd className="px-1 py-0.5 rounded bg-muted text-[10px] font-mono">Enter</kbd> to create "{input.trim()}"
+              {allowCreation ? (
+                <>Press <kbd className="px-1 py-0.5 rounded bg-muted text-[10px] font-mono">Enter</kbd> to create "{input.trim()}"</>
+              ) : (
+                <span className="text-muted-foreground">Tag not found — create tags in Favorites</span>
+              )}
             </p>
           )}
 

@@ -729,6 +729,7 @@ const FeedCard = memo(function FeedCard({ item, isVisible, onClick, getTagsForFi
                   currentTags={getFavorite?.(item.proxyPath)?.tags || []}
                   onTagsChanged={() => {}}
                   onEnsureAndTag={(newTags) => ensureFavoriteAndTag?.({ filePath: item.proxyPath, fileName: item.name, fileType: item.type, projectId: item.projectId, projectTitle: item.projectName, propertyAddress: item.projectName, tonomoBasePath: item.tonomoBasePath }, newTags)}
+                  allowCreation={false}
                 />
               </div>
             )}

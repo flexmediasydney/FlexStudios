@@ -816,6 +816,7 @@ function LazyThumbFileCard({ file, index, folder, shareUrl, onOpenLightbox, proj
                   currentTags={getFavorite?.(fullPath)?.tags || []}
                   onTagsChanged={() => {}}
                   onEnsureAndTag={(newTags) => ensureFavoriteAndTag?.({ filePath: fullPath, fileName: file.name, fileType: file.type, projectId: project?.id, projectTitle: project?.title || project?.property_address, propertyAddress: project?.property_address || project?.title, tonomoBasePath: tonomoBase }, newTags)}
+                  allowCreation={false}
                 />
               </div>
             </>
@@ -938,6 +939,7 @@ function ProxyFileCard({ file, project, getTagsForFile, getFavorite, ensureFavor
                 currentTags={getFavorite?.(fullPath)?.tags || []}
                 onTagsChanged={() => {}}
                 onEnsureAndTag={(newTags) => ensureFavoriteAndTag?.({ filePath: fullPath, fileName: file.name, fileType: file.type, projectId: project?.id, projectTitle: project?.title || project?.property_address, propertyAddress: project?.property_address || project?.title, tonomoBasePath: tonomoBase }, newTags)}
+                allowCreation={false}
               />
             </div>
             <button
