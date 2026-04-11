@@ -184,6 +184,11 @@ function computePipeline(projects: any[], tasks: any[], now: Date): StatGroup {
 
   const activeStatuses = ['to_be_scheduled', 'scheduled', 'onsite', 'uploaded', 'submitted', 'in_progress', 'ready_for_partial', 'in_revision'];
 
+  // Pricing mismatches on active (non-terminal) projects
+  const pricingMismatches = projects.filter(
+    (p: any) => p.has_pricing_mismatch && !['cancelled', 'delivered'].includes(p.status)
+  ).length;
+
   return {
     stat_key: 'pipeline',
     stat_value: {
@@ -198,6 +203,7 @@ function computePipeline(projects: any[], tasks: any[], now: Date): StatGroup {
       active_count: projects.filter((p: any) => activeStatuses.includes(p.status)).length,
       delivered_count: projects.filter((p: any) => p.status === 'delivered').length,
       cancelled_count: projects.filter((p: any) => p.status === 'cancelled').length,
+      pricing_mismatches: pricingMismatches,
     },
   };
 }

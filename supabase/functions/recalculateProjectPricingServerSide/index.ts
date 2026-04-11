@@ -77,6 +77,49 @@ Deno.serve(async (req) => {
       changed_fields: JSON.stringify([{ field: 'calculated_price', old_value: oldPrice?.toString() || '0', new_value: Math.round(newPrice).toString() }]),
     }).catch(() => {});
 
+    // ── Price mismatch detection (Tonomo quoted vs matrix calculated) ──────
+    const tonomoQuotedPrice = project.tonomo_quoted_price;
+    if (tonomoQuotedPrice != null) {
+      try {
+        const tqp = Number(tonomoQuotedPrice);
+        const mismatch = Math.round((tqp - newPrice) * 100) / 100;
+        if (Math.abs(mismatch) > 1) {
+          await entities.Project.update(project_id, {
+            has_pricing_mismatch: true,
+            pricing_mismatch_amount: mismatch,
+            pricing_mismatch_details: `Tonomo: $${tqp.toFixed(2)} vs Matrix: $${newPrice.toFixed(2)} (${mismatch > 0 ? '+' : ''}$${mismatch.toFixed(2)})`,
+          });
+          // Notify admins about the mismatch
+          const projectName = project.title || project.property_address || 'Project';
+          entities.User.list('-created_date', 200).then(async (users: any[]) => {
+            const adminIds = users.filter((u: any) => u.role === 'master_admin' || u.role === 'admin').map((u: any) => u.id);
+            for (const userId of adminIds) {
+              const allowed = await _canNotify(entities, userId, 'project_pricing_changed', 'project');
+              if (!allowed) continue;
+              entities.Notification.create({
+                user_id: userId, type: 'project_pricing_changed', category: 'project', severity: 'warning',
+                title: `Price mismatch: ${projectName}`,
+                message: `Tonomo quoted $${tqp.toFixed(2)} but our price matrix calculates $${newPrice.toFixed(2)} — difference of $${Math.abs(mismatch).toFixed(2)}.`,
+                project_id, project_name: projectName, cta_label: 'View Project',
+                is_read: false, is_dismissed: false, source: 'pricing',
+                idempotency_key: `price_mismatch:${project_id}:${tqp}:${newPrice}:${userId}`,
+                created_date: new Date().toISOString(),
+              }).catch(() => {});
+            }
+          }).catch(() => {});
+        } else if (project.has_pricing_mismatch) {
+          // Prices now match — clear previous mismatch flag
+          await entities.Project.update(project_id, {
+            has_pricing_mismatch: false,
+            pricing_mismatch_amount: null,
+            pricing_mismatch_details: null,
+          });
+        }
+      } catch (mismatchErr: any) {
+        console.warn('Price mismatch check failed (non-fatal):', mismatchErr.message);
+      }
+    }
+
     const priceDelta = Math.abs(newPrice - oldPrice);
     const pctDelta = oldPrice > 0 ? (priceDelta / oldPrice) * 100 : 0;
     if (oldPrice > 0 && priceDelta >= 50 && pctDelta >= 5) {

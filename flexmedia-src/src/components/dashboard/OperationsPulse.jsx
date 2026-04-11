@@ -271,6 +271,18 @@ export default function OperationsPulse({ onTabChange }) {
       });
     }
 
+    // Pricing mismatches (Tonomo vs matrix)
+    const pricingMismatches = parseNumeric(s.pipeline?.pricing_mismatches);
+    if (pricingMismatches > 0) {
+      items.push({
+        severity: "warning",
+        icon: DollarSign,
+        label: `${pricingMismatches} pricing mismatch${pricingMismatches !== 1 ? "es" : ""} (Tonomo vs matrix)`,
+        count: pricingMismatches,
+        link: createPageUrl("Projects") + "?filter=pricing_mismatch",
+      });
+    }
+
     return items;
   }, [s, onTabChange]);
 

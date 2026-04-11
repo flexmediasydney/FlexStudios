@@ -161,6 +161,13 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     project_type_name: projectTypeName || null,
   };
 
+  // Store Tonomo quoted price for mismatch detection after pricing calc
+  const tonomoPrice = p.totalPrice || p.order?.totalPrice || p.order?.invoice_amount || p.invoice_amount || null;
+  if (tonomoPrice != null) {
+    const parsed = Number(tonomoPrice);
+    if (!isNaN(parsed) && parsed > 0) sharedData.tonomo_quoted_price = parsed;
+  }
+
   if (flowUnmapped) sharedData._flow_unmapped = true;
   if (typeUnmapped) sharedData._type_unmapped = true;
 

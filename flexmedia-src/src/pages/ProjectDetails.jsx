@@ -1385,6 +1385,15 @@ export default function ProjectDetails() {
                   <ProjectPricingTable project={project} pricingTier={project.pricing_tier || "standard"} canSeePricing={canSeePricing} canEdit={memoizedCanEdit} />
                 </ErrorBoundary>
               )}
+              {canSeePricing && project?.has_pricing_mismatch && (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs">
+                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                  <div>
+                    <p className="font-medium text-amber-800 dark:text-amber-300">Price Mismatch</p>
+                    <p className="text-amber-600 dark:text-amber-400">{project.pricing_mismatch_details}</p>
+                  </div>
+                </div>
+              )}
               {project.notes?.trim() && (
                 <>
                   <Separator />

@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, RefreshCw, LayoutDashboard } from "lucide-react";
+import { Plus, RefreshCw, LayoutDashboard, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useSearchParams } from "react-router-dom";
@@ -19,8 +19,9 @@ const TasksTab = React.lazy(() => import('@/components/dashboard/TasksTab'));
 const MediaTab = React.lazy(() => import('@/components/dashboard/MediaTab'));
 const RevenueTab = React.lazy(() => import('@/components/dashboard/RevenueTab'));
 const TeamTab = React.lazy(() => import('@/components/dashboard/TeamTab'));
+const WorkingFilesPulse = React.lazy(() => import('@/components/dashboard/WorkingFilesPulse'));
 
-const VALID_DASHBOARD_TABS = new Set(['pulse', 'projects', 'tasks', 'media', 'revenue', 'team']);
+const VALID_DASHBOARD_TABS = new Set(['pulse', 'projects', 'tasks', 'media', 'revenue', 'team', 'files']);
 
 export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);
@@ -62,7 +63,7 @@ export default function Dashboard() {
   useEffect(() => {
     const handler = (e) => {
       if (!(e.ctrlKey || e.metaKey)) return;
-      const tabMap = { '1': 'pulse', '2': 'projects', '3': 'tasks', '4': 'media', '5': 'revenue', '6': 'team' };
+      const tabMap = { '1': 'pulse', '2': 'projects', '3': 'tasks', '4': 'media', '5': 'revenue', '6': 'team', '7': 'files' };
       if (tabMap[e.key]) { e.preventDefault(); handleDashboardTabChange(tabMap[e.key]); }
     };
     window.addEventListener('keydown', handler);
@@ -141,6 +142,10 @@ export default function Dashboard() {
               <TabsTrigger value="media" className={tabTriggerClass}>Media</TabsTrigger>
               <TabsTrigger value="revenue" className={tabTriggerClass}>Revenue</TabsTrigger>
               <TabsTrigger value="team" className={tabTriggerClass}>Team</TabsTrigger>
+              <TabsTrigger value="files" className={tabTriggerClass}>
+                <Zap className="h-3.5 w-3.5 mr-1" />
+                Working Files
+              </TabsTrigger>
             </TabsList>
           </div>
 
@@ -177,6 +182,12 @@ export default function Dashboard() {
           <TabsContent value="team" className="space-y-6 mt-0">
             <ErrorBoundary fallbackLabel="Team">
               <TeamTab />
+            </ErrorBoundary>
+          </TabsContent>
+
+          <TabsContent value="files" className="space-y-6 mt-0">
+            <ErrorBoundary fallbackLabel="Working Files">
+              <WorkingFilesPulse />
             </ErrorBoundary>
           </TabsContent>
         </Tabs>
