@@ -35,17 +35,20 @@ function getTypeColor(ext) {
 }
 
 function getSourceBadge(file) {
-  const ext = file.extension?.toLowerCase();
-  if (["jpg", "jpeg", "png", "webp", "heic", "tiff", "raw", "cr2", "nef", "arw"].includes(ext)) {
-    return { label: "IMG", icon: Image, color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400" };
+  // Source = which Dropbox working directory the file comes from
+  if (file.source === "video") {
+    return { label: "Video Files", icon: Film, color: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400" };
   }
-  if (["mp4", "mov", "avi", "mkv", "wmv", "mxf", "prores"].includes(ext)) {
-    return { label: "VID", icon: Film, color: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400" };
-  }
-  if (["pdf", "doc", "docx"].includes(ext)) {
-    return { label: "DOC", icon: FileText, color: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" };
-  }
-  return { label: "FILE", icon: File, color: "bg-muted text-muted-foreground" };
+  return { label: "Images/Other", icon: Image, color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400" };
+}
+
+function getTypeBadge(ext) {
+  const e = ext?.toLowerCase();
+  if (["jpg", "jpeg", "png", "webp", "heic", "tiff"].includes(e)) return { label: "IMG", color: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" };
+  if (["mp4", "mov", "avi", "mkv", "wmv", "mxf", "prores"].includes(e)) return { label: "VID", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400" };
+  if (["pdf", "doc", "docx"].includes(e)) return { label: "DOC", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" };
+  if (["zip", "rar", "7z"].includes(e)) return { label: "ZIP", color: "bg-muted text-muted-foreground" };
+  return { label: e?.toUpperCase() || "FILE", color: "bg-muted text-muted-foreground" };
 }
 
 function isImageExt(ext) {
@@ -81,10 +84,18 @@ function buildComparator(sortBy, sortDir) {
         av = (a.extension || "").toLowerCase();
         bv = (b.extension || "").toLowerCase();
         return dir * av.localeCompare(bv);
-      case "modified":
+      case "source":
+        av = (a.source || "").toLowerCase();
+        bv = (b.source || "").toLowerCase();
+        return dir * av.localeCompare(bv);
+      case "client_modified":
+        av = a.client_modified ? new Date(a.client_modified).getTime() : 0;
+        bv = b.client_modified ? new Date(b.client_modified).getTime() : 0;
+        return dir * (av - bv);
+      case "server_modified":
       default:
-        av = a.modified ? new Date(a.modified).getTime() : 0;
-        bv = b.modified ? new Date(b.modified).getTime() : 0;
+        av = a.server_modified ? new Date(a.server_modified).getTime() : 0;
+        bv = b.server_modified ? new Date(b.server_modified).getTime() : 0;
         return dir * (av - bv);
     }
   };
@@ -118,9 +129,12 @@ function SortHeader({ label, field, sortBy, sortDir, onSort, className }) {
 function FileRow({ file, idx }) {
   const source = getSourceBadge(file);
   const SourceIcon = source.icon;
-  const ext = file.extension?.toUpperCase() || "—";
-  const modified = file.modified
-    ? formatDistanceToNow(new Date(file.modified), { addSuffix: false })
+  const typeBadge = getTypeBadge(file.extension);
+  const created = file.client_modified
+    ? formatDistanceToNow(new Date(file.client_modified), { addSuffix: true })
+    : "—";
+  const modified = file.server_modified
+    ? formatDistanceToNow(new Date(file.server_modified), { addSuffix: true })
     : "—";
 
   return (
@@ -128,9 +142,9 @@ function FileRow({ file, idx }) {
       "group border-b border-border/30 hover:bg-muted/30 transition-colors",
       idx % 2 === 0 && "bg-muted/10"
     )}>
-      {/* Source */}
+      {/* Source Directory */}
       <td className="px-3 py-2">
-        <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold", source.color)}>
+        <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap", source.color)}>
           <SourceIcon className="h-3 w-3" />
           {source.label}
         </span>
@@ -138,7 +152,7 @@ function FileRow({ file, idx }) {
       {/* Property */}
       <td className="px-3 py-2 max-w-[160px]">
         <span className="text-xs font-mono truncate block" title={file.property || "—"}>
-          {file.property || "—"}
+          {file.property || "Root"}
         </span>
       </td>
       {/* File Name */}
@@ -149,17 +163,21 @@ function FileRow({ file, idx }) {
       </td>
       {/* Type */}
       <td className="px-3 py-2">
-        <span className={cn("inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold", getTypeColor(file.extension))}>
-          {ext}
+        <span className={cn("inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold", typeBadge.color)}>
+          {typeBadge.label}
         </span>
       </td>
       {/* Size */}
       <td className="px-3 py-2 text-right">
         <span className="text-xs font-mono tabular-nums">{formatSize(file.size)}</span>
       </td>
+      {/* Created */}
+      <td className="px-3 py-2 text-right hidden lg:table-cell">
+        <span className="text-xs font-mono text-muted-foreground tabular-nums" title={file.client_modified || ""}>{created}</span>
+      </td>
       {/* Modified */}
       <td className="px-3 py-2 text-right">
-        <span className="text-xs font-mono text-muted-foreground tabular-nums">{modified}</span>
+        <span className="text-xs font-mono text-muted-foreground tabular-nums" title={file.server_modified || ""}>{modified}</span>
       </td>
     </tr>
   );
@@ -277,7 +295,7 @@ export default function WorkingFilesPulse() {
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("all"); // "all" | "images" | "video"
   const [typeFilter, setTypeFilter] = useState("all"); // "all" | "photos" | "videos" | "documents"
-  const [sortBy, setSortBy] = useState("modified");
+  const [sortBy, setSortBy] = useState("server_modified");
   const [sortDir, setSortDir] = useState("desc");
   const [visibleRows, setVisibleRows] = useState(PAGE_SIZE);
   const [countdown, setCountdown] = useState(45);
@@ -336,11 +354,11 @@ export default function WorkingFilesPulse() {
       );
     }
 
-    // Source filter
+    // Source filter (which Dropbox directory)
     if (sourceFilter === "images") {
-      result = result.filter(f => isImageExt(f.extension));
+      result = result.filter(f => f.source === "images");
     } else if (sourceFilter === "video") {
-      result = result.filter(f => isVideoExt(f.extension));
+      result = result.filter(f => f.source === "video");
     }
 
     // Type filter
@@ -534,8 +552,8 @@ export default function WorkingFilesPulse() {
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-muted/50 border-b border-border/50">
-                  <th className="px-3 py-2 w-[70px]">
-                    <SortHeader label="Source" field="type" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  <th className="px-3 py-2 w-[100px]">
+                    <SortHeader label="Source" field="source" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   </th>
                   <th className="px-3 py-2">
                     <SortHeader label="Property" field="property" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
@@ -543,14 +561,17 @@ export default function WorkingFilesPulse() {
                   <th className="px-3 py-2">
                     <SortHeader label="File Name" field="name" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   </th>
-                  <th className="px-3 py-2 w-[70px]">
+                  <th className="px-3 py-2 w-[60px]">
                     <SortHeader label="Type" field="type" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   </th>
                   <th className="px-3 py-2 w-[80px] text-right">
                     <SortHeader label="Size" field="size" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="justify-end" />
                   </th>
+                  <th className="px-3 py-2 w-[100px] text-right hidden lg:table-cell">
+                    <SortHeader label="Created" field="client_modified" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="justify-end" />
+                  </th>
                   <th className="px-3 py-2 w-[100px] text-right">
-                    <SortHeader label="Modified" field="modified" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="justify-end" />
+                    <SortHeader label="Modified" field="server_modified" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="justify-end" />
                   </th>
                 </tr>
               </thead>
