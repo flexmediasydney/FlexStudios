@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDashboardStats } from "@/components/hooks/useDashboardStats";
+import { usePermissions } from "@/components/auth/PermissionGuard";
 import Sparkline from "@/components/dashboard/Sparkline";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -154,6 +155,7 @@ function fmtCurrency(n) {
 
 export default function OperationsPulse({ onTabChange }) {
   const { data: stats, isLoading: statsLoading } = useDashboardStats();
+  const { canSeePricing } = usePermissions();
 
   // Fetch today's and tomorrow's shoots
   const todayStr = format(new Date(), "yyyy-MM-dd");
@@ -271,20 +273,22 @@ export default function OperationsPulse({ onTabChange }) {
       });
     }
 
-    // Pricing mismatches (Tonomo vs matrix)
-    const pricingMismatches = parseNumeric(s.pipeline?.pricing_mismatches);
-    if (pricingMismatches > 0) {
-      items.push({
-        severity: "warning",
-        icon: DollarSign,
-        label: `${pricingMismatches} pricing mismatch${pricingMismatches !== 1 ? "es" : ""} (Tonomo vs matrix)`,
-        count: pricingMismatches,
-        link: createPageUrl("Projects") + "?filter=pricing_mismatch",
-      });
+    // Pricing mismatches (Tonomo vs matrix) — only visible to manager+
+    if (canSeePricing) {
+      const pricingMismatches = parseNumeric(s.pipeline?.pricing_mismatches);
+      if (pricingMismatches > 0) {
+        items.push({
+          severity: "warning",
+          icon: DollarSign,
+          label: `${pricingMismatches} pricing mismatch${pricingMismatches !== 1 ? "es" : ""} (Tonomo vs matrix)`,
+          count: pricingMismatches,
+          link: createPageUrl("Projects") + "?filter=pricing_mismatch",
+        });
+      }
     }
 
     return items;
-  }, [s, onTabChange]);
+  }, [s, onTabChange, canSeePricing]);
 
   if (statsLoading) {
     return (
@@ -325,7 +329,8 @@ export default function OperationsPulse({ onTabChange }) {
   return (
     <div className="space-y-6">
       {/* ── KPI cards ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className={cn("grid gap-4", canSeePricing ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-2")}>
+        {canSeePricing && (
         <KpiCard
           title="Revenue MTD"
           value={fmtCurrency(revenue)}
@@ -336,6 +341,8 @@ export default function OperationsPulse({ onTabChange }) {
           color="bg-green-100 text-green-700"
           linkTo="/Dashboard?tab=revenue"
         />
+        )}
+        {canSeePricing && (
         <KpiCard
           title="Pipeline"
           value={fmtCurrency(pipeline)}
@@ -346,6 +353,7 @@ export default function OperationsPulse({ onTabChange }) {
           color="bg-blue-100 text-blue-700"
           linkTo="/Dashboard?tab=projects"
         />
+        )}
         <KpiCard
           title="Overdue Tasks"
           value={overdue}

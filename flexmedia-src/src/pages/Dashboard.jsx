@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { usePermissions } from "@/components/auth/PermissionGuard";
 import { Plus, RefreshCw, LayoutDashboard, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -26,6 +27,7 @@ const VALID_DASHBOARD_TABS = new Set(['pulse', 'projects', 'tasks', 'media', 're
 export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);
   const queryClient = useQueryClient();
+  const { canSeePricing } = usePermissions();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: dashStats, computed_at, isError, error: statsError } = useDashboardStats();
 
@@ -140,7 +142,7 @@ export default function Dashboard() {
                 {overdueCount > 0 && <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1">{overdueCount}</span>}
               </TabsTrigger>
               <TabsTrigger value="media" className={tabTriggerClass}>Media</TabsTrigger>
-              <TabsTrigger value="revenue" className={tabTriggerClass}>Revenue</TabsTrigger>
+              {canSeePricing && <TabsTrigger value="revenue" className={tabTriggerClass}>Revenue</TabsTrigger>}
               <TabsTrigger value="team" className={tabTriggerClass}>Team</TabsTrigger>
               <TabsTrigger value="files" className={tabTriggerClass}>
                 <Zap className="h-3.5 w-3.5 mr-1" />
