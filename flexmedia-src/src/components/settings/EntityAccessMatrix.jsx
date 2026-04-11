@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useAllEntityAccessRules } from "@/components/auth/useEntityAccess";
+import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { toast } from "sonner";
@@ -85,9 +86,11 @@ function formatRole(role) {
 
 export default function EntityAccessMatrix() {
   const { rules, isLoading } = useAllEntityAccessRules();
+  const { data: currentUser } = useCurrentUser();
   const queryClient = useQueryClient();
   const [updatingRuleId, setUpdatingRuleId] = useState(null);
   const [resetting, setResetting] = useState(false);
+  const isMasterAdmin = currentUser?.role === 'master_admin';
 
   const updateMutation = useMutation({
     mutationFn: ({ ruleId, access_level }) => {
@@ -111,6 +114,10 @@ export default function EntityAccessMatrix() {
     rules.find((r) => r.entity_type === entityType && r.role === role);
 
   const handleCellClick = (entityType, role) => {
+    if (currentUser?.role !== 'master_admin') {
+      toast.error('Only the account owner can modify security rules');
+      return;
+    }
     const rule = getRuleFor(entityType, role);
     if (!rule || updatingRuleId) return;
     const nextLevel = cycleLevel(rule.access_level || "none");
@@ -167,7 +174,8 @@ export default function EntityAccessMatrix() {
         </div>
         <button
           onClick={handleResetDefaults}
-          disabled={resetting}
+          disabled={resetting || !isMasterAdmin}
+          title={!isMasterAdmin ? 'Only the account owner can reset defaults' : undefined}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
         >
           <RotateCcw className={`h-3.5 w-3.5 ${resetting ? "animate-spin" : ""}`} />
