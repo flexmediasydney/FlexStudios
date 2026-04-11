@@ -21,10 +21,16 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const user = await getUserFromReq(req);
 
-    // Accept both user sessions (frontend) and service-role calls
-    if (user && !['master_admin', 'employee'].includes(user.role)) {
+    // Auth: allow service-role (internal/cron calls) or authenticated users with sufficient role
+    const user = await getUserFromReq(req).catch(() => null);
+    if (!user) {
+      const authHeader = req.headers.get('authorization') || '';
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+      if (!serviceKey || !authHeader.includes(serviceKey)) {
+        return errorResponse('Authentication required', 401);
+      }
+    } else if (!['master_admin', 'employee'].includes(user.role)) {
       return errorResponse('Forbidden: insufficient permissions', 403);
     }
 

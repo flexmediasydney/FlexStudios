@@ -14,6 +14,7 @@ import EntityDataTable from '@/components/common/EntityDataTable';
 import SmartFilterBar from '@/components/common/SmartFilterBar';
 import BulkActionBar from '@/components/common/BulkActionBar';
 import { cn } from '@/lib/utils';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 const STATE_STYLES = {
   'Active':         'bg-green-50 text-green-700 border-green-200',
@@ -44,6 +45,7 @@ function fmtRelativeDate(dateStr) {
 }
 
 export default function Organisations() {
+  const { canEdit, canView } = useEntityAccess('agencies');
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [activeFilters, setActiveFilters] = useState(new Set());
@@ -267,7 +269,7 @@ export default function Organisations() {
       key: '_actions', label: '', width: '90px', noClick: true, align: 'right',
       render: (row) => (
         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={e => { e.stopPropagation(); setEditingAgency(row); setShowForm(true); }}>Edit</Button>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={!canEdit} onClick={e => { e.stopPropagation(); setEditingAgency(row); setShowForm(true); }}>Edit</Button>
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); navigate(createPageUrl('OrgDetails') + '?id=' + row.id); }} aria-label="View organisation details">
             <ExternalLink className="h-3 w-3" />
           </Button>
@@ -289,7 +291,8 @@ export default function Organisations() {
             {stats.dnc > 0 && <><span className="text-red-500 font-medium ml-1">{stats.dnc}</span> DNC</>}
           </div>
         </div>
-        <Button onClick={() => { setEditingAgency(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8">
+        {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
+        <Button onClick={() => { setEditingAgency(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8" disabled={!canEdit}>
           <Plus className="h-3.5 w-3.5" />Add Organisation
         </Button>
       </div>
@@ -371,7 +374,7 @@ export default function Organisations() {
                     Clear search
                   </Button>
                 ) : (
-                  <Button size="sm" onClick={() => { setEditingAgency(null); setShowForm(true); }} className="mt-3">
+                  <Button size="sm" onClick={() => { setEditingAgency(null); setShowForm(true); }} className="mt-3" disabled={!canEdit}>
                     <Plus className="h-3.5 w-3.5 mr-1.5" />Add Organisation
                   </Button>
                 )}
@@ -390,7 +393,7 @@ export default function Organisations() {
                         revenue={revenueByAgency[row.id] || 0}
                       />
                       <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
-                        <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => { setEditingAgency(row); setShowForm(true); }}>Edit</Button>
+                        <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" disabled={!canEdit} onClick={() => { setEditingAgency(row); setShowForm(true); }}>Edit</Button>
                         <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}>View</Button>
                       </div>
                     </div>

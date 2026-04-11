@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
@@ -264,6 +265,7 @@ export default function ProjectDetails() {
 
    const queryClient = useQueryClient();
    const { canSeePricing, canEditProject, canAccessProject, isMasterAdmin, isEmployee, user: permUser } = usePermissions();
+   const { canEdit: entityCanEdit, canView: entityCanView } = useEntityAccess('projects');
    const [showEditForm, setShowEditForm] = useState(false);
    const [showAgentSelector, setShowAgentSelector] = useState(false);
    const [composeToAgent, setComposeToAgent] = useState(null);
@@ -1201,13 +1203,14 @@ export default function ProjectDetails() {
             <XCircle className="h-3.5 w-3.5" />
             {project.outcome === "lost" ? "✓ Lost" : "◯ Lost"}
           </button>
-          {memoizedCanEdit && (
+          {memoizedCanEdit && entityCanEdit && (
            <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-all h-9" aria-label="Edit project">
              <Edit className="h-4 w-4" />
              <span className="hidden sm:inline ml-1.5">Edit</span>
            </Button>
           )}
-          {memoizedCanEdit && (
+          {entityCanView && !entityCanEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
+          {memoizedCanEdit && entityCanEdit && (
             <>
               <Button
                 variant="outline"

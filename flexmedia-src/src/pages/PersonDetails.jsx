@@ -23,6 +23,7 @@ import EntityEmailTab from '@/components/email/EntityEmailTab';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
 import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { toast } from 'sonner';
 
 const STATE_BADGE = {
@@ -393,6 +394,7 @@ const HISTORY_FILTERS = [
 ];
 
 export default function PersonDetails() {
+  const { canEdit, canView } = useEntityAccess('agents');
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const agentId = urlParams.get('id');
@@ -678,6 +680,7 @@ export default function PersonDetails() {
           </Badge>
         )}
 
+        {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <Button
             size="sm"
@@ -948,7 +951,8 @@ export default function PersonDetails() {
           <div className="px-3 py-4 border-t border-border/50">
             <button
               onClick={() => setShowDeleteConfirm(true)}
-              className="text-xs text-destructive/60 hover:text-destructive transition-colors flex items-center gap-1"
+              disabled={!canEdit}
+              className="text-xs text-destructive/60 hover:text-destructive transition-colors flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Trash2 className="h-3 w-3" />
               Delete Contact

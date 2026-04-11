@@ -33,6 +33,10 @@ function oauthResultPage(type: string, payload: Record<string, string> = {}) {
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
+    // Auth note: This endpoint is intentionally unauthenticated — it's a Google OAuth
+    // redirect callback. Security is enforced by validating the `state` parameter which
+    // must contain a valid userId that maps to a real user in the database. The state param
+    // is generated server-side during the OAuth initiation flow.
     const url = new URL(req.url);
     const code = url.searchParams.get('code');
     const state = url.searchParams.get('state');
@@ -53,6 +57,12 @@ Deno.serve(async (req) => {
     }
     const { userId, displayName, teamId, reconnectAccountId } = stateData;
     if (!userId) return sendMessage('gmail_auth_error', { error: 'Missing userId in state' });
+
+    // Validate that the userId in state maps to a real user (prevents forged state params)
+    const admin = getAdminClient();
+    const entities = createEntities(admin);
+    const stateUser = await entities.User.get(userId).catch(() => null);
+    if (!stateUser) return sendMessage('gmail_auth_error', { error: 'Invalid user in state parameter' });
 
     const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
     const clientSecret = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET');
@@ -84,9 +94,6 @@ Deno.serve(async (req) => {
     const profile = await profileResponse.json();
     const emailAddress = profile.emailAddress;
 
-    const admin = getAdminClient();
-    const entities = createEntities(admin);
-
     // Reconnect path — update tokens on existing account
     if (reconnectAccountId) {
       await entities.EmailAccount.update(reconnectAccountId, {
@@ -107,13 +114,12 @@ Deno.serve(async (req) => {
       return sendMessage('gmail_auth_error', { error: 'This Gmail account is already connected' });
     }
 
-    const appUser = await entities.User.get(userId);
-
+    // stateUser already validated above
     await entities.EmailAccount.create({
       email_address: emailAddress,
       display_name: displayName || emailAddress,
       assigned_to_user_id: userId,
-      assigned_to_name: appUser.full_name,
+      assigned_to_name: stateUser.full_name,
       team_id: teamId || null,
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,

@@ -1,10 +1,16 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   const steps: any[] = [];
 
   try {
+    // Auth: master_admin only — admin diagnostic tool
+    const user = await getUserFromReq(req).catch(() => null);
+    if (!user || user.role !== 'master_admin') {
+      return errorResponse('Master admin access required', 403);
+    }
+
     const admin = getAdminClient();
     const entities = createEntities(admin);
     steps.push({ step: 1, name: 'createClient', ok: true });

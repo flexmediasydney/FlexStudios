@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, getUserFromReq } from '../_shared/supabase.ts';
 
 // ─── Sydney timezone helpers ─────────────────────────────────────────────────
 
@@ -545,6 +545,15 @@ Deno.serve(async (req) => {
   // Health check
   if (req.method === 'GET') {
     return jsonResponse({ status: 'ok', function: 'calculateDashboardStats' }, 200, req);
+  }
+
+  // ── Auth: require any authenticated user or service role ──
+  const user = await getUserFromReq(req).catch(() => null);
+  if (!user) {
+    const authHeader = req.headers.get('authorization') || '';
+    if (!authHeader.includes(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '___')) {
+      return errorResponse('Authentication required', 401);
+    }
   }
 
   const start = Date.now();

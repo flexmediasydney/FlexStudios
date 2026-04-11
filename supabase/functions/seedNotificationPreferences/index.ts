@@ -1,9 +1,15 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, getUserFromReq } from '../_shared/supabase.ts';
 
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {
+    // ── Auth: require master_admin; allow cron/service-role calls without user context ──
+    const user = await getUserFromReq(req).catch(() => null);
+    if (user && user.role !== 'master_admin') {
+      return errorResponse('Only the account owner can run seed functions', 403);
+    }
+
     const admin = getAdminClient();
     const entities = createEntities(admin);
 

@@ -23,6 +23,7 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { usePrefetchProjectDetails } from "@/components/lib/prefetchRoutes";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 const statusColumns = PROJECT_STAGES.map(s => ({ id: s.value, label: s.label, color: s.color }));
 
@@ -388,6 +389,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
 
 /* ═══════════════════════════ Main KanbanBoard ═══════════════════════════ */
 export default function KanbanBoard({ projects = [], products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs }) {
+  const { canEdit, canView } = useEntityAccess('projects');
   const navigate = useNavigate();
   const { enabledFields } = useCardFields();
   // Bug fix: use tasks/timeLogs from parent when available to avoid duplicate entity subscriptions
@@ -578,6 +580,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
   const onDragEnd = (result) => {
     setDraggingId(null);
     if (!result.destination) return;
+    // Entity access guard: block drag if user cannot edit projects
+    if (!canEdit) { toast.error('You do not have edit access to projects.'); return; }
     // Race condition fix: block drag while a status update is already in flight
     if (updateStatusMutation.isPending) return;
     const projectId = result.draggableId;

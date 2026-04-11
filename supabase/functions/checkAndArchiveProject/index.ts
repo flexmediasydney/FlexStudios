@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, isQuietHours } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, isQuietHours, getUserFromReq } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -15,6 +15,15 @@ async function _canNotify(entities: any, userId: string, type: string, category:
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
+    // ── Auth: require any authenticated user or service role ──
+    const user = await getUserFromReq(req).catch(() => null);
+    if (!user) {
+      const authHeader = req.headers.get('authorization') || '';
+      if (!authHeader.includes(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '___')) {
+        return errorResponse('Authentication required', 401);
+      }
+    }
+
     const admin = getAdminClient();
     const entities = createEntities(admin);
     const { project_id, triggered_by } = await req.json();

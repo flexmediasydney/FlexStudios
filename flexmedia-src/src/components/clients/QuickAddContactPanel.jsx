@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AlertTriangle, Plus, UserPlus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 const INITIAL_STATE = {
   name: "",
@@ -33,6 +34,7 @@ const INITIAL_STATE = {
  *  - Organisation autocomplete
  */
 export default function QuickAddContactPanel({ open, onOpenChange, agencies = [], preselectedAgencyId }) {
+  const { canEdit, canView } = useEntityAccess('agents');
   const [formData, setFormData] = useState(INITIAL_STATE);
   const [errors, setErrors] = useState({});
   const [duplicateWarning, setDuplicateWarning] = useState(null);
@@ -175,6 +177,7 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
               <UserPlus className="h-4 w-4 text-primary" />
             </div>
             Quick Add Contact
+            {canView && !canEdit && <span className="text-[10px] font-normal text-muted-foreground border rounded px-1.5 py-0.5 ml-2">View only</span>}
           </SheetTitle>
           <SheetDescription>
             Add a new person to your CRM. Required fields are marked with *.
@@ -307,7 +310,7 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
         <div className="border-t px-6 py-4 bg-muted/10 flex items-center gap-2">
           <Button
             onClick={() => handleSubmit(false)}
-            disabled={saveMutation.isPending || !formData.name?.trim() || !formData.agency_id}
+            disabled={saveMutation.isPending || !formData.name?.trim() || !formData.agency_id || !canEdit}
             className="flex-1"
           >
             {saveMutation.isPending ? (
@@ -322,7 +325,7 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
           <Button
             variant="outline"
             onClick={() => handleSubmit(true)}
-            disabled={saveMutation.isPending || !formData.name?.trim() || !formData.agency_id}
+            disabled={saveMutation.isPending || !formData.name?.trim() || !formData.agency_id || !canEdit}
             className="gap-1.5"
           >
             <Plus className="h-3.5 w-3.5" />

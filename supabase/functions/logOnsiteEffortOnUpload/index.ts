@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours, getUserFromReq } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -31,6 +31,15 @@ Deno.serve(async (req) => {
 
     if (payload?._health_check) {
       return jsonResponse({ _version: 'v1.1', _fn: 'logOnsiteEffortOnUpload', _ts: '2026-03-17' });
+    }
+
+    // ── Auth: require any authenticated user or service role ──
+    const user = await getUserFromReq(req).catch(() => null);
+    if (!user) {
+      const authHeader = req.headers.get('authorization') || '';
+      if (!authHeader.includes(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '___')) {
+        return errorResponse('Authentication required', 401);
+      }
     }
 
     // Support entity automation payload or direct call

@@ -16,6 +16,7 @@ import SmartFilterBar from '@/components/common/SmartFilterBar';
 import BulkActionBar from '@/components/common/BulkActionBar';
 import ContactActivityPanel from '@/components/clients/ContactActivityPanel';
 import { cn } from '@/lib/utils';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 const STATE_STYLES = {
   'Active':         'bg-green-50 text-green-700 border-green-200',
@@ -56,6 +57,7 @@ function daysSinceLabel(dateStr) {
 }
 
 export default function People() {
+  const { canEdit, canView } = useEntityAccess('agents');
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [view, setView] = useState('table');
@@ -268,7 +270,7 @@ export default function People() {
       key: '_actions', label: '', width: '110px', noClick: true, align: 'right',
       render: (row) => (
         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={e => { e.stopPropagation(); setEditingAgent(row); setShowForm(true); }}>Edit</Button>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={!canEdit} onClick={e => { e.stopPropagation(); setEditingAgent(row); setShowForm(true); }}>Edit</Button>
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={e => { e.stopPropagation(); setActivityAgent(row); }} aria-label="Activity panel" title="Activity panel">
             <Activity className="h-3 w-3" />
           </Button>
@@ -318,7 +320,8 @@ export default function People() {
           >
             <Download className="h-3.5 w-3.5" />Export CSV
           </Button>
-          <Button onClick={() => { setEditingAgent(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8">
+          {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
+          <Button onClick={() => { setEditingAgent(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8" disabled={!canEdit}>
             <Plus className="h-3.5 w-3.5" />Add Person
           </Button>
         </div>
@@ -416,7 +419,7 @@ export default function People() {
                    Clear search
                  </Button>
                ) : (
-                 <Button size="sm" onClick={() => { setEditingAgent(null); setShowForm(true); }} className="mt-3">
+                 <Button size="sm" onClick={() => { setEditingAgent(null); setShowForm(true); }} className="mt-3" disabled={!canEdit}>
                    <Plus className="h-3.5 w-3.5 mr-1.5" />Add Person
                  </Button>
                )}
@@ -430,7 +433,7 @@ export default function People() {
                       onClick={() => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}>
                       <AgentHoverContent row={row} projects={projectsByAgent[row.id] || []} revenue={revenueByAgent[row.id] || 0} />
                       <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
-                        <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => { setEditingAgent(row); setShowForm(true); }}>Edit</Button>
+                        <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" disabled={!canEdit} onClick={() => { setEditingAgent(row); setShowForm(true); }}>Edit</Button>
                         <Button size="sm" className="flex-1 h-7 text-xs" onClick={() => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}>View</Button>
                       </div>
                     </div>

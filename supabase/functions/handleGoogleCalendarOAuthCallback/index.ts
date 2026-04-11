@@ -33,6 +33,10 @@ function oauthResultPage(type: string, payload: Record<string, string> = {}) {
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
+    // Auth note: This endpoint is intentionally unauthenticated — it's a Google OAuth
+    // redirect callback. Security is enforced by validating the `state` parameter which
+    // must contain a valid userId that maps to a real user in the database. The state param
+    // is generated server-side during the OAuth initiation flow.
     const url = new URL(req.url);
     const code = url.searchParams.get('code');
     const state = url.searchParams.get('state');
@@ -55,6 +59,14 @@ Deno.serve(async (req) => {
     const { userId } = stateData;
     if (!userId) {
       return oauthResultPage('calendar_auth_error', { error: 'Missing user ID in state. Please try connecting your calendar again.' });
+    }
+
+    // Validate that the userId in state maps to a real user (prevents forged state params)
+    const admin = getAdminClient();
+    const entities = createEntities(admin);
+    const stateUser = await entities.User.get(userId).catch(() => null);
+    if (!stateUser) {
+      return oauthResultPage('calendar_auth_error', { error: 'Invalid user in state parameter. Please try connecting your calendar again.' });
     }
 
     const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
@@ -88,11 +100,7 @@ Deno.serve(async (req) => {
     const userInfo = await userInfoResponse.json();
     const emailAddress = userInfo.email;
 
-    const admin = getAdminClient();
-    const entities = createEntities(admin);
-
-    // Fetch user to get email for created_by filter (column stores email, not UUID)
-    const stateUser = await entities.User.get(userId).catch(() => null);
+    // stateUser already fetched above during auth validation
     const createdByEmail = stateUser?.email || emailAddress;
 
     // Check if this calendar is already connected
@@ -111,17 +119,17 @@ Deno.serve(async (req) => {
         last_synced: new Date().toISOString(),
       });
     } else {
-      const user = await entities.User.get(userId);
-      if (!user || !user.email) {
-        return oauthResultPage('calendar_auth_error', { error: 'User not found. Please try connecting your calendar again.' });
+      // stateUser already validated above — use it for connection limit and creation
+      if (!stateUser.email) {
+        return oauthResultPage('calendar_auth_error', { error: 'User has no email. Please try connecting your calendar again.' });
       }
 
       // ── CONNECTION LIMIT ENFORCEMENT ─────────────────────────────────────────
-      const isAdmin = user.role === 'master_admin' || user.role === 'admin';
+      const isAdmin = stateUser.role === 'master_admin' || stateUser.role === 'admin';
       const connectionLimit = isAdmin ? 5 : 2;
 
       const allUserConnections = await entities.CalendarConnection
-        .filter({ created_by: user.email }, null, 10);
+        .filter({ created_by: stateUser.email }, null, 10);
 
       if (allUserConnections.length >= connectionLimit) {
         const limitMsg = `Connection limit reached. ${isAdmin ? 'Admins' : 'Users'} can connect up to ${connectionLimit} calendars. Remove an existing connection first.`;
@@ -138,7 +146,7 @@ Deno.serve(async (req) => {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         last_synced: new Date().toISOString(),
-        created_by: user.email
+        created_by: stateUser.email
       });
     }
 

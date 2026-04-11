@@ -7,10 +7,11 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const user = await getUserFromReq(req);
 
-    if (user?.role !== 'master_admin') {
-      return errorResponse('Forbidden: Admin access required', 403);
+    // Auth: master_admin only — seed operation
+    const user = await getUserFromReq(req).catch(() => null);
+    if (!user || user.role !== 'master_admin') {
+      return errorResponse('Master admin access required', 403);
     }
 
     const DEFAULT_CATEGORIES = [

@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 /**
  * Real-time employee utilization calculator triggered on TaskTimeLog changes.
@@ -8,6 +8,16 @@ Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {
+    // Auth: allow service-role (internal/cron calls) or authenticated users
+    const user = await getUserFromReq(req).catch(() => null);
+    if (!user) {
+      const authHeader = req.headers.get('authorization') || '';
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+      if (!serviceKey || !authHeader.includes(serviceKey)) {
+        return errorResponse('Authentication required', 401);
+      }
+    }
+
     const admin = getAdminClient();
     const entities = createEntities(admin);
     const { event } = await req.json();

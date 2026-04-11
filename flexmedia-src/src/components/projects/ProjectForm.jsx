@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/components/auth/PermissionGuard";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { validateField, trimFormData, LIMITS } from "@/components/hooks/useFormValidation";
 import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
 import { sydneyInputToUtc } from "@/components/utils/dateUtils";
@@ -9,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { api } from "@/api/supabaseClient";
 import { retryWithBackoff } from "@/lib/networkResilience";
@@ -35,6 +37,7 @@ import { toast } from "sonner";
 
 export default function ProjectForm({ project, open, onClose, onSave }) {
   const { canSeePricing } = usePermissions();
+  const { canEdit, canView } = useEntityAccess('projects');
   const [formData, setFormData] = useState({
     title: "",
     agent_id: "",
@@ -762,6 +765,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               )}
             </span>
             <kbd className="text-[10px] font-normal text-muted-foreground bg-muted px-2 py-1 rounded border">Ctrl+S to save</kbd>
+            {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground ml-2">View only</Badge>}
           </DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">
             {project ? "Update project details and settings" : "Create a new project with services and assignments"}
@@ -1393,7 +1397,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
             </Button>
             <SubmitButtonGuard
               isLoading={saving || calculatingPrice}
-              isDisabled={calculatingPrice}
+              isDisabled={calculatingPrice || !canEdit}
               hasErrors={Object.values(errors).some(Boolean)}
               unsavedChanges={unsavedChanges}
               isEdit={!!project}

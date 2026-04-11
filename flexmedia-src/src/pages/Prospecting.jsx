@@ -12,9 +12,11 @@ import ProspectFormDialog from '@/components/prospecting/ProspectFormDialog';
 import AgencyFormDialog from '@/components/prospecting/AgencyFormDialog';
 import ProspectingDashboard from '@/components/prospecting/ProspectingDashboard';
 import { usePermissions } from '@/components/auth/PermissionGuard';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 export default function Prospecting() {
   const { canSeeProspecting } = usePermissions();
+  const { canEdit, canView } = useEntityAccess('interaction_logs');
   const [viewMode, setViewMode] = useState('kanban');
   const [searchTerm, setSearchTerm] = useState('');
   const [drillDownState, setDrillDownState] = useState(null);
@@ -184,11 +186,13 @@ export default function Prospecting() {
               </div>
             </div>
             <div className="flex gap-2">
+              {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground self-center">View only</Badge>}
               <Button
                 variant="outline"
                 size="sm"
                 className="gap-1.5 h-8"
                 onClick={() => setShowNewAgencyDialog(true)}
+                disabled={!canEdit}
               >
                 <Plus className="h-3.5 w-3.5" />
                 New Organisation
@@ -197,6 +201,7 @@ export default function Prospecting() {
                 size="sm"
                 className="gap-1.5 h-8"
                 onClick={() => setShowNewAgentDialog(true)}
+                disabled={!canEdit}
               >
                 <Plus className="h-3.5 w-3.5" />
                 New Person
@@ -328,10 +333,10 @@ export default function Prospecting() {
               </Button>
             ) : (
               <div className="flex gap-2 justify-center mt-3">
-                <Button size="sm" onClick={() => setShowNewAgentDialog(true)}>
+                <Button size="sm" onClick={() => setShowNewAgentDialog(true)} disabled={!canEdit}>
                   <Plus className="h-3.5 w-3.5 mr-1.5" />Add Person
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => setShowNewAgencyDialog(true)}>
+                <Button variant="outline" size="sm" onClick={() => setShowNewAgencyDialog(true)} disabled={!canEdit}>
                   <Plus className="h-3.5 w-3.5 mr-1.5" />Add Organisation
                 </Button>
               </div>

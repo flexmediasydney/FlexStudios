@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { handleCors, getCorsHeaders } from '../_shared/supabase.ts';
+import { handleCors, getCorsHeaders, getUserFromReq, errorResponse as sharedErrorResponse } from '../_shared/supabase.ts';
 
 Deno.serve(async (req) => {
   const _cors = handleCors(req); if (_cors) return _cors;
@@ -12,29 +12,14 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    // Verify the caller is an admin
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'No authorization header' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
-    const { data: { user: caller }, error: authErr } = await admin.auth.getUser(token);
-    if (authErr || !caller) {
-      return new Response(JSON.stringify({ error: 'Invalid token' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Check caller is admin
-    const { data: callerRecord } = await admin.from('users').select('role').eq('id', caller.id).single();
-    if (!callerRecord || !['master_admin', 'admin'].includes(callerRecord.role)) {
-      return new Response(JSON.stringify({ error: 'Admin access required' }), {
+    // ── Auth: require master_admin ──
+    const user = await getUserFromReq(req);
+    if (!user || user.role !== 'master_admin') {
+      return new Response(JSON.stringify({ error: 'Only the account owner can perform admin auth actions' }), {
         status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+    const caller = user;
 
     const body = await req.json();
     const { action } = body;

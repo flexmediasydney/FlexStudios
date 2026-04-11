@@ -7,10 +7,16 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const user = await getUserFromReq(req);
 
-    // Verify master admin
-    if (user?.role !== 'master_admin') {
+    // Auth: allow service-role (internal/cron calls) or master_admin users
+    const user = await getUserFromReq(req).catch(() => null);
+    if (!user) {
+      const authHeader = req.headers.get('authorization') || '';
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+      if (!serviceKey || !authHeader.includes(serviceKey)) {
+        return errorResponse('Authentication required', 401);
+      }
+    } else if (user.role !== 'master_admin') {
       return errorResponse('Forbidden: Master admin access required', 403);
     }
 

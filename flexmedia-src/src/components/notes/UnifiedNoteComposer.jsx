@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 // Use centralized sanitizer — covers script, iframe, object, embed, on* handlers,
 // javascript:/data:/vbscript: URIs, base, form, meta, and HTML comments.
 import { sanitizeEditorHtml as sanitizeHtml } from '@/utils/sanitizeHtml';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 export default function UnifiedNoteComposer({
   agencyId, projectId, agentId, teamId,
@@ -26,6 +27,7 @@ export default function UnifiedNoteComposer({
   onSave,
   onCancel,
 }) {
+  const { canEdit, canView } = useEntityAccess('org_notes');
   const queryClient = useQueryClient();
   const editorRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -358,10 +360,11 @@ export default function UnifiedNoteComposer({
         <Button variant="ghost" size="sm" onClick={handleCancel} className="h-7 text-xs text-muted-foreground">
           Cancel
         </Button>
+        {canView && !canEdit && <span className="text-[10px] text-muted-foreground mr-1">View only</span>}
         <Button
           size="sm"
           onClick={handleSave}
-          disabled={saving || editorEmpty || uploadingFiles.length > 0}
+          disabled={saving || editorEmpty || uploadingFiles.length > 0 || !canEdit}
           title="Save note (Ctrl+Enter)"
           className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white"
         >

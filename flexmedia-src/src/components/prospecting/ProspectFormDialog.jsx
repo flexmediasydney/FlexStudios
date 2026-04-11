@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertCircle } from 'lucide-react';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 const STATUS_OPTIONS = [
   'New Lead', 'Researching', 'Attempted Contact', 'Discovery Call Scheduled',
@@ -21,6 +22,7 @@ const SOURCE_OPTIONS = ['Referral', 'LinkedIn', 'Web Search', 'Event', 'Manual I
 const MEDIA_NEEDS = ['Photography', 'Video Production', 'Drone Footage', 'Virtual Staging', 'Social Media Mgmt', 'Website Design', 'Branding'];
 
 export default function ProspectFormDialog({ open, onOpenChange, prospect = null, onSuccess = null, entityType = 'Agent' }) {
+  const { canEdit, canView } = useEntityAccess('interaction_logs');
   const { data: user } = useCurrentUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -139,7 +141,10 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{prospect ? `Edit ${entityType}` : `Add New ${entityType}`}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {prospect ? `Edit ${entityType}` : `Add New ${entityType}`}
+            {canView && !canEdit && <span className="text-[10px] font-normal text-muted-foreground border rounded px-1.5 py-0.5">View only</span>}
+          </DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -344,7 +349,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
             </Button>
             <Button
               type="submit"
-              disabled={loading || !formData.name?.trim() || !formData.current_agency_name?.trim()}
+              disabled={loading || !formData.name?.trim() || !formData.current_agency_name?.trim() || !canEdit}
               className="gap-2"
             >
               {loading ? (

@@ -20,6 +20,7 @@ import ContactActivityLog from "@/components/contacts/ContactActivityLog";
 import ContactFiles from "@/components/contacts/ContactFiles";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 const STATE_BADGE = {
   Active:           "bg-green-100 text-green-800 border-green-200",
@@ -57,6 +58,7 @@ function ErrorState({ navigate, title, message }) {
 }
 
 export default function OrgDetails() {
+  const { canEdit, canView } = useEntityAccess('agencies');
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const agencyId = urlParams.get("id");
@@ -257,6 +259,7 @@ export default function OrgDetails() {
         <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agency.relationship_state] || 'bg-muted text-muted-foreground'}`}>
           {agency.relationship_state || 'Unknown'}
         </Badge>
+        {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {/* Stat pills */}

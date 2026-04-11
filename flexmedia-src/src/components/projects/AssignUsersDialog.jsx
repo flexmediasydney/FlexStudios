@@ -8,8 +8,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Loader2 } from "lucide-react";
 import { createNotification } from "@/components/notifications/createNotification";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 export default function AssignUsersDialog({ project, open, onClose, onSave }) {
+  const { canEdit, canView } = useEntityAccess('projects');
   const [selectedUsers, setSelectedUsers] = useState([]);
   const [selectedTeams, setSelectedTeams] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -91,7 +93,10 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Assign Users</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            Assign Users
+            {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
+          </DialogTitle>
           <DialogDescription>Select team members and teams to assign to this project.</DialogDescription>
         </DialogHeader>
 
@@ -170,7 +175,7 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={saving}>
+          <Button onClick={handleSave} disabled={saving || !canEdit}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save Assignments
           </Button>

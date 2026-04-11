@@ -11,8 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { AlertCircle } from 'lucide-react';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 export default function AgencyFormDialog({ open, onOpenChange, agency = null, onSuccess = null }) {
+  const { canEdit, canView } = useEntityAccess('agencies');
   const { data: user } = useCurrentUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -116,7 +118,10 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{agency ? 'Edit Agency' : 'Add New Agency'}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {agency ? 'Edit Agency' : 'Add New Agency'}
+            {canView && !canEdit && <span className="text-[10px] font-normal text-muted-foreground border rounded px-1.5 py-0.5">View only</span>}
+          </DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -401,7 +406,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
             </Button>
             <Button
               type="submit"
-              disabled={loading || !formData.name?.trim()}
+              disabled={loading || !formData.name?.trim() || !canEdit}
               className="gap-2"
             >
               {loading ? (

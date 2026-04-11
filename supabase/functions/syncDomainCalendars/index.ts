@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 // JWT generation for service account impersonation
 async function generateServiceAccountJWT(serviceAccountEmail: string, privateKey: string, userEmail: string, scopes: string[]): Promise<string> {
@@ -52,13 +52,24 @@ Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {
-    const admin = getAdminClient();
-    const entities = createEntities(admin);
     const body = await req.json().catch(() => ({}));
 
     if (body?._health_check) {
       return jsonResponse({ _version: 'v1.0', _fn: 'syncDomainCalendars' });
     }
+
+    // Auth: allow service-role (internal/cron calls) or authenticated users
+    const user = await getUserFromReq(req).catch(() => null);
+    if (!user) {
+      const authHeader = req.headers.get('authorization') || '';
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+      if (!serviceKey || !authHeader.includes(serviceKey)) {
+        return errorResponse('Authentication required', 401);
+      }
+    }
+
+    const admin = getAdminClient();
+    const entities = createEntities(admin);
 
     // Load domain delegation config
     const settings = await entities.TonomoIntegrationSettings.list('-created_at', 1).catch(() => []);

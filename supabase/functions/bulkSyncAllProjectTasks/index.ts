@@ -5,10 +5,11 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const user = await getUserFromReq(req);
 
+    // Auth: master_admin only — bulk admin operation
+    const user = await getUserFromReq(req).catch(() => null);
     if (!user || user.role !== 'master_admin') {
-      return errorResponse('Master admin only', 403);
+      return errorResponse('Master admin access required', 403);
     }
 
     const allProjects = await entities.Project.filter({}, null, 2000);

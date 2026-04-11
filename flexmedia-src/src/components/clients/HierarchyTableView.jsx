@@ -22,6 +22,7 @@ import { createPageUrl } from "@/utils";
 import { TagList } from "@/components/clients/ContactTags";
 import { toast } from "sonner";
 import { formatDistanceToNow, differenceInDays } from "date-fns";
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 // ─── Column definitions ───
 const COLUMNS = [
@@ -152,6 +153,7 @@ export default function HierarchyTableView({
   onOpenActivityPanel, selectedAgentIds, toggleSelectAgent, toggleSelectAll,
   agentProjectCounts, agentRevenue
 }) {
+  const { canEdit, canView } = useEntityAccess('agencies');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [sortKey, setSortKey] = useState("name");
@@ -267,6 +269,7 @@ export default function HierarchyTableView({
       <div className="flex items-center justify-between px-1 pb-2">
         <span className="text-xs text-muted-foreground tabular-nums">
           {agents.length} contact{agents.length !== 1 ? "s" : ""}
+          {canView && !canEdit && <span className="ml-2 text-muted-foreground font-normal border rounded px-1.5 py-0.5 text-[10px]">View only</span>}
           {someSelected && (
             <span className="ml-2 text-primary font-medium">
               ({selectedAgentIds.size} selected)
@@ -568,7 +571,7 @@ const ContactRow = React.memo(function ContactRow({
               <DropdownMenuItem onClick={() => navigate(createPageUrl("PersonDetails") + "?id=" + agent.id)}>
                 <ExternalLink className="h-3.5 w-3.5 mr-2" />View Profile
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onEdit("agent", agent)}>
+              <DropdownMenuItem onClick={() => onEdit("agent", agent)} disabled={!canEdit}>
                 <Pencil className="h-3.5 w-3.5 mr-2" />Edit
               </DropdownMenuItem>
               {onOpenActivityPanel && (
@@ -580,7 +583,7 @@ const ContactRow = React.memo(function ContactRow({
                 <FolderOpen className="h-3.5 w-3.5 mr-2" />Projects
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => onDelete("agent", agent)} className="text-destructive">
+              <DropdownMenuItem onClick={() => onDelete("agent", agent)} className="text-destructive" disabled={!canEdit}>
                 <Trash2 className="h-3.5 w-3.5 mr-2" />Delete
               </DropdownMenuItem>
             </DropdownMenuContent>

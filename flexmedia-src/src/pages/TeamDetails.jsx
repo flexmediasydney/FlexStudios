@@ -23,6 +23,7 @@ import EntityEmailTab from '@/components/email/EntityEmailTab';
 import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 // ── Tab definitions (Pipedrive-style, matching PersonDetails) ────────────────
 const TABS = [
@@ -386,6 +387,7 @@ function MemberCard({ member }) {
 }
 
 export default function TeamDetails() {
+  const { canEdit, canView } = useEntityAccess('internal_teams');
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const teamId = urlParams.get('id');
@@ -636,6 +638,8 @@ export default function TeamDetails() {
           </Badge>
         )}
 
+        {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
+
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <Button
             size="sm"
@@ -815,7 +819,8 @@ export default function TeamDetails() {
                 <div className="border-t border-border/50 px-4 py-3">
                   <button
                     onClick={() => setShowDeleteConfirm(true)}
-                    className="text-xs text-destructive hover:text-destructive/80 hover:underline transition-colors flex items-center gap-1.5"
+                    disabled={!canEdit}
+                    className="text-xs text-destructive hover:text-destructive/80 hover:underline transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Trash2 className="h-3 w-3" />
                     Delete Team
