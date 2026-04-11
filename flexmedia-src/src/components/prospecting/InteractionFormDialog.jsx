@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AlertCircle } from 'lucide-react';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 const INTERACTION_TYPES = [
   'Email Sent',
@@ -38,6 +39,7 @@ export default function InteractionFormDialog({
   onSuccess = null
 }) {
   const { data: user } = useCurrentUser();
+  const { canEdit, canView } = useEntityAccess('interaction_logs');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -140,6 +142,9 @@ export default function InteractionFormDialog({
           <DialogTitle>Log Interaction</DialogTitle>
           {prospect?.name && (
             <p className="text-sm text-muted-foreground">Recording interaction with {prospect.name}</p>
+          )}
+          {canView && !canEdit && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mt-1">View only — you do not have edit access</p>
           )}
         </DialogHeader>
 
@@ -254,7 +259,7 @@ export default function InteractionFormDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={loading} className="gap-2">
+            <Button type="submit" disabled={!canEdit || loading} className="gap-2">
               {loading ? (
                 <>
                   <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full"></span>

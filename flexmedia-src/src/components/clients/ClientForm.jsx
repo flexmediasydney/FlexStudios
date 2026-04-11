@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { api } from "@/api/supabaseClient";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { useEntityAccess } from "@/components/auth/useEntityAccess";
 
 function FieldError({ error }) {
   if (!error) return null;
@@ -17,6 +18,7 @@ function FieldError({ error }) {
 }
 
 export default function ClientForm({ client, open, onClose, onSave }) {
+  const { canEdit, canView } = useEntityAccess('agencies');
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState({
     agent_name: "",
@@ -88,6 +90,9 @@ export default function ClientForm({ client, open, onClose, onSave }) {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{client ? "Edit Client" : "New Client"}</DialogTitle>
+          {canView && !canEdit && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mt-1">View only — you do not have edit access</p>
+          )}
         </DialogHeader>
         
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -196,7 +201,7 @@ export default function ClientForm({ client, open, onClose, onSave }) {
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving}>
+            <Button type="submit" disabled={!canEdit || saving}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {client ? "Update Client" : "Add Client"}
             </Button>

@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
+import { useEntityAccess } from "@/components/auth/useEntityAccess";
 
 const INITIAL_STATE = {
   name: "",
@@ -32,6 +33,7 @@ function FieldError({ error }) {
 }
 
 export default function AgentForm({ agent, open, onClose, preselectedAgencyId, preselectedTeamId }) {
+  const { canEdit, canView } = useEntityAccess('agents');
   const [formData, setFormData] = useState(INITIAL_STATE);
   const [errors, setErrors] = useState({});
 
@@ -185,6 +187,9 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
       }}>
         <DialogHeader>
           <DialogTitle>{agent ? "Edit Person" : "Add Person"}</DialogTitle>
+          {canView && !canEdit && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mt-1">View only — you do not have edit access</p>
+          )}
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -360,7 +365,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
             <Button type="button" variant="outline" onClick={handleClose} disabled={saveMutation.isPending}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saveMutation.isPending || !formData.name?.trim() || !formData.agency_id} title="Ctrl+S to save">
+            <Button type="submit" disabled={!canEdit || saveMutation.isPending || !formData.name?.trim() || !formData.agency_id} title="Ctrl+S to save">
               {saveMutation.isPending ? "Saving..." : (agent ? "Save Changes" : "Create Person")}
             </Button>
           </DialogFooter>

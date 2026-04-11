@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import ChatMessage from './ChatMessage';
 import MessageInput from './MessageInput';
+import { useEntityAccess } from '@/components/auth/useEntityAccess';
 
 export default function ChatPanel({
   openChats,
@@ -25,6 +26,7 @@ export default function ChatPanel({
   const [isUploading, setIsUploading] = useState(false);
   const scrollRef = useRef(null);
   const queryClient = useQueryClient();
+  const { canEdit, canView } = useEntityAccess('email_messages');
 
   // Derive chat data unconditionally (before hooks that depend on it)
   const chatKey = activeChat || null;
@@ -220,6 +222,9 @@ export default function ChatPanel({
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground mt-1">{sortedMessages.length} messages</p>
+            {canView && !canEdit && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">View only</p>
+            )}
           </div>
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}>
             <X className="h-4 w-4" />
@@ -301,7 +306,7 @@ export default function ChatPanel({
           });
         }}
         users={users}
-        disabled={createMutation.isPending}
+        disabled={!canEdit || createMutation.isPending}
         uploading={isUploading}
       />
     </div>

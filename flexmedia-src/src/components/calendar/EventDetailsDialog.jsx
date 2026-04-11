@@ -18,6 +18,7 @@ import { ACTIVITY_TYPE_LIST, getActivityType, getEventSource, isEventEditable, c
 import { ExternalLink } from "lucide-react";
 import { createPageUrl } from "@/utils";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { useEntityAccess } from "@/components/auth/useEntityAccess";
 import { createNotificationsForUsers, writeFeedEvent } from "@/components/notifications/createNotification";
 
 const EMPTY_FORM = {
@@ -62,6 +63,7 @@ export default function EventDetailsDialog({
   // available in handleSubmit (was defined after handleSubmit, causing undefined)
   const { data: currentUser } = useCurrentUser();
   const currentUserId = currentUser?.id;
+  const { canEdit: canEditEntity, canView: canViewEntity } = useEntityAccess('calendar_events');
 
   const { data: projects = [] } = useQuery({
     queryKey: ["projects-for-cal"],
@@ -426,8 +428,11 @@ export default function EventDetailsDialog({
               {event ? (editable ? `Edit ${actType.label}` : actType.label) : `New ${actType.label}`}
               {event?.is_done && <Badge className="bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">✓ Done</Badge>}
             </span>
-            {editable && <kbd className="text-[10px] font-normal text-muted-foreground bg-muted px-2 py-1 rounded border">Ctrl+S to save</kbd>}
+            {editable && canEditEntity && <kbd className="text-[10px] font-normal text-muted-foreground bg-muted px-2 py-1 rounded border">Ctrl+S to save</kbd>}
           </DialogTitle>
+          {canViewEntity && !canEditEntity && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">View only — you do not have edit access</p>
+          )}
           <div className="text-xs text-muted-foreground">
             {event && !editable && sourceConfig?.tooltip}
           </div>
@@ -789,7 +794,7 @@ export default function EventDetailsDialog({
           <DialogFooter className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex gap-2">
               {event?.id && editable && (
-                <Button type="button" variant="destructive" size="sm" onClick={handleDelete} disabled={deleting} className="hover:shadow-sm transition-shadow">
+                <Button type="button" variant="destructive" size="sm" onClick={handleDelete} disabled={!canEditEntity || deleting} className="hover:shadow-sm transition-shadow">
                   Delete
                 </Button>
               )}
@@ -833,7 +838,7 @@ export default function EventDetailsDialog({
                 {editable ? "Cancel" : "Close"}
               </Button>
               {editable && (
-                <Button type="submit" disabled={isBusy} className="shadow-sm hover:shadow-md transition-all">
+                <Button type="submit" disabled={!canEditEntity || isBusy} className="shadow-sm hover:shadow-md transition-all">
                   {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                   {event ? "Save Changes" : "Create Activity"}
                 </Button>
