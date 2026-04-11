@@ -301,7 +301,7 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
     userMap.set(u.id, u);
   }
 
-  const allUserIds = new Set([...userHoursMap.keys(), ...userEstimatedMap.keys()]);
+  const allUserIds = new Set([...userHoursAllTime.keys(), ...userEstimatedMap.keys()]);
   const byUser: any[] = [];
   let totalLogged = 0;
   let totalEstimated = 0;
