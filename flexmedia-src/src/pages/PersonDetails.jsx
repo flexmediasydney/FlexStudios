@@ -24,6 +24,7 @@ import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
 import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import { usePriceGate } from '@/components/auth/RoleGate';
 import { toast } from 'sonner';
 
 const STATE_BADGE = {
@@ -277,6 +278,7 @@ function ErrorState({ navigate, title, message }) {
 }
 
 function MiniProjectCard({ project }) {
+  const { visible: showPricing } = usePriceGate();
   return (
     <Link
       to={createPageUrl(`ProjectDetails?id=${project.id}`)}
@@ -299,7 +301,7 @@ function MiniProjectCard({ project }) {
           {project.shoot_date ? fmtDate(project.shoot_date, 'd MMM') : '—'} →{' '}
           {project.delivery_date ? fmtDate(project.delivery_date, 'd MMM') : '—'}
         </span>
-        {project.calculated_price || project.price ? (
+        {showPricing && (project.calculated_price || project.price) ? (
           <span className="font-medium text-foreground">
             ${project.calculated_price || project.price}
           </span>
@@ -395,6 +397,7 @@ const HISTORY_FILTERS = [
 
 export default function PersonDetails() {
   const { canEdit, canView } = useEntityAccess('agents');
+  const { visible: showPricing } = usePriceGate();
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const agentId = urlParams.get('id');
@@ -768,12 +771,12 @@ export default function PersonDetails() {
                   <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
                     {projects.length} projects
                   </span>
-                  {totalRev > 0 && (
+                  {showPricing && totalRev > 0 && (
                     <span className="text-[11px] bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-medium border border-green-100">
                       {fmtMoney(totalRev)} revenue
                     </span>
                   )}
-                  {avgBookingValue && (
+                  {showPricing && avgBookingValue && (
                     <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
                       avg {fmtMoney(avgBookingValue)}
                     </span>
@@ -907,7 +910,7 @@ export default function PersonDetails() {
                         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
                           {proj.status?.replace(/_/g, ' ').toUpperCase()}
                         </span>
-                        {price != null && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
+                        {showPricing && price != null && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
                       </div>
                       {(proj.shoot_date || proj.delivery_date) && (
                         <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">
@@ -964,7 +967,7 @@ export default function PersonDetails() {
         <div className="flex-1 overflow-hidden bg-background flex flex-col">
           {/* Pipedrive-style tab bar */}
           <div className="flex items-center gap-0 border-b px-4 shrink-0">
-            {TABS.map(tab => (
+            {TABS.filter(tab => tab.id !== 'pricing' || showPricing).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => handleTabChange(tab.id)}
@@ -1038,7 +1041,7 @@ export default function PersonDetails() {
             )}
 
             {/* ── Pricing tab ────────────────────────────────────── */}
-            {activeTab === 'pricing' && (
+            {activeTab === 'pricing' && showPricing && (
               <div className="h-full overflow-y-auto p-6">
                 <div className="max-w-4xl">
                   <h2 className="text-lg font-semibold mb-4">Pricing Matrix</h2>

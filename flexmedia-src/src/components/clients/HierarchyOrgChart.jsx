@@ -10,6 +10,7 @@ import { LastContactIndicator, NextFollowUpIndicator } from "@/components/client
 import { TagList } from "@/components/clients/ContactTags";
 import QuickLogInteraction from "@/components/clients/QuickLogInteraction";
 import { cn } from "@/lib/utils";
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 export default function HierarchyOrgChart({
   agencies,
@@ -24,6 +25,7 @@ export default function HierarchyOrgChart({
   onOpenActivityPanel,
 }) {
   const navigate = useNavigate();
+  const { visible: showPricing } = usePriceGate();
   const getTeamsForAgency = (agencyId) => teams.filter(t => t.agency_id === agencyId);
   const getAgentsForAgency = (agencyId) => agents.filter(a => a.current_agency_id === agencyId && !a.current_team_id);
   const getAgentsForTeam = (teamId) => agents.filter(a => a.current_team_id === teamId);
@@ -178,6 +180,7 @@ export default function HierarchyOrgChart({
                               agentProjectCounts={agentProjectCounts}
                               agentRevenue={agentRevenue}
                               onOpenActivityPanel={onOpenActivityPanel}
+                              showPricing={showPricing}
                             />
                           ))}
                         </div>
@@ -208,6 +211,7 @@ export default function HierarchyOrgChart({
                         agentProjectCounts={agentProjectCounts}
                         agentRevenue={agentRevenue}
                         onOpenActivityPanel={onOpenActivityPanel}
+                        showPricing={showPricing}
                       />
                     ))}
                   </div>
@@ -225,7 +229,7 @@ export default function HierarchyOrgChart({
  * Individual agent node in the org chart — enhanced with health score,
  * last contact indicator, follow-up badge, tags, and quick actions.
  */
-function AgentOrgNode({ agent, navigate, onEdit, onDelete, agentProjectCounts, agentRevenue, onOpenActivityPanel }) {
+function AgentOrgNode({ agent, navigate, onEdit, onDelete, agentProjectCounts, agentRevenue, onOpenActivityPanel, showPricing }) {
   return (
     <Card
       className={cn(
@@ -250,7 +254,7 @@ function AgentOrgNode({ agent, navigate, onEdit, onDelete, agentProjectCounts, a
             <ContactHealthScore
               agent={agent}
               projectCount={agentProjectCounts?.[agent.id] || 0}
-              totalRevenue={agentRevenue?.[agent.id] || 0}
+              totalRevenue={showPricing ? (agentRevenue?.[agent.id] || 0) : 0}
               size="sm"
             />
           </div>

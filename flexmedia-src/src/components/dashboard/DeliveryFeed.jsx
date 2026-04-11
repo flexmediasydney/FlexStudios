@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
+import { usePriceGate } from '@/components/auth/RoleGate';
 import { format, formatDistanceToNow, differenceInDays, differenceInHours, isToday, isYesterday } from 'date-fns';
 import FavoriteButton from '@/components/favorites/FavoriteButton';
 import TagManager from '@/components/favorites/TagManager';
@@ -1235,8 +1236,8 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, getFav
                   {requestTurnaroundHrs < 24 ? `${requestTurnaroundHrs}h` : `${Math.round(requestTurnaroundHrs / 24)}d`} request turnaround
                 </span>
               )}
-              {value > 0 && <span className="font-semibold text-foreground">${value.toLocaleString()}</span>}
-              {value > 0 && (
+              {showPricing && value > 0 && <span className="font-semibold text-foreground">${value.toLocaleString()}</span>}
+              {showPricing && value > 0 && (
                 <span className={cn('flex items-center gap-0.5 text-[10px] font-medium', isPaid ? 'text-green-600' : 'text-orange-500')}>
                   <CreditCard className="h-2.5 w-2.5" />{isPaid ? 'Paid' : 'Unpaid'}
                 </span>
@@ -1539,6 +1540,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, getFav
 
 // ─── Main DeliveryFeed ───────────────────────────────────────────────────────
 export default function DeliveryFeed() {
+  const { visible: showPricing } = usePriceGate();
   const [dateFilter, setDateFilter] = useState('30');
   const [agencyFilter, setAgencyFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -1763,8 +1765,10 @@ export default function DeliveryFeed() {
           { label: 'Delivered today', value: stats.today, icon: Zap, accent: 'text-green-600', bg: 'bg-green-50', bar: '#22c55e' },
           { label: 'Total deliveries', value: stats.total, icon: Package, accent: 'text-foreground', bg: 'bg-muted/50', bar: 'hsl(var(--muted-foreground))' },
           { label: 'Total files', value: stats.totalFiles.toLocaleString(), icon: Camera, accent: 'text-blue-600', bg: 'bg-blue-50', bar: '#3b82f6' },
-          { label: 'Revenue', value: fmtRevenue(stats.totalRevenue), icon: DollarSign, accent: 'text-emerald-600', bg: 'bg-emerald-50', bar: '#10b981' },
-          { label: 'Paid', value: `${stats.paidCount}/${stats.total}`, icon: CreditCard, accent: stats.paidCount === stats.total ? 'text-green-600' : 'text-orange-500', bg: stats.paidCount === stats.total ? 'bg-green-50' : 'bg-orange-50', bar: stats.paidCount === stats.total ? '#22c55e' : '#f97316' },
+          ...(showPricing ? [
+            { label: 'Revenue', value: fmtRevenue(stats.totalRevenue), icon: DollarSign, accent: 'text-emerald-600', bg: 'bg-emerald-50', bar: '#10b981' },
+            { label: 'Paid', value: `${stats.paidCount}/${stats.total}`, icon: CreditCard, accent: stats.paidCount === stats.total ? 'text-green-600' : 'text-orange-500', bg: stats.paidCount === stats.total ? 'bg-green-50' : 'bg-orange-50', bar: stats.paidCount === stats.total ? '#22c55e' : '#f97316' },
+          ] : []),
           { label: 'Avg turnaround', value: stats.avgTurnaroundHrs != null ? (stats.avgTurnaroundHrs < 24 ? `${stats.avgTurnaroundHrs}h` : `${Math.round(stats.avgTurnaroundHrs / 24)}d`) : '\u2014', icon: Timer, accent: 'text-blue-600', bg: 'bg-blue-50', bar: '#3b82f6' },
         ].map((s, i) => (
           <Card key={i} className="df-stat-enter df-stat-card p-3 hover:shadow-md transition-shadow duration-200" style={{ '--df-stat-accent': s.bar }}>

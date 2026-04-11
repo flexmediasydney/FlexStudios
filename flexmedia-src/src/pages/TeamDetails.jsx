@@ -24,6 +24,7 @@ import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 // ── Tab definitions (Pipedrive-style, matching PersonDetails) ────────────────
 const TABS = [
@@ -262,6 +263,7 @@ function PipelineBar({ status }) {
 }
 
 function MiniProjectCard({ project }) {
+  const { visible: showPricing } = usePriceGate();
   return (
     <Link
       to={createPageUrl(`ProjectDetails?id=${project.id}`)}
@@ -284,7 +286,7 @@ function MiniProjectCard({ project }) {
           {project.shoot_date ? fmtDate(project.shoot_date, 'd MMM') : '—'} →{' '}
           {project.delivery_date ? fmtDate(project.delivery_date, 'd MMM') : '—'}
         </span>
-        {project.calculated_price || project.price ? (
+        {showPricing && (project.calculated_price || project.price) ? (
           <span className="font-medium text-foreground">
             ${project.calculated_price || project.price}
           </span>
@@ -388,6 +390,7 @@ function MemberCard({ member }) {
 
 export default function TeamDetails() {
   const { canEdit, canView } = useEntityAccess('internal_teams');
+  const { visible: showPricing } = usePriceGate();
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const teamId = urlParams.get('id');
@@ -722,7 +725,7 @@ export default function TeamDetails() {
                       <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
                         {projects.length} projects
                       </span>
-                      {totalRev > 0 && (
+                      {showPricing && totalRev > 0 && (
                         <span className="text-[11px] bg-green-50 text-green-700 px-2 py-0.5 rounded-full font-medium border border-green-100">
                           {fmtMoney(totalRev)} revenue
                         </span>
@@ -783,7 +786,7 @@ export default function TeamDetails() {
                           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
                             {proj.status?.replace(/_/g, ' ').toUpperCase()}
                           </span>
-                          {price != null && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
+                          {showPricing && price != null && <span className="text-[11px] font-bold text-foreground ml-auto">{fmtMoney(price)}</span>}
                         </div>
                         {(proj.shoot_date || proj.delivery_date) && (
                           <div className="flex items-center gap-1 mt-1 text-[10px] text-muted-foreground">

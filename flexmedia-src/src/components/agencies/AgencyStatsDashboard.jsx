@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { usePriceGate } from "@/components/auth/RoleGate";
 import {
   DollarSign, FolderOpen, CheckCircle2, TrendingUp,
   AlertCircle, Calendar, Users, RefreshCw, Clock,
@@ -151,18 +152,22 @@ export default function AgencyStatsDashboard({ projects = [], agents = [], teams
     };
   }, [projects, agents, teams]);
 
+  const { visible: showPricing } = usePriceGate();
+
   return (
     <div className="space-y-4">
       {/* Row 1 – Primary KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard
-          icon={DollarSign}
-          label="Total Revenue"
-          value={fmtMoney(stats.totalRevenue)}
-          sub={`${stats.pricedProjects.length} priced projects`}
-          color="green"
-          highlight
-        />
+        {showPricing && (
+          <StatCard
+            icon={DollarSign}
+            label="Total Revenue"
+            value={fmtMoney(stats.totalRevenue)}
+            sub={`${stats.pricedProjects.length} priced projects`}
+            color="green"
+            highlight
+          />
+        )}
         <StatCard
           icon={FolderOpen}
           label="Open Projects"
@@ -188,20 +193,24 @@ export default function AgencyStatsDashboard({ projects = [], agents = [], teams
 
       {/* Row 2 – Financial & Operational */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard
-          icon={AlertCircle}
-          label="Unpaid Revenue"
-          value={fmtMoney(stats.unpaidRevenue)}
-          sub={stats.unpaidRevenue > 0 ? "Awaiting payment" : "All collected"}
-          color={stats.unpaidRevenue > 0 ? "red" : "teal"}
-        />
-        <StatCard
-          icon={BarChart3}
-          label="Avg Project Value"
-          value={fmtMoney(stats.avgValue)}
-          sub="Per priced project"
-          color="amber"
-        />
+        {showPricing && (
+          <StatCard
+            icon={AlertCircle}
+            label="Unpaid Revenue"
+            value={fmtMoney(stats.unpaidRevenue)}
+            sub={stats.unpaidRevenue > 0 ? "Awaiting payment" : "All collected"}
+            color={stats.unpaidRevenue > 0 ? "red" : "teal"}
+          />
+        )}
+        {showPricing && (
+          <StatCard
+            icon={BarChart3}
+            label="Avg Project Value"
+            value={fmtMoney(stats.avgValue)}
+            sub="Per priced project"
+            color="amber"
+          />
+        )}
         <StatCard
           icon={Calendar}
           label="This Month"
@@ -234,13 +243,15 @@ export default function AgencyStatsDashboard({ projects = [], agents = [], teams
           sub={`${stats.repeatBookers} repeat bookers`}
           color="teal"
         />
-        <StatCard
-          icon={Award}
-          label="Top Project Value"
-          value={stats.topProject ? fmtMoney(stats.topProject.val) : "—"}
-          sub={stats.topProject?.title ? stats.topProject.title.slice(0, 28) : "No projects yet"}
-          color="purple"
-        />
+        {showPricing && (
+          <StatCard
+            icon={Award}
+            label="Top Project Value"
+            value={stats.topProject ? fmtMoney(stats.topProject.val) : "—"}
+            sub={stats.topProject?.title ? stats.topProject.title.slice(0, 28) : "No projects yet"}
+            color="purple"
+          />
+        )}
         <StatCard
           icon={Zap}
           label="Active People"

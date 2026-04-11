@@ -25,6 +25,7 @@ import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { usePrefetchProjectDetails } from "@/components/lib/prefetchRoutes";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
+import { usePermissions } from '@/components/auth/PermissionGuard';
 
 const statusColumns = PROJECT_STAGES.map(s => ({ id: s.value, label: s.label, color: s.color }));
 
@@ -393,6 +394,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks, showPricing })
 /* ═══════════════════════════ Main KanbanBoard ═══════════════════════════ */
 export default function KanbanBoard({ projects = [], products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs }) {
   const { canEdit, canView } = useEntityAccess('projects');
+  const { canEditProject } = usePermissions();
   const { visible: showPricing, mask: maskPrice } = usePriceGate();
   const navigate = useNavigate();
   const { enabledFields } = useCardFields();
@@ -584,8 +586,9 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
   const onDragEnd = (result) => {
     setDraggingId(null);
     if (!result.destination) return;
-    // Entity access guard: block drag if user cannot edit projects
-    if (!canEdit) { toast.error('You do not have edit access to projects.'); return; }
+    // Entity access guard: block drag if user cannot edit projects (entity matrix)
+    // Role guard: block drag if user is below manager level (canEditProject = isManagerOrAbove)
+    if (!canEdit || !canEditProject) { toast.error('Only managers and above can change project status.'); return; }
     // Race condition fix: block drag while a status update is already in flight
     if (updateStatusMutation.isPending) return;
     const projectId = result.draggableId;

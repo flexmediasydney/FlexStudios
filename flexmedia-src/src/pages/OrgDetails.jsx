@@ -21,6 +21,7 @@ import ContactFiles from "@/components/contacts/ContactFiles";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 const STATE_BADGE = {
   Active:           "bg-green-100 text-green-800 border-green-200",
@@ -59,6 +60,7 @@ function ErrorState({ navigate, title, message }) {
 
 export default function OrgDetails() {
   const { canEdit, canView } = useEntityAccess('agencies');
+  const { visible: showPricing } = usePriceGate();
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const agencyId = urlParams.get("id");
@@ -274,7 +276,7 @@ export default function OrgDetails() {
             >
               <span className="font-bold text-foreground">{projects.length}</span> projects
             </button>
-            {projects.length > 0 && (() => {
+            {showPricing && projects.length > 0 && (() => {
               // Only count Won + Paid revenue (not open/lost)
               const wonProjects = projects.filter(p => p.outcome === 'won');
               const rev = wonProjects.reduce((s, p) => s + (p.calculated_price || p.price || 0), 0);
@@ -345,12 +347,12 @@ export default function OrgDetails() {
               agents={agents}
               teams={teams}
               projects={projects}
-              totalOrgRev={totalOrgRev}
-              avgOrgBookingValue={avgOrgBookingValue}
+              totalOrgRev={showPricing ? totalOrgRev : null}
+              avgOrgBookingValue={showPricing ? avgOrgBookingValue : null}
               activeAgents={activeAgents}
               dormantAgents={dormantAgents}
               atRiskAgents={atRiskAgents}
-              revenueByAgent={revenueByAgent}
+              revenueByAgent={showPricing ? revenueByAgent : []}
             />
             <div className="border-t pt-2">
               <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Analytics</div>
@@ -371,7 +373,7 @@ export default function OrgDetails() {
         <div ref={tabsRef} className="flex-1 overflow-hidden bg-background flex flex-col">
           {/* Pipedrive-style tab bar */}
           <div className="flex items-center gap-0 border-b px-4 shrink-0">
-            {TABS.map(tab => (
+            {TABS.filter(tab => tab.id !== 'pricing' || showPricing).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => handleTabChange(tab.id)}
@@ -448,7 +450,7 @@ export default function OrgDetails() {
             )}
 
             {/* ── Pricing tab ────────────────────────────────────── */}
-            {activeTab === 'pricing' && (
+            {activeTab === 'pricing' && showPricing && (
               <div className="h-full overflow-y-auto p-4">
                 {!pricingRequested || pricingLoading ? (
                   <div className="flex items-center justify-center py-12">

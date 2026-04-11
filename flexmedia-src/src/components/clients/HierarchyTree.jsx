@@ -11,6 +11,7 @@ import ContactHealthScore from "@/components/clients/ContactHealthScore";
 import { LastContactIndicator, NextFollowUpIndicator } from "@/components/clients/ContactIndicators";
 import { TagList } from "@/components/clients/ContactTags";
 import QuickLogInteraction from "@/components/clients/QuickLogInteraction";
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 export default function HierarchyTree({
   agencies,
@@ -25,6 +26,7 @@ export default function HierarchyTree({
   onOpenActivityPanel,
 }) {
   const navigate = useNavigate();
+  const { visible: showPricing } = usePriceGate();
   const [expandedAgencies, setExpandedAgencies] = useState(new Set());
   const [expandedTeams, setExpandedTeams] = useState(new Set());
 
@@ -185,6 +187,7 @@ export default function HierarchyTree({
                               agentProjectCounts={agentProjectCounts}
                               agentRevenue={agentRevenue}
                               onOpenActivityPanel={onOpenActivityPanel}
+                              showPricing={showPricing}
                             />
                           ))}
                         </div>
@@ -207,6 +210,7 @@ export default function HierarchyTree({
                         agentProjectCounts={agentProjectCounts}
                         agentRevenue={agentRevenue}
                         onOpenActivityPanel={onOpenActivityPanel}
+                        showPricing={showPricing}
                       />
                     ))}
                   </div>
@@ -223,7 +227,7 @@ export default function HierarchyTree({
 /**
  * Enhanced agent row in the tree view with health score, indicators, tags, and quick actions.
  */
-function AgentTreeRow({ agent, navigate, onEdit, onDelete, agentProjectCounts, agentRevenue, onOpenActivityPanel }) {
+function AgentTreeRow({ agent, navigate, onEdit, onDelete, agentProjectCounts, agentRevenue, onOpenActivityPanel, showPricing }) {
   return (
     <div
       className={cn(
@@ -275,7 +279,7 @@ function AgentTreeRow({ agent, navigate, onEdit, onDelete, agentProjectCounts, a
         <ContactHealthScore
           agent={agent}
           projectCount={agentProjectCounts?.[agent.id] || 0}
-          totalRevenue={agentRevenue?.[agent.id] || 0}
+          totalRevenue={showPricing ? (agentRevenue?.[agent.id] || 0) : 0}
           size="sm"
         />
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">

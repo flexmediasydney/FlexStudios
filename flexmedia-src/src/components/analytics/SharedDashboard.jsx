@@ -8,6 +8,7 @@ import Org2MetricsCard, { calculateMetrics } from '@/components/org2/Org2Metrics
 import { createPageUrl } from '@/utils';
 import { differenceInDays, parseISO, isValid, startOfMonth, endOfMonth, format } from 'date-fns';
 import { fixTimestamp } from '@/components/utils/dateUtils';
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 const fmtCurrency = (n) => {
@@ -119,6 +120,7 @@ export default function SharedDashboard({
   entityName = null,
   additionalStats = [], // For custom stat cards (e.g., team members, agency affiliation)
 }) {
+  const { visible: showPricing } = usePriceGate();
   const metrics = calculateMetrics(projects, projectTasks, revisions, taskTimeLogs);
 
   const now = new Date();
@@ -187,12 +189,12 @@ export default function SharedDashboard({
 
   const baseStats = [
     { label: 'Projects', value: projects.length, icon: Briefcase, color: 'bg-amber-100 text-amber-700' },
-    {
+    ...(showPricing ? [{
       label: 'Revenue',
       value: fmtCurrency(drill.wonProjects.reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0)),
       icon: DollarSign,
       color: 'bg-green-100 text-green-700',
-    },
+    }] : []),
   ];
 
   const stats = [...baseStats, ...additionalStats];
@@ -221,7 +223,7 @@ export default function SharedDashboard({
                     renderItem={p => (
                       <Row key={p.id} href={pUrl(p)} label={p.title} sub={p.property_address || ''}
                         right={
-                          (p.calculated_price || p.price) > 0
+                          showPricing && (p.calculated_price || p.price) > 0
                             ? <span className="text-xs font-semibold">{fmtCurrency(p.calculated_price || p.price)}</span>
                             : null
                         }
@@ -236,6 +238,7 @@ export default function SharedDashboard({
       }
 
       case 'Revenue': {
+        if (!showPricing) return null;
         const wonRev = drill.wonProjects.reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0);
         const paidWonRev = drill.wonProjects.filter(p => p.payment_status === 'paid').reduce((s, p) => s + (Number(p.calculated_price) || Number(p.price) || 0), 0);
         return (
@@ -341,7 +344,7 @@ export default function SharedDashboard({
       )}
 
       {/* Payment Status */}
-      {projects.length > 0 && (
+      {showPricing && projects.length > 0 && (
         <Card>
           <CardHeader className="pb-2 pt-3 px-4">
             <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Payment Status</CardTitle>
@@ -385,7 +388,7 @@ export default function SharedDashboard({
         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Performance Metrics</p>
 
         {/* Paid vs Unpaid */}
-        <Org2MetricsCard
+        {showPricing && <Org2MetricsCard
           label="Paid vs Unpaid"
           icon={DollarSign}
           color="bg-emerald-100 text-emerald-700"
@@ -414,7 +417,7 @@ export default function SharedDashboard({
               />
             </div>
           )}
-        />
+        />}
 
         {/* This Month */}
         <Org2MetricsCard
@@ -422,7 +425,7 @@ export default function SharedDashboard({
           icon={TrendingUp}
           color="bg-blue-100 text-blue-700"
           mainValue={metrics.thisMonthCount}
-          subValue={`${fmtCurrency(metrics.thisMonthRevenue)} revenue`}
+          subValue={showPricing ? `${fmtCurrency(metrics.thisMonthRevenue)} revenue` : `${metrics.thisMonthCount} project${metrics.thisMonthCount !== 1 ? 's' : ''}`}
           detailsRender={() => (
             <div>
               <DrillHeader title="This Month's Projects" count={drill.thisMonth.length} />
@@ -434,7 +437,7 @@ export default function SharedDashboard({
                     right={
                       <>
                         <Chip label={p.outcome || 'open'} cls={OUTCOME_CLS[p.outcome || 'open']} />
-                        {(p.calculated_price || p.price) > 0 && (
+                        {showPricing && (p.calculated_price || p.price) > 0 && (
                           <span className="text-xs font-semibold">{fmtCurrency(p.calculated_price || p.price)}</span>
                         )}
                       </>
@@ -529,7 +532,7 @@ export default function SharedDashboard({
                     <Row key={p.id} href={pUrl(p)} label={p.title}
                       sub={p.delivery_date ? `Delivered ${fmtDate(p.delivery_date)}` : ''}
                       right={
-                        (p.calculated_price || p.price) > 0
+                        showPricing && (p.calculated_price || p.price) > 0
                           ? <span className="text-xs font-semibold">{fmtCurrency(p.calculated_price || p.price)}</span>
                           : null
                       }

@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { toSydney, parseTS, relativeTime, ACTION_COLORS } from "@/components/tonomo/tonomoUtils";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { validateProjectReadiness } from "@/components/lib/validateProjectReadiness";
+import { usePriceGate } from "@/components/auth/RoleGate";
 
 export default function TonomoTab({ project }) {
   const [subTab, setSubTab] = useState(project.status === 'pending_review' ? 'review' : 'brief');
@@ -22,6 +23,7 @@ export default function TonomoTab({ project }) {
   const [approvalErrors, setApprovalErrors] = useState([]);
   const [approvalWarnings, setApprovalWarnings] = useState([]);
   const [isApproving, setIsApproving] = useState(false);
+  const { visible: showPricing } = usePriceGate();
 
   // Sync subTab when project.status changes from outside (e.g. approved via Dashboard).
   // If the Review Panel tab is active but project is no longer pending_review,
@@ -239,7 +241,9 @@ export default function TonomoTab({ project }) {
                     try { return JSON.parse(project.tonomo_raw_services || '[]').join(', ') || "—"; } catch { return "—"; }
                   })()} />
                   <DetailRow label="Video Project" value={project.tonomo_video_project === true ? "Yes" : project.tonomo_video_project === false ? "No" : "—"} />
-                  <DetailRow label="Invoice Amount" value={project.tonomo_invoice_amount ? `$${project.tonomo_invoice_amount}` : "—"} />
+                  {showPricing && (
+                    <DetailRow label="Invoice Amount" value={project.tonomo_invoice_amount ? `$${project.tonomo_invoice_amount}` : "—"} />
+                  )}
                   <DetailRow label="Payment Status" value={project.tonomo_payment_status || "—"} />
                   <DetailRow label="Booking Flow" value={project.tonomo_booking_flow || "—"} />
                   {project.is_first_order && (
@@ -412,6 +416,7 @@ function ReviewBanner({ reviewType }) {
 }
 
 function TonomoOrderBrief({ project }) {
+  const { visible: showPricing } = usePriceGate();
   const services = useMemo(() => {
     try { return JSON.parse(project.tonomo_raw_services || '[]'); } catch { return []; }
   }, [project.tonomo_raw_services]);
@@ -459,7 +464,7 @@ function TonomoOrderBrief({ project }) {
             <p key={i}>• {s}</p>
           ))}
           <p className="font-medium mt-2">
-            Total: {totalHrs} hrs on-site{project.tonomo_invoice_amount ? ` · Invoice: $${project.tonomo_invoice_amount}` : ""}
+            Total: {totalHrs} hrs on-site{showPricing && project.tonomo_invoice_amount ? ` · Invoice: $${project.tonomo_invoice_amount}` : ""}
           </p>
           {project.tonomo_booking_flow && <p className="text-muted-foreground">Booking flow: {project.tonomo_booking_flow}</p>}
         </div>
@@ -505,7 +510,7 @@ function TonomoOrderBrief({ project }) {
         <div>
           <h3 className="font-semibold mb-2">Order state</h3>
           <p>Status: {project.tonomo_order_status || "—"} · Payment: {project.tonomo_payment_status || "—"}</p>
-          {project.tonomo_invoice_link && (
+          {showPricing && project.tonomo_invoice_link && (
             <p>
               <a href={project.tonomo_invoice_link} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1">
                 View invoice <ExternalLink className="h-3 w-3" />

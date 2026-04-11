@@ -15,6 +15,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { TagList } from "@/components/clients/ContactTags";
 import QuickLogInteraction from "@/components/clients/QuickLogInteraction";
+import { usePriceGate } from "@/components/auth/RoleGate";
 
 const INTERACTION_ICONS = {
   "Phone Call": Phone,
@@ -111,6 +112,8 @@ export default function ContactActivityPanel({ agent, onClose }) {
     };
   }, [agent]);
 
+  const { visible: showPricing } = usePriceGate();
+
   const isLoading = interactionsLoading || projectsLoading;
   const initials = (agent?.name || "?").split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
 
@@ -200,12 +203,14 @@ export default function ContactActivityPanel({ agent, onClose }) {
               <p className="text-lg font-bold tabular-nums">{projects.length}</p>
               <p className="text-[10px] text-muted-foreground">Projects</p>
             </div>
-            <div className="text-center">
-              <p className="text-lg font-bold tabular-nums">
-                {totalRevenue >= 1000 ? `$${(totalRevenue / 1000).toFixed(1)}k` : `$${totalRevenue}`}
-              </p>
-              <p className="text-[10px] text-muted-foreground">Revenue</p>
-            </div>
+            {showPricing && (
+              <div className="text-center">
+                <p className="text-lg font-bold tabular-nums">
+                  {totalRevenue >= 1000 ? `$${(totalRevenue / 1000).toFixed(1)}k` : `$${totalRevenue}`}
+                </p>
+                <p className="text-[10px] text-muted-foreground">Revenue</p>
+              </div>
+            )}
             <div className="text-center">
               <p className="text-lg font-bold tabular-nums">{interactions.length}</p>
               <p className="text-[10px] text-muted-foreground">Activities</p>
@@ -299,6 +304,7 @@ export default function ContactActivityPanel({ agent, onClose }) {
 }
 
 function TimelineEntry({ item }) {
+  const { visible: showPricing } = usePriceGate();
   if (item.type === "interaction") {
     const i = item.data;
     const Icon = INTERACTION_ICONS[i.interaction_type] || MessageSquare;
@@ -339,7 +345,7 @@ function TimelineEntry({ item }) {
           <p className="text-[11px] font-medium truncate">{p.title || "Untitled project"}</p>
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
             <span>{p.status?.replace(/_/g, " ")}</span>
-            {p.price != null && <span>${p.price.toLocaleString()}</span>}
+            {showPricing && p.price != null && <span>${p.price.toLocaleString()}</span>}
             <span>{p.created_date ? formatDistanceToNow(new Date(p.created_date), { addSuffix: true }) : ""}</span>
           </div>
         </div>

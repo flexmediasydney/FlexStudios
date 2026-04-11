@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DollarSign, Plus, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculatePricingDelta } from "@/components/utils/pricingImpactCalculator";
+import { usePriceGate } from "@/components/auth/RoleGate";
 
 /**
  * Editable pricing impact card for RevisionCard.
@@ -20,12 +21,15 @@ export default function PricingImpactCard({
   allProducts = [],
   pricingTier = 'standard'
 }) {
+  const { visible: showPricing } = usePriceGate();
   const [expanded, setExpanded] = useState(false);
-  
+
   // Calculate delta on-the-fly from current pricing impact
   const estimatedDelta = useMemo(() => {
     return calculatePricingDelta(pricingImpact, allProducts, pricingTier);
   }, [pricingImpact, allProducts, pricingTier]);
+
+  if (!showPricing) return null;
 
   const update = (patch) => onUpdate({ ...pricingImpact, ...patch });
 

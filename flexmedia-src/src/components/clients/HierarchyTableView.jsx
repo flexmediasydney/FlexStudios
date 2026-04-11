@@ -23,6 +23,7 @@ import { TagList } from "@/components/clients/ContactTags";
 import { toast } from "sonner";
 import { formatDistanceToNow, differenceInDays } from "date-fns";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 // ─── Column definitions ───
 const COLUMNS = [
@@ -154,6 +155,7 @@ export default function HierarchyTableView({
   agentProjectCounts, agentRevenue
 }) {
   const { canEdit, canView } = useEntityAccess('agencies');
+  const { visible: showPricing } = usePriceGate();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [sortKey, setSortKey] = useState("name");
@@ -342,6 +344,7 @@ export default function HierarchyTableView({
                     onOpenActivityPanel={onOpenActivityPanel}
                     onInlineSave={handleInlineSave}
                     navigate={navigate}
+                    showPricing={showPricing}
                   />
                 ))
               )}
@@ -357,7 +360,8 @@ export default function HierarchyTableView({
 const ContactRow = React.memo(function ContactRow({
   agent, activeCols, agencyMap, teamMap, stats,
   isSelected, toggleSelect, showCheckbox,
-  onEdit, onDelete, onOpenActivityPanel, onInlineSave, navigate
+  onEdit, onDelete, onOpenActivityPanel, onInlineSave, navigate,
+  showPricing
 }) {
   const [hovered, setHovered] = useState(false);
   const activityInfo = lastActivityInfo(agent);
@@ -452,7 +456,7 @@ const ContactRow = React.memo(function ContactRow({
       case "deal_value":
         return (
           <span className="text-xs tabular-nums font-medium">
-            {fmtRevenue(stats?.revenue)}
+            {showPricing ? fmtRevenue(stats?.revenue) : <span className="text-muted-foreground">&mdash;</span>}
             {stats?.projects > 0 && (
               <span className="text-muted-foreground font-normal ml-1">
                 ({stats.projects})
