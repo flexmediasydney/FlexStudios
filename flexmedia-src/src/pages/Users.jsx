@@ -23,9 +23,11 @@ import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 
 const roleConfig = {
-  master_admin: { label: "Master Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
-  admin: { label: "Admin", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
-  employee: { label: "Employee", color: "bg-blue-100 text-blue-700 border-blue-200", icon: UserCheck },
+  master_admin: { label: "Owner", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
+  admin: { label: "Administrator", color: "bg-orange-100 text-orange-700 border-orange-200", icon: Shield },
+  manager: { label: "Manager", color: "bg-purple-100 text-purple-700 border-purple-200", icon: UserCheck },
+  employee: { label: "Staff", color: "bg-blue-100 text-blue-700 border-blue-200", icon: UserCheck },
+  contractor: { label: "Contractor", color: "bg-gray-100 text-gray-700 border-gray-200", icon: UserX },
 };
 
 const providerLabel = { email: "Email/Password", google: "Google", phone: "Phone OTP" };
@@ -468,12 +470,15 @@ export default function UsersManagement() {
                 <Input type="tel" placeholder="+61 412 345 678" value={editingUser.phone || ""} onChange={(e) => setEditingUser(p => ({ ...p, phone: e.target.value }))} className="h-11" />
               </div>
               <div className="space-y-2">
-                <Label>Role</Label>
+                <Label>Security Level</Label>
                 <Select value={editingUser.role} onValueChange={(v) => setEditingUser(p => ({ ...p, role: v }))}>
                   <SelectTrigger className="h-11"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="master_admin">Admin</SelectItem>
-                    <SelectItem value="employee">Employee</SelectItem>
+                    <SelectItem value="master_admin">Owner</SelectItem>
+                    <SelectItem value="admin">Administrator</SelectItem>
+                    <SelectItem value="manager">Manager</SelectItem>
+                    <SelectItem value="employee">Staff</SelectItem>
+                    <SelectItem value="contractor">Contractor</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

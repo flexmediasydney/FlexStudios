@@ -6,89 +6,91 @@
  * If a page is NOT listed here, defaults to master_admin only.
  */
 
-const ALL_ROLES = ['master_admin', 'employee'];
-const ADMIN_EMPLOYEE = ['master_admin', 'employee'];
-const ADMIN_ONLY = ['master_admin'];
+const ALL_LEVELS = ['master_admin', 'admin', 'manager', 'employee', 'contractor'];
+const EMPLOYEE_AND_ABOVE = ['master_admin', 'admin', 'manager', 'employee'];
+const MANAGER_AND_ABOVE = ['master_admin', 'admin', 'manager'];
+const ADMIN_AND_ABOVE = ['master_admin', 'admin'];
+const OWNER_ONLY = ['master_admin'];
 
 export const ROUTE_ACCESS = {
-  // ── WORKSPACE ─────────────────────────────────────────────
-  Dashboard: ALL_ROLES,
-  Calendar: ALL_ROLES,
-  Inbox: ALL_ROLES,
-  NotificationsPage: ALL_ROLES,
-  UserSettings: ALL_ROLES,
+  // ── WORKSPACE (all levels) ────────────────────────────────
+  Dashboard: ALL_LEVELS,
+  Calendar: ALL_LEVELS,
+  Inbox: ALL_LEVELS,
+  NotificationsPage: ALL_LEVELS,
+  UserSettings: ALL_LEVELS,
 
-  // ── PROJECTS ──────────────────────────────────────────────────
-  Projects: ALL_ROLES,
-  ProjectDetails: ALL_ROLES,
+  // ── PROJECTS (all levels) ─────────────────────────────────
+  Projects: ALL_LEVELS,
+  ProjectDetails: ALL_LEVELS,
 
-  // ── CONTACTS & CRM ────────────────────────────────────────
-  ClientAgents: ADMIN_EMPLOYEE,
-  Organisations: ADMIN_EMPLOYEE,
-  Teams: ADMIN_EMPLOYEE,
-  People: ADMIN_EMPLOYEE,
-  PersonDetails: ADMIN_EMPLOYEE,
-  OrgDetails: ADMIN_EMPLOYEE,
-  TeamDetails: ADMIN_EMPLOYEE,
-  Prospecting: ADMIN_EMPLOYEE,
-  ProspectDetails: ADMIN_EMPLOYEE,
-  ClientMonitor: ADMIN_EMPLOYEE,
+  // ── CONTACTS & CRM (manager+) ────────────────────────────
+  ClientAgents: MANAGER_AND_ABOVE,
+  Organisations: MANAGER_AND_ABOVE,
+  People: EMPLOYEE_AND_ABOVE,
+  PersonDetails: EMPLOYEE_AND_ABOVE,
+  OrgDetails: EMPLOYEE_AND_ABOVE,
+  TeamDetails: EMPLOYEE_AND_ABOVE,
+  Prospecting: MANAGER_AND_ABOVE,
+  ProspectDetails: MANAGER_AND_ABOVE,
+  ClientMonitor: MANAGER_AND_ABOVE,
 
-  // ── SOCIAL MEDIA ──────────────────────────────────────────
-  SocialMedia: ALL_ROLES,
+  // ── SOCIAL MEDIA (all levels) ─────────────────────────────
+  SocialMedia: ALL_LEVELS,
 
-  // ── FIELD MODE ────────────────────────────────────────────
-  FieldMode: ALL_ROLES,
+  // ── FIELD MODE (all levels) ───────────────────────────────
+  FieldMode: ALL_LEVELS,
 
-  // ── ANALYTICS ─────────────────────────────────────────────
-  Reports: ADMIN_EMPLOYEE,
+  // ── ANALYTICS (manager+) ─────────────────────────────────
+  Reports: MANAGER_AND_ABOVE,
 
-  // ── PRODUCTS & PRICING ────────────────────────────────────
-  Products: ADMIN_EMPLOYEE,
-  Packages: ADMIN_EMPLOYEE,
-  PriceMatrix: ADMIN_EMPLOYEE,
-  SettingsProductsPackages: ADMIN_EMPLOYEE,
-  SettingsPriceMatrix: ADMIN_EMPLOYEE,
+  // ── PRODUCTS & PRICING (manager+) ────────────────────────
+  Products: MANAGER_AND_ABOVE,
+  Packages: MANAGER_AND_ABOVE,
+  PriceMatrix: MANAGER_AND_ABOVE,
+  SettingsProductsPackages: MANAGER_AND_ABOVE,
+  SettingsPriceMatrix: MANAGER_AND_ABOVE,
 
-  // ── TONOMO / BOOKINGS ─────────────────────────────────────
-  TonomoIntegrationDashboard: ADMIN_EMPLOYEE,
-  TonomoPulse: ADMIN_EMPLOYEE,
+  // ── TONOMO / BOOKINGS (manager+) ─────────────────────────
+  TonomoIntegrationDashboard: MANAGER_AND_ABOVE,
+  TonomoPulse: MANAGER_AND_ABOVE,
 
-  // ── FIELD MODE (mobile, all staff) ────────────────────────
-  FieldMode: ADMIN_EMPLOYEE,
+  // ── PUBLIC / GALLERY (all levels) ─────────────────────────
+  ClientGallery: ALL_LEVELS,
+  MarketingWithFlex: ALL_LEVELS,
+  SoldWithFlex: ALL_LEVELS,
+  BountyBoard: ALL_LEVELS,
+  InternalRoadmap: ALL_LEVELS,
+  Favorites: ALL_LEVELS,
 
-  // ── PUBLIC / GALLERY ──────────────────────────────────────
-  ClientGallery: ALL_ROLES,
-  MarketingWithFlex: ALL_ROLES,
-  SoldWithFlex: ALL_ROLES,
-  BountyBoard: ALL_ROLES,
-  InternalRoadmap: ALL_ROLES,
-
-  // ── SETTINGS ──────────────────────────────────────────────
-  Settings: ADMIN_EMPLOYEE,
-  SettingsOrganisation: ADMIN_EMPLOYEE,
-  SettingsAutomationRules: ADMIN_EMPLOYEE,
-  SettingsRevisionTemplates: ADMIN_EMPLOYEE,
-  SettingsIntegrations: ADMIN_EMPLOYEE,
-  EmailSyncSettings: ADMIN_EMPLOYEE,
-  SettingsTonomoIntegration: ADMIN_EMPLOYEE,
-  SettingsTonomoMappings: ADMIN_EMPLOYEE,
-  SettingsNotifications: ADMIN_EMPLOYEE,
-  SettingsClients: ADMIN_EMPLOYEE,
-  SettingsProjectRulebook: ADMIN_EMPLOYEE,
-  SettingsTonomoWebhooks: ADMIN_EMPLOYEE,
-  SettingsAI: ADMIN_EMPLOYEE,
-  BusinessRequirementsDocument: ADMIN_EMPLOYEE,
-  HierarchyVisualization: ADMIN_EMPLOYEE,
+  // ── SETTINGS (admin+) ────────────────────────────────────
+  Settings: ADMIN_AND_ABOVE,
+  SettingsOrganisation: ADMIN_AND_ABOVE,
+  SettingsAutomationRules: ADMIN_AND_ABOVE,
+  SettingsRevisionTemplates: ADMIN_AND_ABOVE,
+  SettingsIntegrations: ADMIN_AND_ABOVE,
+  EmailSyncSettings: ADMIN_AND_ABOVE,
+  SettingsTonomoIntegration: ADMIN_AND_ABOVE,
+  SettingsTonomoMappings: ADMIN_AND_ABOVE,
+  SettingsNotifications: ADMIN_AND_ABOVE,
+  SettingsClients: ADMIN_AND_ABOVE,
+  SettingsProjectRulebook: ADMIN_AND_ABOVE,
+  SettingsTonomoWebhooks: ADMIN_AND_ABOVE,
+  SettingsAI: ADMIN_AND_ABOVE,
+  BusinessRequirementsDocument: ADMIN_AND_ABOVE,
+  HierarchyVisualization: ADMIN_AND_ABOVE,
 
   // SettingsStaffDefaults removed — now a subtab in SettingsTeamsUsers
 
-  // ── ADMIN ONLY ────────────────────────────────────────────
-  SettingsTeamsUsers: ADMIN_ONLY,
-  Users: ADMIN_ONLY,
-  NotificationsPulse: ADMIN_ONLY,
-  AdminTodoList: ADMIN_ONLY,
-  AIAuditLog: ADMIN_ONLY,
+  // ── TEAMS (admin+) ───────────────────────────────────────
+  Teams: ADMIN_AND_ABOVE,
+  SettingsTeamsUsers: ADMIN_AND_ABOVE,
+
+  // ── OWNER ONLY (master_admin) ─────────────────────────────
+  Users: OWNER_ONLY,
+  NotificationsPulse: OWNER_ONLY,
+  AdminTodoList: OWNER_ONLY,
+  AIAuditLog: OWNER_ONLY,
 };
 
 /**

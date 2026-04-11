@@ -1,11 +1,14 @@
 import React, { useState } from "react";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import { usePermissions } from '@/components/auth/PermissionGuard';
 import AccessBadge from '@/components/auth/AccessBadge';
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
-import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, GitBranch, History, Camera, BookOpen, LayoutList, Grid3x3, Trello } from "lucide-react";
+import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, GitBranch, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, Lock, Unlock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +48,8 @@ function getChangedFields(oldData, newData) {
 
 export default function ProductsManagement() {
   const { canEdit, canView } = useEntityAccess('products');
+  const { user } = usePermissions();
+  const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(null);
@@ -171,6 +176,22 @@ export default function ProductsManagement() {
       setDeletingProduct(null);
     },
     onError: (e) => toast.error(e.message || "Failed to delete")
+  });
+
+  const toggleLockMutation = useMutation({
+    mutationFn: async (product) => {
+      const now = new Date().toISOString();
+      return api.entities.Product.update(product.id, {
+        is_locked: !product.is_locked,
+        locked_at: !product.is_locked ? now : null,
+        locked_by_name: !product.is_locked ? user?.full_name : null,
+      });
+    },
+    onSuccess: () => {
+      refetchEntityList("Product");
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Lock status updated");
+    },
   });
 
   const handleOpen = (product = null) => { setEditingProduct(product); setShowDialog(true); };
@@ -312,14 +333,29 @@ export default function ProductsManagement() {
                     </TableRow>
                   ) : filteredProducts.flatMap((product) => {
                     const isExpanded = expandedProducts[product.id];
+                    const isLocked = product.is_locked;
                     const rows = [
-                        <TableRow key={`${product.id}-main`} className="hover:bg-muted/50">
+                        <TableRow key={`${product.id}-main`} className={cn("hover:bg-muted/50", isLocked && "bg-red-50/50 dark:bg-red-950/20")}>
                              <TableCell>
                                <Button variant="ghost" size="sm" onClick={() => toggleExpanded(product.id)} className="h-6 w-6 p-0">
                                  {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                                </Button>
                              </TableCell>
-                          <TableCell className="font-medium">{product.name}</TableCell>
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-2">
+                              {isLocked ? (
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild><Lock className="h-4 w-4 text-red-500 shrink-0" /></TooltipTrigger>
+                                    <TooltipContent>Locked by {product.locked_by_name} &middot; {product.locked_at ? fmtTimestampCustom(product.locked_at, { day: 'numeric', month: 'short', year: 'numeric' }) : ''}</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              ) : (
+                                <Unlock className="h-4 w-4 text-muted-foreground/40 shrink-0" />
+                              )}
+                              {product.name}
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <Badge variant={product.product_type === "core" ? "default" : "secondary"}>
                               {product.product_type === "core" ? "Core" : "Add-on"}
@@ -377,10 +413,21 @@ export default function ProductsManagement() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-1 justify-end">
-                              <Button variant="ghost" size="sm" onClick={() => handleOpen(product)} disabled={!canEdit}>
+                              {user?.role === 'master_admin' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => toggleLockMutation.mutate(product)}
+                                  title={isLocked ? `Locked by ${product.locked_by_name}` : "Lock this product"}
+                                  className="h-8 w-8 p-0"
+                                >
+                                  {isLocked ? <Lock className="h-4 w-4 text-red-500" /> : <Unlock className="h-4 w-4 text-muted-foreground" />}
+                                </Button>
+                              )}
+                              <Button variant="ghost" size="sm" onClick={() => handleOpen(product)} disabled={!canEdit || isLocked}>
                                 <Edit className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="sm" onClick={() => setDeletingProduct(product)} className="text-destructive hover:text-destructive" disabled={!canEdit}>
+                              <Button variant="ghost" size="sm" onClick={() => setDeletingProduct(product)} className="text-destructive hover:text-destructive" disabled={!canEdit || isLocked}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>

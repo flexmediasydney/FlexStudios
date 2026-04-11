@@ -26,9 +26,21 @@ export function usePermissions() {
 
   // A missing role means no access.
   const role = user?.role || null;
-  const isMasterAdmin = role === 'master_admin';
-  const isAdminOrEmployee = role === 'master_admin' || role === 'employee';
+
+  // ── 5-tier hierarchy booleans ─────────────────────────────
+  const isOwner = role === 'master_admin';
+  const isAdmin = role === 'admin';
+  const isManager = role === 'manager';
   const isEmployee = role === 'employee';
+  const isContractor = role === 'contractor';
+
+  const isAdminOrAbove = isOwner || isAdmin;
+  const isManagerOrAbove = isAdminOrAbove || isManager;
+  const isEmployeeOrAbove = isManagerOrAbove || isEmployee;
+
+  // Legacy aliases kept for backward-compat with existing code
+  const isMasterAdmin = isOwner;
+  const isAdminOrEmployee = isEmployeeOrAbove;
 
   const isAssignedToProject = (project) => {
     if (!project || !user?.id) return false;
@@ -48,59 +60,69 @@ export function usePermissions() {
   return {
     user,
     role,
+
+    // Tier booleans
+    isOwner,
+    isAdmin,
+    isManager,
+    isEmployee,
+    isContractor,
+    isAdminOrAbove,
+    isManagerOrAbove,
+    isEmployeeOrAbove,
+
+    // Legacy aliases
     isMasterAdmin,
     isAdminOrEmployee,
-    isEmployee,
 
     // Project access
-    canSeeAllProjects: isAdminOrEmployee,
-    canAccessProject: (project) => isAdminOrEmployee || isAssignedToProject(project),
-    canEditProject: (project) => isAdminOrEmployee,
-    canDeleteProject: isMasterAdmin,
+    canSeeAllProjects: isEmployeeOrAbove,
+    canAccessProject: (project) => isEmployeeOrAbove || isAssignedToProject(project),
+    canEditProject: (project) => isManagerOrAbove,
+    canDeleteProject: isOwner,
 
     // Pricing & financial
-    canSeePricing: isAdminOrEmployee,
-    canEditPricing: isAdminOrEmployee,
-    canSeePriceMatrix: isAdminOrEmployee,
-    canSeeInvoicing: isAdminOrEmployee,
+    canSeePricing: isManagerOrAbove,
+    canEditPricing: isAdminOrAbove,
+    canSeePriceMatrix: isManagerOrAbove,
+    canSeeInvoicing: isManagerOrAbove,
 
     // Price Matrix access levels: "edit" | "view_with_pricing" | "view_without_pricing" | "none"
-    // master_admin → edit, employee → view_with_pricing (default)
-    // Can be overridden per-user via user_permissions table
-    priceMatrixAccess: isMasterAdmin ? "edit" : isEmployee ? "view_with_pricing" : "none",
-    canEditPriceMatrix: isMasterAdmin,
-    canViewPriceMatrixPricing: isAdminOrEmployee,
-    canViewPriceMatrixStructure: isAdminOrEmployee,
+    // master_admin → edit, admin → edit, manager → view_with_pricing, employee → view_without_pricing
+    priceMatrixAccess: isAdminOrAbove ? "edit" : isManager ? "view_with_pricing" : isEmployee ? "view_without_pricing" : "none",
+    canEditPriceMatrix: isAdminOrAbove,
+    canViewPriceMatrixPricing: isManagerOrAbove,
+    canViewPriceMatrixStructure: isEmployeeOrAbove,
 
     // Contacts & CRM
-    canManageContacts: isAdminOrEmployee,
-    canSeeProspecting: isAdminOrEmployee,
-    canManageAgencies: isAdminOrEmployee,
+    canManageContacts: isManagerOrAbove,
+    canSeeProspecting: isManagerOrAbove,
+    canManageAgencies: isManagerOrAbove,
 
     // Settings & Admin
-    canAccessSettings: isAdminOrEmployee,
-    canManageUsers: isMasterAdmin,
-    canManageAutomation: isAdminOrEmployee,
-    canManageIntegrations: isAdminOrEmployee,
+    canAccessSettings: isAdminOrAbove,
+    canManageUsers: isOwner,
+    canManageAutomation: isAdminOrAbove,
+    canManageIntegrations: isAdminOrAbove,
 
     // Analytics & Reporting
-    canSeeAnalytics: isAdminOrEmployee,
-    canSeeBI: isMasterAdmin,
-    canSeeUtilization: isMasterAdmin,
-    canSeeReports: isAdminOrEmployee,
+    canSeeAnalytics: isManagerOrAbove,
+    canSeeBI: isOwner,
+    canSeeUtilization: isOwner,
+    canSeeReports: isManagerOrAbove,
 
     // Email
-    canSeeAllEmails: isAdminOrEmployee,
-    canSendEmails: isAdminOrEmployee,
+    canSeeAllEmails: isManagerOrAbove,
+    canSendEmails: isEmployeeOrAbove,
 
     // Calendar
-    canSeeAllCalendars: isAdminOrEmployee,
-    canManageCalendarConnections: isAdminOrEmployee,
+    canSeeAllCalendars: isEmployeeOrAbove,
+    canManageCalendarConnections: isAdminOrAbove,
 
     // Dangerous operations
-    canDeleteUsers: isMasterAdmin,
-    canRunCleanupFunctions: isMasterAdmin,
-    canAccessTestFunctions: isMasterAdmin,
+    canDeleteUsers: isOwner,
+    canRunCleanupFunctions: isOwner,
+    canAccessTestFunctions: isOwner,
   };
 }
 

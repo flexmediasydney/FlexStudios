@@ -1,9 +1,11 @@
 import { useState, useMemo } from "react";
 import React from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
-import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, GitBranch } from "lucide-react";
+import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, GitBranch, Lock, Unlock } from "lucide-react";
 import ProjectTypeFilter from "../components/settings/ProjectTypeFilter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,8 +68,9 @@ import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
 
 export default function PackagesPage() {
-  const { canAccessSettings } = usePermissions();
+  const { canAccessSettings, user } = usePermissions();
   const { canEdit, canView } = useEntityAccess('packages');
+  const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingPackage, setEditingPackage] = useState(null);
   const [deletingPackage, setDeletingPackage] = useState(null);
@@ -200,6 +203,22 @@ export default function PackagesPage() {
       setDeletingPackage(null);
     },
     onError: (e) => toast.error(e.message || "Failed to delete")
+  });
+
+  const toggleLockMutation = useMutation({
+    mutationFn: async (pkg) => {
+      const now = new Date().toISOString();
+      return api.entities.Package.update(pkg.id, {
+        is_locked: !pkg.is_locked,
+        locked_at: !pkg.is_locked ? now : null,
+        locked_by_name: !pkg.is_locked ? user?.full_name : null,
+      });
+    },
+    onSuccess: () => {
+      refetchEntityList("Package");
+      queryClient.invalidateQueries({ queryKey: ["packages"] });
+      toast.success("Lock status updated");
+    },
   });
 
   // Access guards - must be AFTER all hooks to satisfy React Rules of Hooks
@@ -336,15 +355,30 @@ export default function PackagesPage() {
                     </TableRow>
                   ) : filteredPackages.map((pkg) => {
                     const isExpanded = expandedPackages[pkg.id];
+                    const isLocked = pkg.is_locked;
                     return (
                       <React.Fragment key={pkg.id}>
-                        <TableRow className="hover:bg-muted/50">
+                        <TableRow className={cn("hover:bg-muted/50", isLocked && "bg-red-50/50 dark:bg-red-950/20")}>
                           <TableCell>
                             <Button variant="ghost" size="sm" onClick={() => toggleExpanded(pkg.id)} className="h-6 w-6 p-0">
                               {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                             </Button>
                           </TableCell>
-                          <TableCell className="font-medium">{pkg.name}</TableCell>
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-2">
+                              {isLocked ? (
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild><Lock className="h-4 w-4 text-red-500 shrink-0" /></TooltipTrigger>
+                                    <TooltipContent>Locked by {pkg.locked_by_name} &middot; {pkg.locked_at ? new Date(pkg.locked_at).toLocaleDateString() : ''}</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              ) : (
+                                <Unlock className="h-4 w-4 text-muted-foreground/40 shrink-0" />
+                              )}
+                              {pkg.name}
+                            </div>
+                          </TableCell>
                           <TableCell>
                             {(() => {
                               const typeId = (pkg.project_type_ids || [])[0];
@@ -373,10 +407,21 @@ export default function PackagesPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-1 justify-end">
-                              <Button variant="ghost" size="sm" onClick={() => handleOpen(pkg)} disabled={!canEdit}>
+                              {user?.role === 'master_admin' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => toggleLockMutation.mutate(pkg)}
+                                  title={isLocked ? `Locked by ${pkg.locked_by_name}` : "Lock this package"}
+                                  className="h-8 w-8 p-0"
+                                >
+                                  {isLocked ? <Lock className="h-4 w-4 text-red-500" /> : <Unlock className="h-4 w-4 text-muted-foreground" />}
+                                </Button>
+                              )}
+                              <Button variant="ghost" size="sm" onClick={() => handleOpen(pkg)} disabled={!canEdit || isLocked}>
                                 <Edit className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="sm" onClick={() => setDeletingPackage(pkg)} className="text-destructive hover:text-destructive" disabled={!canEdit}>
+                              <Button variant="ghost" size="sm" onClick={() => setDeletingPackage(pkg)} className="text-destructive hover:text-destructive" disabled={!canEdit || isLocked}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
