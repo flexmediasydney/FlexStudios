@@ -15,18 +15,25 @@ import EntityAccessMatrix from "@/components/settings/EntityAccessMatrix";
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const ROLES = {
-  master_admin: { label: "Admin", text: "text-red-700", bg: "bg-red-50", border: "border-red-200", fill: "#dc2626", ring: "ring-red-200" },
-  employee: { label: "Employee", text: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200", fill: "#2563eb", ring: "ring-blue-200" },
+  master_admin: { label: "Owner", text: "text-red-700", bg: "bg-red-50", border: "border-red-200", fill: "#dc2626", ring: "ring-red-200" },
+  admin: { label: "Administrator", text: "text-orange-700", bg: "bg-orange-50", border: "border-orange-200", fill: "#ea580c", ring: "ring-orange-200" },
+  manager: { label: "Manager", text: "text-purple-700", bg: "bg-purple-50", border: "border-purple-200", fill: "#7c3aed", ring: "ring-purple-200" },
+  employee: { label: "Staff", text: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200", fill: "#2563eb", ring: "ring-blue-200" },
+  contractor: { label: "Contractor", text: "text-gray-700", bg: "bg-gray-50", border: "border-gray-200", fill: "#6b7280", ring: "ring-gray-200" },
 };
 
 const PAGE_SECTIONS = [
   { label: "Workspace", pages: ["Dashboard","Calendar","Inbox","NotificationsPage","UserSettings"] },
   { label: "Projects", pages: ["Projects","ProjectDetails"] },
   { label: "Contacts & CRM", pages: ["ClientAgents","Organisations","Teams","People","PersonDetails","OrgDetails","TeamDetails","Prospecting","ProspectDetails","ClientMonitor"] },
+  { label: "Social Media", pages: ["SocialMedia"] },
+  { label: "Field Mode", pages: ["FieldMode"] },
   { label: "Analytics", pages: ["Reports"] },
   { label: "Products & Pricing", pages: ["Products","Packages","PriceMatrix","SettingsProductsPackages","SettingsPriceMatrix"] },
   { label: "Bookings", pages: ["TonomoIntegrationDashboard","TonomoPulse"] },
-  { label: "Settings", pages: ["Settings","SettingsOrganisation","SettingsAutomationRules","SettingsRevisionTemplates","SettingsIntegrations","EmailSyncSettings","SettingsTonomoIntegration","SettingsTonomoMappings","SettingsNotifications","SettingsClients","SettingsProjectRulebook","SettingsTonomoWebhooks","BusinessRequirementsDocument","HierarchyVisualization","SettingsTeamsUsers"] },
+  { label: "Public & Gallery", pages: ["ClientGallery","MarketingWithFlex","SoldWithFlex","BountyBoard","InternalRoadmap","Favorites"] },
+  { label: "Settings", pages: ["Settings","SettingsOrganisation","SettingsAutomationRules","SettingsRevisionTemplates","SettingsIntegrations","EmailSyncSettings","SettingsTonomoIntegration","SettingsTonomoMappings","SettingsNotifications","SettingsClients","SettingsProjectRulebook","SettingsTonomoWebhooks","SettingsAI","BusinessRequirementsDocument","HierarchyVisualization","SettingsTeamsUsers"] },
+  { label: "Owner Only", pages: ["Users","NotificationsPulse","AdminTodoList","AIAuditLog"] },
 ];
 
 const ALL_PAGES = PAGE_SECTIONS.flatMap(s => s.pages);
@@ -550,7 +557,7 @@ function MatrixMode() {
         ))}
         {highlight && <button onClick={() => setHighlight(null)} className="text-xs text-muted-foreground underline">Clear</button>}
       </div>
-      <div className="grid grid-cols-[1fr_80px_80px] gap-0 px-3">
+      <div className="grid gap-0 px-3" style={{ gridTemplateColumns: `1fr ${Object.keys(ROLES).map(() => "72px").join(" ")}` }}>
         <div />
         {Object.entries(ROLES).map(([r, s]) => <div key={r} className={`text-center text-xs font-bold ${s.text}`}>{s.label}</div>)}
       </div>
@@ -561,11 +568,11 @@ function MatrixMode() {
             {section.pages.map((page, i) => {
               const dimmed = highlight && !canAccessRoute(page, highlight);
               return (
-                <div key={page} className={`grid grid-cols-[1fr_80px_80px] items-center px-3 py-2 transition-opacity ${i > 0 ? "border-t" : ""} ${dimmed ? "opacity-20" : ""}`}>
+                <div key={page} className={`grid items-center px-3 py-2 transition-opacity ${i > 0 ? "border-t" : ""} ${dimmed ? "opacity-20" : ""}`} style={{ gridTemplateColumns: `1fr ${Object.keys(ROLES).map(() => "72px").join(" ")}` }}>
                   <div>
                     <div className="text-xs font-semibold">{prettify(page)}</div>
                   </div>
-                  {["master_admin", "employee"].map(role => (
+                  {Object.keys(ROLES).map(role => (
                     <div key={role} className="text-center text-sm">
                       {canAccessRoute(page, role) ? <span className="text-green-500">●</span> : <span className="text-muted-foreground/50">○</span>}
                     </div>
@@ -597,7 +604,7 @@ function BlockedUXMode() {
           </div>
           <h2 className="text-lg font-bold mb-2">Access restricted</h2>
           <p className="text-sm text-muted-foreground mb-6">
-            This page requires a different permission level. If you need access, ask your admin.
+            This page requires a different permission level. If you need access, ask the account owner.
           </p>
           <div className="flex gap-3 justify-center">
             <Button size="sm" className="gap-2">
@@ -612,7 +619,7 @@ function BlockedUXMode() {
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-card border rounded-lg p-4">
           <div className="text-xs font-bold mb-2">Request flow</div>
-          {["User hits blocked page", "Clicks 'Request access'", "Notification created for admins", "Admin sees it in People tab", "Admin grants override or changes role", "Override auto-expires after set days"].map((step, i) => (
+          {["User hits blocked page", "Clicks 'Request access'", "Notification created for Owner/Admin", "Owner sees it in People tab", "Owner grants override or changes role", "Override auto-expires after set days"].map((step, i) => (
             <div key={i} className="flex items-start gap-2 py-1">
               <span className="w-4 h-4 rounded-full bg-muted flex items-center justify-center text-[9px] font-bold text-muted-foreground flex-shrink-0 mt-0.5">{i + 1}</span>
               <span className="text-xs text-muted-foreground">{step}</span>
