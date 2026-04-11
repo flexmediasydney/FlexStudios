@@ -423,12 +423,18 @@ function StaffBar({ user }) {
       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
         <span className="text-muted-foreground">Target:</span>
         <span>{fmtHours(weeklyTarget)}h / week</span>
-        <span className="text-muted-foreground">Logged:</span>
-        <span>{fmtHours(logged)}h</span>
+        <span className="text-muted-foreground">Logged this week:</span>
+        <span className="font-medium">{fmtHours(logged)}h</span>
         <span className="text-muted-foreground">Free capacity:</span>
         <span>{fmtHours(freeCapacity)}h</span>
-        <span className="text-muted-foreground">Committed (estimated):</span>
-        <span>{fmtHours(estimated)}h</span>
+        <span className="text-muted-foreground">Due this week:</span>
+        <span>{fmtHours(estimated)}h estimated</span>
+        {user.hours_estimated_total != null && user.hours_estimated_total !== estimated && (
+          <>
+            <span className="text-muted-foreground">Total backlog:</span>
+            <span className="text-xs">{fmtHours(user.hours_estimated_total)}h across all tasks</span>
+          </>
+        )}
         <span className="text-muted-foreground">Difference:</span>
         <span>
           {diff >= 0 ? "+" : ""}

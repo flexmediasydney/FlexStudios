@@ -247,20 +247,47 @@ function computeTasks(tasks: any[]): StatGroup {
 }
 
 function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employeeRoles: any[]): StatGroup {
-  // Hours logged per user
-  const userHoursMap = new Map<string, number>();
+  // Compute current week boundaries (Monday 00:00 to Sunday 23:59 in Sydney)
+  const sydneyDate = (d: Date) => {
+    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit', day: '2-digit' });
+    return fmt.format(d);
+  };
+  const now = new Date();
+  const sydneyNow = new Date(sydneyDate(now) + 'T00:00:00');
+  const dayOfWeek = sydneyNow.getDay(); // 0=Sun, 1=Mon
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const weekStart = new Date(sydneyNow); weekStart.setDate(sydneyNow.getDate() + mondayOffset);
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7);
+  const weekStartStr = sydneyDate(weekStart);
+  const weekEndStr = sydneyDate(weekEnd);
+
+  // Hours logged per user THIS WEEK only
+  const userHoursThisWeek = new Map<string, number>();
+  const userHoursAllTime = new Map<string, number>();
   for (const log of timeLogs) {
     if (!log.user_id) continue;
     const hrs = (log.total_seconds || 0) / 3600;
-    userHoursMap.set(log.user_id, (userHoursMap.get(log.user_id) || 0) + hrs);
+    userHoursAllTime.set(log.user_id, (userHoursAllTime.get(log.user_id) || 0) + hrs);
+    // Check if log falls within current week
+    const logDate = log.start_time ? sydneyDate(new Date(log.start_time)) : null;
+    if (logDate && logDate >= weekStartStr && logDate < weekEndStr) {
+      userHoursThisWeek.set(log.user_id, (userHoursThisWeek.get(log.user_id) || 0) + hrs);
+    }
   }
 
-  // Hours estimated per user (from tasks assigned to them)
+  // Hours estimated per user — only INCOMPLETE tasks (work remaining)
   const userEstimatedMap = new Map<string, number>();
+  // Hours estimated THIS WEEK — tasks due this week or overdue (should be worked on now)
+  const userEstimatedThisWeek = new Map<string, number>();
   for (const t of tasks) {
-    if (!t.assigned_to) continue;
+    if (!t.assigned_to || t.is_deleted || t.is_completed) continue;
     const hrs = (t.estimated_minutes || 0) / 60;
     userEstimatedMap.set(t.assigned_to, (userEstimatedMap.get(t.assigned_to) || 0) + hrs);
+    // Task is due this week OR overdue (past due = urgent, counts for this week)
+    const dueDate = t.due_date ? sydneyDate(new Date(t.due_date)) : null;
+    if (!dueDate || dueDate <= weekEndStr) {
+      userEstimatedThisWeek.set(t.assigned_to, (userEstimatedThisWeek.get(t.assigned_to) || 0) + hrs);
+    }
   }
 
   // Build role lookup
@@ -280,10 +307,12 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
   let totalEstimated = 0;
 
   for (const uid of allUserIds) {
-    const logged = userHoursMap.get(uid) || 0;
-    const estimated = userEstimatedMap.get(uid) || 0;
-    totalLogged += logged;
-    totalEstimated += estimated;
+    const loggedAllTime = userHoursAllTime.get(uid) || 0;
+    const loggedThisWeek = userHoursThisWeek.get(uid) || 0;
+    const estimatedTotal = userEstimatedMap.get(uid) || 0;
+    const estimatedThisWeek = userEstimatedThisWeek.get(uid) || 0;
+    totalLogged += loggedThisWeek;
+    totalEstimated += estimatedThisWeek;
 
     const user = userMap.get(uid);
     const weeklyTarget = Number(user?.weekly_target_hours) || 40;
@@ -293,12 +322,17 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
       role: roleByUser.get(uid) || user?.role || 'unknown',
       team_id: user?.internal_team_id || null,
       team_name: user?.internal_team_name || null,
-      hours_logged: Math.round(logged * 100) / 100,
-      hours_estimated: Math.round(estimated * 100) / 100,
-      utilization_pct: safePct(logged, estimated),
+      // This week's numbers (primary)
+      hours_logged: Math.round(loggedThisWeek * 100) / 100,
+      hours_estimated: Math.round(estimatedThisWeek * 100) / 100,
+      utilization_pct: safePct(loggedThisWeek, estimatedThisWeek),
+      // All-time totals (secondary)
+      hours_logged_all_time: Math.round(loggedAllTime * 100) / 100,
+      hours_estimated_total: Math.round(estimatedTotal * 100) / 100,
+      // Target-based capacity (weekly)
       weekly_target_hours: weeklyTarget,
-      available_capacity: Math.round(Math.max(0, weeklyTarget - logged) * 100) / 100,
-      target_utilization_pct: safePct(logged, weeklyTarget),
+      available_capacity: Math.round(Math.max(0, weeklyTarget - loggedThisWeek) * 100) / 100,
+      target_utilization_pct: safePct(loggedThisWeek, weeklyTarget),
     });
   }
 
