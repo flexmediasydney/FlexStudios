@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { useEntityList, useEntityData } from "@/components/hooks/useEntityData";
+import { useEntityList, useEntityData, refetchEntityList } from "@/components/hooks/useEntityData";
 import { User, Users, ChevronDown, ChevronRight, AlertCircle, Camera, Video, ImageIcon, Film, PenTool, Compass, Crown, Loader2, Search, Star, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -136,6 +136,7 @@ function useSuggestedUsers(roleKey, legacyKey, allProjects) {
 }
 
 function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, disabledLabel, users, teams, isSaving, allProjects }) {
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(-1);
@@ -199,6 +200,40 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
         api.functions.invoke('syncOnsiteEffortTasks', {
           project_id: project.id,
         }).catch(() => {});
+      }
+
+      // Invalidate caches so UI updates immediately
+      queryClient.invalidateQueries({ queryKey: ["entity-list", "Project"] });
+      queryClient.invalidateQueries({ queryKey: ["entity-data", "Project", project.id] });
+      queryClient.invalidateQueries({ queryKey: ["entity-list", "ProjectTask"] });
+      refetchEntityList("Project");
+
+      // Re-assign tasks for the changed role
+      if (project?.id && data) {
+        const roleFields = ['photographer_id', 'videographer_id', 'image_editor_id', 'video_editor_id', 'floorplan_editor_id', 'drone_editor_id', 'project_owner_id'];
+        for (const field of roleFields) {
+          if (field in data) {
+            const roleName = field.replace('_id', '');
+            const newUserId = data[field] || null;
+            const newUserName = data[field.replace('_id', '_name')] || null;
+            const assignType = data[field.replace('_id', '_type')] || 'user';
+
+            // Fetch tasks with this auto_assign_role and re-assign
+            api.entities.ProjectTask.filter({ project_id: project.id }, null, 200).then(tasks => {
+              const toUpdate = tasks.filter(t =>
+                t.auto_assign_role === roleName && !t.is_deleted
+              );
+              Promise.allSettled(toUpdate.map(t => {
+                const updates = assignType === 'team'
+                  ? { assigned_to: null, assigned_to_name: null, assigned_to_team_id: newUserId, assigned_to_team_name: newUserName }
+                  : { assigned_to: newUserId, assigned_to_name: newUserName, assigned_to_team_id: null, assigned_to_team_name: null };
+                return api.entities.ProjectTask.update(t.id, updates);
+              })).then(() => {
+                refetchEntityList("ProjectTask");
+              });
+            }).catch(() => {});
+          }
+        }
       }
     },
     onError: (err) => toast.error(err?.message || "Failed to update staff assignment"),
