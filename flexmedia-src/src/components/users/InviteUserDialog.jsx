@@ -120,7 +120,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="master_admin">Master Admin</SelectItem>
-                <SelectItem value="employee">Employee</SelectItem>
+                <SelectItem value="employee">Staff</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground mt-1">

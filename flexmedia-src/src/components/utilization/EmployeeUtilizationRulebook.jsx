@@ -5,7 +5,7 @@ export default function EmployeeUtilizationRulebook() {
   const rules = [
     {
       title: 'Time Logging via Task Timer',
-      description: 'Employees log actual time spent on tasks using the TaskTimeLogger component integrated into task details.',
+      description: 'Staff log actual time spent on tasks using the TaskTimeLogger component integrated into task details.',
       details: [
         'Timer starts with "Start" button, can be paused/resumed, and finished with "Finish" button',
         'Each time log entry records: start_time, end_time, total_seconds, user, role, and task reference',
@@ -54,7 +54,7 @@ export default function EmployeeUtilizationRulebook() {
     },
     {
       title: 'Periodic Aggregation',
-      description: 'Employee utilization is aggregated by configured periods.',
+      description: 'Staff utilization is aggregated by configured periods.',
       details: [
         'Periods: day (calendar day), week (ISO week), month (calendar month)',
         'EmployeeUtilization records store: estimated_seconds, actual_seconds, utilization_percent, status',
@@ -156,7 +156,7 @@ export default function EmployeeUtilizationRulebook() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold mb-2">Employee Utilization Rulebook</h2>
+        <h2 className="text-2xl font-bold mb-2">Staff Utilization Rulebook</h2>
         <p className="text-muted-foreground">
           Complete reference for how time tracking, effort estimation, timer defense, and utilization calculation work.
         </p>

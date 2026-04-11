@@ -44,11 +44,11 @@ export default function UtilizationHeatmap({ utilizations, onEmployeeClick }) {
 
       <Card className="p-6">
         <h3 className="text-sm font-semibold mb-4">
-          Employee Utilization Heatmap
-          <span className="ml-2 text-xs font-normal text-muted-foreground">({sorted.length} employees)</span>
+          Staff Utilization Heatmap
+          <span className="ml-2 text-xs font-normal text-muted-foreground">({sorted.length} staff)</span>
         </h3>
         {sorted.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No employees to display</p>
+          <p className="text-sm text-muted-foreground">No staff to display</p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
             {sorted.map(util => (

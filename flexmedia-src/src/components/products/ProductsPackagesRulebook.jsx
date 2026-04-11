@@ -335,12 +335,12 @@ const sections = [
     bg: "bg-orange-50",
     border: "border-orange-200",
     headerBg: "bg-orange-50/60",
-    summary: "Only admins and employees can manage products and packages.",
+    summary: "Only admins and staff can manage products and packages.",
     rules: [
       {
         type: "constraint",
         icon: Lock,
-        label: "Admin & Employee Access Only",
+        label: "Admin & Staff Access Only",
         desc: "The Products & Packages settings page is restricted to users with the 'master_admin' or 'employee' role."
       },
       {

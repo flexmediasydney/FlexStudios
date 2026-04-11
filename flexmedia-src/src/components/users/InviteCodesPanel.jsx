@@ -90,7 +90,7 @@ export default function InviteCodesPanel() {
     toast.success('Code copied to clipboard');
   };
 
-  const roleLabel = { master_admin: 'Admin', admin: 'Admin', employee: 'Employee' };
+  const roleLabel = { master_admin: 'Admin', admin: 'Admin', employee: 'Staff' };
   const roleBadge = { master_admin: 'bg-red-100 text-red-700', admin: 'bg-red-100 text-red-700', employee: 'bg-blue-100 text-blue-700' };
 
   const activeCodes = useMemo(() => codes.filter(c => c.is_active), [codes]);
@@ -248,7 +248,7 @@ export default function InviteCodesPanel() {
               <Select value={newCode.role} onValueChange={(v) => setNewCode(p => ({ ...p, role: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="employee">Employee</SelectItem>
+                  <SelectItem value="employee">Staff</SelectItem>
                   <SelectItem value="master_admin">Admin</SelectItem>
                 </SelectContent>
               </Select>

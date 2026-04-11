@@ -86,7 +86,7 @@ const roleColors = {
 
 const roleLabels = {
   master_admin: "Admin",
-  employee: "Employee",
+  employee: "Staff",
 };
 
 export default function Layout({ children, currentPageName }) {

@@ -137,7 +137,7 @@ export default function Register() {
   const roleLabel = {
     master_admin: 'Administrator',
     admin: 'Admin',
-    employee: 'Employee',
+    employee: 'Staff',
   };
 
   return (

@@ -253,7 +253,7 @@ export default function UsersManagement() {
           { label: "Total", value: stats.total },
           { label: "Active", value: stats.active },
           { label: "Admins", value: stats.admins },
-          { label: "Employees", value: stats.employees },
+          { label: "Staff", value: stats.employees },
         ].map(s => (
           <Card key={s.label}>
             <CardContent className="pt-4 pb-3">

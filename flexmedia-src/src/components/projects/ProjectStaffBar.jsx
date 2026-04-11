@@ -289,7 +289,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
           </button>
           {users.length > 0 && (
             <>
-              <p className="text-xs font-semibold text-muted-foreground px-3 pt-1">Employees</p>
+              <p className="text-xs font-semibold text-muted-foreground px-3 pt-1">Staff</p>
               {users.map((u) => (
                 <button
                   key={u.id}
