@@ -5,6 +5,7 @@ const AuthContext = createContext();
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const SIM_STORAGE_KEY = 'flexstudios_simulation_user';
 
 // ─── Helpers that bypass Supabase client entirely ────────────────────────────
 
@@ -50,6 +51,15 @@ export const AuthProvider = ({ children }) => {
   const [authError, setAuthError] = useState(null);
   const fetchingRef = useRef(false);
   const initDoneRef = useRef(false);
+
+  // ── Simulation / Impersonation ──────────────────────────────────────────
+  // Stored in sessionStorage so it survives navigation but dies on tab close.
+  const [simulatedUser, setSimulatedUser] = useState(() => {
+    try {
+      const stored = sessionStorage.getItem(SIM_STORAGE_KEY);
+      return stored ? JSON.parse(stored) : null;
+    } catch { return null; }
+  });
 
   // Race condition fix: track pending fetch as a promise so concurrent callers
   // (e.g. two TOKEN_REFRESHED events) coalesce onto the same request instead of racing.
@@ -238,10 +248,42 @@ export const AuthProvider = ({ children }) => {
     }
   }, [fetchAppUser]);
 
+  // ── Simulation methods ───────────────────────────────────────────────────
+  const startSimulation = useCallback(async (userId) => {
+    // Only master_admin (owner) can impersonate
+    if (user?.role !== 'master_admin') return;
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/users?id=eq.${encodeURIComponent(userId)}&select=*`,
+        { headers: { 'apikey': SUPABASE_ANON_KEY, 'Accept': 'application/vnd.pgrst.object+json' } }
+      );
+      if (!res.ok) return;
+      const targetUser = await res.json();
+      if (!targetUser?.id) return;
+      setSimulatedUser(targetUser);
+      sessionStorage.setItem(SIM_STORAGE_KEY, JSON.stringify(targetUser));
+    } catch (err) {
+      console.error('Failed to start simulation:', err);
+    }
+  }, [user]);
+
+  const endSimulation = useCallback(() => {
+    setSimulatedUser(null);
+    sessionStorage.removeItem(SIM_STORAGE_KEY);
+  }, []);
+
+  // The effective user: simulated user overrides real user for all permission checks
+  const effectiveUser = simulatedUser || user;
+
   // Memoize context value to prevent unnecessary re-renders of all consumers
   // when AuthProvider re-renders but none of the auth state actually changed.
   const contextValue = useMemo(() => ({
-    user,
+    user: effectiveUser,
+    realUser: user,
+    isSimulating: !!simulatedUser,
+    simulatedUser,
+    startSimulation,
+    endSimulation,
     isAuthenticated,
     isLoadingAuth,
     isLoadingPublicSettings: false,
@@ -251,7 +293,7 @@ export const AuthProvider = ({ children }) => {
     navigateToLogin,
     retryFetchUser,
     checkAppState: () => window.location.reload(),
-  }), [user, isAuthenticated, isLoadingAuth, authError, logout, navigateToLogin, retryFetchUser]);
+  }), [effectiveUser, user, simulatedUser, startSimulation, endSimulation, isAuthenticated, isLoadingAuth, authError, logout, navigateToLogin, retryFetchUser]);
 
   return (
     <AuthContext.Provider value={contextValue}>

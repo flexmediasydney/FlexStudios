@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { useAuth } from "@/lib/AuthContext";
 import { canAccessRoute } from "@/components/lib/routeAccess";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,7 +76,7 @@ function UserAvatar({ name, role, size = "md" }) {
 
 // ─── People Mode ─────────────────────────────────────────────────────────────
 
-function PeopleMode({ onViewAs }) {
+function PeopleMode({ onViewAs, onSimulateUser }) {
   const queryClient = useQueryClient();
   const { data: currentUser } = useCurrentUser();
   const [search, setSearch] = useState("");
@@ -394,12 +395,17 @@ function PeopleMode({ onViewAs }) {
             <div className="flex gap-2 pt-2 border-t">
               <Button
                 size="sm"
-                className="flex-1 h-8 text-xs"
+                className="flex-1 h-8 text-xs text-white"
                 style={{ backgroundColor: ROLES[selected.role]?.fill }}
-                onClick={() => onViewAs(selected.role)}
+                onClick={() => {
+                  onSimulateUser(selected.id);
+                  toast.success(`Now viewing as ${selected.full_name || selected.email}`, {
+                    description: `Role: ${ROLES[selected.role]?.label || selected.role}. Use the banner at the top to end the simulation.`,
+                  });
+                }}
               >
                 <Eye className="h-3 w-3 mr-1.5" />
-                Simulate as {(selected.full_name || "").split(" ")[0]}
+                Impersonate {(selected.full_name || "").split(" ")[0]}
               </Button>
               {selected.is_active ? (
                 <Button
@@ -603,6 +609,7 @@ function BlockedUXMode() {
 
 export default function RolesSecurityPanel() {
   const [mode, setMode] = useState("people");
+  const { startSimulation } = useAuth();
 
   const modes = [
     { key: "people", label: "People" },
@@ -650,7 +657,7 @@ export default function RolesSecurityPanel() {
       </div>
 
       {/* Mode content */}
-      {mode === "people" && <PeopleMode onViewAs={(role) => setMode("simulate")} />}
+      {mode === "people" && <PeopleMode onViewAs={(role) => setMode("simulate")} onSimulateUser={(userId) => startSimulation(userId)} />}
       {mode === "simulate" && <SimulatorMode />}
       {mode === "security-matrix" && <EntityAccessMatrix />}
       {mode === "overrides" && <PermissionMatrix />}

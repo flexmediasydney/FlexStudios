@@ -36,6 +36,7 @@ import TopSearchBar from "@/components/common/TopSearchBar";
 import { cn } from "@/lib/utils";
 import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { useAuth } from "@/lib/AuthContext";
 import { canAccessRoute } from "@/components/lib/routeAccess";
 import { useNotifications, NotificationProvider } from "@/components/notifications/NotificationContext";
 import { useEntityList } from "@/components/hooks/useEntityData";
@@ -45,6 +46,40 @@ import GlobalNotificationBar, { NotificationBell } from "@/components/notificati
 import NotificationToast from "@/components/notifications/NotificationToast";
 import { ActiveTimersProvider } from "@/components/utilization/ActiveTimersContext";
 import CalendarConnectBanner from "@/components/calendar/CalendarConnectBanner";
+import { Eye, XCircle } from "lucide-react";
+
+// ── Simulation Banner ─────────────────────────────────────────────────────
+// Shows globally when an owner is impersonating another user's session.
+// Pushes all layout content down by its height (h-9 = 36px).
+function SimulationBanner() {
+  const { isSimulating, simulatedUser, realUser, endSimulation } = useAuth();
+  if (!isSimulating) return null;
+
+  const roleBadge = {
+    master_admin: 'Owner',
+    admin: 'Admin',
+    manager: 'Manager',
+    employee: 'Staff',
+    contractor: 'Contractor',
+  }[simulatedUser?.role] || simulatedUser?.role || '?';
+
+  return (
+    <div className="fixed top-0 left-0 right-0 z-[200] bg-amber-500 dark:bg-amber-600 text-amber-950 h-9 flex items-center justify-center gap-3 text-xs font-bold shadow-lg select-none">
+      <Eye className="h-3.5 w-3.5 flex-shrink-0" />
+      <span>
+        Viewing as <span className="font-black">{simulatedUser?.name || simulatedUser?.email || '?'}</span>
+        <span className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-700/20 text-[10px] uppercase tracking-wide">{roleBadge}</span>
+      </span>
+      <button
+        onClick={endSimulation}
+        className="ml-2 inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-800/25 hover:bg-amber-800/40 text-amber-950 text-[10px] font-bold uppercase tracking-wide transition-colors"
+      >
+        <XCircle className="h-3 w-3" />
+        End Simulation
+      </button>
+    </div>
+  );
+}
 
 
 function ThemeToggle() {
@@ -423,8 +458,15 @@ function LayoutContent({ currentPageName, children }) {
     );
   };
 
+  const { isSimulating } = useAuth();
+  // When simulating, push all fixed elements down by banner height (36px)
+  const simOffset = isSimulating ? 'top-9' : 'top-0';
+  const simHeaderOffset = isSimulating ? 'top-[calc(4rem+36px)]' : '';
+  const simPt = isSimulating ? 'pt-9' : '';
+
   return (
     <>
+      <SimulationBanner />
       <GlobalNotificationBar />
       <NotificationToast />
       {/* Skip to content link for keyboard navigation */}
@@ -436,7 +478,7 @@ function LayoutContent({ currentPageName, children }) {
       </a>
       <div className="min-h-screen bg-background">
         {/* Desktop Top Bar with Search */}
-         <header className="hidden lg:block fixed top-0 left-64 right-0 h-16 bg-card border-b z-40 px-6 shadow-xs backdrop-blur-sm bg-card/97">
+         <header className={cn("hidden lg:block fixed left-64 right-0 h-16 bg-card border-b z-40 px-6 shadow-xs backdrop-blur-sm bg-card/97", isSimulating ? "top-9" : "top-0")}>
            <div className="h-full flex items-center justify-between gap-4">
              {canGoBack && (
                <button onClick={() => window.history.back()} className="text-muted-foreground hover:text-foreground transition-colors p-2 hover:bg-muted/50 rounded-lg" title="Go back" aria-label="Go back to previous page">
@@ -464,7 +506,7 @@ function LayoutContent({ currentPageName, children }) {
          </header>
 
          {/* Mobile Header */}
-         <header className="lg:hidden fixed top-0 left-0 right-0 h-14 bg-card border-b z-40 shadow-xs backdrop-blur-sm bg-card/97">
+         <header className={cn("lg:hidden fixed left-0 right-0 h-14 bg-card border-b z-40 shadow-xs backdrop-blur-sm bg-card/97", isSimulating ? "top-9" : "top-0")}>
            <div className="h-full flex items-center justify-between px-2 gap-1.5">
              <Button
               variant="ghost"
@@ -507,7 +549,8 @@ function LayoutContent({ currentPageName, children }) {
       <aside
         aria-label="Main navigation"
         className={cn(
-        "fixed top-0 left-0 h-full w-[280px] max-w-[85vw] lg:w-64 bg-card border-r z-50 transform transition-transform duration-300 ease-out lg:translate-x-0 shadow-xl lg:shadow-none will-change-transform",
+        "fixed left-0 h-full w-[280px] max-w-[85vw] lg:w-64 bg-card border-r z-50 transform transition-transform duration-300 ease-out lg:translate-x-0 shadow-xl lg:shadow-none will-change-transform",
+            isSimulating ? "top-9" : "top-0",
         sidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="flex flex-col h-full backdrop-blur-sm bg-card/95">
@@ -588,7 +631,7 @@ function LayoutContent({ currentPageName, children }) {
       </aside>
 
         {/* Main Content */}
-        <main id="main-content" role="main" className="lg:ml-64 min-h-screen pt-14 lg:pt-16" style={{ scrollbarGutter: 'stable' }}>
+        <main id="main-content" role="main" className={cn("lg:ml-64 min-h-screen", isSimulating ? "pt-[calc(3.5rem+36px)] lg:pt-[calc(4rem+36px)]" : "pt-14 lg:pt-16")} style={{ scrollbarGutter: 'stable' }}>
           <CalendarConnectBanner />
           {children}
         </main>
