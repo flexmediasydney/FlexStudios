@@ -114,12 +114,16 @@ export default function ProjectHealthIndicator({ project, tasks = [] }) {
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className={cn(
-            "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-default",
-            config.bg, config.color
-          )}>
-            <span className={cn("h-2 w-2 rounded-full", config.dot)} />
-            <Icon className={cn("h-3.5 w-3.5", config.iconColor)} />
+          <div
+            className={cn(
+              "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-default",
+              config.bg, config.color
+            )}
+            role="status"
+            aria-label={`Project health: ${config.label}`}
+          >
+            <span className={cn("h-2 w-2 rounded-full", config.dot)} aria-hidden="true" />
+            <Icon className={cn("h-3.5 w-3.5", config.iconColor)} aria-hidden="true" />
             {config.label}
           </div>
         </TooltipTrigger>

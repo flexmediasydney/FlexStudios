@@ -200,8 +200,8 @@ export default function EditRevisionDialog({ open, onClose, revision, project })
             />
           )}
           {revision.pricing_impact?.applied && (
-            <p className="text-xs text-muted-foreground italic border rounded-lg p-2 bg-muted/30">
-              Pricing impact has already been applied and cannot be changed.
+            <p className="text-xs text-muted-foreground italic border rounded-lg p-3 bg-muted/30">
+              Pricing impact has already been applied to the project and cannot be edited.
             </p>
           )}
         </div>
@@ -211,7 +211,7 @@ export default function EditRevisionDialog({ open, onClose, revision, project })
           <Button 
             disabled={!form.title?.trim() || updateMutation.isPending} 
             onClick={handleSubmit}
-            title={!form.title?.trim() ? "Enter a title to save changes" : ""}
+            title={!form.title?.trim() ? "A title is required to save changes" : ""}
           >
             {updateMutation.isPending ? (
               <>

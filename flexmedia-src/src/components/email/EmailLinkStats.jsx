@@ -83,7 +83,7 @@ export default function EmailLinkStats({ messageBody, messageId }) {
 
               {/* Link text and URL */}
               <div className="flex-1 min-w-0">
-                <p className="text-sm truncate font-medium">{link.text}</p>
+                <p className="text-sm truncate font-medium" title={link.text}>{link.text}</p>
                 <p className="text-xs text-muted-foreground truncate">{new URL(link.url).hostname}</p>
               </div>
 
@@ -94,7 +94,8 @@ export default function EmailLinkStats({ messageBody, messageId }) {
                 rel="noopener noreferrer"
                 className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
               >
-                <ExternalLink className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                <ExternalLink className="h-4 w-4 text-muted-foreground hover:text-foreground" aria-hidden="true" />
+                <span className="sr-only">Open link</span>
               </a>
             </div>
           </TooltipProvider>

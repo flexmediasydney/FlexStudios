@@ -120,7 +120,7 @@ export default function UserIntegrations({ user }) {
                 Gmail Inbox
               </CardTitle>
               <CardDescription>
-                Connect your Gmail account to manage emails in Flex Studios
+                Connect Gmail accounts to send and receive emails within Flex Studios.
               </CardDescription>
             </div>
           </div>
@@ -129,7 +129,8 @@ export default function UserIntegrations({ user }) {
         <CardContent className="space-y-4">
           {emailAccounts.length === 0 ? (
             <div className="text-center py-6">
-              <p className="text-muted-foreground mb-4">No Gmail accounts connected</p>
+              <Mail className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
+              <p className="text-muted-foreground mb-4">No Gmail accounts connected yet</p>
               <Button
                 onClick={() => setShowGmailDialog(true)}
                 className="gap-2"
@@ -229,7 +230,7 @@ export default function UserIntegrations({ user }) {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Team members can access the inbox together
+                  All members of this team will be able to access this inbox.
                 </p>
               </div>
 

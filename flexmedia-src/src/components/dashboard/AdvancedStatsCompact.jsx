@@ -24,7 +24,7 @@ const StatCompact = ({ label, current, previous, format = 'number', icon: Icon }
         <div className="flex-1">
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</p>
           <motion.div
-            className="text-xl font-bold mt-1"
+            className="text-xl font-bold mt-1 tabular-nums"
             key={current}
             initial={{ scale: 1.1 }}
             animate={{ scale: 1 }}

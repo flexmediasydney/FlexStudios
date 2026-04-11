@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
-import { Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { api } from '@/api/supabaseClient';
@@ -104,7 +103,7 @@ export default function ProspectingStatusKanban({ agentsByStatus }) {
                   <p className="font-medium truncate">{agent.name}</p>
                   <p className="text-muted-foreground truncate">{agent.email}</p>
                   {agent.interactionCount > 0 && (
-                    <p className="text-primary mt-0.5">{agent.interactionCount} interactions</p>
+                    <p className="text-primary mt-0.5">{agent.interactionCount} interaction{agent.interactionCount !== 1 ? 's' : ''}</p>
                   )}
                 </div>
               ))}

@@ -55,6 +55,7 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
         <Card
           className="cursor-pointer hover:shadow-md transition-shadow"
           onClick={handleClick}
+          title="Click to view detailed effort breakdown"
         >
           <CardContent className="py-4 px-4">
             {/* Header */}

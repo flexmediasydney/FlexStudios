@@ -11,6 +11,8 @@ export default function Pagination({ currentPage, totalPages, onPageChange }) {
         size="sm"
         onClick={() => onPageChange(currentPage - 1)}
         disabled={currentPage === 1}
+        title="Previous page"
+        aria-label="Go to previous page"
       >
         <ChevronLeft className="h-4 w-4" />
       </Button>
@@ -28,6 +30,8 @@ export default function Pagination({ currentPage, totalPages, onPageChange }) {
             variant={currentPage === pageNum ? "default" : "outline"}
             size="sm"
             onClick={() => onPageChange(pageNum)}
+            title={`Go to page ${pageNum}`}
+            aria-label={`Page ${pageNum}${currentPage === pageNum ? ' (current)' : ''}`}
           >
             {pageNum}
           </Button>
@@ -39,6 +43,8 @@ export default function Pagination({ currentPage, totalPages, onPageChange }) {
         size="sm"
         onClick={() => onPageChange(currentPage + 1)}
         disabled={currentPage === totalPages}
+        title="Next page"
+        aria-label="Go to next page"
       >
         <ChevronRight className="h-4 w-4" />
       </Button>

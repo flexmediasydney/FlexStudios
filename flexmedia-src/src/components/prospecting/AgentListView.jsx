@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Users } from 'lucide-react';
 import { createPageUrl } from '@/utils';
 import { Link } from 'react-router-dom';
 
@@ -21,6 +22,7 @@ export default function AgentListView({ agents, interactions }) {
   if (!agents.length) {
     return (
       <div className="text-center py-12">
+        <Users className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
         <p className="text-muted-foreground">No agents to display</p>
       </div>
     );
@@ -49,7 +51,7 @@ export default function AgentListView({ agents, interactions }) {
                     <Badge className={statusColors[agent.status] || 'bg-muted text-foreground'}>
                       {agent.status}
                     </Badge>
-                    <p className="text-xs text-muted-foreground mt-2">{agent.interactionCount} interactions</p>
+                    <p className="text-xs text-muted-foreground mt-2">{agent.interactionCount} interaction{agent.interactionCount !== 1 ? 's' : ''}</p>
                   </div>
                 </div>
               </CardContent>

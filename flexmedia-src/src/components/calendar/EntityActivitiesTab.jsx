@@ -94,7 +94,7 @@ export default function EntityActivitiesTab({ entityType, entityId, entityLabel 
           {ACTIVITY_TYPE_LIST.map(({ key, label, color }) => (
             <button
               key={key}
-              className="px-2 py-1 text-xs rounded-full border transition-colors"
+              className="px-2 py-1 text-xs rounded-full border transition-colors cursor-pointer"
               style={filterType === key
                 ? { backgroundColor: color, color: 'white', borderColor: color }
                 : { borderColor: '#e2e8f0', color: '#64748b' }}
@@ -222,6 +222,7 @@ function ActivityRow({ event, onClick, onMarkDone, done }) {
           variant="ghost"
           className="flex-shrink-0 h-7 text-xs"
           onClick={e => onMarkDone(e, event)}
+          title="Mark as done"
         >
           <Check className="h-3.5 w-3.5 mr-1" />
           Done

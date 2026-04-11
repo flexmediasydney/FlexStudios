@@ -66,12 +66,12 @@ export default function ProjectProgressBar({ tasks = [] }) {
             </div>
             <div className="flex items-center gap-3 mt-1.5">
               <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                <CheckCircle2 className="h-3 w-3 text-green-500" />
-                {completed} done
+                <CheckCircle2 className="h-3 w-3 text-green-500" aria-hidden="true" />
+                <span className="tabular-nums">{completed}</span> done
               </span>
               <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                <Circle className="h-3 w-3" />
-                {total - completed} remaining
+                <Circle className="h-3 w-3" aria-hidden="true" />
+                <span className="tabular-nums">{total - completed}</span> remaining
               </span>
             </div>
           </div>

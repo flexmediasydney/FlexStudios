@@ -155,6 +155,10 @@ export const queryClientInstance = new QueryClient({
       throwOnError: false,
       retry: 1,
       retryDelay: 1000,
+      onError: (error) => {
+        // Global mutation error logger — helps debug failed saves in production
+        console.error('[Mutation Error]', error?.message || error);
+      },
     },
   },
 });

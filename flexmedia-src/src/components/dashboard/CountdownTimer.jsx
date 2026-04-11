@@ -14,7 +14,7 @@ const TimeUnit = ({ label, value, isWarning = false }) => {
     >
       <motion.div
         className={cn(
-          'relative w-16 h-16 rounded-lg flex items-center justify-center font-mono font-bold text-xl',
+          'relative w-16 h-16 rounded-lg flex items-center justify-center font-mono font-bold text-xl tabular-nums',
           isWarning 
             ? 'bg-red-100 text-red-700 shadow-lg shadow-red-200' 
             : 'bg-gradient-to-br from-primary/20 to-primary/10 text-primary border border-primary/20'
@@ -72,7 +72,7 @@ export default function CountdownTimer({
   if (!timeLeft) {
     return (
       <Card className="p-8 bg-gradient-to-br from-card to-secondary/10">
-        <div className="text-center text-muted-foreground">Loading countdown...</div>
+        <div className="text-center text-muted-foreground" role="status">Loading countdown...</div>
       </Card>
     );
   }

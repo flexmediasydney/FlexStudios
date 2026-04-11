@@ -17,7 +17,7 @@ export default function QuickStatsBar({ projects = [], tasks = [] }) {
           <TrendingUp className="h-4 w-4 text-blue-600" />
           <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">Projects</span>
         </div>
-        <div className="text-2xl font-bold text-blue-900">{totalProjects}</div>
+        <div className="text-2xl font-bold text-blue-900 tabular-nums">{totalProjects}</div>
         <p className="text-xs text-blue-600/70 mt-1">{totalProjects === 1 ? 'project' : 'projects'} total</p>
       </div>
 
@@ -26,7 +26,7 @@ export default function QuickStatsBar({ projects = [], tasks = [] }) {
           <DollarSign className="h-4 w-4 text-green-600" />
           <span className="text-xs font-semibold text-green-600 uppercase tracking-wide">Revenue</span>
         </div>
-        <div className="text-2xl font-bold text-green-900">
+        <div className="text-2xl font-bold text-green-900 tabular-nums">
           {totalRevenue >= 1000000 
             ? `$${(totalRevenue / 1000000).toFixed(1)}M`
             : totalRevenue >= 1000
@@ -42,7 +42,7 @@ export default function QuickStatsBar({ projects = [], tasks = [] }) {
         <AlertCircle className={`h-4 w-4 ${overdueTasks > 0 ? 'text-red-600' : 'text-muted-foreground'}`} />
         <span className={`text-xs font-semibold ${overdueTasks > 0 ? 'text-red-600' : 'text-muted-foreground'} uppercase tracking-wide`}>Overdue</span>
       </div>
-      <div className={`text-2xl font-bold ${overdueTasks > 0 ? 'text-red-900' : 'text-foreground'}`}>{overdueTasks}</div>
+      <div className={`text-2xl font-bold tabular-nums ${overdueTasks > 0 ? 'text-red-900' : 'text-foreground'}`}>{overdueTasks}</div>
       <p className={`text-xs ${overdueTasks > 0 ? 'text-red-600/70' : 'text-muted-foreground/70'} mt-1`}>{overdueTasks === 1 ? 'task' : 'tasks'} overdue</p>
       </div>
     </div>

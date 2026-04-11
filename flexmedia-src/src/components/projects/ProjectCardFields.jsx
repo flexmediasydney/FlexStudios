@@ -92,8 +92,8 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
     case "priority": {
       if (!project.priority || project.priority === "normal") return null;
       return (
-        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${priorityColors[project.priority] || priorityColors.normal}`}>
-          <Flag className="h-3 w-3" />
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium capitalize ${priorityColors[project.priority] || priorityColors.normal}`}>
+          <Flag className="h-3 w-3" aria-hidden="true" />
           {project.priority}
         </span>
       );
@@ -385,8 +385,8 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
     case "payment_status": {
       const status = project.payment_status || "unpaid";
       return (
-        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${paymentColors[status]}`}>
-          <CreditCard className="h-3 w-3" />
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium capitalize ${paymentColors[status]}`}>
+          <CreditCard className="h-3 w-3" aria-hidden="true" />
           {status}
         </span>
       );

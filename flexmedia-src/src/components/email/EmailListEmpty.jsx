@@ -46,7 +46,7 @@ export default function EmailListEmpty({
       <div className="flex items-center justify-center h-full">
         <div className="text-center space-y-3 max-w-sm px-4">
           <div className="mx-auto w-12 h-12 rounded-full bg-muted/60 flex items-center justify-center">
-            <Search className="h-5 w-5 text-muted-foreground" />
+            <Search className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
           </div>
           <h3 className="text-sm font-semibold text-foreground">No results found</h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
@@ -88,7 +88,7 @@ export default function EmailListEmpty({
         <h3 className="text-sm font-semibold text-foreground">{state.heading}</h3>
         <p className="text-xs text-muted-foreground">{state.description}</p>
         {state.showCompose && onCompose && (
-          <Button onClick={onCompose} variant="outline" size="sm" className="mt-2 gap-1.5 h-8 text-xs">
+          <Button onClick={onCompose} variant="outline" size="sm" className="mt-2 gap-1.5 h-8 text-xs" title="Compose new email">
             <Plus className="h-3.5 w-3.5" />
             Compose
           </Button>

@@ -96,7 +96,7 @@ export default function TodaysScheduleWidget({ projects = [], calendarEvents = [
                   {item.type === "shoot" ? <Camera className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{item.title}</p>
+                  <p className="text-sm font-medium truncate" title={item.title}>{item.title}</p>
                   <div className="flex items-center gap-2 mt-0.5">
                     {item.time && (
                       <span className="text-xs text-muted-foreground">{item.time}</span>
@@ -122,7 +122,7 @@ export default function TodaysScheduleWidget({ projects = [], calendarEvents = [
           </div>
         )}
         <Link to={createPageUrl("Calendar")} className="block mt-3">
-          <Button variant="ghost" size="sm" className="w-full text-xs gap-1">
+          <Button variant="ghost" size="sm" className="w-full text-xs gap-1" title="Open full calendar view">
             View Full Calendar <ArrowRight className="h-3 w-3" />
           </Button>
         </Link>

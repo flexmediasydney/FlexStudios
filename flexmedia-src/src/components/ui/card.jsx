@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils"
 const Card = React.forwardRef(({ className, ...props }, ref) => (
   <div
     ref={ref}
+    data-slot="card"
+    data-testid={props["data-testid"] || undefined}
     className={cn("rounded-xl border bg-card text-card-foreground shadow transition-all duration-200 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)}
     {...props} />
 ))

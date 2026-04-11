@@ -123,7 +123,7 @@ export default function RevisionTemplatesManagement() {
 
       {!loading && filtered.length === 0 && (
         <div className="text-center py-16 text-muted-foreground border rounded-xl border-dashed">
-          <p className="font-medium">No {REQUEST_KINDS[activeKind]?.label} templates yet</p>
+          <p className="font-medium">No {REQUEST_KINDS[activeKind]?.label.toLowerCase()} templates yet</p>
           <p className="text-sm mt-1">Create templates to standardize your request workflows.</p>
           <Button className="mt-4" onClick={() => handleOpen()}>
             <Plus className="h-4 w-4 mr-1.5" /> Create First Template
@@ -131,7 +131,7 @@ export default function RevisionTemplatesManagement() {
         </div>
       )}
 
-      {!isLoading && Object.entries(REVISION_TYPES).map(([type, meta]) => {
+      {!loading && Object.entries(REVISION_TYPES).map(([type, meta]) => {
         const group = grouped[type] || [];
         if (group.length === 0 && searchQuery) return null;
         return (

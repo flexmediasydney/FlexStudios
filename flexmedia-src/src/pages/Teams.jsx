@@ -156,7 +156,7 @@ export default function Teams() {
     {
       key: 'email', label: 'Email', sortable: true,
       render: (row) => row.email
-        ? <a href={`mailto:${row.email}`} className="text-xs text-primary hover:underline truncate max-w-[160px] block" onClick={e => e.stopPropagation()}>{row.email}</a>
+        ? <a href={`mailto:${row.email}`} className="text-xs text-primary hover:underline truncate max-w-[160px] block" onClick={e => e.stopPropagation()} title={row.email}>{row.email}</a>
         : <span className="text-muted-foreground/30 text-xs">—</span>,
     },
     {
@@ -182,13 +182,16 @@ export default function Teams() {
     <div className="flex flex-col h-screen overflow-hidden bg-background">
       <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
         <div className="flex items-center gap-6">
-          <h1 className="text-lg font-semibold">Teams</h1>
+          <h1 className="text-lg font-semibold flex items-center gap-2">
+            <UsersRound className="h-5 w-5 text-primary" />
+            Teams
+          </h1>
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="font-semibold text-foreground">{teams.length}</span> total ·
             <span className="text-muted-foreground ml-1">{agencies.length} organisations</span>
           </div>
         </div>
-        <Button onClick={() => { setEditingTeam(null); setPreselectedAgencyId(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8">
+        <Button onClick={() => { setEditingTeam(null); setPreselectedAgencyId(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8" title="Create a new team">
           <Plus className="h-3.5 w-3.5" />Add Team
         </Button>
       </div>
@@ -205,10 +208,10 @@ export default function Teams() {
         </div>
         <span className="text-xs text-muted-foreground ml-auto">{filtered.length} shown</span>
         <div className="flex items-center border rounded-md overflow-hidden">
-          <button onClick={() => setView('table')} className={cn("px-2 py-1.5 transition-colors", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+          <button onClick={() => setView('table')} title="Table view" aria-label="Table view" className={cn("px-2 py-1.5 transition-colors", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
             <List className="h-3.5 w-3.5" />
           </button>
-          <button onClick={() => setView('cards')} className={cn("px-2 py-1.5 transition-colors", view === 'cards' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+          <button onClick={() => setView('cards')} title="Card view" aria-label="Card view" className={cn("px-2 py-1.5 transition-colors", view === 'cards' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
             <LayoutGrid className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -261,10 +264,17 @@ export default function Teams() {
             {!loading && filtered.length === 0 && (
               <div className="text-center py-16 text-muted-foreground">
                 <Building2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                <p className="font-medium">{search ? `No results for "${search}"` : 'No teams found'}</p>
-                {search && (
+                <p className="font-medium">{search ? `No results for "${search}"` : 'No teams yet'}</p>
+                <p className="text-xs mt-1 text-muted-foreground/70">
+                  {search ? 'Try a different search term' : 'Create your first team to organise contacts'}
+                </p>
+                {search ? (
                   <Button variant="outline" size="sm" onClick={() => setSearch('')} className="mt-3">
                     Clear search
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={() => { setEditingTeam(null); setPreselectedAgencyId(null); setShowForm(true); }} className="mt-3">
+                    <Plus className="h-3.5 w-3.5 mr-1.5" />Add Team
                   </Button>
                 )}
               </div>
@@ -272,7 +282,7 @@ export default function Teams() {
             {!loading && filtered.length > 0 && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {filtered.map(row => (
-                  <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                  <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-lg hover:border-primary/30 transition-all duration-200 cursor-pointer"
                     onClick={() => navigate(createPageUrl('TeamDetails') + '?id=' + row.id)}>
                     <TeamCardContent row={row} members={agentsByTeam[row.id] || []} revenue={revenueByTeam[row.id] || 0} projectsByAgent={projectsByAgent} />
                     <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>

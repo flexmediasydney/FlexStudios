@@ -52,7 +52,7 @@ export default function CalendarConnectBanner() {
         <Button size="sm" onClick={connect} disabled={connecting} className="h-7 text-xs">
           {connecting ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />Connecting...</> : 'Connect Now'}
         </Button>
-        <button onClick={handleDismiss} className="text-blue-400 hover:text-blue-600 dark:hover:text-blue-200" title="Dismiss for 30 days">
+        <button onClick={handleDismiss} className="text-blue-400 hover:text-blue-600 dark:hover:text-blue-200 cursor-pointer transition-colors" title="Dismiss for 30 days" aria-label="Dismiss calendar connection banner">
           <X className="h-4 w-4" />
         </button>
       </div>

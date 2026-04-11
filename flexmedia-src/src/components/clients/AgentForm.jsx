@@ -312,7 +312,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
               rows={3}
               placeholder="e.g., Key decision-maker, prefers email contact, referred by..."
             />
-            <p className="text-xs text-muted-foreground mt-1 text-right">{(formData.notes || "").length}/{LIMITS.notes}</p>
+            <p className="text-xs text-muted-foreground mt-1 text-right tabular-nums">{(formData.notes || "").length}/{LIMITS.notes}</p>
           </div>
           <div>
             <Label className="text-xs text-muted-foreground">Contact every (days)</Label>
@@ -362,7 +362,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
             )}
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={handleClose} disabled={saveMutation.isPending}>
+            <Button type="button" variant="outline" onClick={handleClose} disabled={saveMutation.isPending} title="Cancel editing">
               Cancel
             </Button>
             <Button type="submit" disabled={!canEdit || saveMutation.isPending || !formData.name?.trim() || !formData.agency_id} title="Ctrl+S to save">

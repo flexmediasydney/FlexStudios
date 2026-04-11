@@ -97,7 +97,7 @@ export default function ListingComparison({
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground/80">
-                    Match to Internal Project
+                    Match to Internal Project:
                   </label>
                   <div className="flex gap-2">
                     <Select
@@ -171,9 +171,9 @@ export default function ListingComparison({
       {/* Empty State */}
       {externalListings.length === 0 && (
         <Card className="p-8 text-center">
-          <div className="text-muted-foreground text-sm">
-            No external listings added yet. Add listings from Domain or REA to get started.
-          </div>
+          <AlertCircle className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
+          <p className="text-muted-foreground text-sm font-medium">No external listings added yet</p>
+          <p className="text-muted-foreground text-xs mt-1">Add listings from Domain or REA to start comparing with your projects.</p>
         </Card>
       )}
 

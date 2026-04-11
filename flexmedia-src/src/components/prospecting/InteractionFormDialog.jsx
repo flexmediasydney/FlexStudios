@@ -195,7 +195,7 @@ export default function InteractionFormDialog({
                   }
                 }}
               />
-              <p className="text-xs text-muted-foreground mt-1">Defaults to now. Change if logging a past interaction.</p>
+              <p className="text-xs text-muted-foreground mt-1">Defaults to now — change if logging a past interaction.</p>
             </div>
           </div>
 
@@ -245,7 +245,7 @@ export default function InteractionFormDialog({
               maxLength={2000}
             />
             {formData.details.length > 1900 && (
-              <p className="text-xs text-amber-600 mt-1">{2000 - formData.details.length} characters remaining</p>
+              <p className="text-xs text-amber-600 mt-1 tabular-nums">{2000 - formData.details.length} characters remaining</p>
             )}
           </div>
 
@@ -256,6 +256,7 @@ export default function InteractionFormDialog({
               variant="outline"
               onClick={() => onOpenChange(false)}
               disabled={loading}
+              title="Cancel logging interaction"
             >
               Cancel
             </Button>

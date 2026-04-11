@@ -110,7 +110,7 @@ export default function RelationshipStateKanban({ entitiesByState, onDrillDown }
                           {entity.email || entity.current_agency_name}
                         </p>
                         {entity.interactionCount > 0 && (
-                          <p className="text-xs text-primary mt-0.5">{entity.interactionCount} interactions</p>
+                          <p className="text-xs text-primary mt-0.5">{entity.interactionCount} interaction{entity.interactionCount !== 1 ? 's' : ''}</p>
                         )}
                       </div>
                     </div>

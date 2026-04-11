@@ -155,7 +155,7 @@ export default function RevisionPricingImpact({ pricingImpact, onChange, project
               </Button>
             </div>
             {(pricingImpact.products_added || []).length === 0 ? (
-              <p className="text-xs text-muted-foreground italic">No products being added.</p>
+              <p className="text-xs text-muted-foreground italic">No products being added. Click "Add" to include new products.</p>
             ) : (
               <div className="space-y-2">
                 {(pricingImpact.products_added || []).map((item, i) => (
@@ -306,7 +306,7 @@ export default function RevisionPricingImpact({ pricingImpact, onChange, project
           )}
 
           <p className="text-xs text-muted-foreground italic border-t pt-3">
-            Define the pricing impact. You'll manually apply these changes to the project later.
+            Define the pricing impact here. You can apply these changes to the project later.
           </p>
         </div>
       )}

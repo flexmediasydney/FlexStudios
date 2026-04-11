@@ -36,7 +36,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
                   <p className="text-sm font-medium truncate group-hover:text-primary">
                     {agency.name}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-muted-foreground tabular-nums">
                     ${(agency.revenue / 1000).toFixed(1)}k • {agency.count} projects
                   </p>
                 </div>
@@ -67,7 +67,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
                   <p className="text-sm font-medium truncate group-hover:text-primary">
                     {agent.name}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-muted-foreground tabular-nums">
                     ${((agent.revenue || 0) / 1000).toFixed(1)}k • {agent.count || 0} projects
                   </p>
                 </div>
@@ -96,7 +96,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
                   <p className="text-sm font-medium truncate">
                     {user.name}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-muted-foreground tabular-nums">
                     {user.completedTasks || 0} tasks • {((user.hoursLogged || 0) / 3600).toFixed(1)}h logged
                   </p>
                 </div>

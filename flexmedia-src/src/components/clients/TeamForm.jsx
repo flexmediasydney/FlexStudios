@@ -226,6 +226,7 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
               onChange={(e) => handleChange("name", e.target.value)}
               maxLength={LIMITS.name}
               className={errors.name ? "border-destructive" : ""}
+              placeholder="e.g., Downtown Sales Team"
               required
             />
             <FieldError error={errors.name} />
@@ -239,6 +240,7 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
                 onChange={(e) => handleChange("phone", e.target.value)}
                 maxLength={LIMITS.phone}
                 className={errors.phone ? "border-destructive" : ""}
+                placeholder="e.g., 1300 123 456"
               />
               <FieldError error={errors.phone} />
             </div>
@@ -250,6 +252,7 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
                 onChange={(e) => handleChange("email", e.target.value)}
                 maxLength={LIMITS.email}
                 className={errors.email ? "border-destructive" : ""}
+                placeholder="e.g., team@agency.com.au"
               />
               <FieldError error={errors.email} />
             </div>
@@ -261,26 +264,27 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
               onChange={(e) => handleChange("notes", e.target.value)}
               maxLength={LIMITS.notes}
               rows={3}
+              placeholder="Notes about this team..."
             />
-            <p className="text-xs text-muted-foreground mt-1 text-right">{(formData.notes || "").length}/{LIMITS.notes}</p>
+            <p className="text-xs text-muted-foreground mt-1 text-right tabular-nums">{(formData.notes || "").length}/{LIMITS.notes}</p>
           </div>
           
           {team && (
             <div className="space-y-3 pt-4 border-t">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Users className="h-4 w-4 text-muted-foreground" />
+                  <Users className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   <span className="text-sm font-medium">Agents</span>
-                  <Badge variant="secondary">{teamAgents.length}</Badge>
+                  <Badge variant="secondary" className="tabular-nums">{teamAgents.length}</Badge>
                 </div>
               </div>
             </div>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={handleClose} disabled={saveMutation.isPending}>
+            <Button type="button" variant="outline" onClick={handleClose} disabled={saveMutation.isPending} title="Cancel editing">
               Cancel
             </Button>
-            <Button type="submit" disabled={saveMutation.isPending || !formData.name?.trim() || !formData.agency_id}>
+            <Button type="submit" disabled={saveMutation.isPending || !formData.name?.trim() || !formData.agency_id} title="Ctrl+S to save">
               {saveMutation.isPending ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>

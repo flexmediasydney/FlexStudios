@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
+import { Plus, MessageSquare } from 'lucide-react';
 import InteractionFormDialog from './InteractionFormDialog';
 import InteractionCard from './InteractionCard';
 
@@ -14,13 +13,14 @@ export default function InteractionLogPanel({ prospect, interactions = [], entit
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">Interaction History</h2>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-sm text-muted-foreground mt-1 tabular-nums">
             {interactions.length} touchpoint{interactions.length !== 1 ? 's' : ''} recorded
           </p>
         </div>
         <Button
           onClick={() => setShowNewInteractionDialog(true)}
           className="gap-2"
+          title="Log a new interaction"
         >
           <Plus className="h-4 w-4" />
           Log Interaction
@@ -29,7 +29,9 @@ export default function InteractionLogPanel({ prospect, interactions = [], entit
 
       {interactions.length === 0 ? (
         <Card className="p-12 text-center">
-          <p className="text-muted-foreground mb-4">No interactions logged yet</p>
+          <MessageSquare className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
+          <p className="text-muted-foreground mb-1">No interactions logged yet</p>
+          <p className="text-xs text-muted-foreground mb-4">Start tracking your communication with this prospect.</p>
           <Button
             variant="outline"
             onClick={() => setShowNewInteractionDialog(true)}

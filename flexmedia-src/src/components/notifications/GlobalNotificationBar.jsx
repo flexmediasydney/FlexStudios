@@ -186,7 +186,7 @@ export function NotificationBell() {
         <Bell className={`h-5 w-5 transition-colors ${unreadCount > 0 ? "text-foreground" : "text-muted-foreground"} ${open ? "text-primary" : ""}`} />
         {unreadCount > 0 && (
           <span className={`absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full
-            bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-md
+            bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-md tabular-nums
             ${pulse ? "ring-4 ring-red-300/50 ring-offset-1 animate-pulse" : ""}`}>
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
@@ -204,7 +204,7 @@ export function NotificationBell() {
               <span className="font-semibold text-sm">Notifications</span>
               <span className="text-xs text-muted-foreground">({visible.length})</span>
               {unreadCount > 0 && (
-                <Badge className="bg-red-100 text-red-700 text-xs h-5 font-bold animate-pulse">{unreadCount} unread</Badge>
+                <Badge className="bg-red-100 text-red-700 text-xs h-5 font-bold animate-pulse tabular-nums">{unreadCount} unread</Badge>
               )}
             </div>
             <div className="flex items-center gap-1">

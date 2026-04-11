@@ -77,11 +77,11 @@ export default function PendingReviewsWidget({ projects = [] }) {
                   {item.isUrgent ? <AlertCircle className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{item.name}</p>
-                  <p className="text-xs text-muted-foreground truncate">{item.clientName}</p>
+                  <p className="text-sm font-medium truncate" title={item.name}>{item.name}</p>
+                  <p className="text-xs text-muted-foreground truncate" title={item.clientName}>{item.clientName}</p>
                 </div>
                 <div className="text-right shrink-0">
-                  <span className={`text-xs font-medium ${item.isUrgent ? "text-red-600" : "text-muted-foreground"}`}>
+                  <span className={`text-xs font-medium tabular-nums ${item.isUrgent ? "text-red-600" : "text-muted-foreground"}`}>
                     {formatWaiting(item.waitingHours)}
                   </span>
                   <p className="text-[10px] text-muted-foreground">waiting</p>
@@ -96,7 +96,7 @@ export default function PendingReviewsWidget({ projects = [] }) {
           </div>
         )}
         <Link to={createPageUrl("Projects") + "?status=pending_review"} className="block mt-3">
-          <Button variant="ghost" size="sm" className="w-full text-xs gap-1">
+          <Button variant="ghost" size="sm" className="w-full text-xs gap-1" title="View all pending reviews">
             View All Reviews <ArrowRight className="h-3 w-3" />
           </Button>
         </Link>

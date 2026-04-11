@@ -72,25 +72,25 @@ export default function HierarchyStatistics({ agencies, teams, agents, projectTy
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-6">
-            <p className="text-xs text-muted-foreground mb-1">Avg People/Team</p>
+            <p className="text-xs text-muted-foreground mb-1">Avg. People / Team</p>
             <p className="text-2xl font-bold">{summaryStats.avgAgentsPerTeam}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-xs text-muted-foreground mb-1">Avg People/Organisation</p>
+            <p className="text-xs text-muted-foreground mb-1">Avg. People / Organisation</p>
             <p className="text-2xl font-bold">{summaryStats.avgAgentsPerAgency}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-xs text-muted-foreground mb-1">Products/Category</p>
+            <p className="text-xs text-muted-foreground mb-1">Avg. Products / Category</p>
             <p className="text-2xl font-bold">{summaryStats.productsPerCategory}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-xs text-muted-foreground mb-1">Packages/Type</p>
+            <p className="text-xs text-muted-foreground mb-1">Avg. Packages / Type</p>
             <p className="text-2xl font-bold">{summaryStats.packagesPerType}</p>
           </CardContent>
         </Card>

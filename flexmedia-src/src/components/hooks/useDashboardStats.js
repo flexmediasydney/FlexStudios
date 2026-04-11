@@ -1,6 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 
+/**
+ * Hook to fetch pre-computed dashboard statistics.
+ * Returns { data, computed_at, isLoading, isError, error, refetch }.
+ * Data is an object keyed by stat_key (e.g. "total_projects", "revenue_mtd").
+ * Refreshes every 5 minutes; stats are computed server-side.
+ * @returns {{ data: Record<string, any> | undefined, computed_at: string | null, isLoading: boolean, isError: boolean, error: Error | null, refetch: () => void }}
+ */
 export function useDashboardStats() {
   const query = useQuery({
     queryKey: ["dashboard-stats"],

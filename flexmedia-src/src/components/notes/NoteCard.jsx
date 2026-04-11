@@ -116,7 +116,7 @@ export default function NoteCard({
       {/* Attachments */}
       {note.attachments && note.attachments.length > 0 && (
         <div className="space-y-2 pt-2 border-t">
-          <div className="text-xs font-medium text-muted-foreground">Attachments ({note.attachments.length})</div>
+          <div className="text-xs font-medium text-muted-foreground">{note.attachments.length} attachment{note.attachments.length !== 1 ? 's' : ''}</div>
           <div className="space-y-1">
             {note.attachments.map((att, idx) => (
               <a

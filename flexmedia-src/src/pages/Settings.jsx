@@ -1,6 +1,6 @@
 import React from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Users, Building2, Package, DollarSign, Settings as SettingsIcon, Plug } from "lucide-react";
+import { Users, Building2, Package, DollarSign, Settings as SettingsIcon, Plug, Wrench } from "lucide-react";
 import { PermissionGuard, usePermissions } from "@/components/auth/PermissionGuard";
 import UsersManagement from "@/components/settings/UsersManagement";
 import ClientsManagement from "@/components/settings/ClientsManagement";
@@ -22,7 +22,10 @@ export default function Settings() {
     <PermissionGuard require={["master_admin", "employee"]}>
       <div className="p-6 lg:p-8">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold tracking-tight">Settings & Management</h1>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <Wrench className="h-7 w-7 text-primary" />
+            Settings & Management
+          </h1>
           <p className="text-muted-foreground mt-1">
             Manage your business configuration and pricing
           </p>

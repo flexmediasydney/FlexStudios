@@ -37,7 +37,7 @@ export default function MagicLinkSent({ email, onResend, onBack }) {
         <p className="text-sm font-medium mt-0.5">{email}</p>
       </div>
       <p className="text-xs text-muted-foreground">
-        Click the link in the email to sign in. The link expires in 1 hour.
+        Click the link in the email to sign in. It expires in 1 hour. Check your spam folder if you don't see it.
       </p>
       <Button
         variant="outline"

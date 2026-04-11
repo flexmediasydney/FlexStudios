@@ -45,10 +45,10 @@ export default function TaskEffortBadge({ estimatedMinutes = 0, actualSeconds = 
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted-foreground">Effort</span>
-        <span className={cn("font-medium", textColor)}>
+        <span className={cn("font-medium tabular-nums", textColor)}>
           {formatMins(actualSeconds)}
           {hasEstimate && <span className="text-muted-foreground"> / {formatMins(estimatedSeconds)}</span>}
-          {pct !== null && <span className={cn("ml-1 font-bold", over ? "text-orange-600" : "text-green-600")}>{pct}%</span>}
+          {pct !== null && <span className={cn("ml-1 font-bold tabular-nums", over ? "text-orange-600" : "text-green-600")}>{pct}%</span>}
         </span>
       </div>
       {hasEstimate && (

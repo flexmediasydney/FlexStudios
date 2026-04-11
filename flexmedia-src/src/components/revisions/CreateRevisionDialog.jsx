@@ -332,7 +332,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
         <DialogHeader>
           <DialogTitle>New Request</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Create a revision or change request for this project. Tasks will be auto-assigned to the relevant team members.
+            Create a revision or change request for this project. Tasks are automatically assigned to the relevant team members.
           </p>
         </DialogHeader>
 
@@ -358,7 +358,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
 
           {/* Revision Type */}
           <div>
-            <label className="text-xs font-medium block mb-2">Media Type <span className="text-destructive">*</span> — Select at least one</label>
+            <label className="text-xs font-medium block mb-2">Media Type <span className="text-destructive">*</span></label>
             <div className="grid grid-cols-4 gap-2">
               {Object.entries(REVISION_TYPES).map(([key, meta]) => (
                 <button
@@ -546,7 +546,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
               </Button>
             </div>
             {manualTasks.length === 0 ? (
-              <p className="text-xs text-muted-foreground italic">No additional tasks. Click "Add Task" to add tasks beyond the template.</p>
+              <p className="text-xs text-muted-foreground italic">No additional tasks. Use "Add Task" to include tasks beyond those in the template.</p>
             ) : (
               <div className="space-y-3">
                 {manualTasks.map((task, i) => (
@@ -640,7 +640,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
             <Button 
               disabled={!form.title?.trim() || createMutation.isPending} 
               onClick={handleSubmit}
-              title={!form.title?.trim() ? "Enter a title to create request" : ""}
+              title={!form.title?.trim() ? "A title is required to create a request" : ""}
             >
               {createMutation.isPending ? (
                 <>

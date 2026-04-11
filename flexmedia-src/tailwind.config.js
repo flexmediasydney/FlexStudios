@@ -90,6 +90,18 @@ module.exports = {
   			'load-glow': {
   				'0%, 100%': { boxShadow: '0 0 4px 1px rgba(239, 68, 68, 0.3)' },
   				'50%': { boxShadow: '0 0 8px 3px rgba(239, 68, 68, 0.5)' },
+  			},
+  			'fade-in-up': {
+  				'0%': { opacity: '0', transform: 'translateY(8px)' },
+  				'100%': { opacity: '1', transform: 'translateY(0)' },
+  			},
+  			'fade-in': {
+  				'0%': { opacity: '0' },
+  				'100%': { opacity: '1' },
+  			},
+  			'slide-in-right': {
+  				'0%': { opacity: '0', transform: 'translateX(8px)' },
+  				'100%': { opacity: '1', transform: 'translateX(0)' },
   			}
   		},
   		animation: {
@@ -97,7 +109,11 @@ module.exports = {
   			'accordion-up': 'accordion-up 0.2s ease-out',
   			shimmer: 'shimmer 1.5s ease-in-out infinite',
   			'pulse-ring': 'pulse-ring 1.5s ease-out infinite',
-  			'load-glow': 'load-glow 2s ease-in-out infinite'
+  			'load-glow': 'load-glow 2s ease-in-out infinite',
+  			'fade-in-up': 'fade-in-up 0.3s ease-out',
+  			'fade-in': 'fade-in 0.2s ease-out',
+  			'slide-in-right': 'slide-in-right 0.3s ease-out',
+  			'spin-slow': 'spin 2s linear infinite'
   		}
   	}
   },

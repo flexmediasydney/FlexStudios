@@ -263,7 +263,7 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                   placeholder="https://chat.whatsapp.com/..."
                 />
                 {errors.whatsapp_group_chat && <p className="text-xs text-red-600 mt-1">{errors.whatsapp_group_chat}</p>}
-                <p className="text-xs text-muted-foreground mt-1">Paste the invite link from WhatsApp group info</p>
+                <p className="text-xs text-muted-foreground mt-1">Paste the invite link from the WhatsApp group info screen</p>
               </div>
             </div>
           </div>

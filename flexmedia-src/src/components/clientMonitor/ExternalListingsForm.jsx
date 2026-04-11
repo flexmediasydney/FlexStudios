@@ -100,7 +100,7 @@ export default function ExternalListingsForm({ agent, onSuccess, onCancel }) {
             onChange={(e) => setFormData({ ...formData, price: e.target.value })}
             className="mt-1"
           />
-          <p className="text-[11px] text-muted-foreground mt-1">Listed price or guide. Leave blank if not disclosed.</p>
+          <p className="text-[11px] text-muted-foreground mt-1">Listed or guide price. Leave blank if undisclosed.</p>
         </div>
 
         <div>
@@ -169,7 +169,7 @@ export default function ExternalListingsForm({ agent, onSuccess, onCancel }) {
         </div>
       )}
 
-      <div className="flex gap-3 pt-4">
+      <div className="flex gap-3 justify-end pt-4 border-t">
         <Button
           type="button"
           variant="outline"

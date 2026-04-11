@@ -70,7 +70,7 @@ export default function NotificationToast() {
             )}
             {toast.cta_url && (
               <button
-                className="text-red-200 hover:text-white text-xs underline mt-1"
+                className="text-red-200 hover:text-white text-xs underline mt-1 cursor-pointer transition-colors"
                 onClick={() => {
                   try {
                     const params = toast.cta_params ? JSON.parse(toast.cta_params) : {};
@@ -86,11 +86,13 @@ export default function NotificationToast() {
             )}
           </div>
           <button
-            className="text-red-200 hover:text-white shrink-0"
+            className="text-red-200 hover:text-white shrink-0 cursor-pointer transition-colors"
             onClick={() => {
               markRead(toast.id);
               setToasts(prev => prev.filter(t => t.id !== toast.id));
             }}
+            aria-label="Dismiss notification"
+            title="Dismiss"
           >
             <X className="h-4 w-4" />
           </button>

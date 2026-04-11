@@ -355,7 +355,7 @@ export default function SettingsTonomoIntegration() {
     <ErrorBoundary>
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Tonomo Integration</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Tonomo Integration</h1>
         <p className="text-muted-foreground mt-1">Configure webhook processing and auto-approval rules</p>
       </div>
 
@@ -590,25 +590,25 @@ export default function SettingsTonomoIntegration() {
         <CardContent>
           <div className="grid grid-cols-3 gap-4 mb-4">
             <div className="text-center">
-              <p className="text-2xl font-bold">{queueStats?.pending || 0}</p>
+              <p className="text-2xl font-bold tabular-nums">{queueStats?.pending || 0}</p>
               <p className="text-xs text-muted-foreground">Pending</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-red-600">{queueStats?.failed || 0}</p>
+              <p className="text-2xl font-bold text-red-600 tabular-nums">{queueStats?.failed || 0}</p>
               <p className="text-xs text-muted-foreground">Failed</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-amber-600">{queueStats?.dead_letter || 0}</p>
+              <p className="text-2xl font-bold text-amber-600 tabular-nums">{queueStats?.dead_letter || 0}</p>
               <p className="text-xs text-muted-foreground">Dead Letter</p>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="text-center">
-              <p className="text-2xl font-bold">{auditCount || 0}</p>
+              <p className="text-2xl font-bold tabular-nums">{auditCount || 0}</p>
               <p className="text-xs text-muted-foreground">Audit entries today</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold">{mappingCoverage || 0}%</p>
+              <p className="text-2xl font-bold tabular-nums">{mappingCoverage || 0}%</p>
               <p className="text-xs text-muted-foreground">Mapping coverage</p>
             </div>
           </div>

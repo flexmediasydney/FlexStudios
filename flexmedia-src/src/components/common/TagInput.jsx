@@ -26,7 +26,7 @@ export default function TagInput({ tags = [], onTagsChange, placeholder = "Add t
   return (
     <div className="space-y-2">
       {label && <label className="text-sm font-medium">{label}</label>}
-      <div className="border rounded-lg p-2 space-y-2">
+      <div className="border rounded-lg p-2 space-y-2 focus-within:ring-1 focus-within:ring-primary transition-shadow">
         <div className="flex flex-wrap gap-2">
           {tags.map((tag, idx) => (
             <div key={idx} className="bg-primary/10 text-primary px-3 py-1 rounded-full text-sm flex items-center gap-2">

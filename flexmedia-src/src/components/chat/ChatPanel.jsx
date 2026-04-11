@@ -221,12 +221,12 @@ export default function ChatPanel({
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground mt-1">{sortedMessages.length} messages</p>
+            <p className="text-xs text-muted-foreground mt-1 tabular-nums">{sortedMessages.length} messages</p>
             {canView && !canEdit && (
               <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">View only</p>
             )}
           </div>
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose} aria-label="Close chat panel" title="Close chat">
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -234,7 +234,7 @@ export default function ChatPanel({
         {/* Filters */}
         <div className="space-y-2">
           <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden="true" />
             <Input
               placeholder="Search messages..."
               value={searchQuery}

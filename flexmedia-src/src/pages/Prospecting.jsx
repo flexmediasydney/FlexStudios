@@ -175,7 +175,8 @@ export default function Prospecting() {
                 </Button>
               )}
               <div>
-                <h1 className="text-lg font-semibold">
+                <h1 className="text-lg font-semibold flex items-center gap-2">
+                  <Users className="h-5 w-5 text-primary" />
                   {drillDownState ? `${drillDownState} Pipeline` : 'Prospecting'}
                 </h1>
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -193,6 +194,7 @@ export default function Prospecting() {
                 className="gap-1.5 h-8"
                 onClick={() => setShowNewAgencyDialog(true)}
                 disabled={!canEdit}
+                title="Add a new organisation prospect"
               >
                 <Plus className="h-3.5 w-3.5" />
                 New Organisation
@@ -202,6 +204,7 @@ export default function Prospecting() {
                 className="gap-1.5 h-8"
                 onClick={() => setShowNewAgentDialog(true)}
                 disabled={!canEdit}
+                title="Add a new contact prospect"
               >
                 <Plus className="h-3.5 w-3.5" />
                 New Person

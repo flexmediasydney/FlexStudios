@@ -18,7 +18,9 @@ export default function ProspectTimeline({ prospect, interactions = [] }) {
   if (interactions.length === 0) {
     return (
       <Card className="p-12 text-center">
-        <p className="text-muted-foreground">No interactions yet. Start by logging your first touchpoint.</p>
+        <Calendar className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
+        <p className="text-muted-foreground">No interactions yet.</p>
+        <p className="text-xs text-muted-foreground mt-1">Start by logging your first touchpoint.</p>
       </Card>
     );
   }

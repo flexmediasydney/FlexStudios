@@ -153,6 +153,8 @@ export default function ProjectNotes({ projectId }) {
                 size="icon"
                 className="absolute top-2 right-2 h-8 w-8"
                 onClick={() => setShowUserSuggestions(!showUserSuggestions)}
+                title="Mention a team member"
+                aria-label="Mention a team member"
               >
                 <AtSign className="h-4 w-4" />
               </Button>
@@ -185,7 +187,8 @@ export default function ProjectNotes({ projectId }) {
                     <button
                       type="button"
                       onClick={() => setMentions(prev => prev.filter(m => m !== email))}
-                      className="ml-1 hover:opacity-70"
+                      className="ml-1 hover:opacity-70 transition-opacity"
+                      aria-label={`Remove mention of ${email.split("@")[0]}`}
                     >
                       <X className="h-3 w-3" />
                     </button>
@@ -203,7 +206,8 @@ export default function ProjectNotes({ projectId }) {
                     <button
                       type="button"
                       onClick={() => setSelectedFiles(prev => prev.filter((_, i) => i !== idx))}
-                      className="hover:opacity-70 ml-1"
+                      className="hover:opacity-70 transition-opacity ml-1"
+                      aria-label={`Remove file ${file.file_name}`}
                     >
                       <X className="h-3 w-3" />
                     </button>
@@ -226,6 +230,7 @@ export default function ProjectNotes({ projectId }) {
                 variant="outline"
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
+                title="Attach a file"
               >
                 <Paperclip className="h-4 w-4 mr-1" />
                 Attach

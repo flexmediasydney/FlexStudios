@@ -410,8 +410,8 @@ export default function StaffDefaultsPanel() {
   if (!roleDefaults) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        <p>Could not load role defaults configuration.</p>
-        <p className="text-sm mt-1">Please check that the TonomoRoleDefaults entity exists.</p>
+        <p className="font-medium">Could not load role defaults configuration.</p>
+        <p className="text-sm mt-1">Please check that the TonomoRoleDefaults entity is set up correctly.</p>
       </div>
     );
   }
@@ -428,7 +428,7 @@ export default function StaffDefaultsPanel() {
               <div>
                 <CardTitle className="text-lg">Project Staff Defaults</CardTitle>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  Configure which person or team is automatically assigned to each role when a new project is created.
+                  Choose the default person or team assigned to each role when a new project is created.
                 </p>
               </div>
             </div>

@@ -69,7 +69,7 @@ export default function SnoozeDialog({ open, onOpenChange, onSnooze }) {
             <button
               key={option.label}
               onClick={() => handleSnooze(option)}
-              className="p-3 text-sm rounded-lg border border-input hover:bg-muted transition-colors text-left"
+              className="p-3 text-sm rounded-lg border border-input hover:bg-muted transition-colors text-left cursor-pointer"
             >
               <Clock className="h-3 w-3 inline mr-1" />
               {option.label}

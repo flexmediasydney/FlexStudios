@@ -406,7 +406,7 @@ function NotificationLogTab() {
         ].map(s => (
           <Card key={s.label}>
             <CardContent className="pt-4 pb-3">
-              <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+              <p className={`text-2xl font-bold tabular-nums ${s.color}`}>{s.value}</p>
               <p className="text-xs text-muted-foreground">{s.label}</p>
             </CardContent>
           </Card>
@@ -497,7 +497,10 @@ export default function SettingsNotifications() {
           <Button variant="ghost" size="icon" aria-label="Back to settings"><ArrowLeft className="h-5 w-5" /></Button>
         </Link>
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Notification Settings</h1>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <Bell className="h-7 w-7 text-primary" />
+            Notification Settings
+          </h1>
           <p className="text-muted-foreground mt-1">
             Control which notifications you receive and how they're delivered.
           </p>

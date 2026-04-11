@@ -3,9 +3,10 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 const Table = React.forwardRef(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-x-auto -webkit-overflow-scrolling-touch">
+  <div className="relative w-full overflow-x-auto -webkit-overflow-scrolling-touch" role="region" aria-label="Scrollable table">
     <table
       ref={ref}
+      data-testid={props["data-testid"] || undefined}
       className={cn("w-full caption-bottom text-sm min-w-[640px] sm:min-w-0", className)}
       {...props} />
   </div>
@@ -47,8 +48,9 @@ TableRow.displayName = "TableRow"
 const TableHead = React.forwardRef(({ className, ...props }, ref) => (
   <th
     ref={ref}
+    scope="col"
     className={cn(
-      "h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "h-10 px-2 text-left align-middle font-medium text-muted-foreground select-none [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props} />

@@ -79,7 +79,7 @@ export default function ProspectingDashboard() {
       <div className="flex items-center justify-center py-12">
         <div className="text-center">
           <div className="animate-spin h-6 w-6 border-2 border-primary/30 border-t-primary rounded-full mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">Loading dashboard...</p>
+          <p className="text-sm text-muted-foreground">Loading prospecting dashboard...</p>
         </div>
       </div>
     );

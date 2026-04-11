@@ -13,7 +13,7 @@ export default function StatsCard({ title, value, subtitle, icon: Icon, trend, c
           )}
         </div>
         {Icon && (
-          <div className="p-3 rounded-xl bg-primary/10 text-primary group-hover:scale-125 group-hover:rotate-6 group-hover:bg-primary/20 transition-all duration-300">
+          <div className="p-3 rounded-xl bg-primary/10 text-primary group-hover:scale-125 group-hover:rotate-6 group-hover:bg-primary/20 transition-all duration-300" aria-hidden="true">
             <Icon className="h-5 w-5" />
           </div>
         )}
@@ -21,6 +21,7 @@ export default function StatsCard({ title, value, subtitle, icon: Icon, trend, c
       {trend && (
         <div className="mt-4 flex items-center gap-1.5 text-sm font-medium">
           <span className={cn(
+            "tabular-nums",
             trend > 0 ? "text-green-600" : "text-red-500"
           )}>
             {trend > 0 ? "↑" : "↓"} {Math.abs(trend)}%

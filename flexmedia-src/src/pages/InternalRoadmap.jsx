@@ -4,7 +4,10 @@ export default function InternalRoadmap() {
   return (
     <div className="space-y-6 p-6">
       <div>
-        <h1 className="text-3xl font-bold">Internal Roadmap</h1>
+        <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <Map className="h-7 w-7 text-blue-500" />
+          Internal Roadmap
+        </h1>
         <p className="text-muted-foreground mt-2">Product development roadmap and feature tracking.</p>
       </div>
 

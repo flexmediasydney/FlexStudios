@@ -67,10 +67,10 @@ export default function PricingImpactCard({
         <div className="flex-1">
           <p className={`font-semibold flex items-center gap-1 ${applied ? "text-green-700" : "text-orange-700"}`}>
             <DollarSign className="h-3.5 w-3.5" />
-            {applied ? "✓ Pricing Updated" : "⚠ Pricing Pending"}
+            {applied ? "Pricing Updated" : "Pricing Pending"}
             {estimatedDelta !== 0 && (
               <span className={`font-semibold ${estimatedDelta > 0 ? "text-green-600" : "text-red-600"}`}>
-                {estimatedDelta > 0 ? "+" : ""} ${estimatedDelta.toFixed(2)}
+                {estimatedDelta > 0 ? "+" : ""}${estimatedDelta.toFixed(2)}
               </span>
             )}
           </p>
@@ -105,7 +105,7 @@ export default function PricingImpactCard({
             </p>
           ))}
           {activeCount === 0 && (pricingImpact.products_removed || []).length === 0 && (pricingImpact.quantity_changes || []).length === 0 && !applied && (
-            <p className="text-muted-foreground italic text-xs">No changes defined.</p>
+            <p className="text-muted-foreground italic text-xs">No pricing changes defined yet.</p>
           )}
         </div>
       )}

@@ -186,7 +186,7 @@ export default function InternalTeamsManagement() {
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-bold">Internal Teams <AccessBadge entityType="internal_teams" /></h2>
-          <p className="text-muted-foreground">Manage your internal teams and members</p>
+          <p className="text-muted-foreground">Manage your internal teams and their members.</p>
         </div>
         <Button onClick={() => handleOpen()} className="gap-2" disabled={!canEdit}>
           <Plus className="h-4 w-4" />
@@ -387,7 +387,7 @@ export default function InternalTeamsManagement() {
                 <option value="mixed">Mixed — Multiple functions</option>
               </select>
               <p className="text-xs text-muted-foreground mt-1">
-                Used to auto-suggest this team in Fallback Role Assignments.
+                Determines which roles this team is suggested for in Fallback Assignments.
               </p>
             </div>
             <div className="space-y-1.5">

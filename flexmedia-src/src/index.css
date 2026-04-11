@@ -74,9 +74,27 @@
   * {
     @apply border-border;
   }
+  html {
+    scroll-behavior: smooth;
+    text-rendering: optimizeLegibility;
+  }
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "cv11", "ss01";
+  }
+  /* Selection color — branded highlight */
+  ::selection {
+    background-color: hsl(var(--primary) / 0.2);
+    color: hsl(var(--foreground));
+  }
+  ::-moz-selection {
+    background-color: hsl(var(--primary) / 0.2);
+    color: hsl(var(--foreground));
+  }
+  /* Focus-visible base for all interactive elements */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
   }
 }
 
@@ -252,5 +270,46 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ── Print-friendly styles ──────────────────────────────────────────────────── */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 12pt;
+  }
+  /* Hide navigation, sidebar, toasts, and interactive-only elements */
+  [data-sidebar],
+  nav,
+  .toaster,
+  [role="dialog"],
+  [role="alertdialog"],
+  button:not([data-print-visible]),
+  .fixed {
+    display: none !important;
+  }
+  /* Ensure content fills the page */
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+  /* Prevent page breaks inside cards and tables */
+  .rounded-xl,
+  tr,
+  [data-slot="card"] {
+    break-inside: avoid;
+  }
+  /* Show link URLs */
+  a[href]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.8em;
+    opacity: 0.7;
+  }
+  a[href^="#"]::after,
+  a[href^="javascript"]::after {
+    content: "";
   }
 }

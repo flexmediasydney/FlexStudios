@@ -141,7 +141,7 @@ export default function SettingsTonomoWebhooks() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Total Events</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold">{stats.total}</div>
+              <div className="text-3xl font-bold tabular-nums">{stats.total}</div>
             </CardContent>
           </Card>
           <Card>
@@ -149,7 +149,7 @@ export default function SettingsTonomoWebhooks() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Today</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold">{stats.today}</div>
+              <div className="text-3xl font-bold tabular-nums">{stats.today}</div>
             </CardContent>
           </Card>
           <Card style={{ backgroundColor: stats.coverageBg }}>
@@ -157,7 +157,7 @@ export default function SettingsTonomoWebhooks() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Coverage</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold">{stats.coverage}%</div>
+              <div className="text-3xl font-bold tabular-nums">{stats.coverage}%</div>
               <p className="text-xs text-muted-foreground mt-1">Full signal coverage today</p>
             </CardContent>
           </Card>
@@ -166,7 +166,7 @@ export default function SettingsTonomoWebhooks() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Errors</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-red-600">{stats.errors}</div>
+              <div className="text-3xl font-bold text-red-600 tabular-nums">{stats.errors}</div>
             </CardContent>
           </Card>
         </div>

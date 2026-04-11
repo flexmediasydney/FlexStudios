@@ -255,7 +255,10 @@ export default function ProductsPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Products</h1>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <Camera className="h-7 w-7 text-primary" />
+            Products
+          </h1>
           <p className="text-muted-foreground mt-1">Manage products with tier variants</p>
         </div>
       </div>
@@ -321,7 +324,7 @@ export default function ProductsPage() {
                 <Trello className="h-4 w-4" />
               </Button>
             </div>
-            <Button onClick={() => handleOpen()} className="gap-2">
+            <Button onClick={() => handleOpen()} className="gap-2" title="Create a new product">
               <Plus className="h-4 w-4" />
               Add Product
             </Button>
@@ -355,6 +358,7 @@ export default function ProductsPage() {
                   {filteredProducts.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
+                        <Camera className="h-8 w-8 mx-auto mb-2 opacity-30" />
                         {searchQuery ? "No products match your search" : "No products yet. Add your first product."}
                       </TableCell>
                     </TableRow>
@@ -364,7 +368,7 @@ export default function ProductsPage() {
                       <React.Fragment key={product.id}>
                         <TableRow className="hover:bg-muted/50">
                           <TableCell>
-                            <Button variant="ghost" size="sm" onClick={() => toggleExpanded(product.id)} className="h-6 w-6 p-0">
+                            <Button variant="ghost" size="sm" onClick={() => toggleExpanded(product.id)} className="h-6 w-6 p-0" title={isExpanded ? "Collapse tier details" : "Expand tier details"} aria-label={isExpanded ? "Collapse tier details" : "Expand tier details"}>
                               {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                             </Button>
                           </TableCell>
@@ -378,13 +382,13 @@ export default function ProductsPage() {
                             <Badge variant="outline">{categories[product.category] || product.category}</Badge>
                           </TableCell>
                           <TableCell>{product.pricing_type === "per_unit" ? "Per Unit" : "Fixed"}</TableCell>
-                          <TableCell>
+                          <TableCell className="tabular-nums">
                             ${(product.standard_tier?.base_price ?? 0).toFixed(2)}
                             {product.pricing_type === "per_unit" && (product.standard_tier?.unit_price ?? 0) > 0 && (
                               <span className="text-xs text-muted-foreground ml-1">+ ${(product.standard_tier.unit_price ?? 0).toFixed(2)}/unit</span>
                             )}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="tabular-nums">
                             ${(product.premium_tier?.base_price ?? 0).toFixed(2)}
                             {product.pricing_type === "per_unit" && (product.premium_tier?.unit_price ?? 0) > 0 && (
                               <span className="text-xs text-muted-foreground ml-1">+ ${(product.premium_tier.unit_price ?? 0).toFixed(2)}/unit</span>
@@ -397,10 +401,10 @@ export default function ProductsPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-1 justify-end">
-                              <Button variant="ghost" size="sm" onClick={() => handleOpen(product)}>
+                              <Button variant="ghost" size="sm" onClick={() => handleOpen(product)} title="Edit product" aria-label={`Edit ${product.name}`}>
                                 <Edit className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="sm" onClick={() => setDeletingProduct(product)} className="text-destructive hover:text-destructive">
+                              <Button variant="ghost" size="sm" onClick={() => setDeletingProduct(product)} className="text-destructive hover:text-destructive" title="Delete product" aria-label={`Delete ${product.name}`}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>

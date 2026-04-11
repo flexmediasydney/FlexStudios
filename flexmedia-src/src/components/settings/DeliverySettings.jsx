@@ -123,7 +123,7 @@ export default function DeliverySettings() {
             <Clock className="h-5 w-5" />
             <CardTitle>Working Hours</CardTitle>
           </div>
-          <CardDescription>Set your working hours for each day of the week</CardDescription>
+          <CardDescription>Set working hours for each day. Used for deadline calculations and countdown timers.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {DAYS.map(day => (
@@ -168,7 +168,7 @@ export default function DeliverySettings() {
             <Palette className="h-5 w-5" />
             <CardTitle>Countdown Timer Colors</CardTitle>
           </div>
-          <CardDescription>Configure color thresholds for task countdown timers</CardDescription>
+          <CardDescription>Configure when countdown timers change colour as deadlines approach</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-4">
@@ -229,8 +229,8 @@ export default function DeliverySettings() {
             <p className="text-sm font-medium">Configuration Rules:</p>
             <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
               <li>All thresholds must be in ascending order</li>
-              <li>Values are percentages based on task creation to due date</li>
-              <li>Over 100% displays red card with flashing animation</li>
+              <li>Values represent the percentage of time elapsed from task creation to due date</li>
+              <li>Past 100% the timer turns red and flashes to indicate overdue</li>
             </ul>
           </div>
 

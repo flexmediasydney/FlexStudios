@@ -90,10 +90,10 @@ export default function ActiveTimersWidget({ timeLogs = [], tasks = [] }) {
                   <Play className="h-4 w-4" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{timer.taskName}</p>
-                  <p className="text-xs text-muted-foreground truncate">{timer.userName}</p>
+                  <p className="text-sm font-medium truncate" title={timer.taskName}>{timer.taskName}</p>
+                  <p className="text-xs text-muted-foreground truncate" title={timer.userName}>{timer.userName}</p>
                 </div>
-                <span className="text-sm font-mono font-semibold text-green-600 shrink-0">
+                <span className="text-sm font-mono font-semibold text-green-600 shrink-0 tabular-nums">
                   {formatDuration(timer.elapsedSec)}
                 </span>
               </div>
@@ -119,7 +119,7 @@ export default function ActiveTimersWidget({ timeLogs = [], tasks = [] }) {
                   <p className="text-xs font-medium truncate">{timer.taskName}</p>
                   <p className="text-[11px] text-muted-foreground">{timer.userName}</p>
                 </div>
-                <span className="text-xs font-mono text-muted-foreground shrink-0">
+                <span className="text-xs font-mono text-muted-foreground shrink-0 tabular-nums">
                   {formatDuration(timer.totalSec)}
                 </span>
               </div>

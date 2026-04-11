@@ -64,9 +64,9 @@ export default function HierarchyGridView({
             </span>
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-medium truncate leading-tight">{agent.name}</p>
+            <p className="text-sm font-medium truncate leading-tight" title={agent.name}>{agent.name}</p>
             {agent.title && (
-              <p className="text-[10px] text-muted-foreground truncate">{agent.title}</p>
+              <p className="text-[10px] text-muted-foreground truncate" title={agent.title}>{agent.title}</p>
             )}
           </div>
         </div>
@@ -152,6 +152,7 @@ export default function HierarchyGridView({
             e.stopPropagation();
             navigate(createPageUrl('Projects') + `?agent=${agent.id}`);
           }}
+          title="Create new project for this agent"
         >
           New project
         </Button>
@@ -214,11 +215,11 @@ export default function HierarchyGridView({
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="outline" onClick={() => onAddTeam(agency.id)}>
+                  <Button size="sm" variant="outline" onClick={() => onAddTeam(agency.id)} title="Add team to this agency">
                     <Plus className="h-3.5 w-3.5 mr-1" />
                     Team
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => onAddAgent(agency.id)}>
+                  <Button size="sm" variant="outline" onClick={() => onAddAgent(agency.id)} title="Add agent to this agency">
                     <Plus className="h-3.5 w-3.5 mr-1" />
                     Agent
                   </Button>

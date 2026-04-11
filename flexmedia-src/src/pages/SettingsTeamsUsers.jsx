@@ -155,15 +155,15 @@ function AdminCalendarManagement() {
       {/* Summary stats */}
       <div className="grid grid-cols-3 gap-4">
         <div className="rounded-lg border p-4">
-          <div className="text-2xl font-bold">{totalConnections}</div>
+          <div className="text-2xl font-bold tabular-nums">{totalConnections}</div>
           <div className="text-xs text-muted-foreground mt-1">Total connections</div>
         </div>
         <div className={`rounded-lg border p-4 ${atLimitUsers > 0 ? 'border-amber-200 bg-amber-50' : ''}`}>
-          <div className="text-2xl font-bold">{atLimitUsers}</div>
+          <div className="text-2xl font-bold tabular-nums">{atLimitUsers}</div>
           <div className="text-xs text-muted-foreground mt-1">Users at limit</div>
         </div>
         <div className={`rounded-lg border p-4 ${brokenConnections > 0 ? 'border-red-200 bg-red-50' : ''}`}>
-          <div className="text-2xl font-bold text-red-600">{brokenConnections}</div>
+          <div className="text-2xl font-bold text-red-600 tabular-nums">{brokenConnections}</div>
           <div className="text-xs text-muted-foreground mt-1">Broken (no token)</div>
         </div>
       </div>

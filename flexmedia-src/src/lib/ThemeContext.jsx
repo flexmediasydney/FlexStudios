@@ -58,6 +58,10 @@ export function ThemeProvider({ children }) {
   );
 }
 
+/**
+ * Access the current theme context.
+ * @returns {{ theme: 'light' | 'dark' | 'system', setTheme: (t: 'light' | 'dark' | 'system') => void, resolvedTheme: 'light' | 'dark' }}
+ */
 export function useTheme() {
   return useContext(ThemeContext);
 }

@@ -11,7 +11,12 @@ const stateColors = {
 
 export default function AgencyListView({ agencies, interactions }) {
   if (!agencies.length) {
-    return null;
+    return (
+      <div className="text-center py-12">
+        <Building2 className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
+        <p className="text-muted-foreground">No agencies to display</p>
+      </div>
+    );
   }
 
   return (
@@ -36,7 +41,7 @@ export default function AgencyListView({ agencies, interactions }) {
                   <Badge className={stateColors[agency.relationship_state] || 'bg-muted text-foreground'}>
                     {agency.relationship_state}
                   </Badge>
-                  <p className="text-xs text-muted-foreground mt-2">{agency.interactionCount} interactions</p>
+                  <p className="text-xs text-muted-foreground mt-2">{agency.interactionCount} interaction{agency.interactionCount !== 1 ? 's' : ''}</p>
                 </div>
               </div>
             </CardContent>

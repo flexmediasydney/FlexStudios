@@ -156,6 +156,8 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
               className="h-8 px-2.5"
               onClick={handleSubmit}
               disabled={loading || !selectedType || !summary.trim()}
+              title="Submit interaction"
+              aria-label="Submit interaction"
             >
               {loading ? (
                 <span className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full" />

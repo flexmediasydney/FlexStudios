@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus, RefreshCw, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useSearchParams } from "react-router-dom";
@@ -102,7 +102,11 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <LayoutDashboard className="h-7 w-7 text-primary" />
+            Dashboard
+          </h1>
+          <p className="text-muted-foreground text-sm mt-1">Overview of operations, projects, and team activity</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">

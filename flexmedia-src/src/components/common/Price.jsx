@@ -49,7 +49,7 @@ export default function Price({ value, compact, fallback, children, className = 
     return <span className={className} data-sensitive="price">{fallback || '$0.00'}</span>;
   }
 
-  return <span className={className} data-sensitive="price">{fmt(n, compact)}</span>;
+  return <span className={`tabular-nums ${className}`} data-sensitive="price">{fmt(n, compact)}</span>;
 }
 
 /**

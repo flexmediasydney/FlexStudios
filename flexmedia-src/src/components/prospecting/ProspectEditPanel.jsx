@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2 } from 'lucide-react';
 
 const SOURCE_OPTIONS = ['Referral', 'LinkedIn', 'Web Search', 'Event', 'Manual Import', 'Networking'];
 const VALUE_OPTIONS = ['Low', 'Medium', 'High', 'Enterprise'];
@@ -97,6 +97,7 @@ export default function ProspectEditPanel({ prospect }) {
 
       {success && (
         <div className="flex gap-3 p-4 bg-green-50 border border-green-200 rounded-lg">
+          <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-green-800">Changes saved successfully</p>
         </div>
       )}
@@ -231,6 +232,7 @@ export default function ProspectEditPanel({ prospect }) {
           id="notes"
           value={formData.notes}
           onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+          placeholder="Add any relevant notes about this prospect..."
           rows={4}
         />
       </div>

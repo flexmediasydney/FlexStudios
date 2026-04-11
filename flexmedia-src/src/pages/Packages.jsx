@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
-import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, GitBranch, Lock, Unlock } from "lucide-react";
+import { Plus, Search, Edit, Trash2, ChevronDown, ChevronRight, History, Camera, BookOpen, LayoutList, Grid3x3, Trello, GitBranch, Lock, Unlock, Package } from "lucide-react";
 import ProjectTypeFilter from "../components/settings/ProjectTypeFilter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -315,7 +315,7 @@ export default function PackagesPage() {
                 <Trello className="h-4 w-4" />
               </Button>
             </div>
-            <Button onClick={() => handleOpen()} className="gap-2" disabled={!canEdit}>
+            <Button onClick={() => handleOpen()} className="gap-2" disabled={!canEdit} title="Create a new package">
               <Plus className="h-4 w-4" />
               Add Package
             </Button>
@@ -350,6 +350,7 @@ export default function PackagesPage() {
                   {filteredPackages.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                        <Package className="h-8 w-8 mx-auto mb-2 opacity-30" />
                         {searchQuery ? "No packages match your search" : "No packages yet. Add your first package."}
                       </TableCell>
                     </TableRow>
@@ -360,7 +361,7 @@ export default function PackagesPage() {
                       <React.Fragment key={pkg.id}>
                         <TableRow className={cn("hover:bg-muted/50", isLocked && "bg-red-50/50 dark:bg-red-950/20")}>
                           <TableCell>
-                            <Button variant="ghost" size="sm" onClick={() => toggleExpanded(pkg.id)} className="h-6 w-6 p-0">
+                            <Button variant="ghost" size="sm" onClick={() => toggleExpanded(pkg.id)} className="h-6 w-6 p-0" title={isExpanded ? "Collapse details" : "Expand details"} aria-label={isExpanded ? "Collapse details" : "Expand details"}>
                               {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                             </Button>
                           </TableCell>
@@ -418,10 +419,10 @@ export default function PackagesPage() {
                                   {isLocked ? <Lock className="h-4 w-4 text-red-500" /> : <Unlock className="h-4 w-4 text-muted-foreground" />}
                                 </Button>
                               )}
-                              <Button variant="ghost" size="sm" onClick={() => handleOpen(pkg)} disabled={!canEdit || isLocked}>
+                              <Button variant="ghost" size="sm" onClick={() => handleOpen(pkg)} disabled={!canEdit || isLocked} title="Edit package" aria-label={`Edit ${pkg.name}`}>
                                 <Edit className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="sm" onClick={() => setDeletingPackage(pkg)} className="text-destructive hover:text-destructive" disabled={!canEdit || isLocked}>
+                              <Button variant="ghost" size="sm" onClick={() => setDeletingPackage(pkg)} className="text-destructive hover:text-destructive" disabled={!canEdit || isLocked} title="Delete package" aria-label={`Delete ${pkg.name}`}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>

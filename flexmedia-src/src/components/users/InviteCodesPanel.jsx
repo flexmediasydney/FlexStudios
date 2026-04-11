@@ -113,7 +113,7 @@ export default function InviteCodesPanel() {
       ) : codes.length === 0 ? (
         <div className="text-center py-8 text-sm text-muted-foreground">
           <KeyRound className="h-8 w-8 mx-auto mb-2 opacity-30" />
-          No invite codes yet. Generate one to let new users sign up.
+          No invite codes yet. Generate a code to let new users join your team.
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden">

@@ -57,7 +57,7 @@ function Stat({ label, value, sub, icon: Icon, trend, color = "text-foreground" 
         <div className="flex items-start justify-between">
           <div>
             <p className="text-xs text-muted-foreground mb-1">{label}</p>
-            <p className={`text-2xl font-bold ${color}`}>{value}</p>
+            <p className={`text-2xl font-bold tabular-nums ${color}`}>{value}</p>
             {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
           </div>
           {Icon && <Icon className="h-5 w-5 text-muted-foreground opacity-40 mt-0.5" />}
@@ -278,6 +278,8 @@ export default function Reports() {
             onClick={() => exportCSV(periodProjects, `report_${period}`)}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
                        border border-border hover:bg-muted transition-colors"
+            title="Export current period data as CSV"
+            aria-label="Export CSV"
           >
             <Download className="h-3.5 w-3.5" />
             Export CSV
@@ -290,7 +292,7 @@ export default function Reports() {
         <h2 className="text-lg font-semibold flex items-center gap-2">
           <DollarSign className="h-5 w-5 text-green-600" /> Revenue
         </h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div
             onClick={() => setDrillDown({ title: 'All projects this period', projects: periodProjects })}
             className="cursor-pointer hover:shadow-md transition-shadow"
@@ -440,7 +442,7 @@ export default function Reports() {
           <CheckCircle className="h-5 w-5 text-violet-600" /> Business Health
         </h2>
         <p className="text-xs text-muted-foreground -mt-2">All-time figures across the full project history</p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Stat label="On-time delivery"
             value={health.onTimeRate != null ? `${health.onTimeRate}%` : "—"} icon={CheckCircle}
             color={health.onTimeRate == null ? "" : health.onTimeRate >= 85 ? "text-green-700" : health.onTimeRate >= 70 ? "text-amber-600" : "text-red-600"} />
@@ -466,8 +468,10 @@ export default function Reports() {
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h2 className="text-base font-semibold">{drillDown.title}</h2>
               <button
-                className="text-muted-foreground hover:text-foreground text-lg"
+                className="text-muted-foreground hover:text-foreground text-lg transition-colors"
                 onClick={() => setDrillDown(null)}
+                aria-label="Close drill-down"
+                title="Close"
               >✕</button>
             </div>
             <div className="overflow-y-auto flex-1">

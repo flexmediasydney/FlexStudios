@@ -32,7 +32,7 @@ function Badge({
   variant,
   ...props
 }) {
-  return (<div className={cn(badgeVariants({ variant }), className)} {...props} />);
+  return (<div data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />);
 }
 
 export { Badge, badgeVariants }

@@ -216,8 +216,8 @@ export default function TaskDetailPanel({
               onChange={(e) => setDeadlineInput(e.target.value)}
               className="h-6 text-xs w-40"
             />
-            <Button size="icon" className="h-6 w-6" onClick={handleSaveDeadline}>✓</Button>
-            <Button size="icon" variant="outline" className="h-6 w-6" onClick={() => setEditingDeadline(false)}>✕</Button>
+            <Button size="icon" className="h-6 w-6" onClick={handleSaveDeadline} title="Save deadline" aria-label="Save deadline">✓</Button>
+            <Button size="icon" variant="outline" className="h-6 w-6" onClick={() => setEditingDeadline(false)} title="Cancel editing" aria-label="Cancel deadline editing">✕</Button>
             {task.due_date && (
               <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive" onClick={handleDeleteDeadline}>
                 <Trash2 className="h-3 w-3" />
@@ -306,6 +306,7 @@ export default function TaskDetailPanel({
               className="h-6 text-xs px-2"
               onClick={() => onEdit(task)}
               disabled={lockMutation.isPending}
+              title="Edit task details"
             >
               Edit
             </Button>

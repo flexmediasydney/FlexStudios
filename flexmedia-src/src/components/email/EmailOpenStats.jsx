@@ -37,7 +37,7 @@ export default function EmailOpenStats({ messageId }) {
       <div className="flex items-center gap-2">
         <Eye className="h-4 w-4 text-blue-600" />
         <div>
-          <p className="font-semibold text-foreground">{totalOpens}</p>
+          <p className="font-semibold text-foreground tabular-nums">{totalOpens}</p>
           <p className="text-xs text-muted-foreground">opens</p>
         </div>
       </div>
@@ -46,7 +46,7 @@ export default function EmailOpenStats({ messageId }) {
       <div className="flex items-center gap-2">
         <Users className="h-4 w-4 text-blue-600" />
         <div>
-          <p className="font-semibold text-foreground">{uniqueOpeners.size}</p>
+          <p className="font-semibold text-foreground tabular-nums">{uniqueOpeners.size}</p>
           <p className="text-xs text-muted-foreground">unique</p>
         </div>
       </div>

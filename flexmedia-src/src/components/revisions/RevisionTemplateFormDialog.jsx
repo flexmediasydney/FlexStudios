@@ -164,8 +164,8 @@ export default function RevisionTemplateFormDialog({ open, onClose, template, on
 
             <div className="space-y-2">
               {form.task_templates.length === 0 && (
-                <p className="text-xs text-muted-foreground text-center py-6 border rounded-lg border-dashed">
-                  No tasks yet. Add tasks to define the revision workflow.
+                <p className="text-xs text-muted-foreground text-center py-8 border rounded-lg border-dashed">
+                  No tasks yet. Click "Add Task" above to define the revision workflow.
                 </p>
               )}
               {form.task_templates.map((task, idx) => (

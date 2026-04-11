@@ -37,7 +37,7 @@ export default function AgentSearch({ onSelect }) {
   return (
     <div className="space-y-4">
       <div className="relative">
-        <Search className="absolute left-3 top-3 h-5 w-5 text-muted-foreground/70" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           placeholder="Search agents by name or email..."
           value={searchInput}
@@ -45,7 +45,7 @@ export default function AgentSearch({ onSelect }) {
           className="pl-10"
         />
         {isLoading && (
-          <Loader2 className="absolute right-3 top-3 h-5 w-5 animate-spin text-muted-foreground/70" />
+          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
         )}
       </div>
 
@@ -70,8 +70,8 @@ export default function AgentSearch({ onSelect }) {
       )}
 
       {searchInput.length >= 2 && results.length === 0 && !isLoading && (
-        <div className="text-center py-4 text-muted-foreground text-sm">
-          No agents found
+        <div className="text-center py-6 text-muted-foreground text-sm">
+          <p>No agents found matching "{searchInput}"</p>
         </div>
       )}
     </div>

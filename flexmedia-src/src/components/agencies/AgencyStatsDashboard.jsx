@@ -68,7 +68,7 @@ function StatusBar({ projects }) {
   return (
     <Card className="border-muted">
       <CardContent className="p-4">
-        <p className="text-xs font-medium text-muted-foreground mb-3">Project Pipeline Distribution</p>
+        <p className="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wide">Pipeline Distribution</p>
         <div className="flex h-3 rounded-full overflow-hidden gap-0.5 mb-3">
           {counts.map(g => (
             <div

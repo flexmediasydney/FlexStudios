@@ -135,11 +135,13 @@ export default function ActivityFeed() {
                 </Badge>
               </div>
               {canRestore && (
-                <Button 
-                  size="sm" 
+                <Button
+                  size="sm"
                   variant="ghost"
                   onClick={() => setRestoreItem(log)}
                   className="gap-1"
+                  title="Restore to previous state"
+                  aria-label={`Restore ${log.entity_name} to previous state`}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Restore
@@ -192,7 +194,8 @@ export default function ActivityFeed() {
   return (
     <div className="space-y-6">
       <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+        <span className="sr-only">Search activity feed</span>
         <Input
           placeholder="Search activity..."
           value={searchQuery}

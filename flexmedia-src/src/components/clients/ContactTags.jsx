@@ -122,7 +122,9 @@ export function TagEditor({ tags = [], onChange, maxTags = 10 }) {
               <button
                 type="button"
                 onClick={() => removeTag(i)}
-                className="opacity-60 hover:opacity-100 transition-opacity ml-0.5"
+                className="opacity-60 hover:opacity-100 transition-opacity ml-0.5 cursor-pointer"
+                aria-label={`Remove tag ${tag}`}
+                title={`Remove ${tag}`}
               >
                 <X className="h-2.5 w-2.5" />
               </button>
@@ -136,7 +138,9 @@ export function TagEditor({ tags = [], onChange, maxTags = 10 }) {
                 type="button"
                 className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full
                            border border-dashed border-muted-foreground/30 text-muted-foreground
-                           hover:border-primary/50 hover:text-primary transition-colors"
+                           hover:border-primary/50 hover:text-primary transition-colors cursor-pointer"
+                aria-label="Add new tag"
+                title="Add tag"
               >
                 <Plus className="h-2.5 w-2.5" />
                 Add
@@ -153,7 +157,7 @@ export function TagEditor({ tags = [], onChange, maxTags = 10 }) {
                   autoFocus
                   maxLength={30}
                 />
-                <Button size="sm" className="h-7 px-2" onClick={addTag} disabled={!newTag.trim()}>
+                <Button size="sm" className="h-7 px-2" onClick={addTag} disabled={!newTag.trim()} title="Add tag" aria-label="Add tag">
                   <Plus className="h-3 w-3" />
                 </Button>
               </div>

@@ -110,7 +110,7 @@ export default function ContactHealthScore({ agent, projectCount = 0, totalReven
           <div className="flex items-center gap-1.5">
             <div
               className={cn(
-                "rounded-full flex items-center justify-center font-bold ring-2",
+                "rounded-full flex items-center justify-center font-bold ring-2 tabular-nums",
                 colors.bg,
                 colors.text,
                 colors.ring,

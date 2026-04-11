@@ -146,7 +146,7 @@ export default function ProjectActivityFeedItem({
           {/* Header row */}
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
-              <span className="text-sm font-semibold text-foreground truncate">
+              <span className="text-sm font-semibold text-foreground truncate" title={item.author || 'Unknown'}>
                 {item.author || 'Unknown'}
               </span>
               <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${config.badgeClass} border`}>
@@ -330,7 +330,7 @@ export default function ProjectActivityFeedItem({
 
           {item.type === 'email' && (
             <>
-              <p className="text-sm font-medium text-foreground/80 mt-1">{item._raw?.subject || item.subject}</p>
+              <p className="text-sm font-medium text-foreground/80 mt-1 truncate" title={item._raw?.subject || item.subject}>{item._raw?.subject || item.subject}</p>
               {!expanded && (
                 <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">
                   {item._raw?.body?.replace(/<[^>]*>/g, '').substring(0, 150) || item.preview}

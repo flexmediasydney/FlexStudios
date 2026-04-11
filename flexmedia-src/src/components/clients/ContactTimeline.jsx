@@ -62,7 +62,7 @@ function TimelineItem({ project, isLast }) {
             <CardContent className="p-4">
               <div className="flex items-start justify-between gap-4 mb-3">
                 <div className="flex-1 min-w-0">
-                  <h4 className="font-semibold text-base mb-1 truncate">{project.title}</h4>
+                  <h4 className="font-semibold text-base mb-1 truncate" title={project.title}>{project.title}</h4>
                   <p className="text-sm text-muted-foreground flex items-center gap-1 mb-2">
                     <MapPin className="h-3 w-3" />
                     {project.property_address}
@@ -87,7 +87,7 @@ function TimelineItem({ project, isLast }) {
                 {project.price && (
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <DollarSign className="h-4 w-4" />
-                    <span>${project.price.toLocaleString()}</span>
+                    <span className="tabular-nums">${project.price.toLocaleString()}</span>
                   </div>
                 )}
                 {project.services && project.services.length > 0 && (

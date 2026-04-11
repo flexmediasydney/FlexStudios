@@ -142,7 +142,9 @@ export default function MessageInput({
               <span className="flex-1 truncate">{att.file_name}</span>
               <button
                 onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
-                className="text-muted-foreground hover:text-foreground"
+                className="text-muted-foreground hover:text-foreground cursor-pointer"
+                aria-label={`Remove ${att.file_name}`}
+                title="Remove attachment"
               >
                 ✕
               </button>
@@ -189,7 +191,7 @@ export default function MessageInput({
       {/* Character count hint */}
       {content.length > 0 && (
         <div className="flex justify-end">
-          <span className={`text-[11px] ${content.length > 4500 ? 'text-amber-500 font-medium' : 'text-muted-foreground/50'}`}>
+          <span className={`text-[11px] tabular-nums ${content.length > 4500 ? 'text-amber-500 font-medium' : 'text-muted-foreground/50'}`}>
             {content.length.toLocaleString()} chars
           </span>
         </div>
@@ -211,6 +213,8 @@ export default function MessageInput({
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || uploading}
           className="gap-1.5"
+          title="Attach file"
+          aria-label="Attach file"
         >
           <Paperclip className="h-4 w-4" />
           Attach
@@ -220,6 +224,8 @@ export default function MessageInput({
           disabled={(!content.trim() && attachments.length === 0) || disabled || uploading}
           size="sm"
           className="ml-auto gap-1.5"
+          title="Send message (Enter)"
+          aria-label="Send message"
         >
           {uploading ? (
             <Loader2 className="h-4 w-4 animate-spin" />

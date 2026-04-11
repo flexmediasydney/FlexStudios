@@ -143,7 +143,10 @@ export default function ActiveTimersPanel({ projectId, tasks = [] }) {
       {/* Header */}
       <button
         onClick={() => setCollapsed((c) => !c)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-100/50 transition-colors"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-100/50 transition-colors cursor-pointer"
+        title={collapsed ? "Expand active timers" : "Collapse active timers"}
+        aria-expanded={!collapsed}
+        aria-label={`Active timers panel — ${runningCount} running, ${pausedCount} paused`}
       >
         <div className="relative flex-shrink-0">
           <Timer className="h-4 w-4 text-emerald-600" />
@@ -196,11 +199,11 @@ export default function ActiveTimersPanel({ projectId, tasks = [] }) {
                     <User className="h-3.5 w-3.5 text-muted-foreground" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate leading-tight">
+                    <p className="text-sm font-medium text-foreground truncate leading-tight" title={log.user_name || "Unknown"}>
                       {log.user_name || "Unknown"}
                     </p>
                     {taskTitle && (
-                      <p className="text-xs text-muted-foreground truncate leading-tight">{taskTitle}</p>
+                      <p className="text-xs text-muted-foreground truncate leading-tight" title={taskTitle}>{taskTitle}</p>
                     )}
                   </div>
                 </div>

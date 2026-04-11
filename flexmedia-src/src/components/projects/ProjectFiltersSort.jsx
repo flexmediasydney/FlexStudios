@@ -179,6 +179,7 @@ export default function ProjectFiltersSort({
           size="sm"
           className="gap-2"
           onClick={() => handleToggleFilter("assigned_to_me")}
+          title={activeFilters.assigned_to_me ? "Showing your projects — click to clear" : "Filter to your projects only"}
         >
           <User className="h-3.5 w-3.5" />
           My Projects
@@ -188,6 +189,7 @@ export default function ProjectFiltersSort({
           size="sm"
           className="gap-2"
           onClick={() => handleToggleFilter("assigned_to_my_team")}
+          title={activeFilters.assigned_to_my_team ? "Showing your team's projects — click to clear" : "Filter to your team's projects"}
         >
           <Users className="h-3.5 w-3.5" />
           My Team
@@ -234,9 +236,10 @@ export default function ProjectFiltersSort({
             size="sm"
             onClick={() => onFiltersChange({})}
             className="gap-1.5"
+            title="Reset all filters"
           >
             <RotateCcw className="h-3.5 w-3.5" />
-            Reset
+            Reset All
           </Button>
         )}
       </div>
@@ -249,7 +252,7 @@ export default function ProjectFiltersSort({
             <Badge variant="secondary" className="gap-1.5 px-2.5 py-1">
               <User className="h-3 w-3" />
               <span className="text-xs">My Projects</span>
-              <button onClick={() => clearFilter("assigned_to_me")} className="hover:opacity-70">
+              <button onClick={() => clearFilter("assigned_to_me")} className="hover:opacity-70 transition-opacity" title="Remove filter" aria-label="Remove My Projects filter">
                 <X className="h-3 w-3" />
               </button>
             </Badge>
@@ -272,10 +275,12 @@ export default function ProjectFiltersSort({
                   variant="secondary"
                   className="gap-1.5 px-2.5 py-1"
                 >
-                  <span className="text-xs">{item?.name || value}</span>
+                  <span className="text-xs truncate max-w-[120px]" title={item?.name || value}>{item?.name || value}</span>
                   <button
                     onClick={() => clearFilter(type, value)}
                     className="hover:opacity-70 transition-opacity"
+                    title="Remove filter"
+                    aria-label={`Remove ${item?.name || value} filter`}
                   >
                     <X className="h-3 w-3" />
                   </button>

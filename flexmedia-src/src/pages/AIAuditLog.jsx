@@ -171,7 +171,7 @@ export default function AIAuditLog() {
           </div>
           <p className="text-muted-foreground text-sm">Real-time feed of all AI assistant actions.</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
+        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading} title="Refresh audit log entries">
           <RefreshCw className={cn("h-4 w-4 mr-2", isLoading && "animate-spin")} />
           Refresh
         </Button>
@@ -185,7 +185,7 @@ export default function AIAuditLog() {
               <Sparkles className="h-5 w-5 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <p className="text-2xl font-bold">{stats.total}</p>
+              <p className="text-2xl font-bold tabular-nums">{stats.total}</p>
               <p className="text-xs text-muted-foreground">Today</p>
             </div>
           </CardContent>
@@ -196,7 +196,7 @@ export default function AIAuditLog() {
               <Check className="h-5 w-5 text-green-600 dark:text-green-400" />
             </div>
             <div>
-              <p className="text-2xl font-bold">{stats.rate}%</p>
+              <p className="text-2xl font-bold tabular-nums">{stats.rate}%</p>
               <p className="text-xs text-muted-foreground">Success</p>
             </div>
           </CardContent>
@@ -207,7 +207,7 @@ export default function AIAuditLog() {
               <DollarSign className="h-5 w-5 text-amber-600 dark:text-amber-400" />
             </div>
             <div>
-              <p className="text-2xl font-bold">${stats.cost.toFixed(2)}</p>
+              <p className="text-2xl font-bold tabular-nums">${stats.cost.toFixed(2)}</p>
               <p className="text-xs text-muted-foreground">Today</p>
             </div>
           </CardContent>
@@ -401,7 +401,7 @@ function LogEntry({ log, userName, isExpanded, onToggle }) {
           </div>
 
           {/* Expand toggle */}
-          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onToggle}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onToggle} title={isExpanded ? "Collapse details" : "Expand details"} aria-label={isExpanded ? "Collapse details" : "Expand details"}>
             {isExpanded ? (
               <ChevronDown className="h-4 w-4" />
             ) : (

@@ -108,7 +108,7 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               maxLength={120}
             />
             <p className="text-xs text-muted-foreground mt-1">
-              Optional. They can update this after accepting the invite.
+              Optional. The user can change this after accepting the invite.
             </p>
           </div>
 
@@ -124,8 +124,8 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground mt-1">
-              {role === "master_admin" && "Full access to everything including user management"}
-              {role === "employee" && "Can see all projects and client information"}
+              {role === "master_admin" && "Full access to all settings, users, and data management"}
+              {role === "employee" && "Standard access to projects, clients, and day-to-day operations"}
             </p>
           </div>
 

@@ -194,14 +194,14 @@ export default function ClientForm({ client, open, onClose, onSave }) {
               maxLength={LIMITS.notes}
               rows={3}
             />
-            <p className="text-xs text-muted-foreground mt-1 text-right">{(formData.notes || "").length}/{LIMITS.notes}</p>
+            <p className="text-xs text-muted-foreground mt-1 text-right tabular-nums">{(formData.notes || "").length}/{LIMITS.notes}</p>
           </div>
           
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={onClose} title="Cancel editing">
               Cancel
             </Button>
-            <Button type="submit" disabled={!canEdit || saving}>
+            <Button type="submit" disabled={!canEdit || saving} title="Save client record">
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {client ? "Update Client" : "Add Client"}
             </Button>

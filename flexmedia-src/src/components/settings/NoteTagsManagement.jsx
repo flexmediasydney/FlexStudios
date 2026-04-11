@@ -122,9 +122,9 @@ export default function NoteTagsManagement() {
 
       {/* Tag list */}
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading...</p>
+        <p className="text-sm text-muted-foreground">Loading tags...</p>
       ) : tags.length === 0 ? (
-        <p className="text-sm text-muted-foreground italic">No tags yet. Add one above.</p>
+        <p className="text-sm text-muted-foreground italic">No tags created yet. Use the form above to add your first tag.</p>
       ) : (
         <div className="space-y-2">
           {tags.map((tag) => (

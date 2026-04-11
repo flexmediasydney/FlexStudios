@@ -332,7 +332,7 @@ export default function AIChat({ projectId, projectTitle }) {
             <div className="text-center py-12 text-muted-foreground">
               <Sparkles className="h-10 w-10 mx-auto mb-3 opacity-40" />
               <p className="text-sm font-medium">AI Assistant</p>
-              <p className="text-xs mt-1">
+              <p className="text-xs mt-1 max-w-[240px] mx-auto">
                 Ask me to complete tasks, add notes, update statuses, and more.
               </p>
             </div>
@@ -404,7 +404,7 @@ export default function AIChat({ projectId, projectTitle }) {
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
                   <span className="text-xs font-medium text-foreground">Processing...</span>
                 </div>
-                <div className="space-y-1 pl-5.5">
+                <div className="space-y-1 pl-6">
                   <p className="text-[10px] text-muted-foreground animate-pulse">Understanding your request</p>
                   <p className="text-[10px] text-muted-foreground/50 animate-pulse" style={{ animationDelay: '0.5s' }}>Checking project context</p>
                   <p className="text-[10px] text-muted-foreground/30 animate-pulse" style={{ animationDelay: '1s' }}>Executing actions...</p>

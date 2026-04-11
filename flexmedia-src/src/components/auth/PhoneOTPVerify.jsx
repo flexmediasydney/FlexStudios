@@ -44,7 +44,7 @@ export default function PhoneOTPVerify({ phone, onVerify, onResend, onBack, erro
         <Phone className="h-7 w-7 text-green-600" />
       </div>
       <div>
-        <h3 className="text-lg font-semibold">Enter verification code</h3>
+        <h3 className="text-lg font-semibold">Verify your phone</h3>
         <p className="text-sm text-muted-foreground mt-1">
           We sent a 6-digit code to <span className="font-medium">{phone}</span>
         </p>

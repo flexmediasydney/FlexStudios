@@ -46,7 +46,10 @@ export default function ClientMonitor() {
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
         <div className="max-w-2xl mx-auto">
           <div className="mb-8">
-            <h1 className="text-4xl font-bold text-foreground mb-2">Client Monitor</h1>
+            <h1 className="text-4xl font-bold text-foreground mb-2 flex items-center gap-3">
+              <Search className="h-8 w-8 text-primary" />
+              Client Monitor
+            </h1>
             <p className="text-muted-foreground">Cross-reference external listings with your internal projects</p>
           </div>
 
@@ -125,21 +128,21 @@ export default function ClientMonitor() {
               <span className="inline-flex h-2 w-2 rounded-full bg-blue-500" />
               Internal Projects
             </div>
-            <div className="text-3xl font-bold text-foreground">{agentProjects.length}</div>
+            <div className="text-3xl font-bold text-foreground tabular-nums">{agentProjects.length}</div>
           </Card>
           <Card className="p-4">
             <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-1">
               <ExternalLink className="h-3.5 w-3.5" />
               External Listings
             </div>
-            <div className="text-3xl font-bold text-foreground">{externalListings.length}</div>
+            <div className="text-3xl font-bold text-foreground tabular-nums">{externalListings.length}</div>
           </Card>
           <Card className="p-4">
             <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-1">
               <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
               Matched
             </div>
-            <div className="text-3xl font-bold text-green-700">
+            <div className="text-3xl font-bold text-green-700 tabular-nums">
               {externalListings.filter(e => e.matched_project_id).length}
             </div>
           </Card>
@@ -148,7 +151,7 @@ export default function ClientMonitor() {
               <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
               Unmatched
             </div>
-            <div className="text-3xl font-bold text-amber-700">
+            <div className="text-3xl font-bold text-amber-700 tabular-nums">
               {externalListings.filter(e => !e.matched_project_id).length}
             </div>
           </Card>
@@ -159,6 +162,7 @@ export default function ClientMonitor() {
           <Button
             onClick={() => setShowForm(!showForm)}
             className="gap-2"
+            title="Add an external listing to compare with internal projects"
           >
             <Plus className="h-4 w-4" />
             Add External Listing

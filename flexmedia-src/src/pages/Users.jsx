@@ -239,7 +239,10 @@ export default function UsersManagement() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">User Management <AccessBadge entityType="users" /></h1>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <Shield className="h-7 w-7 text-primary" />
+            User Management <AccessBadge entityType="users" />
+          </h1>
           <p className="text-muted-foreground mt-1">Manage team members, access levels, and invite codes</p>
         </div>
         <Button onClick={() => setShowInviteDialog(true)} className="gap-2" disabled={!canEdit} title="Send an email or code invite to a new team member">
@@ -257,7 +260,7 @@ export default function UsersManagement() {
         ].map(s => (
           <Card key={s.label}>
             <CardContent className="pt-4 pb-3">
-              <div className="text-2xl font-bold">{s.value}</div>
+              <div className="text-2xl font-bold tabular-nums">{s.value}</div>
               <p className="text-xs text-muted-foreground">{s.label}</p>
             </CardContent>
           </Card>

@@ -158,7 +158,7 @@ export default function BulkActionBar({
           </div>
         ) : (
           <div className="flex items-center gap-1.5 bg-blue-100 px-2.5 py-1 rounded-full">
-            <span className="text-xs font-bold text-blue-800">{selectedCount}</span>
+            <span className="text-xs font-bold text-blue-800 tabular-nums">{selectedCount}</span>
             <span className="text-xs text-blue-600">selected</span>
           </div>
         )}

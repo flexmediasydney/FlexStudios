@@ -4,7 +4,10 @@ export default function BountyBoard() {
   return (
     <div className="space-y-6 p-6">
       <div>
-        <h1 className="text-3xl font-bold">Bounty Board</h1>
+        <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <Trophy className="h-7 w-7 text-amber-500" />
+          Bounty Board
+        </h1>
         <p className="text-muted-foreground mt-2">Community bounties and tasks.</p>
       </div>
 

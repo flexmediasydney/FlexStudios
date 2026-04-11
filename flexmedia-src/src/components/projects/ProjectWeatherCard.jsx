@@ -239,7 +239,9 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
         <div className="border-t pt-3">
           <button
             onClick={() => setShowHourly(!showHourly)}
-            className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors mb-2"
+            className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors mb-2 cursor-pointer"
+            aria-expanded={showHourly}
+            title={showHourly ? "Hide hourly weather breakdown" : "Show hourly weather breakdown"}
           >
             {showHourly ? "▼ Hide" : "▶ Show"} Hourly Breakdown
           </button>

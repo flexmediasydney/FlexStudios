@@ -237,7 +237,7 @@ export default function NoteComposer({
           <Paperclip className="h-4 w-4" />
           Attach
         </Button>
-        <Button size="sm" onClick={handleSaveNote} disabled={!content.trim() || isSubmitting} className="gap-2 bg-green-600 hover:bg-green-700">
+        <Button size="sm" onClick={handleSaveNote} disabled={!content.trim() || isSubmitting} className="gap-2">
           <Send className="h-4 w-4" />
           {isSubmitting ? "Saving..." : "Save"}
         </Button>

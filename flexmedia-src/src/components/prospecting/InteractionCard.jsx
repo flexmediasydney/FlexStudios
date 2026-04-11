@@ -3,7 +3,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { formatDistanceToNow } from 'date-fns';
 import { fmtTimestampCustom, fixTimestamp } from '@/components/utils/dateUtils';
-import { Mail, Phone, MessageSquare, Calendar, User, Smile } from 'lucide-react';
+import { Mail, Phone, MessageSquare, Calendar, User } from 'lucide-react';
 
 const INTERACTION_ICONS = {
   'Email Sent': Mail,

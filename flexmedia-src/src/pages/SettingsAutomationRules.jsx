@@ -606,7 +606,10 @@ export default function SettingsAutomationRules() {
             <Button variant="ghost" size="icon" aria-label="Back to settings"><ArrowLeft className="h-5 w-5" /></Button>
           </Link>
           <div className="flex-1">
-            <h1 className="text-3xl font-bold tracking-tight">Automation Rules</h1>
+            <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+              <Zap className="h-7 w-7 text-primary" />
+              Automation Rules
+            </h1>
             <p className="text-muted-foreground mt-1">Configure automated actions that run against projects on a schedule or on change.</p>
           </div>
           <Button onClick={handleNew}><Plus className="h-4 w-4 mr-2" />New Rule</Button>
@@ -614,19 +617,19 @@ export default function SettingsAutomationRules() {
 
         <div className="grid grid-cols-4 gap-3">
           <Card><CardContent className="pt-4 pb-3">
-            <p className="text-2xl font-bold">{stats.total}</p>
+            <p className="text-2xl font-bold tabular-nums">{stats.total}</p>
             <p className="text-xs text-muted-foreground">Total Rules</p>
           </CardContent></Card>
           <Card><CardContent className="pt-4 pb-3">
-            <p className="text-2xl font-bold text-emerald-600">{stats.enabled}</p>
+            <p className="text-2xl font-bold text-emerald-600 tabular-nums">{stats.enabled}</p>
             <p className="text-xs text-muted-foreground">Active</p>
           </CardContent></Card>
           <Card><CardContent className="pt-4 pb-3">
-            <p className="text-2xl font-bold text-blue-600">{stats.total_fired}</p>
+            <p className="text-2xl font-bold text-blue-600 tabular-nums">{stats.total_fired}</p>
             <p className="text-xs text-muted-foreground">Total Actions Taken</p>
           </CardContent></Card>
           <Card><CardContent className="pt-4 pb-3">
-            <p className="text-2xl font-bold text-purple-600">{stats.dry_run}</p>
+            <p className="text-2xl font-bold text-purple-600 tabular-nums">{stats.dry_run}</p>
             <p className="text-xs text-muted-foreground">Dry Run Mode</p>
           </CardContent></Card>
         </div>

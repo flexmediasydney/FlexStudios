@@ -37,7 +37,7 @@ export default function EmailListControls({
       {/* Sort Dropdown */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:bg-muted/60 transition-colors border border-border/40 hover:border-border" title={`Sorted by: ${currentSortLabel}`}>
+          <button className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:bg-muted/60 transition-colors border border-border/40 hover:border-border cursor-pointer" title={`Sorted by: ${currentSortLabel}`}>
             Sort: {currentSortLabel}
             <ChevronDown className="h-3.5 w-3.5 opacity-60" />
           </button>
@@ -58,7 +58,7 @@ export default function EmailListControls({
       {/* Filter Dropdown */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:bg-muted/60 transition-colors border border-border/40 hover:border-border">
+          <button className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:bg-muted/60 transition-colors border border-border/40 hover:border-border cursor-pointer" title="Filter emails">
             Filter
             <ChevronDown className="h-3.5 w-3.5 opacity-60" />
           </button>
@@ -112,7 +112,7 @@ export default function EmailListControls({
 
 
       {/* Results counter */}
-      <div className="ml-auto text-xs text-muted-foreground/70 font-medium" title={`${filteredCount} visible${filteredCount !== totalCount ? ` of ${totalCount} total` : ''}`}>
+      <div className="ml-auto text-xs text-muted-foreground/70 font-medium tabular-nums" title={`${filteredCount} visible${filteredCount !== totalCount ? ` of ${totalCount} total` : ''}`}>
         {filteredCount === totalCount 
           ? `${totalCount} email${totalCount !== 1 ? 's' : ''}` 
           : `${filteredCount} of ${totalCount}`}

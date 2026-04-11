@@ -62,7 +62,7 @@ export default function HierarchyOrgChart({
                   </div>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Agency actions">
                         <MoreVertical className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -137,7 +137,7 @@ export default function HierarchyOrgChart({
                         </div>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-7 w-7">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Team actions">
                               <MoreVertical className="h-3.5 w-3.5" />
                             </Button>
                           </DropdownMenuTrigger>
@@ -257,7 +257,7 @@ function AgentOrgNode({ agent, navigate, onEdit, onDelete, agentProjectCounts, a
         </div>
 
         {/* Name */}
-        <p className="text-xs font-semibold truncate w-full leading-tight">{agent.name}</p>
+        <p className="text-xs font-semibold truncate w-full leading-tight" title={agent.name}>{agent.name}</p>
 
         {/* State badge */}
         {agent.relationship_state && (
@@ -309,7 +309,7 @@ function AgentOrgNode({ agent, navigate, onEdit, onDelete, agentProjectCounts, a
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => e.stopPropagation()}>
+              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => e.stopPropagation()} aria-label="Agent actions">
                 <MoreVertical className="h-3 w-3" />
               </Button>
             </DropdownMenuTrigger>

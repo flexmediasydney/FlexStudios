@@ -30,7 +30,7 @@ function AttentionItem({ severity, icon: Icon, title, detail, action, actionLabe
       </div>
       {action && (
         <Link to={action} className="shrink-0">
-          <Button size="sm" variant="outline" className="h-7 text-xs gap-1">
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1 transition-colors">
             {actionLabel || 'View'} <ArrowRight className="h-3 w-3" />
           </Button>
         </Link>
@@ -224,7 +224,7 @@ export default function NeedsAttentionPanel({ projects, tasks, users }) {
   if (items.length === 0) {
     return (
       <Card className="p-6 text-center border-dashed">
-        <CheckCircle2 className="h-8 w-8 text-green-500/50 mx-auto mb-2" />
+        <CheckCircle2 className="h-8 w-8 text-green-500/50 mx-auto mb-2" aria-hidden="true" />
         <p className="text-sm font-medium text-green-700">All clear</p>
         <p className="text-xs text-muted-foreground mt-1">No items need attention right now</p>
       </Card>

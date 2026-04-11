@@ -23,6 +23,7 @@ const Alert = React.forwardRef(({ className, variant, ...props }, ref) => (
   <div
     ref={ref}
     role="alert"
+    data-testid={props["data-testid"] || "alert"}
     className={cn(alertVariants({ variant }), className)}
     {...props} />
 ))

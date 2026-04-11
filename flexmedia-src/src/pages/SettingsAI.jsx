@@ -182,7 +182,10 @@ export default function SettingsAI() {
       <div>
         <div className="flex items-center gap-3 mb-1">
           <Sparkles className="h-6 w-6 text-primary" />
-          <h1 className="text-2xl font-bold tracking-tight">AI Settings</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Sparkles className="h-6 w-6 text-primary" />
+            AI Settings
+          </h1>
         </div>
         <p className="text-muted-foreground text-sm">
           Configure the AI assistant for your organisation.

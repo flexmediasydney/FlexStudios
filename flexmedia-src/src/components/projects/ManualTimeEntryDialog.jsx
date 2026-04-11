@@ -196,7 +196,7 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
           )}
 
           <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-muted/40 p-2 rounded">
-            Total: <span className="font-semibold">{hours || 0}h {minutes || 0}m</span>
+            Total: <span className="font-semibold tabular-nums">{hours || 0}h {minutes || 0}m</span>
             <span className="text-muted-foreground/50 ml-2">
               ({((parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0))} minutes)
             </span>

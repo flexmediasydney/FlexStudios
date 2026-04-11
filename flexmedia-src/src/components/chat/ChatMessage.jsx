@@ -82,6 +82,7 @@ export default function ChatMessage({ message, currentUserEmail, onPin, onDelete
               className="h-6 w-6"
               onClick={() => onPin(message.id, message.is_pinned)}
               title={message.is_pinned ? 'Unpin' : 'Pin'}
+              aria-label={message.is_pinned ? 'Unpin message' : 'Pin message'}
             >
               <Pin className={cn('h-3 w-3', message.is_pinned && 'fill-current text-amber-500')} />
             </Button>
@@ -91,6 +92,7 @@ export default function ChatMessage({ message, currentUserEmail, onPin, onDelete
               className="h-6 w-6 text-destructive hover:text-destructive"
               onClick={() => onDelete(message.id)}
               title="Delete"
+              aria-label="Delete message"
             >
               <Trash2 className="h-3 w-3" />
             </Button>

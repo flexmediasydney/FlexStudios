@@ -252,7 +252,7 @@ export default function Organisations() {
     {
       key: 'email', label: 'Email', sortable: true,
       render: (row) => row.email
-        ? <a href={`mailto:${row.email}`} className="text-xs text-primary hover:underline truncate max-w-[180px] block" onClick={e => e.stopPropagation()}>{row.email}</a>
+        ? <a href={`mailto:${row.email}`} className="text-xs text-primary hover:underline truncate max-w-[180px] block" onClick={e => e.stopPropagation()} title={row.email}>{row.email}</a>
         : <span className="text-muted-foreground/30 text-xs">—</span>,
     },
     {
@@ -282,7 +282,10 @@ export default function Organisations() {
     <div className="flex flex-col h-screen overflow-hidden bg-background">
       <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
         <div className="flex items-center gap-6">
-          <h1 className="text-lg font-semibold">Organisations</h1>
+          <h1 className="text-lg font-semibold flex items-center gap-2">
+            <Building2 className="h-5 w-5 text-primary" />
+            Organisations
+          </h1>
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="font-semibold text-foreground">{stats.total}</span> total ·
             <span className="text-green-600 font-medium ml-1">{stats.active}</span> active ·
@@ -292,7 +295,7 @@ export default function Organisations() {
           </div>
         </div>
         {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
-        <Button onClick={() => { setEditingAgency(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8" disabled={!canEdit}>
+        <Button onClick={() => { setEditingAgency(null); setShowForm(true); }} size="sm" className="gap-1.5 h-8" disabled={!canEdit} title="Add a new organisation">
           <Plus className="h-3.5 w-3.5" />Add Organisation
         </Button>
       </div>
@@ -384,7 +387,7 @@ export default function Organisations() {
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {filtered.slice(0, cardLimit).map(row => (
-                    <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                    <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-lg hover:border-primary/30 transition-all duration-200 cursor-pointer"
                       onClick={() => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}>
                       <AgencyHoverContent
                         row={row}

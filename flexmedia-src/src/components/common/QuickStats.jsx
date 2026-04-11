@@ -23,7 +23,7 @@ export default function QuickStats({ stats = [], loading = false, columns = 4 })
       {stats.map((stat, i) => (
         <Card key={i} className="p-4 hover:shadow-md transition-shadow">
           <p className="text-xs font-medium text-muted-foreground">{stat.label}</p>
-          <p className="text-2xl font-bold mt-1">{stat.value}</p>
+          <p className="text-2xl font-bold mt-1 tabular-nums">{stat.value}</p>
           {stat.subtext && <p className="text-xs text-muted-foreground mt-1">{stat.subtext}</p>}
         </Card>
       ))}

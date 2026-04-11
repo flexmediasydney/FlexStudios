@@ -121,7 +121,7 @@ export default function ContactActivityPanel({ agent, onClose }) {
       {/* ── Header with close button ── */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b bg-muted/20">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Contact Details</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close contact details" title="Close">
           <X className="h-4 w-4" />
         </Button>
       </div>
@@ -140,7 +140,7 @@ export default function ContactActivityPanel({ agent, onClose }) {
               {initials}
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className="text-base font-semibold truncate">{agent.name}</h3>
+              <h3 className="text-base font-semibold truncate" title={agent.name}>{agent.name}</h3>
               {agent.title && (
                 <p className="text-xs text-muted-foreground truncate">{agent.title}</p>
               )}
@@ -254,7 +254,7 @@ export default function ContactActivityPanel({ agent, onClose }) {
                 key={f.id}
                 onClick={() => setFilter(f.id)}
                 className={cn(
-                  "text-[11px] px-2.5 py-1 rounded-full font-medium transition-colors",
+                  "text-[11px] px-2.5 py-1 rounded-full font-medium transition-colors cursor-pointer",
                   filter === f.id
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-muted"

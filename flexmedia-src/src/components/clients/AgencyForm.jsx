@@ -234,30 +234,31 @@ export default function AgencyForm({ agency, open, onClose }) {
               onChange={(e) => handleChange("notes", e.target.value)}
               maxLength={LIMITS.notes}
               rows={3}
+              placeholder="Notes about this organisation..."
             />
-            <p className="text-xs text-muted-foreground mt-1 text-right">{(formData.notes || "").length}/{LIMITS.notes}</p>
+            <p className="text-xs text-muted-foreground mt-1 text-right tabular-nums">{(formData.notes || "").length}/{LIMITS.notes}</p>
           </div>
 
           {agency && (
             <div className="space-y-3 pt-4 border-t">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Building2 className="h-4 w-4 text-muted-foreground" />
+                  <Building2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   <span className="text-sm font-medium">Teams</span>
-                  <Badge variant="secondary">{agencyTeams.length}</Badge>
+                  <Badge variant="secondary" className="tabular-nums">{agencyTeams.length}</Badge>
                 </div>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Users className="h-4 w-4 text-muted-foreground" />
+                  <Users className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   <span className="text-sm font-medium">Agents</span>
-                  <Badge variant="secondary">{agencyAgents.length}</Badge>
+                  <Badge variant="secondary" className="tabular-nums">{agencyAgents.length}</Badge>
                 </div>
               </div>
             </div>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={handleClose} disabled={saveMutation.isPending}>
+            <Button type="button" variant="outline" onClick={handleClose} disabled={saveMutation.isPending} title="Cancel editing">
               Cancel
             </Button>
             <Button type="submit" disabled={saveMutation.isPending || !formData.name?.trim()} title="Ctrl+S to save">
