@@ -247,131 +247,195 @@ function computeTasks(tasks: any[]): StatGroup {
 }
 
 function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employeeRoles: any[]): StatGroup {
-  // Compute current week boundaries (Monday 00:00 to Sunday 23:59 in Sydney)
+  const now = new Date();
+
+  // Week boundaries (Mon-Sun Sydney time)
   const sydneyDate = (d: Date) => {
     const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit', day: '2-digit' });
     return fmt.format(d);
   };
-  const now = new Date();
   const sydneyNow = new Date(sydneyDate(now) + 'T00:00:00');
-  const dayOfWeek = sydneyNow.getDay(); // 0=Sun, 1=Mon
+  const dayOfWeek = sydneyNow.getDay();
   const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   const weekStart = new Date(sydneyNow); weekStart.setDate(sydneyNow.getDate() + mondayOffset);
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7);
   const weekStartStr = sydneyDate(weekStart);
   const weekEndStr = sydneyDate(weekEnd);
 
-  // Hours logged per user THIS WEEK only
-  const userHoursThisWeek = new Map<string, number>();
-  const userHoursAllTime = new Map<string, number>();
+  // Hours logged THIS WEEK per user
+  const userLoggedThisWeek = new Map<string, number>();
   for (const log of timeLogs) {
-    if (!log.user_id) continue;
-    const hrs = (log.total_seconds || 0) / 3600;
-    userHoursAllTime.set(log.user_id, (userHoursAllTime.get(log.user_id) || 0) + hrs);
-    // Check if log falls within current week
-    const logDate = log.start_time ? sydneyDate(new Date(log.start_time)) : null;
-    if (logDate && logDate >= weekStartStr && logDate < weekEndStr) {
-      userHoursThisWeek.set(log.user_id, (userHoursThisWeek.get(log.user_id) || 0) + hrs);
+    if (!log.user_id || !log.start_time) continue;
+    const logDate = sydneyDate(new Date(String(log.start_time).endsWith('Z') ? log.start_time : log.start_time + 'Z'));
+    if (logDate >= weekStartStr && logDate < weekEndStr) {
+      const hrs = (log.total_seconds || 0) / 3600;
+      userLoggedThisWeek.set(log.user_id, (userLoggedThisWeek.get(log.user_id) || 0) + hrs);
     }
   }
 
-  // Hours estimated per user — only INCOMPLETE tasks (work remaining)
-  const userEstimatedMap = new Map<string, number>();
-  // Hours estimated THIS WEEK — tasks due this week or overdue (should be worked on now)
-  const userEstimatedThisWeek = new Map<string, number>();
+  // Categorize tasks per user
+  const userDueThisWeek = new Map<string, number>();    // hours
+  const userOverdue = new Map<string, number>();         // hours
+  const userOverdueCount = new Map<string, number>();    // count
+  const userDueThisWeekCount = new Map<string, number>();
+  const userUnscheduled = new Map<string, number>();     // hours (no due date)
+  const userFuture = new Map<string, number>();          // hours (due after this week)
+
   for (const t of tasks) {
     if (!t.assigned_to || t.is_deleted || t.is_completed) continue;
     const hrs = (t.estimated_minutes || 0) / 60;
-    userEstimatedMap.set(t.assigned_to, (userEstimatedMap.get(t.assigned_to) || 0) + hrs);
-    // Task is due this week OR overdue (past due = urgent, counts for this week)
+    if (hrs <= 0) continue;
+
     const dueDate = t.due_date ? sydneyDate(new Date(t.due_date)) : null;
-    if (!dueDate || dueDate <= weekEndStr) {
-      userEstimatedThisWeek.set(t.assigned_to, (userEstimatedThisWeek.get(t.assigned_to) || 0) + hrs);
+    const uid = t.assigned_to;
+
+    if (!dueDate) {
+      userUnscheduled.set(uid, (userUnscheduled.get(uid) || 0) + hrs);
+    } else if (dueDate < weekStartStr) {
+      // OVERDUE — past due, carries forward into this week's load
+      userOverdue.set(uid, (userOverdue.get(uid) || 0) + hrs);
+      userOverdueCount.set(uid, (userOverdueCount.get(uid) || 0) + 1);
+    } else if (dueDate < weekEndStr) {
+      // DUE THIS WEEK
+      userDueThisWeek.set(uid, (userDueThisWeek.get(uid) || 0) + hrs);
+      userDueThisWeekCount.set(uid, (userDueThisWeekCount.get(uid) || 0) + 1);
+    } else {
+      // FUTURE — not this week's problem
+      userFuture.set(uid, (userFuture.get(uid) || 0) + hrs);
     }
   }
 
-  // Build role lookup
+  // Role + user lookups
   const roleByUser = new Map<string, string>();
-  for (const er of employeeRoles) {
-    roleByUser.set(er.user_id, er.role || 'unknown');
-  }
-
+  for (const er of employeeRoles) roleByUser.set(er.user_id, er.role || 'unknown');
   const userMap = new Map<string, any>();
-  for (const u of users) {
-    userMap.set(u.id, u);
-  }
+  for (const u of users) userMap.set(u.id, u);
 
-  const allUserIds = new Set([...userHoursAllTime.keys(), ...userEstimatedMap.keys()]);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Build per-user stats
+  const allUserIds = new Set([...userLoggedThisWeek.keys(), ...userDueThisWeek.keys(), ...userOverdue.keys(), ...userUnscheduled.keys()]);
   const byUser: any[] = [];
-  let totalLogged = 0;
-  let totalEstimated = 0;
+  let totalCommitted = 0, totalLogged = 0, totalTarget = 0;
 
   for (const uid of allUserIds) {
-    const loggedAllTime = userHoursAllTime.get(uid) || 0;
-    const loggedThisWeek = userHoursThisWeek.get(uid) || 0;
-    const estimatedTotal = userEstimatedMap.get(uid) || 0;
-    const estimatedThisWeek = userEstimatedThisWeek.get(uid) || 0;
-    totalLogged += loggedThisWeek;
-    totalEstimated += estimatedThisWeek;
-
     const user = userMap.get(uid);
-    const weeklyTarget = Number(user?.weekly_target_hours) || 40;
+    if (!user) continue;
+
+    const logged = userLoggedThisWeek.get(uid) || 0;
+    const dueThisWeek = userDueThisWeek.get(uid) || 0;
+    const overdue = userOverdue.get(uid) || 0;
+    const committed = dueThisWeek + overdue;
+    const target = Number(user.weekly_target_hours) || 40;
+    const unscheduled = userUnscheduled.get(uid) || 0;
+    const future = userFuture.get(uid) || 0;
+
+    const loadPct = safePct(committed, target);
+    const progressPct = safePct(logged, committed);
+    const freeCapacity = Math.max(0, target - committed);
+
+    totalCommitted += committed;
+    totalLogged += logged;
+    totalTarget += target;
+
     byUser.push({
       user_id: uid,
-      user_name: user?.full_name || 'Unknown',
-      role: roleByUser.get(uid) || user?.role || 'unknown',
-      team_id: user?.internal_team_id || null,
-      team_name: user?.internal_team_name || null,
-      // This week's numbers (primary)
-      hours_logged: Math.round(loggedThisWeek * 100) / 100,
-      hours_estimated: Math.round(estimatedThisWeek * 100) / 100,
-      utilization_pct: safePct(loggedThisWeek, estimatedThisWeek),
-      // All-time totals (secondary)
-      hours_logged_all_time: Math.round(loggedAllTime * 100) / 100,
-      hours_estimated_total: Math.round(estimatedTotal * 100) / 100,
-      // Target-based capacity (weekly)
-      weekly_target_hours: weeklyTarget,
-      available_capacity: Math.round(Math.max(0, weeklyTarget - loggedThisWeek) * 100) / 100,
-      target_utilization_pct: safePct(loggedThisWeek, weeklyTarget),
+      user_name: user.full_name || 'Unknown',
+      role: roleByUser.get(uid) || user.default_staff_role || 'unknown',
+      team_id: user.internal_team_id || null,
+      team_name: user.internal_team_name || null,
+      // PRIMARY
+      load_pct: loadPct,
+      committed_hours: r2(committed),
+      weekly_target_hours: target,
+      free_capacity_hours: r2(freeCapacity),
+      // SECONDARY
+      progress_pct: progressPct,
+      hours_logged: r2(logged),
+      // BREAKDOWN
+      hours_due_this_week: r2(dueThisWeek),
+      hours_overdue: r2(overdue),
+      overdue_task_count: userOverdueCount.get(uid) || 0,
+      tasks_due_this_week_count: userDueThisWeekCount.get(uid) || 0,
+      hours_unscheduled: r2(unscheduled),
+      hours_future: r2(future),
+      // DEPRECATED (backward compat)
+      utilization_pct: progressPct,
+      target_utilization_pct: safePct(logged, target),
+      hours_estimated: r2(committed),
+      available_capacity: r2(freeCapacity),
     });
   }
 
-  byUser.sort((a, b) => b.hours_logged - a.hours_logged);
+  byUser.sort((a, b) => b.load_pct - a.load_pct);
 
-  // Build team-level aggregation from by_user data
-  const teamMap = new Map<string, { team_name: string; team_id: string; hours_logged: number; hours_estimated: number; total_target_hours: number; member_count: number; members: any[] }>();
+  // Team aggregation
+  const teamAgg = new Map<string, any>();
   for (const u of byUser) {
-    const teamId = u.team_id || 'unassigned';
-    const teamName = u.team_name || 'Unassigned';
-    if (!teamMap.has(teamId)) {
-      teamMap.set(teamId, { team_id: teamId, team_name: teamName, hours_logged: 0, hours_estimated: 0, total_target_hours: 0, member_count: 0, members: [] });
+    const tid = u.team_id || 'unassigned';
+    const tname = u.team_name || 'Unassigned';
+    if (!teamAgg.has(tid)) {
+      teamAgg.set(tid, { team_id: tid, team_name: tname, committed: 0, logged: 0, target: 0, overdueCount: 0, memberCount: 0, members: [] });
     }
-    const team = teamMap.get(teamId)!;
-    team.hours_logged += u.hours_logged || 0;
-    team.hours_estimated += u.hours_estimated || 0;
-    team.total_target_hours += u.weekly_target_hours || 40;
-    team.member_count++;
-    team.members.push({ user_name: u.user_name, utilization_pct: u.utilization_pct, weekly_target_hours: u.weekly_target_hours || 40 });
+    const t = teamAgg.get(tid)!;
+    t.committed += u.committed_hours;
+    t.logged += u.hours_logged;
+    t.target += u.weekly_target_hours;
+    t.overdueCount += u.overdue_task_count;
+    t.memberCount++;
+    t.members.push({ user_name: u.user_name, load_pct: u.load_pct, progress_pct: u.progress_pct });
   }
-  const byTeam = Array.from(teamMap.values()).map(t => ({
-    ...t,
-    utilization_pct: t.hours_estimated > 0 ? Math.round((t.hours_logged / t.hours_estimated) * 100) : 0,
-    target_utilization_pct: t.total_target_hours > 0 ? Math.round((t.hours_logged / t.total_target_hours) * 100) : 0,
-    team_free_capacity: Math.round(Math.max(0, t.total_target_hours - t.hours_logged) * 100) / 100,
-  })).sort((a, b) => b.hours_logged - a.hours_logged);
 
-  const overallPct = safePct(totalLogged, totalEstimated);
-  const overloaded = byUser.filter((u) => u.utilization_pct > 90);
-  const underloaded = byUser.filter((u) => u.utilization_pct < 40 && u.hours_estimated > 0);
+  const byTeam = Array.from(teamAgg.values()).map(t => {
+    const loadPct = safePct(t.committed, t.target);
+    const progressPct = safePct(t.logged, t.committed);
+    const loadWord = loadPct > 100 ? 'overloaded' : loadPct > 80 ? 'at capacity' : 'loaded';
+    const progressWord = progressPct > 80 ? 'on track' : progressPct > 50 ? 'in progress' : 'behind';
+    let summary = `${t.memberCount} staff, ${loadPct}% ${loadWord}, ${progressPct}% ${progressWord}`;
+    if (loadPct > 100) summary += ' — needs redistribution';
+    if (t.overdueCount > 0) summary += ` (${t.overdueCount} overdue)`;
+
+    return {
+      team_id: t.team_id,
+      team_name: t.team_name,
+      member_count: t.memberCount,
+      load_pct: loadPct,
+      progress_pct: progressPct,
+      total_committed_hours: r2(t.committed),
+      total_target_hours: r2(t.target),
+      total_logged_hours: r2(t.logged),
+      total_free_capacity: r2(Math.max(0, t.target - t.committed)),
+      overdue_task_count: t.overdueCount,
+      members: t.members,
+      summary,
+      // DEPRECATED
+      utilization_pct: progressPct,
+      target_utilization_pct: safePct(t.logged, t.target),
+      hours_logged: r2(t.logged),
+      hours_estimated: r2(t.committed),
+      total_target_hours_legacy: r2(t.target),
+      team_free_capacity: r2(Math.max(0, t.target - t.committed)),
+    };
+  }).sort((a, b) => b.load_pct - a.load_pct);
+
+  const overallLoad = safePct(totalCommitted, totalTarget);
+  const overallProgress = safePct(totalLogged, totalCommitted);
+  const overloaded = byUser.filter(u => u.load_pct > 100);
+  const underloaded = byUser.filter(u => u.load_pct < 40 && u.committed_hours > 0);
 
   return {
     stat_key: 'utilization',
     stat_value: {
       by_user: byUser,
       by_team: byTeam,
-      overall_utilization_pct: overallPct,
-      overloaded_users: overloaded.map((u) => ({ user_id: u.user_id, user_name: u.user_name, utilization_pct: u.utilization_pct })),
-      underloaded_users: underloaded.map((u) => ({ user_id: u.user_id, user_name: u.user_name, utilization_pct: u.utilization_pct })),
+      overall_load_pct: overallLoad,
+      overall_progress_pct: overallProgress,
+      overloaded_users: overloaded,
+      underloaded_users: underloaded,
+      week_start: weekStartStr,
+      week_end: weekEndStr,
+      // DEPRECATED
+      overall_utilization_pct: overallProgress,
     },
   };
 }
