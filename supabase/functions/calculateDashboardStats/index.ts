@@ -250,11 +250,15 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
   const now = new Date();
 
   // Week boundaries (Mon-Sun Sydney time)
-  const sydneyDate = (d: Date) => {
-    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit', day: '2-digit' });
-    return fmt.format(d);
+  const sydneyDate = (d: Date): string | null => {
+    try {
+      if (!d || isNaN(d.getTime())) return null;
+      const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit', day: '2-digit' });
+      return fmt.format(d);
+    } catch { return null; }
   };
-  const sydneyNow = new Date(sydneyDate(now) + 'T00:00:00');
+  const sydneyNowStr = sydneyDate(now) || new Date().toISOString().slice(0, 10);
+  const sydneyNow = new Date(sydneyNowStr + 'T00:00:00');
   const dayOfWeek = sydneyNow.getDay();
   const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   const weekStart = new Date(sydneyNow); weekStart.setDate(sydneyNow.getDate() + mondayOffset);
@@ -267,7 +271,7 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
   for (const log of timeLogs) {
     if (!log.user_id || !log.start_time) continue;
     const logDate = sydneyDate(new Date(String(log.start_time).endsWith('Z') ? log.start_time : log.start_time + 'Z'));
-    if (logDate >= weekStartStr && logDate < weekEndStr) {
+    if (logDate && logDate >= weekStartStr && logDate < weekEndStr) {
       const hrs = (log.total_seconds || 0) / 3600;
       userLoggedThisWeek.set(log.user_id, (userLoggedThisWeek.get(log.user_id) || 0) + hrs);
     }
@@ -286,7 +290,8 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
     const hrs = (t.estimated_minutes || 0) / 60;
     if (hrs <= 0) continue;
 
-    const dueDate = t.due_date ? sydneyDate(new Date(t.due_date)) : null;
+    const rawDue = t.due_date ? new Date(t.due_date) : null;
+    const dueDate = rawDue ? sydneyDate(rawDue) : null;
     const uid = t.assigned_to;
 
     if (!dueDate) {
