@@ -63,14 +63,21 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Load package definitions to resolve nested products
+    const allPackageDefs = await entities.Package.list(null, 200).catch(() => []);
+    const packageDefMap = new Map(allPackageDefs.map((p: any) => [p.id, p]));
+
     if (project.packages && Array.isArray(project.packages)) {
       for (const pkg of project.packages) {
-        if (pkg.products && Array.isArray(pkg.products)) {
-          for (const nestedProd of pkg.products) {
-            packageProductInfo.push({ packageId: pkg.package_id, productId: nestedProd.product_id });
-            if (!productSources.has(nestedProd.product_id)) productSources.set(nestedProd.product_id, new Set());
-            productSources.get(nestedProd.product_id).add(pkg.package_id);
-          }
+        // Use project-level overrides if present, otherwise fall back to package definition
+        let nestedProducts = pkg.products && pkg.products.length > 0
+          ? pkg.products
+          : (packageDefMap.get(pkg.package_id)?.products || []);
+
+        for (const nestedProd of nestedProducts) {
+          packageProductInfo.push({ packageId: pkg.package_id, productId: nestedProd.product_id });
+          if (!productSources.has(nestedProd.product_id)) productSources.set(nestedProd.product_id, new Set());
+          productSources.get(nestedProd.product_id).add(pkg.package_id);
         }
       }
     }
