@@ -182,18 +182,18 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
   return res.json();
 }
 
-// ─── Recursive folder listing with pagination ───────────────────────────────
+// ─── Folder listing with pagination (no recursive — Dropbox disallows it on shared links) ──
 
-async function listAll(
+const SUBFOLDER_CONCURRENCY = 5;
+
+async function listFolder(
   token: string,
   path: string,
   sharedLink: string,
-  recursive: boolean,
 ): Promise<{ entries: Record<string, unknown>[]; truncated: boolean }> {
   const body: Record<string, unknown> = {
     path,
     include_deleted: false,
-    recursive,
     limit: 2000,
     shared_link: { url: sharedLink },
   };
@@ -215,6 +215,84 @@ async function listAll(
     }
   }
   return { entries, truncated };
+}
+
+/**
+ * List all files under a shared link by walking subfolders manually.
+ * Dropbox doesn't allow recursive=true on shared links, so we list the
+ * top level to discover property folders, then list each subfolder.
+ */
+async function listAllUnderSharedLink(
+  token: string,
+  sharedLink: string,
+): Promise<{ entries: Record<string, unknown>[]; truncated: boolean }> {
+  const { entries: topEntries, truncated: topTruncated } = await listFolder(token, '', sharedLink);
+
+  const subfolders: Record<string, unknown>[] = [];
+  const allEntries: Record<string, unknown>[] = [];
+  let anyTruncated = topTruncated;
+
+  for (const e of topEntries) {
+    if (e['.tag'] === 'folder') {
+      subfolders.push(e);
+    } else if (e['.tag'] === 'file') {
+      allEntries.push(e);
+    }
+  }
+
+  // List each subfolder (property folder) with concurrency limit
+  // Shared-link entries often lack path_display, so we construct paths manually.
+  let next = 0;
+  async function worker() {
+    while (next < subfolders.length) {
+      const idx = next++;
+      const sf = subfolders[idx];
+      const sfName = sf.name as string;
+      // Skip shell/template folders
+      if (sfName.includes('SHELL')) continue;
+
+      try {
+        const sfPath = (sf.path_display as string) || (sf.path_lower as string) || `/${sfName}`;
+        const { entries: subEntries, truncated: subTruncated } = await listFolder(token, sfPath, sharedLink);
+        if (subTruncated) anyTruncated = true;
+
+        for (const se of subEntries) {
+          if (se['.tag'] === 'file') {
+            // Ensure path_display is set for files
+            if (!se.path_display) {
+              se.path_display = `${sfPath}/${se.name}`;
+            }
+            allEntries.push(se);
+          } else if (se['.tag'] === 'folder') {
+            // Go one more level deep (property > room/area > files)
+            const deepName = se.name as string;
+            const deepPath = (se.path_display as string) || (se.path_lower as string) || `${sfPath}/${deepName}`;
+            try {
+              const { entries: deepEntries, truncated: deepTruncated } = await listFolder(token, deepPath, sharedLink);
+              if (deepTruncated) anyTruncated = true;
+              for (const de of deepEntries) {
+                if (de['.tag'] === 'file') {
+                  if (!de.path_display) {
+                    de.path_display = `${deepPath}/${de.name}`;
+                  }
+                  allEntries.push(de);
+                }
+              }
+            } catch (deepErr: any) {
+              console.warn(`Failed listing deep folder ${deepPath}: ${deepErr?.message}`);
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn(`Failed listing subfolder ${sfName}: ${err?.message}`);
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(SUBFOLDER_CONCURRENCY, subfolders.length) }, () => worker());
+  await Promise.all(workers);
+
+  return { entries: allEntries, truncated: anyTruncated };
 }
 
 // ─── Cache helpers ──────────────────────────────────────────────────────────
@@ -291,7 +369,7 @@ async function fetchWorkingFiles(token: string): Promise<{ files: WorkingFile[];
 
   const results = await Promise.allSettled(
     sources.map(async ({ url, source }) => {
-      const { entries, truncated } = await listAll(token, '', url, true);
+      const { entries, truncated } = await listAllUnderSharedLink(token, url);
       if (truncated) anyTruncated = true;
 
       const files: WorkingFile[] = [];
@@ -385,11 +463,46 @@ Deno.serve(async (req) => {
       return errResponse('UNAUTHORIZED', 'Missing or invalid apikey / authorization header', 401, req);
     }
 
+    const body = await req.json().catch(() => ({}));
     const token = await getAccessToken();
     if (!token) return errResponse('CONFIG_ERROR', 'Dropbox integration not configured', 500, req);
 
+    // Debug mode — show env config status and Dropbox link metadata
+    if (body?._debug) {
+      const imagesUrl = Deno.env.get('DROPBOX_WORKING_FILES_IMAGES_URL') || '';
+      const videoUrl  = Deno.env.get('DROPBOX_WORKING_FILES_VIDEO_URL') || '';
+      const debug: Record<string, unknown> = {
+        token_set: token.length > 10,
+        images_url_set: !!imagesUrl,
+        images_url_len: imagesUrl.length,
+        video_url_set: !!videoUrl,
+        video_url_len: videoUrl.length,
+      };
+      // Probe each shared link
+      for (const [label, url] of [['images', imagesUrl], ['video', videoUrl]] as const) {
+        if (!url) continue;
+        try {
+          const meta = await dbxPost(token, '/sharing/get_shared_link_metadata', { url });
+          debug[`${label}_meta`] = { tag: meta['.tag'], name: meta.name, path: meta.path_lower, id: meta.id };
+          // Also try listing root
+          const listResult = await dbxPost(token, '/files/list_folder', {
+            path: '', shared_link: { url }, include_deleted: false, limit: 20,
+          });
+          debug[`${label}_root_entries`] = (listResult.entries || []).length;
+          debug[`${label}_root_sample`] = (listResult.entries || []).slice(0, 5).map((e: any) => ({
+            tag: e['.tag'], name: e.name, path_display: e.path_display, path_lower: e.path_lower, id: e.id,
+          }));
+        } catch (err: any) {
+          debug[`${label}_error`] = err?.message;
+        }
+      }
+      return jsonResponse(debug, 200, req);
+    }
+
+    const forceRefresh = !!body?.force_refresh;
+
     // ─── Check cache first ────────────────────────────────────────────
-    const cached = await getCacheEntry(CACHE_KEY);
+    const cached = forceRefresh ? null : await getCacheEntry(CACHE_KEY);
 
     if (cached) {
       const cachedData = cached.data as { files: WorkingFile[]; truncated?: boolean };
