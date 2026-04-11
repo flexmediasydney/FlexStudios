@@ -297,6 +297,7 @@ export default function UsersManagement() {
                   <TableHead className="font-semibold">Role</TableHead>
                   <TableHead className="font-semibold">Team</TableHead>
                   <TableHead className="font-semibold">Default Role</TableHead>
+                  <TableHead className="font-semibold">Target Hrs</TableHead>
                   <TableHead className="font-semibold">Last Login</TableHead>
                   <TableHead className="font-semibold">Status</TableHead>
                   <TableHead className="text-right font-semibold">Actions</TableHead>
@@ -304,9 +305,9 @@ export default function UsersManagement() {
               </TableHeader>
               <TableBody>
                 {isLoading ? (
-                  <TableRow><TableCell colSpan={8} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
+                  <TableRow><TableCell colSpan={9} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
                 ) : filteredUsers.length === 0 ? (
-                  <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No users found</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground">No users found</TableCell></TableRow>
                 ) : (
                   filteredUsers.map(user => {
                     const config = roleConfig[user.role] || roleConfig.employee;
@@ -380,6 +381,9 @@ export default function UsersManagement() {
                               ))}
                             </SelectContent>
                           </Select>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm tabular-nums">{user.weekly_target_hours ?? 40.0}h</span>
                         </TableCell>
                         <TableCell>
                           {user.last_login_at ? (
@@ -494,6 +498,11 @@ export default function UsersManagement() {
                 </Select>
                 <p className="text-[10px] text-muted-foreground">Used by Tonomo webhooks to assign the correct project role</p>
               </div>
+              <div className="space-y-2">
+                <Label>Weekly Target Hours</Label>
+                <Input type="number" step="0.1" min="0" max="168" placeholder="40.0" value={editingUser.weekly_target_hours ?? 40.0} onChange={(e) => setEditingUser(p => ({ ...p, weekly_target_hours: parseFloat(e.target.value) || 0 }))} className="h-11" />
+                <p className="text-[10px] text-muted-foreground">Used for capacity planning (default 40h/week)</p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button>
@@ -507,6 +516,7 @@ export default function UsersManagement() {
                     internal_team_id: editingUser.internal_team_id || null,
                     internal_team_name: editingUser.internal_team_name || null,
                     default_staff_role: editingUser.default_staff_role || null,
+                    weekly_target_hours: editingUser.weekly_target_hours ?? 40.0,
                   },
                 })}
                 disabled={updateUserMutation.isPending}

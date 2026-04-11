@@ -286,6 +286,7 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
     totalEstimated += estimated;
 
     const user = userMap.get(uid);
+    const weeklyTarget = Number(user?.weekly_target_hours) || 40;
     byUser.push({
       user_id: uid,
       user_name: user?.full_name || 'Unknown',
@@ -295,28 +296,34 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
       hours_logged: Math.round(logged * 100) / 100,
       hours_estimated: Math.round(estimated * 100) / 100,
       utilization_pct: safePct(logged, estimated),
+      weekly_target_hours: weeklyTarget,
+      available_capacity: Math.round(Math.max(0, weeklyTarget - logged) * 100) / 100,
+      target_utilization_pct: safePct(logged, weeklyTarget),
     });
   }
 
   byUser.sort((a, b) => b.hours_logged - a.hours_logged);
 
   // Build team-level aggregation from by_user data
-  const teamMap = new Map<string, { team_name: string; team_id: string; hours_logged: number; hours_estimated: number; member_count: number; members: any[] }>();
+  const teamMap = new Map<string, { team_name: string; team_id: string; hours_logged: number; hours_estimated: number; total_target_hours: number; member_count: number; members: any[] }>();
   for (const u of byUser) {
     const teamId = u.team_id || 'unassigned';
     const teamName = u.team_name || 'Unassigned';
     if (!teamMap.has(teamId)) {
-      teamMap.set(teamId, { team_id: teamId, team_name: teamName, hours_logged: 0, hours_estimated: 0, member_count: 0, members: [] });
+      teamMap.set(teamId, { team_id: teamId, team_name: teamName, hours_logged: 0, hours_estimated: 0, total_target_hours: 0, member_count: 0, members: [] });
     }
     const team = teamMap.get(teamId)!;
     team.hours_logged += u.hours_logged || 0;
     team.hours_estimated += u.hours_estimated || 0;
+    team.total_target_hours += u.weekly_target_hours || 40;
     team.member_count++;
-    team.members.push({ user_name: u.user_name, utilization_pct: u.utilization_pct });
+    team.members.push({ user_name: u.user_name, utilization_pct: u.utilization_pct, weekly_target_hours: u.weekly_target_hours || 40 });
   }
   const byTeam = Array.from(teamMap.values()).map(t => ({
     ...t,
     utilization_pct: t.hours_estimated > 0 ? Math.round((t.hours_logged / t.hours_estimated) * 100) : 0,
+    target_utilization_pct: t.total_target_hours > 0 ? Math.round((t.hours_logged / t.total_target_hours) * 100) : 0,
+    team_free_capacity: Math.round(Math.max(0, t.total_target_hours - t.hours_logged) * 100) / 100,
   })).sort((a, b) => b.hours_logged - a.hours_logged);
 
   const overallPct = safePct(totalLogged, totalEstimated);

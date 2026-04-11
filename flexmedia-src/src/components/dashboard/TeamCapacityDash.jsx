@@ -139,9 +139,9 @@ function ColorLegend() {
 /*  Section 1 - Summary Strip                                          */
 /* ------------------------------------------------------------------ */
 
-function SummaryStrip({ overallPct, totalLogged, totalEstimated, overloadedCount, underloadedCount, onScrollOverloaded, onScrollUnderloaded }) {
+function SummaryStrip({ overallPct, totalLogged, totalEstimated, totalCapacity, overloadedCount, underloadedCount, onScrollOverloaded, onScrollUnderloaded }) {
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
       {/* Overall Utilization */}
       <Card className="p-4">
         <div className="flex items-center gap-3">
@@ -174,6 +174,23 @@ function SummaryStrip({ overallPct, totalLogged, totalEstimated, overloadedCount
               <span className="text-sm font-normal text-muted-foreground">
                 / {fmtHours(totalEstimated)}h
               </span>
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Available Capacity */}
+      <Card className="p-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+            <Zap className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">
+              Available Capacity
+            </p>
+            <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-400">
+              {fmtHours(totalCapacity)}h
             </p>
           </div>
         </div>
@@ -249,6 +266,10 @@ function TeamRow({ team }) {
   const mostLoaded = sortedMembers[0];
   const leastLoaded = sortedMembers[sortedMembers.length - 1];
 
+  const totalTarget = team.total_target_hours ?? (members.length * 40);
+  const teamFree = team.team_free_capacity ?? Math.max(0, totalTarget - logged);
+  const targetPct = team.target_utilization_pct ?? (totalTarget > 0 ? Math.round((logged / totalTarget) * 100) : 0);
+
   const popoverContent = (
     <div className="space-y-1.5">
       <p className="font-semibold text-sm">{team.team_name}</p>
@@ -257,10 +278,33 @@ function TeamRow({ team }) {
         <span className="text-muted-foreground">Members: </span>
         {members.map((m) => m.user_name).join(", ") || "None"}
       </p>
+      <div className="border-t border-border my-1" />
       <p>
-        <span className="text-muted-foreground">Total: </span>
-        {fmtHours(logged)}h logged / {fmtHours(estimated)}h estimated
+        <span className="text-muted-foreground">Team target: </span>
+        {fmtHours(totalTarget)}h ({members.length} x {members.length > 0 ? fmtHours(totalTarget / members.length) : "40.0"}h)
       </p>
+      <p>
+        <span className="text-muted-foreground">Team logged: </span>
+        {fmtHours(logged)}h
+      </p>
+      <p>
+        <span className="text-muted-foreground">Team free: </span>
+        {fmtHours(teamFree)}h
+      </p>
+      <p>
+        <span className="text-muted-foreground">Committed (estimated): </span>
+        {fmtHours(estimated)}h
+      </p>
+      <div className="border-t border-border my-1" />
+      <p>
+        <span className="text-muted-foreground">Utilization (vs estimate): </span>
+        {fmtPct(pct)}%
+      </p>
+      <p>
+        <span className="text-muted-foreground">Utilization (vs target): </span>
+        {fmtPct(targetPct)}%
+      </p>
+      <div className="border-t border-border my-1" />
       {mostLoaded && (
         <p>
           <span className="text-muted-foreground">Most loaded: </span>
@@ -365,6 +409,9 @@ function StaffBar({ user }) {
   const pct = user.utilization_pct ?? 0;
   const logged = user.hours_logged ?? 0;
   const estimated = user.hours_estimated ?? 0;
+  const weeklyTarget = user.weekly_target_hours ?? 40;
+  const freeCapacity = user.available_capacity ?? Math.max(0, weeklyTarget - logged);
+  const targetPct = user.target_utilization_pct ?? (weeklyTarget > 0 ? Math.round((logged / weeklyTarget) * 100) : 0);
   const diff = logged - estimated;
   const RIcon = roleIcon(user.role);
 
@@ -374,19 +421,27 @@ function StaffBar({ user }) {
       <p className="text-muted-foreground capitalize">{user.role?.replace(/_/g, " ")}</p>
       <div className="border-t border-border my-1" />
       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+        <span className="text-muted-foreground">Target:</span>
+        <span>{fmtHours(weeklyTarget)}h / week</span>
         <span className="text-muted-foreground">Logged:</span>
-        <span>{fmtHours(logged)} hours</span>
-        <span className="text-muted-foreground">Estimated:</span>
-        <span>{fmtHours(estimated)} hours</span>
+        <span>{fmtHours(logged)}h</span>
+        <span className="text-muted-foreground">Free capacity:</span>
+        <span>{fmtHours(freeCapacity)}h</span>
+        <span className="text-muted-foreground">Committed (estimated):</span>
+        <span>{fmtHours(estimated)}h</span>
         <span className="text-muted-foreground">Difference:</span>
         <span>
           {diff >= 0 ? "+" : ""}
           {fmtHours(diff)}h{" "}
           {diff > 0 ? "(ahead)" : diff < 0 ? "(catching up)" : "(on track)"}
         </span>
+        <span className="text-muted-foreground">Utilization (vs estimate):</span>
+        <span>{fmtPct(pct)}%</span>
+        <span className="text-muted-foreground">Utilization (vs target):</span>
+        <span>{fmtPct(targetPct)}%</span>
         <span className="text-muted-foreground">Status:</span>
         <span>
-          {statusEmoji(pct)} {statusLabel(pct)} ({fmtPct(pct)}%)
+          {statusEmoji(pct)} {statusLabel(pct)}
         </span>
         {user.team_name && (
           <>
@@ -580,7 +635,7 @@ function UnderloadedOpportunities({ users }) {
                     <p className="text-sm font-bold text-blue-700 dark:text-blue-400">
                       {fmtHours(available)}h
                     </p>
-                    <p className="text-[10px] text-blue-600 dark:text-blue-500">available</p>
+                    <p className="text-[10px] text-blue-600 dark:text-blue-500">remaining</p>
                   </div>
                 )}
               </div>
@@ -736,6 +791,7 @@ export default function TeamCapacityDash() {
   const overallPct = utilization?.overall_utilization_pct ?? 0;
   const totalLogged = byUser.reduce((s, u) => s + (u.hours_logged ?? 0), 0);
   const totalEstimated = byUser.reduce((s, u) => s + (u.hours_estimated ?? 0), 0);
+  const totalCapacity = byUser.reduce((s, u) => s + (u.available_capacity ?? Math.max(0, (u.weekly_target_hours ?? 40) - (u.hours_logged ?? 0))), 0);
   const overloadedCount = byUser.filter((u) => (u.utilization_pct ?? 0) > 90).length;
   const underloadedCount = byUser.filter((u) => (u.utilization_pct ?? 0) < 40).length;
 
@@ -746,6 +802,7 @@ export default function TeamCapacityDash() {
         overallPct={overallPct}
         totalLogged={totalLogged}
         totalEstimated={totalEstimated}
+        totalCapacity={totalCapacity}
         overloadedCount={overloadedCount}
         underloadedCount={underloadedCount}
         onScrollOverloaded={() => overloadedRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
