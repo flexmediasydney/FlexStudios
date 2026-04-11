@@ -287,12 +287,15 @@ export default function WorkingFilesPulse() {
 
   const { data, isLoading, isError, dataUpdatedAt, refetch } = useQuery({
     queryKey: ["working-files-feed"],
-    queryFn: () => api.functions.invoke("getWorkingFilesFeed", {}),
+    queryFn: async () => {
+      const res = await api.functions.invoke("getWorkingFilesFeed", {});
+      return res?.data || res || {};
+    },
     refetchInterval: 45_000,
     staleTime: 30_000,
   });
 
-  const files = useMemo(() => data?.files || data || [], [data]);
+  const files = useMemo(() => data?.files || [], [data]);
 
   // ── Auto-refresh countdown ───────────────────────────────────────────────
 
