@@ -543,50 +543,6 @@ function SimulatorMode() {
   );
 }
 
-// ─── Matrix Mode ─────────────────────────────────────────────────────────────
-
-function MatrixMode() {
-  const [highlight, setHighlight] = useState(null);
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground font-semibold">Highlight:</span>
-        {Object.keys(ROLES).map(r => (
-          <RolePill key={r} role={r} selected={highlight === r} onClick={() => setHighlight(highlight === r ? null : r)} />
-        ))}
-        {highlight && <button onClick={() => setHighlight(null)} className="text-xs text-muted-foreground underline">Clear</button>}
-      </div>
-      <div className="grid gap-0 px-3" style={{ gridTemplateColumns: `1fr ${Object.keys(ROLES).map(() => "72px").join(" ")}` }}>
-        <div />
-        {Object.entries(ROLES).map(([r, s]) => <div key={r} className={`text-center text-xs font-bold ${s.text}`}>{s.label}</div>)}
-      </div>
-      {PAGE_SECTIONS.map(section => (
-        <div key={section.label}>
-          <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1 px-1">{section.label}</div>
-          <div className="bg-card border rounded-lg overflow-hidden">
-            {section.pages.map((page, i) => {
-              const dimmed = highlight && !canAccessRoute(page, highlight);
-              return (
-                <div key={page} className={`grid items-center px-3 py-2 transition-opacity ${i > 0 ? "border-t" : ""} ${dimmed ? "opacity-20" : ""}`} style={{ gridTemplateColumns: `1fr ${Object.keys(ROLES).map(() => "72px").join(" ")}` }}>
-                  <div>
-                    <div className="text-xs font-semibold">{prettify(page)}</div>
-                  </div>
-                  {Object.keys(ROLES).map(role => (
-                    <div key={role} className="text-center text-sm">
-                      {canAccessRoute(page, role) ? <span className="text-green-500">●</span> : <span className="text-muted-foreground/50">○</span>}
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // ─── Blocked UX Preview ──────────────────────────────────────────────────────
 
 function BlockedUXMode() {
@@ -651,10 +607,9 @@ export default function RolesSecurityPanel() {
   const modes = [
     { key: "people", label: "People" },
     { key: "simulate", label: "Simulate" },
-    { key: "matrix", label: "Access Matrix" },
+    { key: "security-matrix", label: "Security Matrix" },
     { key: "overrides", label: "Overrides" },
     { key: "blocked", label: "Blocked UX" },
-    { key: "entity-access", label: "Entity Access" },
   ];
 
   return (
@@ -697,10 +652,9 @@ export default function RolesSecurityPanel() {
       {/* Mode content */}
       {mode === "people" && <PeopleMode onViewAs={(role) => setMode("simulate")} />}
       {mode === "simulate" && <SimulatorMode />}
-      {mode === "matrix" && <MatrixMode />}
+      {mode === "security-matrix" && <EntityAccessMatrix />}
       {mode === "overrides" && <PermissionMatrix />}
       {mode === "blocked" && <BlockedUXMode />}
-      {mode === "entity-access" && <EntityAccessMatrix />}
 
       {/* Platform note */}
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex gap-3">
