@@ -128,7 +128,7 @@ export default function NoteComposer({
       setFocusTags([]);
       onNoteCreated?.();
     } catch (error) {
-      toast.error("Failed to save note: " + (error.message || "Unknown error"));
+      toast.error("Failed to save note. " + (error.message || "Check your connection and try again."));
     } finally {
       setIsSubmitting(false);
     }

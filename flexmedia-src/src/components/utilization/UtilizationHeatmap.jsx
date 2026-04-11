@@ -56,7 +56,7 @@ export default function UtilizationHeatmap({ utilizations, onEmployeeClick }) {
                 key={util.user_id}
                 onClick={() => onEmployeeClick?.(util)}
                 className={cn(
-                  'p-3 rounded-lg text-center transition-all hover:shadow-md cursor-pointer',
+                  'p-3 rounded-lg text-center transition-all duration-200 hover:shadow-md cursor-pointer',
                   getColor(util.utilization_percent, util.has_data),
                 )}
                 title={`${util.user_name} — ${util.has_data ? `${util.utilization_percent}% utilization` : 'no data this period'}`}
@@ -65,7 +65,7 @@ export default function UtilizationHeatmap({ utilizations, onEmployeeClick }) {
                 <p className="text-lg font-bold leading-tight">
                   {util.has_data ? `${util.utilization_percent}%` : '—'}
                 </p>
-                <p className="text-xs opacity-75">
+                <p className="text-xs text-muted-foreground">
                   {util.has_data ? fmtHoursMins(util.actual_seconds) : 'idle'}
                 </p>
               </button>

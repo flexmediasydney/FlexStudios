@@ -113,7 +113,7 @@ function ProjectDrawer({ project, onClose }) {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
         {/* Address */}
         <div>
           <p className="text-base font-bold leading-tight">
@@ -211,7 +211,7 @@ function ProjectListPanel({ projects, selectedId, onSelect, loading }) {
           {loading ? 'Loading…' : `${projects.length} project${projects.length !== 1 ? 's' : ''} in view`}
         </p>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto scrollbar-thin">
         {projects.length === 0 && !loading && (
           <div className="p-4 text-center text-xs text-muted-foreground">
             No projects in current map view

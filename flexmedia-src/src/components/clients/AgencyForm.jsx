@@ -27,7 +27,7 @@ const INITIAL_STATE = {
 
 function FieldError({ error }) {
   if (!error) return null;
-  return <p className="text-xs text-destructive mt-1">{error}</p>;
+  return <p className="text-xs text-destructive mt-1" role="alert">{error}</p>;
 }
 
 export default function AgencyForm({ agency, open, onClose }) {
@@ -154,12 +154,14 @@ export default function AgencyForm({ agency, open, onClose }) {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <Label>Organisation Name *</Label>
+            <Label htmlFor="agency-name">Organisation Name *</Label>
             <Input
+              id="agency-name"
               value={formData.name}
               onChange={(e) => handleChange("name", e.target.value)}
               maxLength={LIMITS.name}
               className={errors.name ? "border-destructive" : ""}
+              aria-invalid={!!errors.name}
               placeholder="e.g., Ray White Real Estate"
               required
               autoFocus
@@ -167,8 +169,9 @@ export default function AgencyForm({ agency, open, onClose }) {
             <FieldError error={errors.name} />
           </div>
           <div>
-            <Label>Address</Label>
+            <Label htmlFor="agency-address">Address</Label>
             <Input
+              id="agency-address"
               value={formData.address}
               onChange={(e) => handleChange("address", e.target.value)}
               maxLength={LIMITS.address}

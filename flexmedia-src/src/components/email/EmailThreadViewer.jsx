@@ -202,9 +202,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           description: 'Email marked as read'
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      toast.success("Marked as read");
+      toast.success("Thread marked as read");
     },
-    onError: () => toast.error("Failed to mark as read")
+    onError: () => toast.error("Failed to mark as read. Please try again.")
   });
 
   const markAsUnreadMutation = useMutation({
@@ -224,9 +224,9 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           description: 'Email marked as unread'
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      toast.success("Marked as unread");
+      toast.success("Thread marked as unread");
     },
-    onError: () => toast.error("Failed to mark as unread")
+    onError: () => toast.error("Failed to mark as unread. Please try again.")
   });
 
   const archiveEmailMutation = useMutation({
@@ -244,10 +244,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           description: 'Email archived'
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      toast.success("Archived");
+      toast.success("Thread archived");
       onBack();
     },
-    onError: () => toast.error("Failed to archive")
+    onError: () => toast.error("Failed to archive thread. Please try again.")
   });
 
   const restoreEmailMutation = useMutation({
@@ -265,10 +265,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           description: 'Email restored to inbox'
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      toast.success("Restored to inbox");
+      toast.success("Thread restored to inbox");
       onBack();
     },
-    onError: () => toast.error("Failed to restore")
+    onError: () => toast.error("Failed to restore thread. Please try again.")
   });
 
   const setVisibilityMutation = useMutation({
@@ -294,7 +294,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           description: `Visibility changed to ${visibility}`
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      toast.success("Visibility updated");
+      toast.success("Thread visibility updated");
     },
     onError: (error) => toast.error(error?.message || "Failed to update visibility")
   });
@@ -329,10 +329,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           queryClient.invalidateQueries({ queryKey: ['email-activity', msg.id] });
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      toast.success("Priority updated");
+      toast.success("Email priority updated");
     },
     onError: () => {
-      toast.error("Failed to update priority");
+      toast.error("Failed to update priority. Please try again.");
     }
   });
 
@@ -352,11 +352,11 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           description: 'Email deleted'
         }).catch(err => console.error('Failed to log activity:', err));
       }
-      toast.success("Email deleted");
+      toast.success("Email moved to trash");
       onBack();
     },
     onError: () => {
-      toast.error("Failed to delete email");
+      toast.error("Failed to delete email. Please try again.");
     }
   });
 
@@ -408,7 +408,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
          }).catch(err => console.error('Failed to log activity:', err));
        }
      }
-     toast.success("Labels updated");
+     toast.success("Email labels updated");
    },
    onError: (_, __, context) => {
      // Revert optimistic update on error
@@ -416,7 +416,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
        setLiveMessages(context.previousMessages);
      }
      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
-     toast.error("Failed to update labels");
+     toast.error("Failed to update labels. Please try again.");
    }
   });
 
@@ -446,10 +446,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         }).catch(err => console.error('Failed to log activity:', err));
       }
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
-      toast.success("Project unlinked");
+      toast.success("Project unlinked from thread");
     },
     onError: () => {
-      toast.error("Failed to unlink project");
+      toast.error("Failed to unlink project. Please try again.");
     }
   });
 
@@ -480,10 +480,10 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       }
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       setShowProjectLink(false);
-      toast.success("Project linked");
+      toast.success("Project linked to thread");
     },
     onError: () => {
-      toast.error("Failed to link project");
+      toast.error("Failed to link project. Please try again.");
     }
   });
 

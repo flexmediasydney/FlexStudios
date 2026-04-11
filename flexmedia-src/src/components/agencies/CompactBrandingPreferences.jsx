@@ -76,7 +76,7 @@ export default function CompactBrandingPreferences({ agency }) {
       const existing = getPref(catId)?.reference_uploads || [];
       setPref(catId, catName, { reference_uploads: [...existing, ...uploads] });
       toast.success(`${uploads.length} file(s) uploaded`);
-    } catch { toast.error('Upload failed'); }
+    } catch { toast.error('File upload failed. Please check the file and try again.'); }
     finally { setUploading(p => ({ ...p, [catId]: false })); }
   };
 
@@ -96,13 +96,13 @@ export default function CompactBrandingPreferences({ agency }) {
         branding_files_link: filesLink
       });
       setPreferences(cleanPrefs);
-      toast.success('Branding saved');
-    } catch { toast.error('Failed to save'); }
+      toast.success('Branding preferences saved successfully');
+    } catch { toast.error('Failed to save branding preferences. Please try again.'); }
     finally { setSaving(false); }
   };
 
   if (typesLoading || categoriesLoading) {
-    return <div className="flex items-center gap-2 text-xs text-muted-foreground py-2"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading...</div>;
+    return <div className="flex items-center gap-2 text-xs text-muted-foreground py-2"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading branding preferences...</div>;
   }
 
   return (

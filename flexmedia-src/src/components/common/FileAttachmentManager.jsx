@@ -221,6 +221,7 @@ export default function FileAttachmentManager({
                           onClick={() => remove(i)}
                           className="opacity-0 group-hover/img:opacity-100 transition-opacity p-1 bg-destructive text-white rounded hover:bg-destructive/90"
                           title="Remove attachment"
+                          aria-label={`Remove ${att.file_name || 'attachment'}`}
                         >
                           <X className="h-4 w-4" />
                         </button>
@@ -258,6 +259,7 @@ export default function FileAttachmentManager({
                       download={att.file_name}
                       className="text-muted-foreground hover:text-primary opacity-0 group-hover/file:opacity-100 transition-opacity flex-shrink-0"
                       title="Download file"
+                      aria-label={`Download ${att.file_name || 'file'}`}
                     >
                       <Download className="h-3.5 w-3.5" />
                     </a>
@@ -267,6 +269,7 @@ export default function FileAttachmentManager({
                         onClick={() => remove(i)}
                         className="text-muted-foreground hover:text-destructive opacity-0 group-hover/file:opacity-100 transition-opacity flex-shrink-0"
                         title="Remove attachment"
+                        aria-label={`Remove ${att.file_name || 'attachment'}`}
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>

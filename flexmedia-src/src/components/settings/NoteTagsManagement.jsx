@@ -130,7 +130,7 @@ export default function NoteTagsManagement() {
           {tags.map((tag) => (
             <div
               key={tag.id}
-              className="flex items-center justify-between px-3 py-2 rounded-lg border bg-card"
+              className="flex items-center justify-between px-3 py-2 rounded-lg border bg-card transition-colors hover:bg-muted/30"
             >
               {editingId === tag.id ? (
                 <div className="flex items-center gap-2 flex-1">
@@ -189,7 +189,7 @@ export default function NoteTagsManagement() {
                       onClick={() => deleteMutation.mutate(tag.id)}
                       disabled={deletingId === tag.id}
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </>

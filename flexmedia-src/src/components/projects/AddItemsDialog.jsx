@@ -36,14 +36,14 @@ function QtyControl({ qty, min = 1, max, onChange }) {
         type="button"
         onClick={handleDecrement}
         disabled={qty <= min}
-        className="px-1.5 py-0.5 text-xs hover:bg-muted rounded-l disabled:opacity-40"
+        className="px-1.5 py-0.5 text-xs hover:bg-muted rounded-l disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none"
       >−</button>
-      <span className="text-xs font-medium w-6 text-center select-none">{qty}</span>
+      <span className="text-xs font-medium w-6 text-center select-none tabular-nums">{qty}</span>
       <button
         type="button"
         onClick={handleIncrement}
         disabled={!!(max && qty >= max)}
-        className="px-1.5 py-0.5 text-xs hover:bg-muted rounded-r disabled:opacity-40"
+        className="px-1.5 py-0.5 text-xs hover:bg-muted rounded-r disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none"
       >+</button>
     </div>
   );

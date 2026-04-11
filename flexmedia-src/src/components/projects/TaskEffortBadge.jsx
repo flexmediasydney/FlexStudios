@@ -29,7 +29,7 @@ export default function TaskEffortBadge({ estimatedMinutes = 0, actualSeconds = 
   if (compact) {
     return (
       <div className="flex items-center gap-1" title={`Logged: ${formatMins(actualSeconds)} / Est: ${formatMins(estimatedSeconds)}`}>
-        <span className={cn("text-[10px] font-medium", hasActual ? textColor : "text-muted-foreground/60")}>
+        <span className={cn("text-[10px] font-medium tabular-nums", hasActual ? textColor : "text-muted-foreground/60")}>
           {hasActual
             ? <>{formatMins(actualSeconds)}{hasEstimate && <span className="text-muted-foreground/60">/{formatMins(estimatedSeconds)}</span>}</>
             : hasEstimate
@@ -52,7 +52,7 @@ export default function TaskEffortBadge({ estimatedMinutes = 0, actualSeconds = 
         </span>
       </div>
       {hasEstimate && (
-        <div className="w-full bg-gray-100 rounded-full h-1.5">
+        <div className="w-full bg-muted rounded-full h-1.5">
           <div
             className={cn("h-1.5 rounded-full transition-all duration-300", barColor)}
             style={{ width: `${Math.min(pct ?? 0, 100)}%` }}

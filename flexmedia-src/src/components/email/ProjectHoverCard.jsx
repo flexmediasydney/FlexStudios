@@ -74,7 +74,7 @@ export default function ProjectHoverCard({ projectId, children }) {
           {/* Content */}
           {isLoading ? (
             <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-              Loading...
+              Loading project details...
             </div>
           ) : project ? (
             <div className="p-4 space-y-3">

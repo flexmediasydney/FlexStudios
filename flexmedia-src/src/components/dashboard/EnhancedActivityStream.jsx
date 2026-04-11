@@ -39,7 +39,7 @@ function ActivityItem({ activity }) {
   const Icon = config.icon;
 
   return (
-    <div className="flex gap-3 py-2.5 hover:bg-muted/30 rounded-lg px-2 transition-colors">
+    <div className="flex gap-3 py-2.5 hover:bg-muted/30 rounded-lg px-2 transition-colors duration-150">
       <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5', config.bg)}>
         <Icon className={cn('h-3.5 w-3.5', config.color)} />
       </div>

@@ -29,7 +29,7 @@ const INITIAL_STATE = {
 
 function FieldError({ error }) {
   if (!error) return null;
-  return <p className="text-xs text-destructive mt-1">{error}</p>;
+  return <p className="text-xs text-destructive mt-1" role="alert">{error}</p>;
 }
 
 export default function AgentForm({ agent, open, onClose, preselectedAgencyId, preselectedTeamId }) {
@@ -256,12 +256,14 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
             </Select>
           </div>
           <div>
-            <Label>Name *</Label>
+            <Label htmlFor="agent-name">Name *</Label>
             <Input
+              id="agent-name"
               value={formData.name}
               onChange={(e) => handleChange("name", e.target.value)}
               maxLength={LIMITS.name}
               className={errors.name ? "border-destructive" : ""}
+              aria-invalid={!!errors.name}
               placeholder="e.g., John Smith"
               required
               autoFocus={!preselectedAgencyId}
@@ -269,8 +271,9 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
             <FieldError error={errors.name} />
           </div>
           <div>
-            <Label>Title / Role</Label>
+            <Label htmlFor="agent-title">Title / Role</Label>
             <Input
+              id="agent-title"
               value={formData.title}
               onChange={(e) => handleChange("title", e.target.value)}
               maxLength={LIMITS.title}
@@ -279,25 +282,29 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <Label>Phone</Label>
+              <Label htmlFor="agent-phone">Phone</Label>
               <Input
+                id="agent-phone"
                 type="tel"
                 value={formData.phone}
                 onChange={(e) => handleChange("phone", e.target.value)}
                 maxLength={LIMITS.phone}
                 className={errors.phone ? "border-destructive" : ""}
+                aria-invalid={!!errors.phone}
                 placeholder="e.g., 0412 345 678"
               />
               <FieldError error={errors.phone} />
             </div>
             <div>
-              <Label>Email</Label>
+              <Label htmlFor="agent-email">Email</Label>
               <Input
+                id="agent-email"
                 type="email"
                 value={formData.email}
                 onChange={(e) => handleChange("email", e.target.value)}
                 maxLength={LIMITS.email}
                 className={errors.email ? "border-destructive" : ""}
+                aria-invalid={!!errors.email}
                 placeholder="e.g., john@agency.com.au"
               />
               <FieldError error={errors.email} />

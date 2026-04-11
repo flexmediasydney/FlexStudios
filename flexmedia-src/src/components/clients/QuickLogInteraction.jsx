@@ -126,6 +126,8 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
                   type="button"
                   onClick={() => setSelectedType(t.id)}
                   title={t.id}
+                  aria-label={`Log ${t.id}`}
+                  aria-pressed={isSelected}
                   className={cn(
                     "flex items-center justify-center w-10 h-8 rounded-md border transition-all",
                     isSelected
@@ -134,7 +136,7 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
                     t.color
                   )}
                 >
-                  <Icon className="h-3.5 w-3.5" />
+                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               );
             })}
@@ -160,7 +162,7 @@ export default function QuickLogInteraction({ agent, onLogged, triggerSize = "sm
               aria-label="Submit interaction"
             >
               {loading ? (
-                <span className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full" />
+                <span className="animate-spin h-3 w-3 border-2 border-current border-t-transparent rounded-full" role="status" aria-label="Submitting" />
               ) : (
                 <Send className="h-3 w-3" />
               )}

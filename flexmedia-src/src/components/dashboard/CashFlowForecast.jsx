@@ -9,7 +9,7 @@ export default function CashFlowForecast({ data, forecastedRevenue }) {
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="text-base flex items-center gap-2">
-            <DollarSign className="h-4 w-4" />
+            <DollarSign className="h-4 w-4 text-green-600" />
             Cash Flow Forecast (Next 30 Days)
           </CardTitle>
           <div className="flex items-center gap-2">
@@ -20,7 +20,7 @@ export default function CashFlowForecast({ data, forecastedRevenue }) {
         </div>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={240}>
+        <ResponsiveContainer width="100%" height={240} role="img" aria-label="Cash flow forecast area chart for next 30 days">
           <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="colorActual" x1="0" y1="0" x2="0" y2="1">
@@ -32,7 +32,7 @@ export default function CashFlowForecast({ data, forecastedRevenue }) {
                 <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+            <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
             <XAxis 
               dataKey="date" 
               tick={{ fontSize: 10, fill: '#6b7280' }}
@@ -45,8 +45,9 @@ export default function CashFlowForecast({ data, forecastedRevenue }) {
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #e5e7eb',
+                backgroundColor: 'hsl(var(--popover))',
+                color: 'hsl(var(--popover-foreground))',
+                border: '1px solid hsl(var(--border))',
                 borderRadius: '8px',
                 boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
                 fontSize: '11px'

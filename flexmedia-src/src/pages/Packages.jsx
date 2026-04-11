@@ -217,7 +217,7 @@ export default function PackagesPage() {
     onSuccess: () => {
       refetchEntityList("Package");
       queryClient.invalidateQueries({ queryKey: ["packages"] });
-      toast.success("Lock status updated");
+      toast.success("Package lock status updated");
     },
   });
 

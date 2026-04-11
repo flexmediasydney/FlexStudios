@@ -8,15 +8,15 @@ const QtyControl = memo(({ qty, minQty, maxQty, onChange }) => {
     <div className="inline-flex items-center gap-1 border rounded px-1 py-0.5">
       <button
         onClick={() => onChange(qty - 1)}
-        className="px-1.5 py-0.5 text-xs hover:bg-muted rounded disabled:opacity-30 font-bold"
+        className="px-1.5 py-0.5 text-xs hover:bg-muted rounded disabled:opacity-30 font-bold focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none"
         disabled={qty <= minQty}
       >
         −
       </button>
-      <span className="font-mono text-sm font-medium w-6 text-center">{qty}</span>
+      <span className="font-mono text-sm font-medium w-6 text-center tabular-nums">{qty}</span>
       <button
         onClick={() => onChange(qty + 1)}
-        className="px-1.5 py-0.5 text-xs hover:bg-muted rounded disabled:opacity-30 font-bold"
+        className="px-1.5 py-0.5 text-xs hover:bg-muted rounded disabled:opacity-30 font-bold focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none"
         disabled={maxQty != null && qty >= maxQty}
       >
         +

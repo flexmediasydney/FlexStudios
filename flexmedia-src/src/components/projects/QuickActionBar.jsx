@@ -134,10 +134,10 @@ export default function QuickActionBar({
               }}
               disabled={stage.value === project.status}
               className={cn(
-                "w-full text-left px-3 py-2 text-sm rounded-md transition-colors",
+                "w-full text-left px-3 py-2 text-sm rounded-md transition-all duration-150",
                 stage.value === project.status
                   ? "bg-primary/10 text-primary font-medium cursor-default"
-                  : "hover:bg-muted text-foreground",
+                  : "hover:bg-muted text-foreground hover:pl-4",
               )}
             >
               <span className="flex items-center gap-2">

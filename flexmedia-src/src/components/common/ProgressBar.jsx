@@ -16,7 +16,7 @@ export default function ProgressBar({ value, label, showLabel = true, showPercen
           {showPercent && <span className="text-sm text-muted-foreground">{Math.round(value)}%</span>}
         </div>
       )}
-      <Progress value={value} className={cn(sizeClasses[size])} />
+      <Progress value={value} className={cn(sizeClasses[size])} aria-label={label ? `${label}: ${Math.round(value)}%` : `${Math.round(value)}% complete`} />
     </div>
   );
 }

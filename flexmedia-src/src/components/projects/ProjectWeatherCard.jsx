@@ -8,14 +8,14 @@ import { OPEN_METEO_FORECAST_URL, OPEN_METEO_GEOCODING_URL } from "@/lib/constan
 function getWeatherInfo(code) {
   if (code === 0) return { label: "Clear sky", icon: Sun, color: "text-yellow-500" };
   if (code <= 2) return { label: "Partly cloudy", icon: Cloud, color: "text-blue-400" };
-  if (code <= 3) return { label: "Overcast", icon: Cloud, color: "text-gray-400" };
-  if (code <= 49) return { label: "Foggy", icon: Cloud, color: "text-gray-400" };
+  if (code <= 3) return { label: "Overcast", icon: Cloud, color: "text-muted-foreground" };
+  if (code <= 49) return { label: "Foggy", icon: Cloud, color: "text-muted-foreground" };
   if (code <= 59) return { label: "Drizzle", icon: CloudRain, color: "text-blue-400" };
   if (code <= 69) return { label: "Rain", icon: CloudRain, color: "text-blue-500" };
   if (code <= 79) return { label: "Snow", icon: CloudSnow, color: "text-blue-200" };
   if (code <= 84) return { label: "Rain showers", icon: CloudRain, color: "text-blue-500" };
   if (code <= 94) return { label: "Thunderstorm", icon: CloudRain, color: "text-purple-500" };
-  return { label: "Stormy", icon: Wind, color: "text-gray-600" };
+  return { label: "Stormy", icon: Wind, color: "text-muted-foreground" };
 }
 
 function extractSuburb(address) {
@@ -207,7 +207,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap tabular-nums">
             <div className="flex items-center gap-1">
               <Thermometer className="h-3.5 w-3.5 text-red-400" />
               <span className="font-medium">{weather.tempMax}°C</span>
@@ -222,7 +222,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
             )}
 
             <div className="flex items-center gap-1">
-              <Wind className="h-3.5 w-3.5 text-gray-400" />
+              <Wind className="h-3.5 w-3.5 text-muted-foreground" />
               <span>{weather.wind} km/h</span>
             </div>
 
@@ -239,7 +239,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
         <div className="border-t pt-3">
           <button
             onClick={() => setShowHourly(!showHourly)}
-            className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors mb-2 cursor-pointer"
+            className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors mb-2 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none rounded"
             aria-expanded={showHourly}
             title={showHourly ? "Hide hourly weather breakdown" : "Show hourly weather breakdown"}
           >

@@ -84,7 +84,7 @@ export default function ActiveTimersWidget({ timeLogs = [], tasks = [] }) {
             {activeTimers.map(timer => (
               <div
                 key={timer.id}
-                className="flex items-center gap-3 p-2.5 rounded-lg border border-green-200 bg-green-50/50"
+                className="flex items-center gap-3 p-2.5 rounded-lg border border-green-200 bg-green-50/50 dark:bg-green-950/30 dark:border-green-800"
               >
                 <div className="w-8 h-8 rounded-lg bg-green-100 text-green-600 flex items-center justify-center shrink-0">
                   <Play className="h-4 w-4" />

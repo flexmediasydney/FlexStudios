@@ -94,7 +94,7 @@ class ErrorBoundary extends Component {
             {/* Heading & description */}
             <div className="text-center mb-8">
               <h2 className="text-xl font-semibold tracking-tight mb-2">
-                {label ? `${label} encountered an error` : "Something went wrong"}
+                {label ? `${label} encountered an error` : "Something went wrong loading this page"}
               </h2>
               <p className="text-sm text-muted-foreground leading-relaxed max-w-md mx-auto">
                 {errorMessage}

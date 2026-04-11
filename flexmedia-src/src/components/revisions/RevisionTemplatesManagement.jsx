@@ -122,7 +122,7 @@ export default function RevisionTemplatesManagement() {
       )}
 
       {!loading && filtered.length === 0 && (
-        <div className="text-center py-16 text-muted-foreground border rounded-xl border-dashed">
+        <div className="text-center py-16 text-muted-foreground border rounded-lg border-dashed">
           <p className="font-medium">No {REQUEST_KINDS[activeKind]?.label.toLowerCase()} templates yet</p>
           <p className="text-sm mt-1">Create templates to standardize your request workflows.</p>
           <Button className="mt-4" onClick={() => handleOpen()}>
@@ -149,7 +149,7 @@ export default function RevisionTemplatesManagement() {
                   return (
                     <div key={tpl.id} className="border rounded-lg overflow-hidden">
                       <div
-                        className="flex items-center gap-3 p-3 bg-card hover:bg-muted/30 cursor-pointer"
+                        className="flex items-center gap-3 p-3 bg-card hover:bg-muted/30 cursor-pointer transition-colors"
                         onClick={() => toggleExpand(tpl.id)}
                       >
                         <span className="text-muted-foreground">

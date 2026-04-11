@@ -19,8 +19,8 @@ export default function AgencyProjectTypesCompact({ agency }) {
     setSaving(true);
     try {
       await api.entities.Agency.update(agency.id, { default_project_type_ids: selected });
-      toast.success('Project types saved');
-    } catch { toast.error('Failed to save'); }
+      toast.success('Project types saved successfully');
+    } catch { toast.error('Failed to save project types. Please try again.'); }
     finally { setSaving(false); }
   };
 

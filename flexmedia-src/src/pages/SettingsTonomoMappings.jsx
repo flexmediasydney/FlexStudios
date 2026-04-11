@@ -229,7 +229,7 @@ export default function SettingsTonomoMappings() {
       id: mapping.id,
       data: { flexmedia_entity_id: entityId, flexmedia_label: entityLabel, is_confirmed: true, auto_suggested: false, confidence: "high", ...extraData }
     });
-    toast.success("Linked");
+    toast.success("Mapping linked successfully");
   }, [saveMutation]);
 
   const handleUnlink = useCallback((mapping) => {
@@ -237,7 +237,7 @@ export default function SettingsTonomoMappings() {
       id: mapping.id,
       data: { flexmedia_entity_id: null, flexmedia_label: null, is_confirmed: false, auto_suggested: false, confidence: "low" }
     });
-    toast.success("Unlinked");
+    toast.success("Mapping unlinked");
   }, [saveMutation]);
 
   const handleConfirm = useCallback((mapping) => {
@@ -245,7 +245,7 @@ export default function SettingsTonomoMappings() {
       id: mapping.id,
       data: { is_confirmed: true, auto_suggested: false }
     });
-    toast.success("Confirmed");
+    toast.success("Mapping confirmed");
   }, [saveMutation]);
 
   const currentTypeConfig = TYPE_CONFIG[activeType];

@@ -54,10 +54,10 @@ export default function AgentSearch({ onSelect }) {
           {results.map((agent) => (
             <Card
               key={agent.id}
-              className="p-3 cursor-pointer hover:bg-muted/50 transition-colors"
+              className="p-3 cursor-pointer hover:bg-muted/50 transition-all duration-200"
               onClick={() => onSelect(agent)}
             >
-              <div className="font-medium text-foreground">{agent.name}</div>
+              <div className="font-medium text-sm text-foreground">{agent.name}</div>
               <div className="text-sm text-muted-foreground">{agent.email}</div>
               {agent.current_agency_name && (
                 <div className="text-xs text-muted-foreground">

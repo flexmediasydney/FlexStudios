@@ -38,20 +38,20 @@ export default function ProjectCard({ project, products = [], packages = [], tas
                 }`}>
                   <Zap className="w-3.5 h-3.5" />
                 </div>
-                <div className="absolute right-0 top-8 w-72 bg-gray-900 text-white text-xs rounded-lg p-3 shadow-xl z-50 hidden group-hover/auto:block">
-                  <p className="font-semibold mb-1">⚡ Auto-imported from Tonomo</p>
+                <div className="absolute right-0 top-8 w-72 bg-popover text-popover-foreground border text-xs rounded-lg p-3 shadow-xl z-50 hidden group-hover/auto:block">
+                  <p className="font-semibold mb-1">Auto-imported from Tonomo</p>
                   {project.pending_review_reason && (
-                    <p className="text-gray-300 mb-1">{project.pending_review_reason}</p>
+                    <p className="text-muted-foreground mb-1">{project.pending_review_reason}</p>
                   )}
-                  <p className="text-gray-400">
+                  <p className="text-muted-foreground">
                     Confidence: <span className={
-                      project.mapping_confidence === 'full' ? 'text-green-400' :
-                      project.mapping_confidence === 'partial' ? 'text-amber-400' : 'text-red-400'
+                      project.mapping_confidence === 'full' ? 'text-green-500' :
+                      project.mapping_confidence === 'partial' ? 'text-amber-500' : 'text-red-500'
                     }>{project.mapping_confidence || 'unknown'}</span>
                   </p>
-                  {project.tonomo_package && <p className="text-gray-400">Package: {project.tonomo_package}</p>}
-                  {project.tonomo_invoice_amount && <p className="text-gray-400">Invoice: ${project.tonomo_invoice_amount}</p>}
-                  <p className="text-blue-400 mt-1 cursor-pointer">View in Integration Dashboard →</p>
+                  {project.tonomo_package && <p className="text-muted-foreground">Package: {project.tonomo_package}</p>}
+                  {project.tonomo_invoice_amount && <p className="text-muted-foreground">Invoice: ${project.tonomo_invoice_amount}</p>}
+                  <p className="text-primary mt-1 cursor-pointer">View in Integration Dashboard</p>
                 </div>
               </div>
             )}

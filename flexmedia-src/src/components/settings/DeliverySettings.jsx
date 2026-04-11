@@ -226,7 +226,7 @@ export default function DeliverySettings() {
           <Separator />
 
           <div className="bg-muted/50 rounded-lg p-4 space-y-2">
-            <p className="text-sm font-medium">Configuration Rules:</p>
+            <p className="text-sm font-semibold">Configuration Rules:</p>
             <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
               <li>All thresholds must be in ascending order</li>
               <li>Values represent the percentage of time elapsed from task creation to due date</li>

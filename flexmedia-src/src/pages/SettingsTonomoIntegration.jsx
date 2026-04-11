@@ -348,8 +348,8 @@ export default function SettingsTonomoIntegration() {
     }
   };
 
-  if (isLoading) return <div className="p-6">Loading...</div>;
-  if (!settings) return <div className="p-6">No settings found</div>;
+  if (isLoading) return <div className="p-6">Loading integration settings...</div>;
+  if (!settings) return <div className="p-6">No integration settings found. Please check your Tonomo configuration.</div>;
 
   return (
     <ErrorBoundary>

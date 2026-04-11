@@ -55,14 +55,14 @@ export default function NotificationToast() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 max-w-sm">
+    <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-2 max-w-sm" role="region" aria-live="assertive" aria-label="Notifications">
       {toasts.map(toast => (
         <div
           key={toast.id}
           className="bg-red-600 text-white rounded-xl shadow-2xl p-4 flex items-start gap-3
             animate-in slide-in-from-bottom-4 fade-in"
         >
-          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" aria-hidden="true" />
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-sm leading-snug">{toast.title}</p>
             {digestSettings?.show_previews !== false && toast.message && (
@@ -71,6 +71,7 @@ export default function NotificationToast() {
             {toast.cta_url && (
               <button
                 className="text-red-200 hover:text-white text-xs underline mt-1 cursor-pointer transition-colors"
+                aria-label={`${toast.cta_label || "View"}: ${toast.title}`}
                 onClick={() => {
                   try {
                     const params = toast.cta_params ? JSON.parse(toast.cta_params) : {};

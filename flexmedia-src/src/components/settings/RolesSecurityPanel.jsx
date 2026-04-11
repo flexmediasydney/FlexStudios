@@ -159,8 +159,8 @@ function PeopleMode({ onViewAs }) {
                   try {
                     await api.entities.Notification.update(req.id, { is_dismissed: true });
                     queryClient.invalidateQueries({ queryKey: ["access-requests"] });
-                    toast.success("Dismissed");
-                  } catch { toast.error("Failed to dismiss"); }
+                    toast.success("Access request dismissed");
+                  } catch { toast.error("Failed to dismiss request. Please try again."); }
                 }}>
                   Dismiss
                 </Button>
@@ -346,8 +346,8 @@ function PeopleMode({ onViewAs }) {
                         className="h-5 px-2 text-[9px] text-red-600 hover:text-red-700 hover:bg-red-50"
                         onClick={() => {
                           api.entities.UserPermission.update(o.id, { is_active: false })
-                            .then(() => { queryClient.invalidateQueries({ queryKey: ["userPermissions"] }); toast.success("Revoked"); })
-                            .catch(() => toast.error("Failed to revoke"));
+                            .then(() => { queryClient.invalidateQueries({ queryKey: ["userPermissions"] }); toast.success("Permission revoked"); })
+                            .catch(() => toast.error("Failed to revoke permission. Please try again."));
                         }}
                       >
                         Revoke
@@ -409,7 +409,7 @@ function PeopleMode({ onViewAs }) {
                   onClick={() => {
                     api.entities.User.update(selected.id, { is_active: false })
                       .then(() => { queryClient.invalidateQueries({ queryKey: ["users"] }); toast.success(`${selected.full_name || "User"} deactivated`); })
-                      .catch(() => toast.error("Failed to deactivate user"));
+                      .catch(() => toast.error("Failed to deactivate user. Please try again."));
                   }}
                 >
                   Deactivate
@@ -422,7 +422,7 @@ function PeopleMode({ onViewAs }) {
                   onClick={() => {
                     api.entities.User.update(selected.id, { is_active: true })
                       .then(() => { queryClient.invalidateQueries({ queryKey: ["users"] }); toast.success(`${selected.full_name || "User"} reactivated`); })
-                      .catch(() => toast.error("Failed to reactivate user"));
+                      .catch(() => toast.error("Failed to reactivate user. Please try again."));
                   }}
                 >
                   Reactivate

@@ -19,8 +19,8 @@ export default function ProspectTimeline({ prospect, interactions = [] }) {
     return (
       <Card className="p-12 text-center">
         <Calendar className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
-        <p className="text-muted-foreground">No interactions yet.</p>
-        <p className="text-xs text-muted-foreground mt-1">Start by logging your first touchpoint.</p>
+        <p className="text-muted-foreground">No interactions logged yet</p>
+        <p className="text-xs text-muted-foreground mt-1">Log your first call, email, or meeting to build a timeline.</p>
       </Card>
     );
   }
@@ -50,7 +50,7 @@ export default function ProspectTimeline({ prospect, interactions = [] }) {
               <Card className="flex-1 p-4">
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <h4 className="font-semibold">{interaction.summary}</h4>
+                    <h4 className="font-medium text-sm">{interaction.summary}</h4>
                     <p className="text-xs text-muted-foreground mt-1">
                       {fmtTimestampCustom(interaction.date_time, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
@@ -65,7 +65,7 @@ export default function ProspectTimeline({ prospect, interactions = [] }) {
                 )}
 
                 <div className="flex items-center gap-2 mt-4 pt-3 border-t text-xs text-muted-foreground">
-                  <User className="h-3 w-3" />
+                  <User className="h-3.5 w-3.5" />
                   <span>{interaction.user_name || 'System'}</span>
                 </div>
               </Card>

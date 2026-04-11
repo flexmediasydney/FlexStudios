@@ -240,6 +240,7 @@ export default function ChatPanel({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-8 h-8 text-xs"
+              aria-label="Search messages"
             />
           </div>
 
@@ -276,11 +277,11 @@ export default function ChatPanel({
       {/* Messages */}
       <ScrollArea className="flex-1 p-4" ref={scrollRef}>
         {isLoading ? (
-          <p className="text-center text-sm text-muted-foreground py-8">Loading...</p>
+          <p className="text-center text-sm text-muted-foreground py-8" role="status" aria-live="polite">Loading messages...</p>
         ) : sortedMessages.length === 0 ? (
           <p className="text-center text-sm text-muted-foreground py-8">No messages yet. Start the conversation!</p>
         ) : (
-          <div className="space-y-3 pr-4">
+          <div className="space-y-3 pr-4" aria-live="polite" aria-relevant="additions">
             {sortedMessages.map((msg) => (
               <ChatMessage
                 key={msg.id}

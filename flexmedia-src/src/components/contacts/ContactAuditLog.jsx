@@ -69,7 +69,7 @@ export default function ContactAuditLog({ entityType, entityId }) {
       <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
         <Clock className="h-10 w-10 mb-3 opacity-30" />
         <p className="text-sm font-medium">No changes recorded yet</p>
-        <p className="text-xs mt-1">Changes to this record will appear here</p>
+        <p className="text-xs mt-1">Edits and updates to this contact will be logged here automatically.</p>
       </div>
     );
   }

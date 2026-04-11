@@ -53,7 +53,7 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
     <HoverCard openDelay={300} closeDelay={200}>
       <HoverCardTrigger asChild>
         <Card
-          className="cursor-pointer hover:shadow-md transition-shadow"
+          className="cursor-pointer hover:shadow-md transition-all duration-200 hover:border-primary/20"
           onClick={handleClick}
           title="Click to view detailed effort breakdown"
         >
@@ -104,7 +104,7 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
                 {/* Progress bar */}
                 {data.totalEstimated > 0 && (
                   <div>
-                    <div className="relative h-2 w-full overflow-hidden rounded-full bg-gray-200">
+                    <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
                       <div
                         className={cn('h-full rounded-full transition-all duration-500', BAR_CLASSES[color])}
                         style={{ width: `${Math.min(utilPct, 100)}%` }}
@@ -174,7 +174,7 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
                           </span>
                         </div>
                         {role.estimated > 0 && (
-                          <div className="h-1 w-full rounded-full bg-gray-200">
+                          <div className="h-1 w-full rounded-full bg-muted">
                             <div
                               className={cn('h-1 rounded-full transition-all', BAR_CLASSES[c])}
                               style={{ width: `${Math.min(pct, 100)}%` }}

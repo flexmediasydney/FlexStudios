@@ -162,7 +162,7 @@ function RuleBuilderModal({ open, onClose, initialRule, onSave }) {
 
   function handleSave() {
     if (!form.name.trim()) {
-      toast.error("Rule name is required");
+      toast.error("Please enter a name for this automation rule");
       return;
     }
     // Sanitize numeric fields to prevent NaN reaching the database
@@ -512,7 +512,7 @@ export default function SettingsAutomationRules() {
 
   // Show error toast on failed rules fetch (onError removed in TanStack Query v5)
   useEffect(() => {
-    if (rulesError) toast.error('Failed to load automation rules');
+    if (rulesError) toast.error('Failed to load automation rules. Check your connection and refresh.');
   }, [rulesError]);
 
   const { data: logs = [], isLoading: logsLoading } = useQuery({
@@ -732,7 +732,7 @@ export default function SettingsAutomationRules() {
                 Loading logs...
               </div>
             ) : filteredLogs.length === 0 ? (
-              <Card><CardContent className="py-8 text-center text-muted-foreground text-sm">No log entries yet.</CardContent></Card>
+              <Card><CardContent className="py-8 text-center text-muted-foreground text-sm">No automation log entries yet. Logs will appear here as rules are triggered.</CardContent></Card>
             ) : (
               <div className="space-y-2">
                 {filteredLogs.map(log => (

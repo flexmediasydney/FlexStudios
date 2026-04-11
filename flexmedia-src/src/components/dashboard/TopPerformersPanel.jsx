@@ -85,7 +85,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
             {topUsers.slice(0, 3).map((user, idx) => (
               <div
                 key={user.id}
-                className="flex items-center gap-3 p-2 rounded-lg bg-muted/30"
+                className="flex items-center gap-3 p-2 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
               >
                 <Avatar className="h-8 w-8">
                   <AvatarFallback className="text-xs bg-blue-500/10 text-blue-600 font-semibold">

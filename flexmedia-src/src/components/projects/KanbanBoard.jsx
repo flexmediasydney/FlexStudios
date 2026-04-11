@@ -567,11 +567,11 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
       }
     },
     onSuccess: () => {
-      toast.success('Project status updated');
+      toast.success('Project moved to new stage');
       // Bug fix: invalidate project cache so the parent list and kanban reflect the new status
       refetchEntityList('Project');
     },
-    onError: (err) => toast.error(err?.message || "Failed to update project status"),
+    onError: (err) => toast.error(err?.message || "Failed to update project status. Please try again."),
   });
 
   const [pendingDrag, setPendingDrag] = useState(null);

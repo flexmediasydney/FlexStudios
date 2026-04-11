@@ -359,7 +359,7 @@ export default function ProductsPage() {
                     <TableRow>
                       <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                         <Camera className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                        {searchQuery ? "No products match your search" : "No products yet. Add your first product."}
+                        {searchQuery ? "No products match your search. Try a different term." : "No products yet. Add your first product to build your catalogue."}
                       </TableCell>
                     </TableRow>
                   ) : filteredProducts.map((product) => {

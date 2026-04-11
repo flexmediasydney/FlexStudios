@@ -37,7 +37,7 @@ const StatCompact = ({ label, current, previous, format = 'number', icon: Icon }
           <motion.div
             className={cn(
               'p-2 rounded-lg',
-              isPositive ? 'bg-green-100' : 'bg-red-100'
+              isPositive ? 'bg-green-100 dark:bg-green-950/40' : 'bg-red-100 dark:bg-red-950/40'
             )}
             animate={{ rotate: [0, 5, -5, 0] }}
             transition={{ duration: 0.5, repeat: Infinity, repeatDelay: 2 }}

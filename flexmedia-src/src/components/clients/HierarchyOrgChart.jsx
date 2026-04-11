@@ -107,7 +107,7 @@ export default function HierarchyOrgChart({
             {!hasChildren && (
               <div className="flex justify-center mt-4">
                 <p className="text-sm text-muted-foreground bg-muted/30 px-4 py-2 rounded-lg border border-dashed">
-                  No teams or people yet
+                  No teams or people added yet
                 </p>
               </div>
             )}

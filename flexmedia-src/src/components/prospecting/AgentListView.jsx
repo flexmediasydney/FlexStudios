@@ -23,7 +23,7 @@ export default function AgentListView({ agents, interactions }) {
     return (
       <div className="text-center py-12">
         <Users className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
-        <p className="text-muted-foreground">No agents to display</p>
+        <p className="text-muted-foreground">No agents found. Add a contact to start tracking prospects.</p>
       </div>
     );
   }
@@ -34,11 +34,11 @@ export default function AgentListView({ agents, interactions }) {
       <div className="grid grid-cols-1 gap-3">
         {agents.map((agent) => (
           <Link key={agent.id} to={createPageUrl('ProspectDetails') + `?id=${agent.id}`}>
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer">
+            <Card className="hover:shadow-md transition-all duration-200 cursor-pointer">
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold">{agent.name}</h3>
+                    <h3 className="font-medium text-sm">{agent.name}</h3>
                     <p className="text-sm text-muted-foreground">{agent.title}</p>
                     <div className="flex gap-2 mt-2">
                       <Badge variant="outline">{agent.email}</Badge>

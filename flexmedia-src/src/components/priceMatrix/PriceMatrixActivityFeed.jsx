@@ -33,7 +33,7 @@ export default function PriceMatrixActivityFeed({ priceMatrixId = null }) {
       {logs.map((log) => (
         <div key={log.id} className="border rounded-lg overflow-hidden">
           <div
-            className="flex items-start gap-3 p-3 cursor-pointer hover:bg-muted/30 transition-colors"
+            className="flex items-start gap-3 p-3 cursor-pointer hover:bg-muted/30 transition-all duration-200"
             onClick={() => setExpandedLog(expandedLog === log.id ? null : log.id)}
           >
             <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -54,7 +54,7 @@ export default function PriceMatrixActivityFeed({ priceMatrixId = null }) {
                 <span className="text-sm text-muted-foreground">{log.changes_summary}</span>
               </div>
               <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
-                <Clock className="h-3 w-3" />
+                <Clock className="h-3.5 w-3.5" />
                 {log.created_date
                   ? format(new Date(log.created_date), "dd MMM yyyy, h:mm a")
                   : "Unknown time"}

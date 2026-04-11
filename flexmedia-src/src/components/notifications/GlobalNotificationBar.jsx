@@ -77,7 +77,11 @@ function NotificationItem({ n, onMarkRead, onDismiss, onNavigate, showPreviews =
       className={`px-4 py-3 hover:bg-muted/60 transition-all cursor-pointer group border-b border-border/50 last:border-0 active:bg-muted ${
         !n.is_read ? "bg-blue-50/50 dark:bg-blue-950/20" : ""
       }`}
+      role="button"
+      tabIndex={0}
+      aria-label={`${!n.is_read ? 'Unread: ' : ''}${n.title}`}
       onClick={() => { if (n.cta_url) onNavigate(n); if (!n.is_read) onMarkRead(n.id); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (n.cta_url) onNavigate(n); if (!n.is_read) onMarkRead(n.id); } }}
     >
       <div className="flex items-start gap-2.5">
         <span className="text-base shrink-0 mt-0.5">
@@ -265,6 +269,7 @@ export function NotificationBell() {
             <div className="border-t border-border px-4 py-2.5 bg-muted/20">
               <button
                 className="text-sm text-primary hover:text-primary/80 font-semibold w-full text-center py-1 hover:bg-muted/50 rounded-md transition-colors"
+                aria-label="View all notifications"
                 onClick={() => {
                   navigate(createPageUrl("NotificationsPage"));
                   setOpen(false);

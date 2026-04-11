@@ -163,11 +163,12 @@ export default function MessageInput({
           onKeyDown={handleKeyDown}
           disabled={disabled || uploading}
           className="min-h-12 max-h-24 text-sm resize-none"
+          aria-label="Message input"
         />
 
         {/* Mention Dropdown */}
         {showMentions && filteredUsers.length > 0 && (
-          <div className="absolute bottom-full left-0 right-0 mb-2 bg-popover border rounded-lg shadow-lg max-h-48 overflow-y-auto z-50">
+          <div className="absolute bottom-full left-0 right-0 mb-2 bg-popover border rounded-lg shadow-lg max-h-48 overflow-y-auto z-50" role="listbox" aria-label="Mention suggestions">
             {filteredUsers.map((user, idx) => (
               <button
                 key={user.id}
@@ -191,7 +192,7 @@ export default function MessageInput({
       {/* Character count hint */}
       {content.length > 0 && (
         <div className="flex justify-end">
-          <span className={`text-[11px] tabular-nums ${content.length > 4500 ? 'text-amber-500 font-medium' : 'text-muted-foreground/50'}`}>
+          <span className={`text-[11px] tabular-nums ${content.length > 4500 ? 'text-amber-500 font-medium' : 'text-muted-foreground'}`}>
             {content.length.toLocaleString()} chars
           </span>
         </div>

@@ -68,7 +68,7 @@ export default function PendingReviewsWidget({ projects = [] }) {
                 key={item.id}
                 onClick={() => navigate(createPageUrl("ProjectDetails") + `?id=${item.id}`)}
                 className={`w-full flex items-start gap-3 p-2.5 rounded-lg border text-left transition-colors hover:bg-accent/50 ${
-                  item.isUrgent ? "border-red-200 bg-red-50/30" : "border-border/50"
+                  item.isUrgent ? "border-red-200 bg-red-50/30 dark:bg-red-950/20 dark:border-red-800" : "border-border/50"
                 }`}
               >
                 <div className={`mt-0.5 w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${

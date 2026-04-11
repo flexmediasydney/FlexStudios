@@ -273,7 +273,7 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
         ) : connections.length === 0 ? (
           <div className="text-center py-6">
             <CalendarDays className="h-10 w-10 mx-auto mb-2 text-muted-foreground opacity-40" />
-            <p className="text-muted-foreground text-sm">No calendar connections yet</p>
+            <p className="text-muted-foreground text-sm">No calendar connections yet. Connect Google Calendar to sync your schedule.</p>
             <Button size="sm" className="mt-3" onClick={handleConnect}>
               <Plus className="h-4 w-4 mr-2" />
               Connect Google Calendar

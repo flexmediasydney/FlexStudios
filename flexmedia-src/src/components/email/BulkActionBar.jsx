@@ -380,11 +380,11 @@ export default function BulkActionBar({
               if (failures > 0) {
                 toast.warning(`Deleted with ${failures} account error${failures !== 1 ? 's' : ''}`);
               } else {
-                toast.success("Deleted");
+                toast.success("Emails deleted successfully");
               }
               setSelectedMessages(new Set());
               onRefetch();
-            }).catch(() => toast.error("Failed to delete"))
+            }).catch(() => toast.error("Failed to delete emails. Please try again."))
             .finally(() => setIsProcessing(false));
           }}
           disabled={isProcessing || filterView === 'deleted'}

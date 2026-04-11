@@ -116,6 +116,8 @@ export default function ContactHealthScore({ agent, projectCount = 0, totalReven
                 colors.ring,
                 sizeClasses[size]
               )}
+              aria-label={`Health score: ${health.score} out of 100, ${health.grade}`}
+              role="img"
             >
               {health.score}
             </div>

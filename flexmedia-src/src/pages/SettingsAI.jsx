@@ -127,7 +127,7 @@ export default function SettingsAI() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["aiSettings"] });
       setGlobalForm(null);
-      toast.success("AI settings saved.");
+      toast.success("AI settings saved successfully");
     },
     onError: (err) => toast.error(`Failed to save: ${err.message}`),
   });
@@ -144,7 +144,7 @@ export default function SettingsAI() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["aiMyPrefs", user?.id] });
       setPrefForm(null);
-      toast.success("Preferences saved.");
+      toast.success("AI preferences saved successfully");
     },
     onError: (err) => toast.error(`Failed to save: ${err.message}`),
   });
@@ -159,7 +159,7 @@ export default function SettingsAI() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["aiUserOverrides"] });
-      toast.success("User override saved.");
+      toast.success("User AI override saved successfully");
     },
     onError: (err) => toast.error(`Failed to save override: ${err.message}`),
   });

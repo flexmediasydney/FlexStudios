@@ -83,7 +83,7 @@ export default function UsersManagement() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
       refetchEntityList("User");
-      toast.success("User updated");
+      toast.success("User profile updated successfully");
       setEditingUser(null);
     },
     onError: (err) => toast.error(err?.message || "Failed to update user"),
@@ -94,7 +94,7 @@ export default function UsersManagement() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
       refetchEntityList("User");
-      toast.success("User status updated");
+      toast.success("User access status updated");
     },
     onError: (err) => toast.error(err?.message || "Failed to update"),
   });
@@ -135,7 +135,7 @@ export default function UsersManagement() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
       refetchEntityList("User");
-      toast.success("User deleted");
+      toast.success("User removed successfully");
       setDeletingUser(null);
       setDeleteImpact(null);
     },

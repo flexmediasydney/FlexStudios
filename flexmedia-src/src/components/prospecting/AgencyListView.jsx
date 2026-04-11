@@ -14,7 +14,7 @@ export default function AgencyListView({ agencies, interactions }) {
     return (
       <div className="text-center py-12">
         <Building2 className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
-        <p className="text-muted-foreground">No agencies to display</p>
+        <p className="text-muted-foreground">No agencies found. Add an agency to start tracking prospects.</p>
       </div>
     );
   }
@@ -24,13 +24,13 @@ export default function AgencyListView({ agencies, interactions }) {
       <h2 className="text-lg font-semibold">Agencies ({agencies.length})</h2>
       <div className="grid grid-cols-1 gap-3">
         {agencies.map((agency) => (
-          <Card key={agency.id} className="hover:shadow-lg transition-shadow">
+          <Card key={agency.id} className="hover:shadow-md transition-all duration-200">
             <CardContent className="p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-start gap-3 flex-1 min-w-0">
                   <Building2 className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold">{agency.name}</h3>
+                    <h3 className="font-medium text-sm">{agency.name}</h3>
                     <p className="text-sm text-muted-foreground">{agency.email}</p>
                     {agency.address && (
                       <p className="text-sm text-muted-foreground">{agency.address}</p>

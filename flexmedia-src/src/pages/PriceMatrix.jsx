@@ -271,7 +271,7 @@ export default function PriceMatrixPage() {
 
 function MatrixContent({ enriched, entityType, loading, searchQuery, viewMode, creating, onCreate, selectedProjectType }) {
   if (loading) {
-    return <div className="py-12 text-center text-sm text-muted-foreground">Loading...</div>;
+    return <div className="py-12 text-center text-sm text-muted-foreground">Loading price matrices...</div>;
   }
   if (enriched.length === 0) {
     return (

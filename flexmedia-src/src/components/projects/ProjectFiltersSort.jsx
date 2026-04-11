@@ -54,9 +54,9 @@ const FilterGroup = ({ title, items, selectedIds, onToggle, icon: Icon }) => {
                   type="checkbox"
                   checked={selectedIds.includes(item.id)}
                   onChange={() => onToggle(item.id)}
-                  className="rounded w-4 h-4"
+                  className="rounded w-4 h-4 focus-visible:ring-2 focus-visible:ring-primary/20"
                 />
-                <span className="text-sm flex-1 truncate">{item.name}</span>
+                <span className="text-sm flex-1 truncate" title={item.name}>{item.name}</span>
               </label>
             ))
           )}

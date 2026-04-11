@@ -115,7 +115,7 @@ export default function InteractionFormDialog({
       // count and list never refreshed after logging.
       await refetchEntityList('InteractionLog');
       await refetchEntityList('Agent');
-      toast.success('Interaction logged');
+      toast.success('Interaction logged successfully');
       onOpenChange(false);
       setFormData({
         interaction_type: 'Meeting',
@@ -228,7 +228,7 @@ export default function InteractionFormDialog({
                 if (errors.summary) setErrors(prev => ({ ...prev, summary: null }));
               }}
               className={errors.summary ? 'border-red-500' : ''}
-              placeholder="Brief summary of the interaction"
+              placeholder="e.g., Discussed listing photography rates for summer season"
             />
             {errors.summary && <p className="text-xs text-red-600 mt-1">{errors.summary}</p>}
           </div>

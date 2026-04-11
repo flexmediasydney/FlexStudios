@@ -41,12 +41,12 @@ const TYPE_CONFIG = {
   },
   activity: {
     icon: Activity,
-    iconBg: 'bg-gray-100',
-    iconColor: 'text-gray-600',
-    borderColor: 'border-gray-200',
-    bgColor: 'bg-gray-50',
+    iconBg: 'bg-muted',
+    iconColor: 'text-muted-foreground',
+    borderColor: 'border-border',
+    bgColor: 'bg-muted/50',
     label: 'Activity',
-    badgeClass: 'bg-gray-50 text-gray-700 border-gray-200',
+    badgeClass: 'bg-muted text-muted-foreground border-border',
   },
 };
 
@@ -146,7 +146,7 @@ export default function ProjectActivityFeedItem({
           {/* Header row */}
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
-              <span className="text-sm font-semibold text-foreground truncate" title={item.author || 'Unknown'}>
+              <span className="text-sm font-semibold text-foreground truncate max-w-[160px]" title={item.author || 'Unknown'}>
                 {item.author || 'Unknown'}
               </span>
               <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${config.badgeClass} border`}>

@@ -145,7 +145,7 @@ export default function PermissionMatrix() {
   );
 
   if (usersLoading || permsLoading) {
-    return <div className="p-4">Loading...</div>;
+    return <div className="p-4">Loading permissions...</div>;
   }
 
   return (

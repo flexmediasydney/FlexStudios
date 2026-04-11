@@ -14,7 +14,7 @@ import { useEntityAccess } from "@/components/auth/useEntityAccess";
 
 function FieldError({ error }) {
   if (!error) return null;
-  return <p className="text-xs text-destructive mt-1">{error}</p>;
+  return <p className="text-xs text-destructive mt-1" role="alert">{error}</p>;
 }
 
 export default function ClientForm({ client, open, onClose, onSave }) {
@@ -107,6 +107,7 @@ export default function ClientForm({ client, open, onClose, onSave }) {
                 placeholder="John Smith"
                 maxLength={LIMITS.name}
                 className={errors.agent_name ? "border-destructive" : ""}
+                aria-invalid={!!errors.agent_name}
                 required
               />
               <FieldError error={errors.agent_name} />
@@ -140,7 +141,7 @@ export default function ClientForm({ client, open, onClose, onSave }) {
                 />
                 <FieldError error={errors.agent_phone} />
                 {!errors.agent_phone && (
-                  <p className="text-[11px] text-muted-foreground/60 mt-0.5">Format: (04xx) xxx-xxx or +61 x xxxx xxxx</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">Format: (04xx) xxx-xxx or +61 x xxxx xxxx</p>
                 )}
               </div>
             </div>
@@ -202,7 +203,7 @@ export default function ClientForm({ client, open, onClose, onSave }) {
               Cancel
             </Button>
             <Button type="submit" disabled={!canEdit || saving} title="Save client record">
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
               {client ? "Update Client" : "Add Client"}
             </Button>
           </DialogFooter>

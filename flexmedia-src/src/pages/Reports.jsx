@@ -250,8 +250,8 @@ export default function Reports() {
         </div>
         <Card className="p-12 text-center border-2 border-dashed bg-muted/30">
           <Camera className="h-12 w-12 mx-auto mb-3 text-muted-foreground/30" />
-          <h3 className="text-lg font-semibold mb-2">No project data yet</h3>
-          <p className="text-muted-foreground text-sm">Create some projects to see reports and analytics</p>
+          <h3 className="text-lg font-semibold mb-2">No report data available</h3>
+          <p className="text-muted-foreground text-sm">Create and complete projects to generate revenue and performance reports.</p>
         </Card>
       </div>
     );

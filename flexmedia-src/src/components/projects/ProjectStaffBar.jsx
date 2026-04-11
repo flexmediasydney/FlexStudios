@@ -272,7 +272,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
         <div className="space-y-1 max-h-72 overflow-y-auto">
           {currentId && !isNotRequired && (
             <button
-              className="w-full text-left px-3 py-2 text-sm text-destructive hover:bg-destructive/10 rounded-md"
+              className="w-full text-left px-3 py-2 text-sm text-destructive hover:bg-destructive/10 rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none"
               onClick={() => select(null, null, null)}
             >
               Clear assignment
@@ -294,7 +294,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
                 <button
                   key={u.id}
                   className={cn(
-                    "w-full text-left px-3 py-2 text-sm rounded-md hover:bg-muted flex items-center gap-2",
+                    "w-full text-left px-3 py-2 text-sm rounded-md hover:bg-muted flex items-center gap-2 transition-colors",
                     currentId === u.id && "bg-primary/10 text-primary font-medium"
                   )}
                   onClick={() => select(u.id, u.full_name, "user")}

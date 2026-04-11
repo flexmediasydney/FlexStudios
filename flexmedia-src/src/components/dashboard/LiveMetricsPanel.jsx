@@ -6,10 +6,10 @@ import { cn } from '@/lib/utils';
 
 const MetricCard = ({ label, value, unit, trend, icon: Icon, color = 'primary' }) => {
   const colors = {
-    primary: 'text-blue-600',
-    success: 'text-green-600',
-    warning: 'text-amber-600',
-    destructive: 'text-red-600'
+    primary: 'text-blue-600 dark:text-blue-400',
+    success: 'text-green-600 dark:text-green-400',
+    warning: 'text-amber-600 dark:text-amber-400',
+    destructive: 'text-red-600 dark:text-red-400'
   };
 
   return (
@@ -18,10 +18,10 @@ const MetricCard = ({ label, value, unit, trend, icon: Icon, color = 'primary' }
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
     >
-      <Card className="p-6 bg-gradient-to-br from-card to-secondary/20 border-0 shadow-lg">
+      <Card className="p-6 bg-gradient-to-br from-card to-secondary/20 border-0 shadow-lg hover:shadow-xl transition-shadow duration-200">
         <div className="flex justify-between items-start mb-4">
           <div>
-            <p className="text-sm text-muted-foreground font-medium">{label}</p>
+            <p className="text-sm text-muted-foreground font-semibold">{label}</p>
             <div className="flex items-baseline gap-1 mt-2">
               <motion.span
                 className="text-3xl font-bold tracking-tight"

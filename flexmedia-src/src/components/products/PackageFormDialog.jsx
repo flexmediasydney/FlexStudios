@@ -310,7 +310,7 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
               <div className="space-y-2">
                 {formData.products.length === 0 ? (
                   <div className="p-6 text-center border-2 border-dashed rounded-lg">
-                    <p className="text-sm text-muted-foreground">No products added yet</p>
+                    <p className="text-sm text-muted-foreground">No products added yet. Select products above to build this package.</p>
                   </div>
                 ) : (
                   formData.products.map((item, idx) => (

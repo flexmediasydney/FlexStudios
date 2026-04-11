@@ -102,8 +102,8 @@ function EmptyState() {
   return (
     <Card className="p-8 text-center">
       <BarChart3 className="h-10 w-10 mx-auto text-muted-foreground/40 mb-3" />
-      <p className="text-sm font-medium text-muted-foreground">No dashboard data yet</p>
-      <p className="text-xs text-muted-foreground mt-1">Stats will appear once projects are being tracked.</p>
+      <p className="text-sm font-medium text-muted-foreground">No dashboard data available</p>
+      <p className="text-xs text-muted-foreground mt-1">Revenue and performance stats will appear once projects are created and tracked.</p>
     </Card>
   );
 }

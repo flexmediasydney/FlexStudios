@@ -118,10 +118,10 @@ export default function RoleAnalysisView({ utilizations }) {
                     <span>{fmtHoursMins(role.estimated)} estimated</span>
                   </div>
                   {role.estimated > 0 && (
-                    <div className="w-full bg-gray-200 rounded h-1 mt-1.5">
+                    <div className="w-full bg-muted rounded-full h-1 mt-1.5">
                       <div
                         className={cn(
-                          'h-1 rounded transition-all',
+                          'h-1 rounded-full transition-all',
                           avgUtil > 120 ? 'bg-orange-400' : avgUtil >= 80 ? 'bg-green-400' : 'bg-blue-300',
                         )}
                         style={{ width: `${Math.min(avgUtil ?? 0, 100)}%` }}

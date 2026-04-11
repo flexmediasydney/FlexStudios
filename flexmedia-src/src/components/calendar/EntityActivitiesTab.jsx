@@ -73,7 +73,7 @@ export default function EntityActivitiesTab({ entityType, entityId, entityLabel 
     agency:  { defaultAgencyId: entityId },
   }[entityType] || {};
 
-  if (isLoading) return <div className="p-6 text-sm text-muted-foreground">Loading activities...</div>;
+  if (isLoading) return <div className="p-6 text-sm text-muted-foreground" role="status" aria-live="polite">Loading activities...</div>;
 
   return (
     <div className="h-full flex flex-col">
@@ -88,6 +88,7 @@ export default function EntityActivitiesTab({ entityType, entityId, entityLabel 
           <button
             className={`px-2 py-1 text-xs rounded-full border transition-colors ${filterType === 'all' ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground'}`}
             onClick={() => setFilterType("all")}
+            aria-pressed={filterType === 'all'}
           >
             All
           </button>
@@ -118,7 +119,7 @@ export default function EntityActivitiesTab({ entityType, entityId, entityLabel 
         {upcoming.length === 0 && done.length === 0 && (
           <div className="text-center py-12 text-muted-foreground text-sm">
             <Clock className="h-8 w-8 mx-auto mb-2 opacity-30" />
-            No activities yet
+            No scheduled activities yet
             <div className="mt-2">
               <Button size="sm" variant="outline" onClick={() => handleOpen(null)}>
                 <Plus className="h-3.5 w-3.5 mr-1" />
@@ -164,7 +165,11 @@ function ActivityRow({ event, onClick, onMarkDone, done }) {
   return (
     <div
       className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer hover:bg-muted/40 transition-colors ${done ? 'opacity-60' : ''} ${isOverdue ? 'border-red-200 bg-red-50/50' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`${event.title}${isOverdue ? ' (overdue)' : ''}${done ? ' (completed)' : ''}`}
       onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
     >
       {/* Type indicator */}
       <div

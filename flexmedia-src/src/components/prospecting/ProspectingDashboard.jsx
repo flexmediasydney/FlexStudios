@@ -65,10 +65,10 @@ export default function ProspectingDashboard() {
         <div className="flex items-start justify-between">
           <div>
             <p className="text-sm text-muted-foreground">{label}</p>
-            <p className="text-3xl font-bold mt-2">{value}</p>
+            <p className="text-3xl font-semibold mt-2">{value}</p>
             {subtext && <p className="text-xs text-muted-foreground mt-1">{subtext}</p>}
           </div>
-          <Icon className="h-6 w-6 text-muted-foreground opacity-50" />
+          <Icon className="h-6 w-6 text-muted-foreground" />
         </div>
       </CardContent>
     </Card>
@@ -168,7 +168,7 @@ export default function ProspectingDashboard() {
                 return (
                   <div key={level} className="flex items-center justify-between">
                     <Badge className={colors[level]}>{level}</Badge>
-                    <span className="font-semibold">{count} agents</span>
+                    <span className="font-medium">{count} agents</span>
                   </div>
                 );
               })}
@@ -187,7 +187,7 @@ export default function ProspectingDashboard() {
                 <div key={service}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm font-medium">{service}</span>
-                    <span className="font-semibold">{count}</span>
+                    <span className="font-medium">{count}</span>
                   </div>
                   <div className="w-full bg-muted rounded-full h-2">
                     <div
@@ -207,19 +207,19 @@ export default function ProspectingDashboard() {
         <CardContent className="pt-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
             <div>
-              <p className="text-2xl font-bold text-primary">{metrics.prospectingAgents}</p>
+              <p className="text-2xl font-semibold text-primary">{metrics.prospectingAgents}</p>
               <p className="text-xs text-muted-foreground">Prospecting Agents</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-green-600">{metrics.activeAgents}</p>
+              <p className="text-2xl font-semibold text-green-600">{metrics.activeAgents}</p>
               <p className="text-xs text-muted-foreground">Active Agents</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-primary">{metrics.totalInteractions}</p>
+              <p className="text-2xl font-semibold text-primary">{metrics.totalInteractions}</p>
               <p className="text-xs text-muted-foreground">Total Interactions</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-accent">{metrics.prospectingAgencies}</p>
+              <p className="text-2xl font-semibold text-accent">{metrics.prospectingAgencies}</p>
               <p className="text-xs text-muted-foreground">Prospecting Agencies</p>
             </div>
           </div>

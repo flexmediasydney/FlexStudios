@@ -6,11 +6,11 @@ import { Database } from "lucide-react";
 export default function DataTable({ columns, data, loading, empty, isLoading: isLoadingRow = () => false }) {
   if (loading) {
     return (
-      <div className="border rounded-lg">
+      <div className="border rounded-lg" role="status" aria-label="Loading data">
         <Table>
           <TableHeader>
             <TableRow>
-              {columns.map((col) => <TableHead key={col.key}>{col.label}</TableHead>)}
+              {columns.map((col) => <TableHead key={col.key} scope="col">{col.label}</TableHead>)}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -43,7 +43,7 @@ export default function DataTable({ columns, data, loading, empty, isLoading: is
         <TableHeader>
           <TableRow>
             {columns.map((col) => (
-              <TableHead key={col.key} className={col.className}>
+              <TableHead key={col.key} className={col.className} scope="col">
                 {col.label}
               </TableHead>
             ))}

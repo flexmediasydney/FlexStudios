@@ -31,7 +31,7 @@ function ShootCard({ project, users }) {
 
   return (
     <Link to={createPageUrl('ProjectDetails') + `?id=${project.id}`} className="block">
-      <div className="flex gap-4 p-4 rounded-xl border hover:shadow-md hover:border-primary/30 transition-all group bg-card">
+      <div className="flex gap-4 p-4 rounded-xl border hover:shadow-md hover:border-primary/30 hover:-translate-y-0.5 transition-all duration-200 group bg-card">
         <div className="flex flex-col items-center gap-1 w-16 shrink-0">
           {shootTime && <div className="text-sm font-bold">{shootTime}</div>}
           <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: stageColor }} />
@@ -170,7 +170,7 @@ export default function TodayBoard() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-bold">{todayStr}</h2>
+          <h2 className="text-lg font-bold tracking-tight">{todayStr}</h2>
           <p className="text-xs text-muted-foreground">
             {todayShoots.length} shoot{todayShoots.length !== 1 ? 's' : ''} · {deliveriesDue.length} deliver{deliveriesDue.length !== 1 ? 'ies' : 'y'} due · {todayPhotoCount} photographer{todayPhotoCount !== 1 ? 's' : ''} active
           </p>
@@ -185,7 +185,7 @@ export default function TodayBoard() {
           <Badge variant="outline" className="text-[10px] h-5">{todayShoots.length}</Badge>
         </div>
         {todayShoots.length === 0 ? (
-          <Card className="p-6 text-center text-sm text-muted-foreground border-dashed">No shoots scheduled for today</Card>
+          <Card className="p-6 text-center text-sm text-muted-foreground border-dashed hover:shadow-md transition-shadow duration-200">No shoots scheduled for today</Card>
         ) : (
           <div className="space-y-2">
             {todayShoots.map(p => <ShootCard key={p.id} project={p} users={users} />)}

@@ -119,7 +119,7 @@ export default function ActivityFeed() {
       <Card className="p-4 hover:shadow-md transition-shadow">
         <div className="flex items-start gap-4">
           <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${actionColors[log.action]}`}>
-            <ActionIcon className="h-5 w-5" />
+            <ActionIcon className="h-5 w-5" aria-hidden="true" />
           </div>
           
           <div className="flex-1 min-w-0">
@@ -183,8 +183,8 @@ export default function ActivityFeed() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center p-12">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+        <div className="text-center" role="status" aria-label="Loading activity">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4" aria-hidden="true"></div>
           <p className="text-muted-foreground">Loading activity...</p>
         </div>
       </div>
@@ -201,6 +201,7 @@ export default function ActivityFeed() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="pl-10"
+          aria-label="Search activity feed"
         />
       </div>
 

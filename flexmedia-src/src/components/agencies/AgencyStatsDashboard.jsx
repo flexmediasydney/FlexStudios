@@ -32,7 +32,7 @@ function StatCard({ icon: Icon, label, value, sub, color = "blue", highlight = f
             <Icon className={`h-4.5 w-4.5 ${c.icon}`} style={{ height: "18px", width: "18px" }} />
           </div>
         </div>
-        <p className="text-2xl font-bold tracking-tight leading-none mb-1">{value}</p>
+        <p className="text-2xl font-semibold tracking-tight leading-none mb-1">{value}</p>
         <p className="text-xs font-medium text-muted-foreground">{label}</p>
         {sub && <p className="text-[11px] text-muted-foreground mt-1 leading-tight">{sub}</p>}
       </CardContent>

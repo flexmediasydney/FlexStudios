@@ -89,9 +89,9 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
        {(actualSeconds > 0 || estimatedSeconds > 0) && (
          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
            <Zap className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" />
-           <span className="font-medium text-foreground">{formatTime(actualSeconds)}</span>
+           <span className="font-medium text-foreground tabular-nums">{formatTime(actualSeconds)}</span>
            {estimatedSeconds > 0 && (
-             <span className="text-muted-foreground">/ {formatTime(estimatedSeconds)}</span>
+             <span className="text-muted-foreground tabular-nums">/ {formatTime(estimatedSeconds)}</span>
            )}
            {hasRunning && (
              <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
@@ -104,9 +104,9 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
            <Zap className="h-3.5 w-3.5 flex-shrink-0 text-violet-500" />
            <span className="text-xs text-muted-foreground">Revisions:</span>
-           <span className="font-medium text-foreground">{formatTime(revisionActualSeconds)}</span>
+           <span className="font-medium text-foreground tabular-nums">{formatTime(revisionActualSeconds)}</span>
            {revisionEstimatedSeconds > 0 && (
-             <span className="text-muted-foreground">/ {formatTime(revisionEstimatedSeconds)}</span>
+             <span className="text-muted-foreground tabular-nums">/ {formatTime(revisionEstimatedSeconds)}</span>
            )}
          </div>
        )}

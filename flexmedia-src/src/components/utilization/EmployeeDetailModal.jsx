@@ -137,7 +137,7 @@ export default function EmployeeDetailModal({
         <div className="grid grid-cols-3 gap-3">
           <Card className="p-3 text-center">
             <p className="text-xs text-muted-foreground">{periodLabel}</p>
-            <p className="text-xl font-bold text-primary">{fmtHoursMins(currentActualSeconds)}</p>
+            <p className="text-xl font-semibold text-primary">{fmtHoursMins(currentActualSeconds)}</p>
             {employee.estimated_seconds > 0 && (
               <p className="text-xs text-muted-foreground mt-0.5">
                 of {fmtHoursMins(employee.estimated_seconds)} est.
@@ -146,11 +146,11 @@ export default function EmployeeDetailModal({
           </Card>
           <Card className="p-3 text-center">
             <p className="text-xs text-muted-foreground">All Time</p>
-            <p className="text-xl font-bold">{fmtHoursMins(totalAllTime)}</p>
+            <p className="text-xl font-semibold">{fmtHoursMins(totalAllTime)}</p>
           </Card>
           <Card className="p-3 text-center">
             <p className="text-xs text-muted-foreground">Log Entries</p>
-            <p className="text-xl font-bold">{timeLogs.length}</p>
+            <p className="text-xl font-semibold">{timeLogs.length}</p>
             {currentPeriodLogs.length > 0 && (
               <p className="text-xs text-muted-foreground mt-0.5">
                 {currentPeriodLogs.length} this period

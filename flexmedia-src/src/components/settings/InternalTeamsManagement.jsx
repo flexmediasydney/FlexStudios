@@ -185,7 +185,7 @@ export default function InternalTeamsManagement() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-bold">Internal Teams <AccessBadge entityType="internal_teams" /></h2>
+          <h2 className="text-2xl font-semibold">Internal Teams <AccessBadge entityType="internal_teams" /></h2>
           <p className="text-muted-foreground">Manage your internal teams and their members.</p>
         </div>
         <Button onClick={() => handleOpen()} className="gap-2" disabled={!canEdit}>
@@ -203,7 +203,7 @@ export default function InternalTeamsManagement() {
         ].map(({ value, label }) => (
           <Card key={label}>
             <CardContent className="py-3 px-4">
-              <div className="text-xl font-bold">{value}</div>
+              <div className="text-xl font-semibold">{value}</div>
               <p className="text-xs text-muted-foreground">{label}</p>
             </CardContent>
           </Card>

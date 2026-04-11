@@ -39,13 +39,13 @@ export default function HierarchyHealthCheck({ checks, agents, teams, agencies }
       <div className={`${getHealthBadgeColor(healthScore)} border-2 rounded-lg p-6`}>
         <div className="flex items-center gap-4">
           <div className="flex-1">
-            <h3 className="text-lg font-bold mb-1">Organizational Health</h3>
-            <p className="text-sm opacity-90">Overall system integrity and data consistency</p>
+            <h3 className="text-lg font-semibold mb-1">Organizational Health</h3>
+            <p className="text-sm text-muted-foreground">Overall system integrity and data consistency</p>
           </div>
           <div className="flex flex-col items-center">
-            <div className="text-xs uppercase tracking-wider opacity-75 mb-0.5">Score</div>
-            <div className="text-4xl font-bold">{healthScore}<span className="text-lg">%</span></div>
-            <div className="text-xs opacity-75 mt-1">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground mb-0.5">Score</div>
+            <div className="text-4xl font-semibold">{healthScore}<span className="text-lg">%</span></div>
+            <div className="text-xs text-muted-foreground mt-1">
               {checks.filter((c) => c.type === "warning").length} warnings &middot; {checks.filter((c) => c.type === "info").length} notices
             </div>
           </div>
@@ -135,19 +135,19 @@ export default function HierarchyHealthCheck({ checks, agents, teams, agencies }
           <div className="grid grid-cols-2 gap-4">
             <div className="p-3 bg-green-50 rounded-lg border border-green-200">
               <p className="text-xs text-muted-foreground mb-1">Total Organisations</p>
-              <p className="text-2xl font-bold text-green-900">{agencies.length}</p>
+              <p className="text-2xl font-semibold text-green-900">{agencies.length}</p>
             </div>
             <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
               <p className="text-xs text-muted-foreground mb-1">Total Teams</p>
-              <p className="text-2xl font-bold text-blue-900">{teams.length}</p>
+              <p className="text-2xl font-semibold text-blue-900">{teams.length}</p>
             </div>
             <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
               <p className="text-xs text-muted-foreground mb-1">Total People</p>
-              <p className="text-2xl font-bold text-purple-900">{agents.length}</p>
+              <p className="text-2xl font-semibold text-purple-900">{agents.length}</p>
             </div>
             <div className={`p-3 rounded-lg border ${checks.length === 0 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
               <p className="text-xs text-muted-foreground mb-1">Data Issues</p>
-              <p className={`text-2xl font-bold ${checks.length === 0 ? "text-green-900" : "text-red-900"}`}>{checks.length}</p>
+              <p className={`text-2xl font-semibold ${checks.length === 0 ? "text-green-900" : "text-red-900"}`}>{checks.length}</p>
             </div>
           </div>
 

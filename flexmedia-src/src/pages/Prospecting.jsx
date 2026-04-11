@@ -128,10 +128,29 @@ export default function Prospecting() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-background">
-        <div className="text-center">
-          <div className="animate-spin h-6 w-6 border-2 border-primary/30 border-t-primary rounded-full mx-auto mb-3"></div>
-          <p className="text-sm text-muted-foreground">Loading...</p>
+      <div className="flex flex-col h-screen overflow-hidden bg-background p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="h-6 w-40 bg-muted rounded animate-pulse" />
+            <div className="h-3 w-56 bg-muted rounded animate-pulse" />
+          </div>
+          <div className="flex gap-2">
+            <div className="h-8 w-28 bg-muted rounded animate-pulse" />
+            <div className="h-8 w-28 bg-muted rounded animate-pulse" />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {[0,1,2].map(i => <div key={i} className="h-7 w-20 bg-muted rounded-full animate-pulse" />)}
+        </div>
+        <div className="grid grid-cols-4 gap-4 flex-1">
+          {[0,1,2,3].map(i => (
+            <div key={i} className="bg-card border rounded-xl p-3 space-y-3 animate-pulse">
+              <div className="h-4 w-24 bg-muted rounded" />
+              <div className="space-y-2">
+                {[0,1,2].map(j => <div key={j} className="h-16 w-full bg-muted rounded-lg" />)}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -179,7 +198,7 @@ export default function Prospecting() {
                   <Users className="h-5 w-5 text-primary" />
                   {drillDownState ? `${drillDownState} Pipeline` : 'Prospecting'}
                 </h1>
-                <p className="text-xs text-muted-foreground mt-0.5">
+                <p className="text-xs text-muted-foreground mt-0.5 tabular-nums">
                   {drillDownState
                     ? 'Manage prospecting flow'
                     : `${enrichedAgents.length} people, ${enrichedAgencies.length} organisations`}

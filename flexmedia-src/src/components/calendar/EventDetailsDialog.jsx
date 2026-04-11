@@ -165,7 +165,7 @@ export default function EventDetailsDialog({
     const start = sydneyInputToUtc(formData.start_time);
     const end = formData.end_time ? sydneyInputToUtc(formData.end_time) : null;
     if (end && end < start) {
-      toast.error('End time must be after start time');
+      toast.error('End time must be after start time. Please adjust your schedule.');
       return;
     }
 
@@ -387,7 +387,7 @@ export default function EventDetailsDialog({
       onClose();
     } catch (err) {
       console.error('Reschedule error:', err);
-      toast.error('Failed to reschedule event. Please try again.');
+      toast.error('Failed to reschedule event. Check your connection and try again.');
     } finally {
       setRescheduling(false);
     }

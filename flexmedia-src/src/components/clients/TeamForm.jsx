@@ -24,7 +24,7 @@ const INITIAL_STATE = {
 
 function FieldError({ error }) {
   if (!error) return null;
-  return <p className="text-xs text-destructive mt-1">{error}</p>;
+  return <p className="text-xs text-destructive mt-1" role="alert">{error}</p>;
 }
 
 export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
@@ -220,12 +220,14 @@ export default function TeamForm({ team, open, onClose, preselectedAgencyId }) {
             </Select>
           </div>
           <div>
-            <Label>Team Name *</Label>
+            <Label htmlFor="team-name">Team Name *</Label>
             <Input
+              id="team-name"
               value={formData.name}
               onChange={(e) => handleChange("name", e.target.value)}
               maxLength={LIMITS.name}
               className={errors.name ? "border-destructive" : ""}
+              aria-invalid={!!errors.name}
               placeholder="e.g., Downtown Sales Team"
               required
             />

@@ -58,5 +58,5 @@ export default function ProjectDurationTimer({ project }) {
   }, [project?.created_date, project?.status]);
 
   if (!project?.created_date) return null;
-  return <span>{formatDuration(elapsed)}</span>;
+  return <span className="tabular-nums">{formatDuration(elapsed)}</span>;
 }

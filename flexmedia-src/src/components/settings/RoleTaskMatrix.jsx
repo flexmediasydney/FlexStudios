@@ -430,7 +430,7 @@ export default function RoleTaskMatrix() {
   }, [products, packages]);
 
   if (loadingProducts || loadingPackages || loadingMappings) {
-    return <div className="py-12 text-center text-sm text-muted-foreground">Loading...</div>;
+    return <div className="py-12 text-center text-sm text-muted-foreground">Loading task assignments...</div>;
   }
 
   if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;

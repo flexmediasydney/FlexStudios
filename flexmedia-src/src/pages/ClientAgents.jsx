@@ -323,8 +323,8 @@ export default function ClientAgents() {
       refetchEntityList("Team");
       refetchEntityList("Agent");
       refetchEntityList("AuditLog");
-      toast.success("Deleted successfully");
-    } catch (error) { toast.error(error.message || "Failed to delete"); }
+      toast.success("Contact deleted successfully");
+    } catch (error) { toast.error(error.message || "Failed to delete contact. Please try again."); }
     setDeletingItem(null);
   };
 

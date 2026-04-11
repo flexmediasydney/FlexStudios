@@ -54,7 +54,7 @@ export default function TeamWorkloadChart({ tasks = [], users = [] }) {
             <p>No assigned tasks</p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3" role="img" aria-label="Team workload distribution chart">
             {workloadData.map(member => {
               const pct = Math.round((member.open / maxTasks) * 100);
               const overduePct = member.overdue > 0 ? Math.round((member.overdue / maxTasks) * 100) : 0;

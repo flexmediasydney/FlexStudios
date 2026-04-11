@@ -130,7 +130,7 @@ export default function UserIntegrations({ user }) {
           {emailAccounts.length === 0 ? (
             <div className="text-center py-6">
               <Mail className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
-              <p className="text-muted-foreground mb-4">No Gmail accounts connected yet</p>
+              <p className="text-muted-foreground mb-4">No Gmail accounts connected yet. Link your inbox to send and receive emails.</p>
               <Button
                 onClick={() => setShowGmailDialog(true)}
                 className="gap-2"

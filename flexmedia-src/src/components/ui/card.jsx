@@ -7,7 +7,7 @@ const Card = React.forwardRef(({ className, ...props }, ref) => (
     ref={ref}
     data-slot="card"
     data-testid={props["data-testid"] || undefined}
-    className={cn("rounded-xl border bg-card text-card-foreground shadow transition-all duration-200 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)}
+    className={cn("rounded-xl border bg-card text-card-foreground shadow transition-all duration-200 hover:shadow-md dark:shadow-none dark:hover:shadow-lg dark:hover:shadow-black/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2", className)}
     {...props} />
 ))
 Card.displayName = "Card"

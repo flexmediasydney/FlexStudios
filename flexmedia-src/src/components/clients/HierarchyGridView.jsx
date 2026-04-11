@@ -40,7 +40,11 @@ export default function HierarchyGridView({
           ? 'border-amber-300 bg-amber-50/30 dark:bg-amber-950/10'
           : 'border-border hover:border-border/80'
       }`}
+      role="button"
+      tabIndex={0}
+      aria-label={`View ${agent.name}'s profile`}
       onClick={() => navigate(createPageUrl('PersonDetails') + `?id=${agent.id}`)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(createPageUrl('PersonDetails') + `?id=${agent.id}`); } }}
     >
       {/* Selection checkbox */}
       {selectedAgentIds && toggleSelectAgent && (
@@ -51,6 +55,7 @@ export default function HierarchyGridView({
           onClick={e => e.stopPropagation()}
           className="absolute top-2 left-2 opacity-0 group-hover:opacity-100
                      checked:opacity-100 cursor-pointer"
+          aria-label={`Select ${agent.name}`}
         />
       )}
 
@@ -79,7 +84,7 @@ export default function HierarchyGridView({
             size="sm"
           />
           {agent.is_at_risk && (
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" title="At risk" />
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" title="At risk" aria-hidden="true" />
           )}
           {agent.relationship_state && (
             <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${

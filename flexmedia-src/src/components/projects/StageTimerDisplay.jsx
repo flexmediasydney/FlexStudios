@@ -65,7 +65,7 @@ export default function StageTimerDisplay({ stage, stageLabel, projectId }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <div className="flex items-center gap-2 text-sm">
-            <span className="font-semibold">{formatDuration(Math.floor(totalAccumulated))}</span>
+            <span className="font-semibold tabular-nums">{formatDuration(Math.floor(totalAccumulated))}</span>
             {isReEntry && (
               <span className="text-xs bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">
                 ×{visitCount}

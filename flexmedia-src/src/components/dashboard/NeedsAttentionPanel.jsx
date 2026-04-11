@@ -14,9 +14,9 @@ import { stageLabel } from '@/components/projects/projectStatuses';
 import { differenceInDays, differenceInHours, isToday, isTomorrow, format } from 'date-fns';
 
 const SEVERITY = {
-  critical: { color: 'border-l-red-500 bg-red-50/50', badge: 'bg-red-100 text-red-700', icon: AlertCircle },
-  warning: { color: 'border-l-amber-500 bg-amber-50/50', badge: 'bg-amber-100 text-amber-700', icon: AlertTriangle },
-  info: { color: 'border-l-blue-500 bg-blue-50/50', badge: 'bg-blue-100 text-blue-700', icon: Activity },
+  critical: { color: 'border-l-red-500 bg-red-50/50 dark:bg-red-950/30', badge: 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300', icon: AlertCircle },
+  warning: { color: 'border-l-amber-500 bg-amber-50/50 dark:bg-amber-950/30', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300', icon: AlertTriangle },
+  info: { color: 'border-l-blue-500 bg-blue-50/50 dark:bg-blue-950/30', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300', icon: Activity },
 };
 
 function AttentionItem({ severity, icon: Icon, title, detail, action, actionLabel }) {
@@ -223,7 +223,7 @@ export default function NeedsAttentionPanel({ projects, tasks, users }) {
 
   if (items.length === 0) {
     return (
-      <Card className="p-6 text-center border-dashed">
+      <Card className="p-6 text-center border-dashed hover:shadow-md transition-shadow duration-200">
         <CheckCircle2 className="h-8 w-8 text-green-500/50 mx-auto mb-2" aria-hidden="true" />
         <p className="text-sm font-medium text-green-700">All clear</p>
         <p className="text-xs text-muted-foreground mt-1">No items need attention right now</p>
@@ -259,7 +259,7 @@ export default function NeedsAttentionPanel({ projects, tasks, users }) {
           )}
         </div>
       </div>
-      <div className="divide-y max-h-[400px] overflow-y-auto">
+      <div className="divide-y max-h-[400px] overflow-y-auto scrollbar-thin">
         {items.map((item, i) => (
           <AttentionItem key={i} {...item} />
         ))}

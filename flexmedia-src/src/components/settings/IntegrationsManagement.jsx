@@ -72,9 +72,9 @@ export default function IntegrationsManagement() {
     try {
       // Simulate API test - in real implementation, this would call the Tonomo API
       await new Promise(resolve => setTimeout(resolve, 1500));
-      toast.success("Connection successful!");
+      toast.success("Connection test successful!");
     } catch (error) {
-      toast.error("Connection failed");
+      toast.error("Connection test failed. Check your API key and endpoint.");
     } finally {
       setTesting(false);
     }

@@ -945,7 +945,7 @@ function ErrorState({ error, onRetry }) {
         </div>
         <h3 className="text-sm font-semibold text-red-700 mb-1.5">Failed to load media feed</h3>
         <p className="text-xs text-muted-foreground max-w-sm mb-4">
-          {error?.message || "Something went wrong while scanning project files."}
+          {error?.message || "Could not load media files. Check your connection and try again."}
         </p>
         <Button variant="outline" size="sm" onClick={onRetry} className="text-xs border-red-200 text-red-600 hover:bg-red-50 gap-1.5">
           <RefreshCw className="h-3 w-3" />Try again

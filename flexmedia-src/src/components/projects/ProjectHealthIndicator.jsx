@@ -116,7 +116,7 @@ export default function ProjectHealthIndicator({ project, tasks = [] }) {
         <TooltipTrigger asChild>
           <div
             className={cn(
-              "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-default",
+              "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all duration-200 cursor-default hover:shadow-sm",
               config.bg, config.color
             )}
             role="status"

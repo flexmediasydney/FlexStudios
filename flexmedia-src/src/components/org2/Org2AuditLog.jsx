@@ -70,7 +70,7 @@ export default function Org2AuditLog({ agencyId, agents = [], teams = [] }) {
     return (
       <Card className="bg-muted/30 border-dashed">
         <CardContent className="pt-6 pb-6 text-center">
-          <p className="text-muted-foreground text-sm">No changes recorded yet</p>
+          <p className="text-muted-foreground text-sm">No changes recorded yet. Edits will be logged here automatically.</p>
         </CardContent>
       </Card>
     );

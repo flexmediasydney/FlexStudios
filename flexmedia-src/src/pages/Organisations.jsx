@@ -286,7 +286,7 @@ export default function Organisations() {
             <Building2 className="h-5 w-5 text-primary" />
             Organisations
           </h1>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
             <span className="font-semibold text-foreground">{stats.total}</span> total ·
             <span className="text-green-600 font-medium ml-1">{stats.active}</span> active ·
             <span className="text-orange-500 font-medium ml-1">{stats.prospecting}</span> prospecting ·
@@ -324,12 +324,12 @@ export default function Organisations() {
           totalCount={agencies.length}
           filteredCount={filtered.length}
         />
-        <span className="text-xs text-muted-foreground ml-auto">{filtered.length} shown</span>
+        <span className="text-xs text-muted-foreground ml-auto tabular-nums">{filtered.length} shown</span>
         <div className="flex items-center border rounded-md overflow-hidden">
-          <button onClick={() => setView('table')} title="Table view" aria-label="Table view" className={cn("px-2 py-1.5 transition-colors", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+          <button onClick={() => setView('table')} title="Table view" aria-label="Table view" className={cn("px-2 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
             <List className="h-3.5 w-3.5" />
           </button>
-          <button onClick={() => setView('cards')} title="Card view" aria-label="Card view" className={cn("px-2 py-1.5 transition-colors", view === 'cards' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+          <button onClick={() => setView('cards')} title="Card view" aria-label="Card view" className={cn("px-2 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none", view === 'cards' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
             <LayoutGrid className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -351,7 +351,7 @@ export default function Organisations() {
         {view === 'table' ? (
           <EntityDataTable columns={columns} data={filtered} loading={loading}
             onRowClick={row => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}
-            emptyMessage={search ? 'No organisations match your search' : 'No organisations yet'} pageSize={100}
+            emptyMessage={search ? 'No organisations match your search. Try a different term.' : 'No organisations yet. Add your first organisation to get started.'} pageSize={100}
             selectable
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
@@ -362,7 +362,21 @@ export default function Organisations() {
           <>
             {loading && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {Array(8).fill(0).map((_, i) => <div key={i} className="h-48 bg-muted animate-pulse rounded-xl" />)}
+                {Array(8).fill(0).map((_, i) => (
+                  <div key={i} className="bg-card border rounded-xl p-4 space-y-3 animate-pulse">
+                    <div className="space-y-2">
+                      <div className="h-4 w-32 bg-muted rounded" />
+                      <div className="h-5 w-20 bg-muted rounded-full" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2"><div className="h-3 w-3 bg-muted rounded" /><div className="h-3 w-36 bg-muted rounded" /></div>
+                      <div className="flex items-center gap-2"><div className="h-3 w-3 bg-muted rounded" /><div className="h-3 w-24 bg-muted rounded" /></div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[0,1,2].map(j => <div key={j} className="rounded bg-muted/60 p-2 text-center space-y-1"><div className="h-5 w-8 bg-muted rounded mx-auto" /><div className="h-2 w-10 bg-muted rounded mx-auto" /></div>)}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
             {!loading && filtered.length === 0 && (
@@ -387,7 +401,7 @@ export default function Organisations() {
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {filtered.slice(0, cardLimit).map(row => (
-                    <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-lg hover:border-primary/30 transition-all duration-200 cursor-pointer"
+                    <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer"
                       onClick={() => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}>
                       <AgencyHoverContent
                         row={row}
@@ -436,15 +450,15 @@ function AgencyHoverContent({ row, teams, agentCount, revenue }) {
       </div>
       <div className="grid grid-cols-3 gap-2">
         <div className="rounded bg-muted/60 p-2 text-center">
-          <p className="text-lg font-bold">{teams.length}</p>
+          <p className="text-lg font-bold tabular-nums">{teams.length}</p>
           <p className="text-[10px] text-muted-foreground">Teams</p>
         </div>
         <div className="rounded bg-muted/60 p-2 text-center">
-          <p className="text-lg font-bold">{agentCount}</p>
+          <p className="text-lg font-bold tabular-nums">{agentCount}</p>
           <p className="text-[10px] text-muted-foreground">People</p>
         </div>
         <div className="rounded bg-muted/60 p-2 text-center">
-          <p className="text-lg font-bold">{fmtRevenue(revenue)}</p>
+          <p className="text-lg font-bold tabular-nums">{fmtRevenue(revenue)}</p>
           <p className="text-[10px] text-muted-foreground">Revenue</p>
         </div>
       </div>

@@ -187,8 +187,8 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           {/* Duplicate warning */}
           {duplicateWarning && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs" role="alert">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
               <p>{duplicateWarning}</p>
             </div>
           )}
@@ -207,7 +207,7 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
               placeholder="Full name"
               onKeyDown={e => { if (e.key === "Enter") e.preventDefault(); }}
             />
-            {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
+            {errors.name && <p className="text-xs text-destructive" role="alert">{errors.name}</p>}
           </div>
 
           {/* Organisation */}
@@ -263,7 +263,7 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
                 className={cn("h-9", errors.email && "border-destructive")}
                 placeholder="email@example.com"
               />
-              {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
+              {errors.email && <p className="text-xs text-destructive" role="alert">{errors.email}</p>}
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs font-medium text-muted-foreground">Phone</Label>
@@ -275,7 +275,7 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
                 className={cn("h-9", errors.phone && "border-destructive")}
                 placeholder="0412 345 678"
               />
-              {errors.phone && <p className="text-xs text-destructive">{errors.phone}</p>}
+              {errors.phone && <p className="text-xs text-destructive" role="alert">{errors.phone}</p>}
             </div>
           </div>
 
@@ -315,7 +315,7 @@ export default function QuickAddContactPanel({ open, onOpenChange, agencies = []
           >
             {saveMutation.isPending ? (
               <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" aria-hidden="true" />
                 Saving...
               </>
             ) : (

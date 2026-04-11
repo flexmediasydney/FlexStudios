@@ -115,8 +115,8 @@ export default function RevenueIntelligence() {
           { label: 'Avg Project Value', value: `$${Math.round(stats.avgValue).toLocaleString()}`, sub: 'per project', color: '' },
           { label: 'Revenue at Risk', value: `$${Math.round(atRisk.totalAtRisk / 1000)}k`, sub: `${atRisk.unpaid.length} unpaid + ${atRisk.stale.length} stale`, color: atRisk.totalAtRisk > 0 ? 'text-red-600' : 'text-green-600' },
         ].map((kpi, i) => (
-          <Card key={i} className="p-4">
-            <div className="text-xs text-muted-foreground">{kpi.label}</div>
+          <Card key={i} className="p-4 hover:shadow-md transition-shadow duration-200">
+            <div className="text-xs font-medium text-muted-foreground">{kpi.label}</div>
             <div className={cn('text-2xl font-bold mt-1', kpi.color)}>{kpi.value}</div>
             <div className="text-[10px] text-muted-foreground mt-0.5">{kpi.sub}</div>
           </Card>
@@ -124,11 +124,11 @@ export default function RevenueIntelligence() {
       </div>
 
       {/* Weekly revenue bars */}
-      <Card className="p-4">
+      <Card className="p-4 hover:shadow-md transition-shadow duration-200">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2"><BarChart3 className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-bold">Weekly revenue</span></div>
         </div>
-        <div className="flex items-end gap-1.5 h-40">
+        <div className="flex items-end gap-1.5 h-40" role="img" aria-label="Weekly revenue bar chart">
           {weeklyData.map((week, i) => (
             <div key={i} className="flex-1 flex flex-col items-center gap-1">
               <div className="text-[9px] font-bold tabular-nums">{week.total > 0 ? `$${Math.round(week.total / 1000)}k` : ''}</div>
@@ -148,7 +148,7 @@ export default function RevenueIntelligence() {
             <Building2 className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm font-bold">Top agencies by revenue</span>
           </div>
-          <div className="divide-y max-h-80 overflow-y-auto">
+          <div className="divide-y max-h-80 overflow-y-auto scrollbar-thin">
             {topAgencies.map((agency, i) => (
               <div key={agency.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/30">
                 <span className="text-xs text-muted-foreground w-5 text-right font-mono">{i + 1}</span>
@@ -176,7 +176,7 @@ export default function RevenueIntelligence() {
           {/* Revenue at risk */}
           {(atRisk.unpaid.length > 0 || atRisk.churning.length > 0) && (
             <Card className="overflow-hidden">
-              <div className="px-4 py-3 border-b bg-red-50/50 flex items-center gap-2">
+              <div className="px-4 py-3 border-b bg-red-50/50 dark:bg-red-950/30 flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-red-600" />
                 <span className="text-sm font-bold text-red-900">Revenue at risk</span>
               </div>
@@ -209,7 +209,7 @@ export default function RevenueIntelligence() {
 
           {/* Quote vs invoice gap */}
           {quoteGap && (
-            <Card className="p-4">
+            <Card className="p-4 hover:shadow-md transition-shadow duration-200">
               <div className="flex items-center gap-2 mb-2">
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-bold">Quote → Invoice Gap</span>

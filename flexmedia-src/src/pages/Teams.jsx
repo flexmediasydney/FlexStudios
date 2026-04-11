@@ -186,7 +186,7 @@ export default function Teams() {
             <UsersRound className="h-5 w-5 text-primary" />
             Teams
           </h1>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
             <span className="font-semibold text-foreground">{teams.length}</span> total ·
             <span className="text-muted-foreground ml-1">{agencies.length} organisations</span>
           </div>
@@ -206,12 +206,12 @@ export default function Teams() {
             </button>
           )}
         </div>
-        <span className="text-xs text-muted-foreground ml-auto">{filtered.length} shown</span>
+        <span className="text-xs text-muted-foreground ml-auto tabular-nums">{filtered.length} shown</span>
         <div className="flex items-center border rounded-md overflow-hidden">
-          <button onClick={() => setView('table')} title="Table view" aria-label="Table view" className={cn("px-2 py-1.5 transition-colors", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+          <button onClick={() => setView('table')} title="Table view" aria-label="Table view" className={cn("px-2 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
             <List className="h-3.5 w-3.5" />
           </button>
-          <button onClick={() => setView('cards')} title="Card view" aria-label="Card view" className={cn("px-2 py-1.5 transition-colors", view === 'cards' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
+          <button onClick={() => setView('cards')} title="Card view" aria-label="Card view" className={cn("px-2 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none", view === 'cards' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
             <LayoutGrid className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -247,7 +247,7 @@ export default function Teams() {
         {view === 'table' ? (
           <EntityDataTable columns={columns} data={filtered} loading={loading}
             onRowClick={row => navigate(createPageUrl('TeamDetails') + '?id=' + row.id)}
-            emptyMessage={search ? 'No teams match your search' : 'No teams yet'} pageSize={100}
+            emptyMessage={search ? 'No teams match your search. Try a different term.' : 'No teams yet. Create a team to organise your contacts.'} pageSize={100}
             selectable
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
@@ -258,7 +258,20 @@ export default function Teams() {
           <>
             {loading && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {Array(8).fill(0).map((_, i) => <div key={i} className="h-48 bg-muted animate-pulse rounded-xl" />)}
+                {Array(8).fill(0).map((_, i) => (
+                  <div key={i} className="bg-card border rounded-xl p-4 space-y-3 animate-pulse">
+                    <div className="space-y-2">
+                      <div className="h-4 w-28 bg-muted rounded" />
+                      <div className="flex items-center gap-1.5"><div className="h-3 w-3 bg-muted rounded" /><div className="h-3 w-24 bg-muted rounded" /></div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2"><div className="h-3 w-3 bg-muted rounded" /><div className="h-3 w-32 bg-muted rounded" /></div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[0,1].map(j => <div key={j} className="rounded bg-muted/60 p-2 text-center space-y-1"><div className="h-5 w-8 bg-muted rounded mx-auto" /><div className="h-2 w-10 bg-muted rounded mx-auto" /></div>)}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
             {!loading && filtered.length === 0 && (
@@ -282,7 +295,7 @@ export default function Teams() {
             {!loading && filtered.length > 0 && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {filtered.map(row => (
-                  <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-lg hover:border-primary/30 transition-all duration-200 cursor-pointer"
+                  <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer"
                     onClick={() => navigate(createPageUrl('TeamDetails') + '?id=' + row.id)}>
                     <TeamCardContent row={row} members={agentsByTeam[row.id] || []} revenue={revenueByTeam[row.id] || 0} projectsByAgent={projectsByAgent} />
                     <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>
@@ -321,11 +334,11 @@ function TeamCardContent({ row, members, revenue, projectsByAgent }) {
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div className="rounded bg-muted/60 p-2 text-center">
-          <p className="text-lg font-bold">{members.length}</p>
+          <p className="text-lg font-bold tabular-nums">{members.length}</p>
           <p className="text-[10px] text-muted-foreground">People</p>
         </div>
         <div className="rounded bg-muted/60 p-2 text-center">
-          <p className="text-lg font-bold">{fmtRevenue(revenue)}</p>
+          <p className="text-lg font-bold tabular-nums">{fmtRevenue(revenue)}</p>
           <p className="text-[10px] text-muted-foreground">Revenue</p>
         </div>
       </div>
@@ -335,8 +348,8 @@ function TeamCardContent({ row, members, revenue, projectsByAgent }) {
           <div className="space-y-1">
             {members.slice(0, 5).map(a => (
               <div key={a.id} className="flex items-center justify-between text-xs">
-                <span>{a.name}</span>
-                <span className="text-muted-foreground">{(projectsByAgent[a.id] || []).length} projects</span>
+                <span className="truncate mr-2" title={a.name}>{a.name}</span>
+                <span className="text-muted-foreground tabular-nums whitespace-nowrap">{(projectsByAgent[a.id] || []).length} projects</span>
               </div>
             ))}
             {members.length > 5 && <p className="text-[10px] text-muted-foreground">+{members.length - 5} more</p>}

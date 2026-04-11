@@ -395,7 +395,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
                   {data.totalUtilization}%{data.totalIsOverCap && <span className="text-red-600 ml-0.5" title="Actual effort exceeds 9x estimate"> 9x+</span>}
                 </p>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-1.5" title={`${formatTime(data.totalActual)} actual of ${formatTime(data.totalEstimated)} estimated (${data.totalUtilization}%)`}>
+              <div className="w-full bg-muted rounded-full h-1.5" title={`${formatTime(data.totalActual)} actual of ${formatTime(data.totalEstimated)} estimated (${data.totalUtilization}%)`}>
                 <div
                   className={cn('h-1.5 rounded-full transition-all', data.totalUtilization >= 100 ? 'bg-orange-500' : 'bg-green-500')}
                   style={{ width: `${Math.min(data.totalUtilization, 100)}%` }}
@@ -426,7 +426,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
                   {data.task.utilization}%{data.task.isOverCap && <span className="text-red-600 ml-0.5" title="Actual effort exceeds 9x estimate"> 9x+</span>}
                 </p>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-1.5" title={`${formatTime(data.task.actualTotal)} actual of ${formatTime(data.task.estimatedTotal)} estimated (${data.task.utilization}%)`}>
+              <div className="w-full bg-muted rounded-full h-1.5" title={`${formatTime(data.task.actualTotal)} actual of ${formatTime(data.task.estimatedTotal)} estimated (${data.task.utilization}%)`}>
                 <div
                   className={cn('h-1.5 rounded-full transition-all', data.task.utilization >= 100 ? 'bg-orange-500' : 'bg-green-500')}
                   style={{ width: `${Math.min(data.task.utilization, 100)}%` }}
@@ -457,7 +457,7 @@ export default function ProjectEffortSummaryV2({ projectId, project = null }) {
                   {data.revision.utilization}%{data.revision.isOverCap && <span className="text-red-600 ml-0.5" title="Actual effort exceeds 9x estimate"> 9x+</span>}
                 </p>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-1.5" title={`${formatTime(data.revision.actualTotal)} actual of ${formatTime(data.revision.estimatedTotal)} estimated (${data.revision.utilization}%)`}>
+              <div className="w-full bg-muted rounded-full h-1.5" title={`${formatTime(data.revision.actualTotal)} actual of ${formatTime(data.revision.estimatedTotal)} estimated (${data.revision.utilization}%)`}>
                 <div
                   className={cn('h-1.5 rounded-full transition-all', data.revision.utilization >= 100 ? 'bg-orange-500' : 'bg-green-500')}
                   style={{ width: `${Math.min(data.revision.utilization, 100)}%` }}

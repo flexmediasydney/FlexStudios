@@ -556,7 +556,7 @@ export default function ProjectPricingTable({
                       {/* Pagination controls */}
                       {totalPages > 1 && (
                         <div className="flex items-center justify-between mt-3 px-3 py-2 border-t text-xs text-muted-foreground">
-                          <div>Page {currentPage + 1} of {totalPages} ({allItems.length} items)</div>
+                          <div className="tabular-nums">Page {currentPage + 1} of {totalPages} ({allItems.length} items)</div>
                           <div className="flex gap-1">
                             <Button
                               size="sm"
@@ -595,7 +595,7 @@ export default function ProjectPricingTable({
                     )}
                   </div>
                   <div className="text-right">
-                    <p className="text-3xl font-bold text-primary font-mono">
+                    <p className="text-3xl font-bold text-primary font-mono tabular-nums transition-all duration-300">
                       <Price value={displayTotal} />
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">

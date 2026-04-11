@@ -69,7 +69,7 @@ export default function TeamComparisonView({ groupedByTeam }) {
             ? 'bg-green-500' : 'bg-blue-400';
 
           return (
-            <Card key={team.name} className="p-4 hover:shadow-md transition-shadow">
+            <Card key={team.name} className="p-4 hover:shadow-md transition-all duration-200">
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <p className="text-sm font-semibold">{team.name}</p>
@@ -101,9 +101,9 @@ export default function TeamComparisonView({ groupedByTeam }) {
                 </div>
               </div>
 
-              <div className="w-full bg-gray-200 rounded h-1.5">
+              <div className="w-full bg-muted rounded-full h-1.5">
                 <div
-                  className={cn('h-1.5 rounded transition-all', barColor)}
+                  className={cn('h-1.5 rounded-full transition-all', barColor)}
                   style={{ width: `${Math.min(team.utilization, 100)}%` }}
                 />
               </div>

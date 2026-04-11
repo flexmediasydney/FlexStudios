@@ -1,5 +1,6 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
+import { Users } from "lucide-react";
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -9,10 +10,13 @@ export default function RevenueByClientTypeChart({ data }) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Revenue by Client Type</CardTitle>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Users className="h-4 w-4 text-blue-500" />
+          Revenue by Client Type
+        </CardTitle>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveContainer width="100%" height={280} role="img" aria-label="Revenue distribution by client type pie chart">
           <PieChart>
             <Pie
               data={data}
@@ -30,8 +34,9 @@ export default function RevenueByClientTypeChart({ data }) {
             </Pie>
             <Tooltip
               contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #e5e7eb',
+                backgroundColor: 'hsl(var(--popover))',
+                color: 'hsl(var(--popover-foreground))',
+                border: '1px solid hsl(var(--border))',
                 borderRadius: '8px',
                 boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
                 fontSize: '12px'

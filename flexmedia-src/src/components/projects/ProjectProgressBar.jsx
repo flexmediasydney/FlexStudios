@@ -58,7 +58,7 @@ export default function ProjectProgressBar({ tasks = [] }) {
             <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-muted">
               <div
                 className={cn(
-                  "h-full rounded-full transition-all duration-500 ease-out",
+                  "h-full rounded-full transition-all duration-700 ease-out",
                   getColor()
                 )}
                 style={{ width: `${percentage}%` }}

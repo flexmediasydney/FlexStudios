@@ -119,7 +119,7 @@ function InlineEditCell({ value, onSave, type = "text", className = "" }) {
       onClick={e => { e.stopPropagation(); setDraft(value || ""); setEditing(true); }}
       title="Click to edit"
     >
-      {value || <span className="text-muted-foreground/40">\u2014</span>}
+      {value || <span className="text-muted-foreground">\u2014</span>}
     </span>
   );
 }
@@ -286,7 +286,7 @@ export default function HierarchyTableView({
               <tr className="border-b bg-muted/30 bg-card">
                 {/* Checkbox column */}
                 {toggleSelectAgent && (
-                  <th className="w-10 px-3 py-2.5">
+                  <th className="w-10 px-3 py-2.5" scope="col">
                     <Checkbox
                       checked={allSelected ? true : someSelected ? "indeterminate" : false}
                       onCheckedChange={() => toggleSelectAll && toggleSelectAll()}
@@ -299,6 +299,7 @@ export default function HierarchyTableView({
                     key={col.id}
                     className="px-3 py-2.5 text-left"
                     style={{ minWidth: col.minWidth }}
+                    scope="col"
                   >
                     {col.sortable ? (
                       <SortableHeader
@@ -313,7 +314,7 @@ export default function HierarchyTableView({
                   </th>
                 ))}
                 {/* Actions column */}
-                <th className="w-12 px-2 py-2.5" />
+                <th className="w-12 px-2 py-2.5" scope="col"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -403,7 +404,7 @@ const ContactRow = React.memo(function ContactRow({
             <span className="truncate group-hover/org:underline">{org.name}</span>
           </button>
         ) : (
-          <span className="text-muted-foreground/40">\u2014</span>
+          <span className="text-muted-foreground">\u2014</span>
         );
       }
 
@@ -462,7 +463,7 @@ const ContactRow = React.memo(function ContactRow({
 
       case "state": {
         const s = agent.relationship_state;
-        if (!s) return <span className="text-muted-foreground/40">\u2014</span>;
+        if (!s) return <span className="text-muted-foreground">\u2014</span>;
         return (
           <span className={cn(
             "inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full border",
@@ -477,12 +478,12 @@ const ContactRow = React.memo(function ContactRow({
       case "tags":
         return Array.isArray(agent.tags) && agent.tags.length > 0
           ? <TagList tags={agent.tags} max={2} size="xs" />
-          : <span className="text-muted-foreground/40">\u2014</span>;
+          : <span className="text-muted-foreground">\u2014</span>;
 
       case "team":
         return agent.current_team_name
           ? <span className="text-xs text-muted-foreground">{agent.current_team_name}</span>
-          : <span className="text-muted-foreground/40">\u2014</span>;
+          : <span className="text-muted-foreground">\u2014</span>;
 
       case "title":
         return (

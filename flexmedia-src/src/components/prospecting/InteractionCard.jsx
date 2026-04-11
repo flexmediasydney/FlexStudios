@@ -35,7 +35,7 @@ export default function InteractionCard({ interaction }) {
   const Icon = INTERACTION_ICONS[interaction.interaction_type] || MessageSquare;
 
   return (
-    <Card className="p-4 hover:shadow-md transition-shadow">
+    <Card className="p-4 hover:shadow-md transition-all duration-200">
       <div className="flex gap-4">
         {/* Icon */}
         <div className="flex-shrink-0 mt-0.5">
@@ -77,7 +77,7 @@ export default function InteractionCard({ interaction }) {
           {/* Footer */}
           <div className="flex items-center gap-3 mt-3 pt-3 border-t text-xs text-muted-foreground">
             <div className="flex items-center gap-1">
-              <User className="h-3 w-3" />
+              <User className="h-3.5 w-3.5" />
               <span>{interaction.user_name || 'System'}</span>
             </div>
             {interaction.relationship_state_at_time && (

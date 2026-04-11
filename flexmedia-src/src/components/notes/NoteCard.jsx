@@ -49,7 +49,7 @@ export default function NoteCard({
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-sm">{note.author_name}</span>
+            <span className="font-semibold text-sm">{note.author_name}</span>
             <span className="text-xs text-muted-foreground">
               {(() => { try { if (!note.created_date) return '—'; return format(new Date(note.created_date), 'dd MMM yyyy, HH:mm'); } catch { return '—'; } })()}
             </span>
@@ -144,9 +144,9 @@ export default function NoteCard({
         <div className="flex items-center gap-3 pt-1">
           <button
             onClick={() => onReply?.(note.id)}
-            className="text-xs text-muted-foreground hover:text-primary transition-colors flex items-center gap-1"
+            className="text-xs text-muted-foreground hover:text-primary transition-all duration-200 flex items-center gap-1"
           >
-            <MessageCircle className="h-3 w-3" />
+            <MessageCircle className="h-3.5 w-3.5" />
             {replyCount > 0 ? `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` : 'Reply'}
           </button>
         </div>

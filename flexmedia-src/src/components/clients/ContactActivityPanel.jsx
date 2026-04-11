@@ -253,6 +253,8 @@ export default function ContactActivityPanel({ agent, onClose }) {
               <button
                 key={f.id}
                 onClick={() => setFilter(f.id)}
+                aria-pressed={filter === f.id}
+                aria-label={`Filter by ${f.label}`}
                 className={cn(
                   "text-[11px] px-2.5 py-1 rounded-full font-medium transition-colors cursor-pointer",
                   filter === f.id
@@ -270,9 +272,9 @@ export default function ContactActivityPanel({ agent, onClose }) {
 
           {/* Timeline content */}
           {isLoading ? (
-            <div className="space-y-3">
+            <div className="space-y-3" role="status" aria-label="Loading activity timeline">
               {Array(4).fill(0).map((_, i) => (
-                <div key={i} className="h-14 bg-muted animate-pulse rounded-lg" />
+                <div key={i} className="h-14 bg-muted animate-pulse rounded-lg" aria-hidden="true" />
               ))}
             </div>
           ) : timeline.length === 0 ? (

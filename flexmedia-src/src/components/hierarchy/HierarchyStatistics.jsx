@@ -73,25 +73,25 @@ export default function HierarchyStatistics({ agencies, teams, agents, projectTy
         <Card>
           <CardContent className="pt-6">
             <p className="text-xs text-muted-foreground mb-1">Avg. People / Team</p>
-            <p className="text-2xl font-bold">{summaryStats.avgAgentsPerTeam}</p>
+            <p className="text-2xl font-semibold">{summaryStats.avgAgentsPerTeam}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
             <p className="text-xs text-muted-foreground mb-1">Avg. People / Organisation</p>
-            <p className="text-2xl font-bold">{summaryStats.avgAgentsPerAgency}</p>
+            <p className="text-2xl font-semibold">{summaryStats.avgAgentsPerAgency}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
             <p className="text-xs text-muted-foreground mb-1">Avg. Products / Category</p>
-            <p className="text-2xl font-bold">{summaryStats.productsPerCategory}</p>
+            <p className="text-2xl font-semibold">{summaryStats.productsPerCategory}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
             <p className="text-xs text-muted-foreground mb-1">Avg. Packages / Type</p>
-            <p className="text-2xl font-bold">{summaryStats.packagesPerType}</p>
+            <p className="text-2xl font-semibold">{summaryStats.packagesPerType}</p>
           </CardContent>
         </Card>
       </div>
@@ -246,23 +246,23 @@ export default function HierarchyStatistics({ agencies, teams, agents, projectTy
             <div className="space-y-3">
               <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
                 <span className="text-sm">Total People</span>
-                <span className="font-bold">{agents.length}</span>
+                <span className="font-semibold">{agents.length}</span>
               </div>
               <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
                 <span className="text-sm">Organizational Units</span>
-                <span className="font-bold">{agencies.length + teams.length}</span>
+                <span className="font-semibold">{agencies.length + teams.length}</span>
               </div>
               <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
                 <span className="text-sm">Service Offerings</span>
-                <span className="font-bold">{products.filter((p) => p.is_active).length}</span>
+                <span className="font-semibold">{products.filter((p) => p.is_active).length}</span>
               </div>
               <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
                 <span className="text-sm">Service Packages</span>
-                <span className="font-bold">{packages.filter((p) => p.is_active).length}</span>
+                <span className="font-semibold">{packages.filter((p) => p.is_active).length}</span>
               </div>
               <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
                 <span className="text-sm">Service Categories</span>
-                <span className="font-bold">{new Set(products.filter((p) => p.is_active).map((p) => p.category)).size}</span>
+                <span className="font-semibold">{new Set(products.filter((p) => p.is_active).map((p) => p.category)).size}</span>
               </div>
             </div>
           </CardContent>

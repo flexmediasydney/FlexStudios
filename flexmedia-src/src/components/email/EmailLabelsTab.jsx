@@ -183,7 +183,7 @@ export default function EmailLabelsTab() {
           </h4>
 
           {isLoading ? (
-            <p className="text-sm text-muted-foreground py-4">Loading...</p>
+            <p className="text-sm text-muted-foreground py-4">Loading labels...</p>
           ) : labels.length === 0 ? (
             <div className="text-center py-10 border rounded-xl text-muted-foreground bg-slate-50/50">
               <p className="text-sm">No labels yet. Create one above to get started.</p>

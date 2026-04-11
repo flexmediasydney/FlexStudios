@@ -312,7 +312,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit, allTas
         closedOrphanIdsRef.current.add(t.id);
         api.entities.ProjectStageTimer.update(t.id, {
           exit_time: t.updated_date || new Date().toISOString(),
-        }).catch(() => toast.error('Failed to close orphaned stage timer — stage time may be inaccurate'));
+        }).catch(() => toast.error('Failed to close a previous stage timer. Stage time tracking may be inaccurate.'));
       }
     });
   }, [stageTimers, s.status]);

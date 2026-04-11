@@ -577,7 +577,7 @@ function TaskRow({ task, project, user, activeTimers, onToggleComplete }) {
         paused_duration: 0,
       }),
     onSuccess: () => {
-      toast.success("Timer started");
+      toast.success("Task timer started");
       refetchEntityList("TaskTimeLog");
     },
     onError: (err) => {
@@ -600,7 +600,7 @@ function TaskRow({ task, project, user, activeTimers, onToggleComplete }) {
       });
     },
     onSuccess: () => {
-      toast.success("Timer stopped");
+      toast.success("Task timer stopped");
       refetchEntityList("TaskTimeLog");
     },
     onError: (err) => {
@@ -692,7 +692,7 @@ function QuickNote({ project, user }) {
         contextType: "project",
       }),
     onSuccess: () => {
-      toast.success("Note added");
+      toast.success("Note added to project");
       setNoteText("");
       refetchEntityList("ProjectNote");
     },
@@ -825,7 +825,7 @@ function CompassTab({ project, user }) {
   // ── Save GPS to Project ─────────────────────────────────────────────────
   const saveToProject = useCallback(async () => {
     if (!project || !location) {
-      toast.error("No project selected or location unavailable");
+      toast.error("Select a project and enable location services to save GPS");
       return;
     }
 
@@ -843,7 +843,7 @@ function CompassTab({ project, user }) {
           gps_saved_by: user?.id,
         },
       });
-      toast.success("GPS saved to project");
+      toast.success("GPS location saved to project");
       refetchEntityList("Project");
     } catch (err) {
       toast.error("Failed to save GPS: " + (err.message || "Unknown error"));

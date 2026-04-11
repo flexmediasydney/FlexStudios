@@ -34,7 +34,7 @@ function KpiCard({ title, value, subtitle, trend, trendData, icon: Icon, color, 
             <div className={cn("p-1.5 rounded-lg", color)}>
               <Icon className="h-4 w-4" />
             </div>
-            <span className="text-xs font-medium text-muted-foreground">{title}</span>
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{title}</span>
           </div>
           <Sparkline data={trendData} width={60} height={20} color={isPositive ? "#22c55e" : "#ef4444"} />
         </div>
@@ -57,8 +57,8 @@ function KpiCard({ title, value, subtitle, trend, trendData, icon: Icon, color, 
 // ---------------------------------------------------------------------------
 
 const SEVERITY_STYLES = {
-  critical: { bg: "border-l-red-500 bg-red-50/50", badge: "bg-red-100 text-red-700" },
-  warning:  { bg: "border-l-amber-500 bg-amber-50/50", badge: "bg-amber-100 text-amber-700" },
+  critical: { bg: "border-l-red-500 bg-red-50/50 dark:bg-red-950/30", badge: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300" },
+  warning:  { bg: "border-l-amber-500 bg-amber-50/50 dark:bg-amber-950/30", badge: "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300" },
 };
 
 function AttentionRow({ severity, icon: Icon, label, count, link, onClick }) {
@@ -103,7 +103,7 @@ function ShootRow({ project }) {
     <Link
       to={createPageUrl(`ProjectDetails?id=${project.id}`)}
       aria-label={`View project ${title}`}
-      className="flex items-center gap-3 p-3 rounded-lg border hover:bg-accent/50 transition-colors"
+      className="flex items-center gap-3 p-3 rounded-lg border hover:bg-accent/50 hover:shadow-sm transition-all duration-150"
     >
       <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary shrink-0">
         <Camera className="h-4 w-4" />

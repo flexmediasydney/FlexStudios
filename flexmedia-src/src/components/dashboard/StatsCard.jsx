@@ -22,7 +22,7 @@ export default function StatsCard({ title, value, subtitle, icon: Icon, trend, c
         <div className="mt-4 flex items-center gap-1.5 text-sm font-medium">
           <span className={cn(
             "tabular-nums",
-            trend > 0 ? "text-green-600" : "text-red-500"
+            trend > 0 ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"
           )}>
             {trend > 0 ? "↑" : "↓"} {Math.abs(trend)}%
           </span>
