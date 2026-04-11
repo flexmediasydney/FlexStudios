@@ -16,7 +16,7 @@ export const ROUTE_ACCESS = {
   // ── WORKSPACE (all levels) ────────────────────────────────
   Dashboard: ALL_LEVELS,
   Calendar: ALL_LEVELS,
-  Inbox: ALL_LEVELS,
+  Inbox: EMPLOYEE_AND_ABOVE,
   NotificationsPage: ALL_LEVELS,
   UserSettings: ALL_LEVELS,
 
@@ -44,12 +44,12 @@ export const ROUTE_ACCESS = {
   // ── ANALYTICS (manager+) ─────────────────────────────────
   Reports: MANAGER_AND_ABOVE,
 
-  // ── PRODUCTS & PRICING (manager+) ────────────────────────
-  Products: MANAGER_AND_ABOVE,
-  Packages: MANAGER_AND_ABOVE,
-  PriceMatrix: MANAGER_AND_ABOVE,
-  SettingsProductsPackages: MANAGER_AND_ABOVE,
-  SettingsPriceMatrix: MANAGER_AND_ABOVE,
+  // ── PRODUCTS & PRICING (admin+) ──────────────────────────
+  Products: ADMIN_AND_ABOVE,
+  Packages: ADMIN_AND_ABOVE,
+  PriceMatrix: ADMIN_AND_ABOVE,
+  SettingsProductsPackages: ADMIN_AND_ABOVE,
+  SettingsPriceMatrix: ADMIN_AND_ABOVE,
 
   // ── TONOMO / BOOKINGS (manager+) ─────────────────────────
   TonomoIntegrationDashboard: MANAGER_AND_ABOVE,
