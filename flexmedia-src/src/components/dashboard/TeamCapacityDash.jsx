@@ -3,6 +3,13 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
   Users,
   Camera,
   Video,
@@ -15,8 +22,13 @@ import {
   AlertTriangle,
   TrendingUp,
   ShieldAlert,
+  CheckCircle2,
+  Circle,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/supabaseClient";
 import { useDashboardStats } from "@/components/hooks/useDashboardStats";
 
 /* ------------------------------------------------------------------ */
@@ -420,7 +432,7 @@ function TeamHoverContent({ team }) {
   );
 }
 
-function TeamSummaryCard({ team }) {
+function TeamSummaryCard({ team, onClick }) {
   const isOverloaded =
     (team.load_pct ?? 0) > 100 || (team.overdue_task_count ?? 0) > 0;
   const overdue = team.overdue_task_count ?? 0;
@@ -430,8 +442,9 @@ function TeamSummaryCard({ team }) {
   return (
     <HoverDetail content={<TeamHoverContent team={team} />}>
       <Card
+        onClick={() => onClick?.(team)}
         className={cn(
-          "p-4 cursor-default",
+          "p-4 cursor-pointer",
           isOverloaded && "border-l-4 border-l-red-500",
         )}
       >
@@ -506,7 +519,7 @@ function TeamSummaryCard({ team }) {
   );
 }
 
-function TeamSummarySection({ teams }) {
+function TeamSummarySection({ teams, onTeamClick }) {
   if (!teams?.length) return null;
   return (
     <Card>
@@ -518,7 +531,7 @@ function TeamSummarySection({ teams }) {
       <CardContent>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {teams.map((t) => (
-            <TeamSummaryCard key={t.team_name} team={t} />
+            <TeamSummaryCard key={t.team_name} team={t} onClick={onTeamClick} />
           ))}
         </div>
       </CardContent>
@@ -639,7 +652,7 @@ function StaffHoverContent({ u }) {
   );
 }
 
-function StaffRow({ user }) {
+function StaffRow({ user, onClick }) {
   const lc = loadColor(user.load_pct ?? 0);
   const pc = progressColor(user.progress_pct ?? 0);
   const RIcon = roleIcon(user.role);
@@ -652,8 +665,9 @@ function StaffRow({ user }) {
   return (
     <HoverDetail content={<StaffHoverContent u={user} />}>
       <div
+        onClick={() => onClick?.(user)}
         className={cn(
-          "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
+          "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors cursor-pointer",
           isOverloaded
             ? "bg-red-50/40 dark:bg-red-950/20 border border-red-200/50"
             : "hover:bg-muted/40",
@@ -758,7 +772,7 @@ function StaffRow({ user }) {
   );
 }
 
-function StaffGrid({ users }) {
+function StaffGrid({ users, onStaffClick }) {
   const sorted = useMemo(
     () =>
       [...(users ?? [])].sort(
@@ -794,7 +808,7 @@ function StaffGrid({ users }) {
       </CardHeader>
       <CardContent className="space-y-0.5">
         {sorted.map((u) => (
-          <StaffRow key={u.user_name} user={u} />
+          <StaffRow key={u.user_name} user={u} onClick={onStaffClick} />
         ))}
       </CardContent>
     </Card>
@@ -825,7 +839,7 @@ function RoleHoverContent({ role, roleName, memberCount, avgLoad, tasksPerPerson
   );
 }
 
-function RoleCard({ roleName, role, memberCount, avgLoad }) {
+function RoleCard({ roleName, role, memberCount, avgLoad, onClick }) {
   const RIcon = roleIcon(roleName);
   const completionPct = role.completion_rate_pct ?? 0;
   const lc = loadColor(avgLoad);
@@ -843,7 +857,7 @@ function RoleCard({ roleName, role, memberCount, avgLoad }) {
         />
       }
     >
-      <Card className="p-4 cursor-default">
+      <Card className="p-4 cursor-pointer" onClick={() => onClick?.({ role: roleName, name: roleName, data: role, memberCount, avgLoad })}>
         <div className="flex items-center gap-2 mb-3">
           <div className="p-1.5 rounded-md bg-muted">
             <RIcon className="h-4 w-4" />
@@ -874,7 +888,7 @@ function RoleCard({ roleName, role, memberCount, avgLoad }) {
   );
 }
 
-function RoleCapacityGrid({ rolesMap, byUser }) {
+function RoleCapacityGrid({ rolesMap, byUser, onRoleClick }) {
   // Compute member count and avg load per role from byUser
   const roleStats = useMemo(() => {
     const stats = {};
@@ -920,11 +934,500 @@ function RoleCapacityGrid({ rolesMap, byUser }) {
               role={r.data}
               memberCount={r.memberCount}
               avgLoad={r.avgLoad}
+              onClick={onRoleClick}
             />
           ))}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/* ================================================================== */
+/*  SECTION 6 — Drill-Down Modal                                       */
+/* ================================================================== */
+
+/** Days overdue helper */
+function daysOverdue(dueDate) {
+  const due = new Date(dueDate);
+  const now = new Date();
+  const diff = Math.floor((now - due) / (1000 * 60 * 60 * 24));
+  return diff > 0 ? diff : 0;
+}
+
+/** Check if a date falls within the current week (Mon-Sun) */
+function isThisWeek(dateStr) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0=Sun
+  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(now.getDate() + mondayOffset);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  return d >= monday && d <= sunday;
+}
+
+/** Categorize tasks into groups */
+function categorizeTasks(tasks) {
+  const now = new Date();
+  const completed = [];
+  const dueThisWeek = [];
+  const overdue = [];
+  const unscheduled = [];
+  const future = [];
+
+  for (const t of tasks) {
+    if (t.is_deleted) continue;
+    if (t.is_completed) { completed.push(t); continue; }
+    const due = t.due_date ? new Date(t.due_date) : null;
+    if (!due) { unscheduled.push(t); continue; }
+    if (due < now) { overdue.push(t); continue; }
+    if (isThisWeek(t.due_date)) { dueThisWeek.push(t); continue; }
+    future.push(t);
+  }
+  return { completed, dueThisWeek, overdue, unscheduled, future };
+}
+
+/** A single task row in the drill-down modal */
+function DrillDownTaskRow({ task, showAssignee = false, projectMap }) {
+  const isOverdue = !task.is_completed && task.due_date && new Date(task.due_date) < new Date();
+  const isDone = task.is_completed;
+  const projectName = task.project_title || projectMap?.[task.project_id] || "";
+
+  return (
+    <div className={cn(
+      "flex items-center gap-2 px-3 py-2 text-xs",
+      isOverdue && "bg-red-50/50 dark:bg-red-950/10",
+    )}>
+      {/* Status icon */}
+      {isDone ? (
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+      ) : isOverdue ? (
+        <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+      ) : (
+        <Circle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      )}
+
+      {/* Task title */}
+      <span className={cn("flex-1 truncate", isDone && "line-through text-muted-foreground")} title={task.title}>
+        {task.title || "Untitled task"}
+      </span>
+
+      {/* Project name */}
+      {projectName && (
+        <span className="text-[10px] text-muted-foreground truncate max-w-[120px] hidden sm:inline" title={projectName}>
+          {projectName}
+        </span>
+      )}
+
+      {/* Assignee (for team/role views) */}
+      {showAssignee && task.assigned_to_name && (
+        <span className="text-[10px] text-muted-foreground truncate max-w-[80px]">
+          {task.assigned_to_name}
+        </span>
+      )}
+
+      {/* Status text */}
+      {isDone ? (
+        <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[9px] px-1.5 py-0 h-4 shrink-0">
+          done
+        </Badge>
+      ) : isOverdue ? (
+        <span className="text-[10px] font-medium text-red-600 dark:text-red-400 shrink-0 tabular-nums">
+          {daysOverdue(task.due_date)}d overdue
+        </span>
+      ) : task.due_date ? (
+        <span className="text-[10px] text-muted-foreground shrink-0">
+          due {new Date(task.due_date).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+        </span>
+      ) : (
+        <span className="text-[10px] text-muted-foreground shrink-0">no date</span>
+      )}
+    </div>
+  );
+}
+
+/** Section header inside the modal */
+function DrillDownSection({ title, count, variant = "default", children }) {
+  return (
+    <div className={cn(
+      "rounded-lg border",
+      variant === "overdue" && "border-red-200 dark:border-red-900/50",
+    )}>
+      <div className={cn(
+        "px-3 py-2 rounded-t-lg",
+        variant === "overdue" ? "bg-red-50 dark:bg-red-950/30" : "bg-muted/50",
+      )}>
+        <p className="text-xs font-semibold uppercase tracking-wide">
+          {title}
+          {count != null && (
+            <span className="ml-1.5 font-normal text-muted-foreground">
+              ({count} task{count !== 1 ? "s" : ""})
+            </span>
+          )}
+        </p>
+      </div>
+      <div className="divide-y divide-border">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Member row inside team/role drill-down */
+function MemberRow({ member, taskCount }) {
+  const lc = loadColor(member.load_pct ?? 0);
+  return (
+    <div className="flex items-center gap-3 px-3 py-2">
+      <div className={cn("w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0", bgCls(lc))}>
+        {member.user_name?.charAt(0)?.toUpperCase() ?? "?"}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-semibold truncate">{member.user_name}</p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="w-20">
+          <ThinBar pct={member.load_pct ?? 0} colorFn={loadColor} height="h-1.5" />
+        </div>
+        <span className={cn("text-[10px] font-bold tabular-nums w-8 text-right", textCls(lc))}>
+          {pctRound(member.load_pct)}%
+        </span>
+        {taskCount != null && (
+          <span className="text-[10px] text-muted-foreground tabular-nums">
+            {taskCount} tasks
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------- Staff Drill-Down Content ------- */
+function StaffDrillContent({ user, projectMap }) {
+  const { data: tasks = [], isLoading } = useQuery({
+    queryKey: ["drill-staff-tasks", user.user_id],
+    queryFn: () => api.entities.ProjectTask.filter({ assigned_to: user.user_id }, null, 200),
+    enabled: !!user.user_id,
+    staleTime: 60_000,
+  });
+
+  const cats = useMemo(() => categorizeTasks(tasks), [tasks]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-sm text-muted-foreground">Loading tasks...</span>
+      </div>
+    );
+  }
+
+  const activeTasks = tasks.filter(t => !t.is_deleted);
+
+  return (
+    <div className="space-y-4">
+      {/* Summary line */}
+      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+        <span>Load: <strong className={textCls(loadColor(user.load_pct ?? 0))}>{pctRound(user.load_pct)}%</strong></span>
+        <span>Progress: <strong className={textCls(progressColor(user.progress_pct ?? 0))}>{pctRound(user.progress_pct)}%</strong></span>
+        <span>{fhRaw(user.weekly_target_hours)}h target</span>
+        <span>{activeTasks.length} total tasks</span>
+      </div>
+
+      {/* Overdue */}
+      {cats.overdue.length > 0 && (
+        <DrillDownSection title="Overdue" count={cats.overdue.length} variant="overdue">
+          {cats.overdue.map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+
+      {/* Due this week */}
+      {cats.dueThisWeek.length > 0 && (
+        <DrillDownSection title="Due This Week" count={cats.dueThisWeek.length}>
+          {cats.dueThisWeek.map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+
+      {/* Future */}
+      {cats.future.length > 0 && (
+        <DrillDownSection title="Upcoming" count={cats.future.length}>
+          {cats.future.map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+
+      {/* Completed this week */}
+      {cats.completed.length > 0 && (
+        <DrillDownSection title="Completed" count={cats.completed.length}>
+          {cats.completed.slice(0, 10).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+          {cats.completed.length > 10 && (
+            <p className="px-3 py-2 text-[10px] text-muted-foreground">
+              + {cats.completed.length - 10} more completed tasks
+            </p>
+          )}
+        </DrillDownSection>
+      )}
+
+      {/* Unscheduled */}
+      {cats.unscheduled.length > 0 && (
+        <DrillDownSection title="Unscheduled Backlog" count={cats.unscheduled.length}>
+          {cats.unscheduled.slice(0, 10).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+          {cats.unscheduled.length > 10 && (
+            <p className="px-3 py-2 text-[10px] text-muted-foreground">
+              + {cats.unscheduled.length - 10} more unscheduled tasks
+            </p>
+          )}
+        </DrillDownSection>
+      )}
+
+      {activeTasks.length === 0 && (
+        <p className="text-center py-8 text-sm text-muted-foreground">No tasks assigned</p>
+      )}
+    </div>
+  );
+}
+
+/* ------- Team Drill-Down Content ------- */
+function TeamDrillContent({ team, byUser, projectMap }) {
+  const teamMembers = useMemo(
+    () => (byUser ?? []).filter(u => u.team_name === team.team_name),
+    [byUser, team.team_name],
+  );
+
+  const memberIds = useMemo(() => teamMembers.map(m => m.user_id).filter(Boolean), [teamMembers]);
+
+  const { data: allTasks = [], isLoading } = useQuery({
+    queryKey: ["drill-team-tasks", team.team_name, memberIds],
+    queryFn: async () => {
+      if (!memberIds.length) return [];
+      const results = await Promise.all(
+        memberIds.map(uid => api.entities.ProjectTask.filter({ assigned_to: uid }, null, 200)),
+      );
+      return results.flat();
+    },
+    enabled: memberIds.length > 0,
+    staleTime: 60_000,
+  });
+
+  const activeTasks = useMemo(() => allTasks.filter(t => !t.is_deleted && !t.is_completed), [allTasks]);
+
+  // Group active tasks by project
+  const byProject = useMemo(() => {
+    const map = {};
+    for (const t of activeTasks) {
+      const key = t.project_id || "unassigned";
+      const name = t.project_title || projectMap?.[t.project_id] || "No Project";
+      if (!map[key]) map[key] = { name, tasks: [] };
+      map[key].tasks.push(t);
+    }
+    return Object.values(map).sort((a, b) => b.tasks.length - a.tasks.length);
+  }, [activeTasks, projectMap]);
+
+  // Per-member task counts
+  const memberTaskCounts = useMemo(() => {
+    const counts = {};
+    for (const t of activeTasks) {
+      if (t.assigned_to) counts[t.assigned_to] = (counts[t.assigned_to] || 0) + 1;
+    }
+    return counts;
+  }, [activeTasks]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-sm text-muted-foreground">Loading tasks...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary line */}
+      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+        <span>{teamMembers.length} members</span>
+        <span>Load: <strong className={textCls(loadColor(team.load_pct ?? 0))}>{pctRound(team.load_pct)}%</strong></span>
+        <span>Progress: <strong className={textCls(progressColor(team.progress_pct ?? 0))}>{pctRound(team.progress_pct)}%</strong></span>
+      </div>
+
+      {/* Members */}
+      <DrillDownSection title="Members" count={teamMembers.length}>
+        {teamMembers.map(m => (
+          <MemberRow key={m.user_name} member={m} taskCount={memberTaskCounts[m.user_id] ?? 0} />
+        ))}
+      </DrillDownSection>
+
+      {/* Tasks grouped by project */}
+      {byProject.length > 0 && (
+        <DrillDownSection title="Active Tasks by Project" count={activeTasks.length}>
+          {byProject.map(group => (
+            <div key={group.name}>
+              <div className="px-3 py-1.5 bg-muted/30">
+                <p className="text-[11px] font-semibold truncate">{group.name}</p>
+              </div>
+              {group.tasks.map(t => (
+                <DrillDownTaskRow key={t.id} task={t} showAssignee projectMap={projectMap} />
+              ))}
+            </div>
+          ))}
+        </DrillDownSection>
+      )}
+
+      {activeTasks.length === 0 && (
+        <p className="text-center py-8 text-sm text-muted-foreground">No active tasks for this team</p>
+      )}
+    </div>
+  );
+}
+
+/* ------- Role Drill-Down Content ------- */
+function RoleDrillContent({ roleName, roleData, byUser, projectMap }) {
+  const roleMembers = useMemo(
+    () => (byUser ?? []).filter(u => u.role === roleName),
+    [byUser, roleName],
+  );
+
+  const { data: tasks = [], isLoading } = useQuery({
+    queryKey: ["drill-role-tasks", roleName],
+    queryFn: () => api.entities.ProjectTask.filter({ auto_assign_role: roleName }, null, 300),
+    enabled: !!roleName,
+    staleTime: 60_000,
+  });
+
+  const cats = useMemo(() => categorizeTasks(tasks), [tasks]);
+  const activeTasks = useMemo(() => tasks.filter(t => !t.is_deleted), [tasks]);
+
+  // Per-member task counts from role tasks
+  const memberTaskCounts = useMemo(() => {
+    const counts = {};
+    for (const t of activeTasks) {
+      if (t.assigned_to) counts[t.assigned_to] = (counts[t.assigned_to] || 0) + 1;
+    }
+    return counts;
+  }, [activeTasks]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-sm text-muted-foreground">Loading tasks...</span>
+      </div>
+    );
+  }
+
+  const totalComplete = roleData?.completed ?? cats.completed.length;
+  const totalTasks = roleData?.total ?? activeTasks.length;
+  const avgLoad = roleMembers.length > 0
+    ? roleMembers.reduce((s, m) => s + (m.load_pct ?? 0), 0) / roleMembers.length
+    : 0;
+
+  return (
+    <div className="space-y-4">
+      {/* Summary line */}
+      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+        <span>Tasks: <strong>{totalComplete}/{totalTasks}</strong> complete</span>
+        <span>{roleMembers.length} staff</span>
+        <span>Avg load: <strong className={textCls(loadColor(avgLoad))}>{pctRound(avgLoad)}%</strong></span>
+      </div>
+
+      {/* Staff in this role */}
+      {roleMembers.length > 0 && (
+        <DrillDownSection title="Staff in This Role" count={roleMembers.length}>
+          {roleMembers.map(m => (
+            <MemberRow key={m.user_name} member={m} taskCount={memberTaskCounts[m.user_id] ?? 0} />
+          ))}
+        </DrillDownSection>
+      )}
+
+      {/* Task breakdown summary */}
+      <div className="rounded-lg border">
+        <div className="px-3 py-2 bg-muted/50 rounded-t-lg">
+          <p className="text-xs font-semibold uppercase tracking-wide">Task Breakdown</p>
+        </div>
+        <div className="px-3 py-2 space-y-1 text-xs">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+            <span>{cats.completed.length} completed</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Circle className="h-3.5 w-3.5 text-muted-foreground" />
+            <span>{cats.dueThisWeek.length + cats.future.length + cats.unscheduled.length} pending</span>
+          </div>
+          {cats.overdue.length > 0 && (
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
+              <span className="text-red-600 dark:text-red-400">{cats.overdue.length} overdue</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Overdue tasks */}
+      {cats.overdue.length > 0 && (
+        <DrillDownSection title="Overdue Tasks" count={cats.overdue.length} variant="overdue">
+          {cats.overdue.map(t => <DrillDownTaskRow key={t.id} task={t} showAssignee projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+
+      {activeTasks.length === 0 && (
+        <p className="text-center py-8 text-sm text-muted-foreground">No tasks for this role</p>
+      )}
+    </div>
+  );
+}
+
+/* ------- Main DrillDown Modal ------- */
+function DrillDownModal({ drillDown, onClose, byUser, projectMap }) {
+  if (!drillDown) return null;
+
+  const { type, data } = drillDown;
+
+  let title = "";
+  let subtitle = "";
+  const RIcon = type === "role" ? roleIcon(data.role || data.name) : null;
+
+  if (type === "staff") {
+    title = data.user_name || "Staff Member";
+    subtitle = (data.role?.replace(/_/g, " ") || "Staff") + (data.team_name ? ` \u00B7 ${data.team_name}` : "");
+  } else if (type === "team") {
+    title = data.team_name || "Team";
+    subtitle = `${data.member_count ?? 0} members`;
+  } else if (type === "role") {
+    const roleName = data.role || data.name || "";
+    title = roleName.replace(/_/g, " ");
+    subtitle = `${data.memberCount ?? 0} staff`;
+  }
+
+  return (
+    <Dialog open={!!drillDown} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 capitalize">
+            {RIcon && <RIcon className="h-5 w-5" />}
+            {title}
+          </DialogTitle>
+          <DialogDescription className="capitalize">{subtitle}</DialogDescription>
+        </DialogHeader>
+
+        {type === "staff" && (
+          <StaffDrillContent user={data} projectMap={projectMap} />
+        )}
+        {type === "team" && (
+          <TeamDrillContent team={data} byUser={byUser} projectMap={projectMap} />
+        )}
+        {type === "role" && (
+          <RoleDrillContent
+            roleName={data.role || data.name}
+            roleData={data.data || data}
+            byUser={byUser}
+            projectMap={projectMap}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -987,6 +1490,22 @@ const PULSE_SHADOW_CSS = `
 
 export default function TeamCapacityDash() {
   const { data, isLoading } = useDashboardStats();
+  const [drillDown, setDrillDown] = useState(null);
+
+  // Fetch a lightweight project map for showing project names in drill-downs
+  const { data: projectMap = {} } = useQuery({
+    queryKey: ["drill-project-map"],
+    queryFn: async () => {
+      const projects = await api.entities.Project.list(null, 500);
+      const map = {};
+      for (const p of projects) {
+        map[p.id] = p.property_address || p.title || p.project_name || "Untitled";
+      }
+      return map;
+    },
+    staleTime: 5 * 60_000,
+    enabled: !!drillDown, // only fetch when a drill-down is open
+  });
 
   if (isLoading) return <LoadingSkeleton />;
 
@@ -997,6 +1516,10 @@ export default function TeamCapacityDash() {
   const byRole = tasks?.by_role ?? {};
 
   if (!byUser.length && !byTeam.length) return <EmptyState />;
+
+  const handleStaffClick = (user) => setDrillDown({ type: "staff", data: user });
+  const handleTeamClick = (team) => setDrillDown({ type: "team", data: team });
+  const handleRoleClick = (roleObj) => setDrillDown({ type: "role", data: roleObj });
 
   return (
     <>
@@ -1009,14 +1532,22 @@ export default function TeamCapacityDash() {
         <AttentionFlags byUser={byUser} />
 
         {/* Section 3: Team Summary Cards */}
-        <TeamSummarySection teams={byTeam} />
+        <TeamSummarySection teams={byTeam} onTeamClick={handleTeamClick} />
 
         {/* Section 4: Staff Grid (main visual) */}
-        <StaffGrid users={byUser} />
+        <StaffGrid users={byUser} onStaffClick={handleStaffClick} />
 
         {/* Section 5: Role Capacity Grid */}
-        <RoleCapacityGrid rolesMap={byRole} byUser={byUser} />
+        <RoleCapacityGrid rolesMap={byRole} byUser={byUser} onRoleClick={handleRoleClick} />
       </div>
+
+      {/* Section 6: Drill-Down Modal */}
+      <DrillDownModal
+        drillDown={drillDown}
+        onClose={() => setDrillDown(null)}
+        byUser={byUser}
+        projectMap={projectMap}
+      />
     </>
   );
 }
