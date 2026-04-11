@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useSearchParams } from "react-router-dom";
@@ -9,6 +9,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import ErrorBoundary from '@/components/common/ErrorBoundary';
+import { useDashboardStats } from "@/components/hooks/useDashboardStats";
+import { formatDistanceToNow } from "date-fns";
+import { toast } from "@/components/ui/use-toast";
 
 const OperationsPulse = React.lazy(() => import('@/components/dashboard/OperationsPulse'));
 const ProjectsTab = React.lazy(() => import('@/components/dashboard/ProjectsTab'));
@@ -23,6 +26,7 @@ export default function Dashboard() {
   const [showProjectForm, setShowProjectForm] = useState(false);
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { data: dashStats, computed_at, isError, error: statsError } = useDashboardStats();
 
   // Tab persistence via URL — defaults to "pulse", survives navigation
   const activeTab = VALID_DASHBOARD_TABS.has(searchParams.get('tab'))
@@ -54,6 +58,24 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  // Keyboard shortcuts: Ctrl/Cmd+1-6 switch dashboard tabs
+  useEffect(() => {
+    const handler = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const tabMap = { '1': 'pulse', '2': 'projects', '3': 'tasks', '4': 'media', '5': 'revenue', '6': 'team' };
+      if (tabMap[e.key]) { e.preventDefault(); handleDashboardTabChange(tabMap[e.key]); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleDashboardTabChange]);
+
+  // Show toast when dashboard stats fail to load
+  useEffect(() => {
+    if (isError && statsError) {
+      toast({ title: "Stats unavailable", description: "Dashboard stats failed to load. They will retry automatically.", variant: "destructive" });
+    }
+  }, [isError, statsError]);
+
   const handleShowProjectForm = useCallback(() => {
     setShowProjectForm(true);
   }, []);
@@ -69,8 +91,11 @@ export default function Dashboard() {
     queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
   }, [queryClient]);
 
+  // Extract badge counts from cached stats (no extra fetch)
+  const overdueCount = Number(dashStats?.tasks?.overdue_tasks) || 0;
+
   const tabTriggerClass =
-    "data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent";
+    "data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none focus:ring-2 focus:ring-primary min-w-max px-4 py-3 rounded-none border-b-2 border-transparent hover:border-muted-foreground/30";
 
   return (
     <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6 lg:space-y-8">
@@ -79,15 +104,23 @@ export default function Dashboard() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
         </div>
-        <Button
-          onClick={handleShowProjectForm}
-          className="gap-2 shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-10"
-          title="Create a new project (Ctrl+N)"
-          aria-label="New project - Ctrl+N"
-        >
-          <Plus className="h-4 w-4" />
-          New Project
-        </Button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Updated {formatDistanceToNow(new Date(computed_at || Date.now()), { addSuffix: true })}</span>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] })} title="Refresh stats">
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <Button
+            onClick={handleShowProjectForm}
+            className="gap-2 shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-10"
+            title="Create a new project (Ctrl+N)"
+            aria-label="New project - Ctrl+N"
+          >
+            <Plus className="h-4 w-4" />
+            New Project
+          </Button>
+        </div>
       </div>
 
       {/* Dashboard Tabs */}
@@ -97,7 +130,10 @@ export default function Dashboard() {
             <TabsList className="bg-muted/30 w-full justify-start border-b border-border/50 rounded-none h-auto p-0 gap-0 overflow-x-auto overflow-y-hidden scrollbar-none flex-nowrap -webkit-overflow-scrolling-touch" style={{ WebkitOverflowScrolling: 'touch' }}>
               <TabsTrigger value="pulse" className={tabTriggerClass}>Pulse</TabsTrigger>
               <TabsTrigger value="projects" className={tabTriggerClass}>Projects</TabsTrigger>
-              <TabsTrigger value="tasks" className={tabTriggerClass}>Tasks</TabsTrigger>
+              <TabsTrigger value="tasks" className={tabTriggerClass}>
+                Tasks
+                {overdueCount > 0 && <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1">{overdueCount}</span>}
+              </TabsTrigger>
               <TabsTrigger value="media" className={tabTriggerClass}>Media</TabsTrigger>
               <TabsTrigger value="revenue" className={tabTriggerClass}>Revenue</TabsTrigger>
               <TabsTrigger value="team" className={tabTriggerClass}>Team</TabsTrigger>
@@ -106,7 +142,7 @@ export default function Dashboard() {
 
           <TabsContent value="pulse" className="space-y-6 mt-0">
             <ErrorBoundary fallbackLabel="Operations Pulse">
-              <OperationsPulse />
+              <OperationsPulse onTabChange={handleDashboardTabChange} />
             </ErrorBoundary>
           </TabsContent>
 

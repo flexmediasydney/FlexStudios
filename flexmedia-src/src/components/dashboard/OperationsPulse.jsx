@@ -4,6 +4,7 @@ import { useDashboardStats } from "@/components/hooks/useDashboardStats";
 import Sparkline from "@/components/dashboard/Sparkline";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   TrendingUp, TrendingDown, AlertTriangle, Clock,
   CheckCircle2, Calendar, DollarSign, Zap, UserX,
@@ -19,11 +20,14 @@ import { format, isToday, isTomorrow, parseISO } from "date-fns";
 // KPI Card
 // ---------------------------------------------------------------------------
 
-function KpiCard({ title, value, subtitle, trend, trendData, icon: Icon, color }) {
+function KpiCard({ title, value, subtitle, trend, trendData, icon: Icon, color, linkTo }) {
   const isPositive = trend > 0;
   const TrendIcon = isPositive ? TrendingUp : TrendingDown;
+  const Wrapper = linkTo ? Link : "div";
+  const wrapperProps = linkTo ? { to: linkTo, className: "block" } : {};
   return (
-    <Card>
+    <Card className={cn(linkTo && "cursor-pointer hover:shadow-md transition-shadow")}>
+      <Wrapper {...wrapperProps}>
       <CardContent className="p-4">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
@@ -43,6 +47,7 @@ function KpiCard({ title, value, subtitle, trend, trendData, icon: Icon, color }
           <span className="text-xs text-muted-foreground">{subtitle}</span>
         </div>
       </CardContent>
+      </Wrapper>
     </Card>
   );
 }
@@ -56,36 +61,48 @@ const SEVERITY_STYLES = {
   warning:  { bg: "border-l-amber-500 bg-amber-50/50", badge: "bg-amber-100 text-amber-700" },
 };
 
-function AttentionRow({ severity, icon: Icon, label, count, link }) {
+function AttentionRow({ severity, icon: Icon, label, count, link, onClick }) {
   const sev = SEVERITY_STYLES[severity] || SEVERITY_STYLES.warning;
-  return (
-    <Link
-      to={link}
-      className={cn(
-        "flex items-center gap-3 p-3 rounded-lg border-l-4 transition-colors hover:brightness-95",
-        sev.bg,
-      )}
-    >
+  const cls = cn(
+    "flex items-center gap-3 p-3 rounded-lg border-l-4 transition-colors hover:brightness-95 cursor-pointer",
+    sev.bg,
+  );
+  const children = (
+    <>
       <Icon className={cn("h-4 w-4 shrink-0", severity === "critical" ? "text-red-600" : "text-amber-600")} />
       <span className="flex-1 text-sm font-medium">{label}</span>
       <Badge variant="secondary" className={cn("text-xs", sev.badge)}>{count}</Badge>
       <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-    </Link>
+    </>
   );
+  if (onClick) {
+    return <button type="button" onClick={onClick} aria-label={`${label}: ${count} items`} className={cls}>{children}</button>;
+  }
+  return <Link to={link} aria-label={`${label}: ${count} items`} className={cls}>{children}</Link>;
 }
 
 // ---------------------------------------------------------------------------
 // Shoot timeline item
 // ---------------------------------------------------------------------------
 
+function formatShootTime(time) {
+  if (!time || time === 'TBD') return 'No time set';
+  const [h, m] = time.split(':');
+  const hour = parseInt(h, 10);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const h12 = hour % 12 || 12;
+  return `${h12}:${m} ${ampm}`;
+}
+
 function ShootRow({ project }) {
-  const time = project.shoot_time || "TBD";
+  const time = formatShootTime(project.shoot_time);
   const title = project.title || project.property_address || "Untitled";
   const subtitle = project.property_address && project.title !== project.property_address
     ? project.property_address : (project.photographer_name || project.status || "");
   return (
     <Link
       to={createPageUrl(`ProjectDetails?id=${project.id}`)}
+      aria-label={`View project ${title}`}
       className="flex items-center gap-3 p-3 rounded-lg border hover:bg-accent/50 transition-colors"
     >
       <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary shrink-0">
@@ -135,7 +152,7 @@ function fmtCurrency(n) {
 // Main component
 // ---------------------------------------------------------------------------
 
-export default function OperationsPulse() {
+export default function OperationsPulse({ onTabChange }) {
   const { data: stats, isLoading: statsLoading } = useDashboardStats();
 
   // Fetch today's and tomorrow's shoots
@@ -214,11 +231,11 @@ export default function OperationsPulse() {
         icon: Clock,
         label: `${pendingReview} project${pendingReview !== 1 ? "s" : ""} pending review${hourLabel}`,
         count: pendingReview,
-        link: createPageUrl("Projects"),
+        link: createPageUrl("Projects") + "?filter=pending_review",
       });
     }
 
-    // Overdue tasks
+    // Overdue tasks — switch to Tasks tab instead of navigating away
     const overdueTasks = parseNumeric(s.tasks?.overdue_tasks);
     if (overdueTasks > 0) {
       items.push({
@@ -226,7 +243,7 @@ export default function OperationsPulse() {
         icon: AlertTriangle,
         label: `${overdueTasks} overdue task${overdueTasks !== 1 ? "s" : ""}`,
         count: overdueTasks,
-        link: createPageUrl("Projects"),
+        onClick: () => onTabChange?.("tasks"),
       });
     }
 
@@ -238,7 +255,7 @@ export default function OperationsPulse() {
         icon: UserX,
         label: `${needsAttention} project${needsAttention !== 1 ? "s" : ""} need attention`,
         count: needsAttention,
-        link: createPageUrl("Projects"),
+        link: createPageUrl("Projects") + "?filter=needs_attention",
       });
     }
 
@@ -255,15 +272,39 @@ export default function OperationsPulse() {
     }
 
     return items;
-  }, [s]);
+  }, [s, onTabChange]);
 
   if (statsLoading) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-6">
+        {/* KPI card skeletons */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
-            <Card key={i}><CardContent className="p-4 h-24 animate-pulse bg-muted/40" /></Card>
+            <Card key={i}><CardContent className="p-4 space-y-2">
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-7 w-16" />
+              <Skeleton className="h-2.5 w-24" />
+            </CardContent></Card>
           ))}
+        </div>
+        {/* Attention section skeleton */}
+        <Card><CardContent className="p-4 space-y-2">
+          <Skeleton className="h-4 w-32 mb-2" />
+          <Skeleton className="h-10 w-full rounded-lg" />
+          <Skeleton className="h-10 w-full rounded-lg" />
+        </CardContent></Card>
+        {/* Shoots section skeleton */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card><CardContent className="p-4 space-y-2">
+            <Skeleton className="h-4 w-28 mb-2" />
+            <Skeleton className="h-14 w-full rounded-lg" />
+            <Skeleton className="h-14 w-full rounded-lg" />
+          </CardContent></Card>
+          <Card><CardContent className="p-4 space-y-2">
+            <Skeleton className="h-4 w-28 mb-2" />
+            <Skeleton className="h-14 w-full rounded-lg" />
+            <Skeleton className="h-14 w-full rounded-lg" />
+          </CardContent></Card>
         </div>
       </div>
     );
@@ -281,6 +322,7 @@ export default function OperationsPulse() {
           trendData={revenueTrend}
           icon={DollarSign}
           color="bg-green-100 text-green-700"
+          linkTo="/Dashboard?tab=revenue"
         />
         <KpiCard
           title="Pipeline"
@@ -290,15 +332,17 @@ export default function OperationsPulse() {
           trendData={pipelineTrend}
           icon={Zap}
           color="bg-blue-100 text-blue-700"
+          linkTo="/Dashboard?tab=projects"
         />
         <KpiCard
           title="Overdue Tasks"
           value={overdue}
-          subtitle="vs last week"
+          subtitle="total overdue"
           trend={overduePct * -1} // Invert: fewer overdue = positive
           trendData={overdueTrend}
           icon={AlertTriangle}
           color="bg-red-100 text-red-700"
+          linkTo="/Dashboard?tab=tasks"
         />
         <KpiCard
           title="Delivery Rate"
@@ -308,6 +352,7 @@ export default function OperationsPulse() {
           trendData={deliveryTrend}
           icon={CheckCircle2}
           color="bg-purple-100 text-purple-700"
+          linkTo="/Dashboard?tab=revenue"
         />
       </div>
 
@@ -340,8 +385,9 @@ export default function OperationsPulse() {
           </CardHeader>
           <CardContent className="space-y-2">
             {todayShoots.length === 0 ? (
-              <div className="text-sm text-muted-foreground text-center py-6">
-                No shoots scheduled today
+              <div className="text-center py-6">
+                <Calendar className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground">No shoots scheduled today</p>
               </div>
             ) : (
               todayShoots.map(p => <ShootRow key={p.id} project={p} />)
@@ -359,8 +405,9 @@ export default function OperationsPulse() {
           </CardHeader>
           <CardContent className="space-y-2">
             {tomorrowShoots.length === 0 ? (
-              <div className="text-sm text-muted-foreground text-center py-6">
-                No shoots scheduled tomorrow
+              <div className="text-center py-6">
+                <Clock className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground">No shoots scheduled tomorrow</p>
               </div>
             ) : (
               tomorrowShoots.map(p => <ShootRow key={p.id} project={p} />)

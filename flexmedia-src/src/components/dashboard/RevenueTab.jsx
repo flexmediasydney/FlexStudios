@@ -6,18 +6,19 @@ const BusinessIntelDash = React.lazy(() => import("@/components/dashboard/Busine
 const RevenueIntelligence = React.lazy(() => import("@/components/dashboard/RevenueIntelligence"));
 
 export default function RevenueTab() {
-  const [view, setView] = useState("overview");
+  const [view, setView] = useState(() => localStorage.getItem('revenueTab_view') || 'overview');
+  const changeView = (v) => { setView(v); localStorage.setItem('revenueTab_view', v); };
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <Button variant={view === "overview" ? "default" : "outline"} size="sm" onClick={() => setView("overview")}>
+        <Button variant={view === "overview" ? "default" : "outline"} size="sm" onClick={() => changeView("overview")}>
           <BarChart3 className="h-4 w-4 mr-1.5" /> Overview
         </Button>
-        <Button variant={view === "detail" ? "default" : "outline"} size="sm" onClick={() => setView("detail")}>
+        <Button variant={view === "detail" ? "default" : "outline"} size="sm" onClick={() => changeView("detail")}>
           <TrendingUp className="h-4 w-4 mr-1.5" /> Detail
         </Button>
       </div>
-      <React.Suspense fallback={<div className="h-96 flex items-center justify-center"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}>
+      <React.Suspense fallback={<div className="h-96 flex items-center justify-center" role="status" aria-label="Loading content"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /><span className="sr-only">Loading...</span></div>}>
         {view === "overview" ? <BusinessIntelDash /> : <RevenueIntelligence />}
       </React.Suspense>
     </div>

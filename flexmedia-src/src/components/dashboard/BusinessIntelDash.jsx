@@ -4,13 +4,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DollarSign, TrendingUp, AlertTriangle, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDashboardStats } from "@/components/hooks/useDashboardStats";
+import { Link } from "react-router-dom";
+import { createPageUrl } from "@/utils";
 
 /* ---------- sub-components ---------- */
 
-function HorizontalBar({ label, value, maxValue, color = "bg-primary" }) {
+function HorizontalBar({ label, value, maxValue, color = "bg-primary", linkTo }) {
   const pct = maxValue > 0 ? (value / maxValue) * 100 : 0;
+  const Wrapper = linkTo ? Link : "div";
+  const wrapperProps = linkTo ? { to: linkTo } : {};
   return (
-    <div className="flex items-center gap-3">
+    <Wrapper {...wrapperProps} className={cn("flex items-center gap-3 rounded-md px-1 -mx-1", linkTo && "cursor-pointer hover:bg-muted/50 transition-colors")}>
       <span className="text-xs text-muted-foreground w-28 truncate">{label}</span>
       <div className="flex-1 bg-muted rounded-full h-2.5">
         <div
@@ -21,7 +25,7 @@ function HorizontalBar({ label, value, maxValue, color = "bg-primary" }) {
       <span className="text-xs font-medium w-16 text-right">
         ${(value / 1000).toFixed(1)}k
       </span>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -53,14 +57,11 @@ function VelocityChart({ weeks = [] }) {
           </span>
         ))}
       </div>
-      <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-blue-400/60" /> Created
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500/60" /> Completed
-        </span>
+      <div className="flex items-center gap-4 mt-2 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1"><span className="w-3 h-2 bg-blue-400/60 rounded" /> Created</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-2 bg-emerald-500/60 rounded" /> Completed</span>
       </div>
+      <p className="text-[10px] text-muted-foreground mt-1">Weekly project velocity — last 8 weeks</p>
     </div>
   );
 }
@@ -176,6 +177,7 @@ export default function BusinessIntelDash() {
                 value={a.revenue ?? 0}
                 maxValue={maxAgencyRev}
                 color="bg-blue-500"
+                linkTo={createPageUrl("Projects") + "?agency=" + encodeURIComponent(a.agency_name)}
               />
             ))}
           </CardContent>
@@ -212,18 +214,39 @@ export default function BusinessIntelDash() {
                   {delivery.on_time_pct != null ? `${delivery.on_time_pct}%` : "--"}
                 </p>
                 <p className="text-xs text-muted-foreground">On-Time Delivery</p>
+                {delivery.on_time_pct != null && (
+                  <Badge variant="secondary" className={cn("mt-1 text-[10px]",
+                    delivery.on_time_pct >= 90 ? "bg-green-100 text-green-700" :
+                    delivery.on_time_pct >= 70 ? "bg-amber-100 text-amber-700" :
+                    "bg-red-100 text-red-700"
+                  )}>
+                    {delivery.on_time_pct >= 90 ? "On Track" : delivery.on_time_pct >= 70 ? "Needs Improvement" : "Critical"}
+                  </Badge>
+                )}
               </div>
               <div className="text-center">
                 <p className="text-2xl font-bold">
                   {delivery.avg_turnaround_days != null ? `${delivery.avg_turnaround_days}d` : "--"}
                 </p>
                 <p className="text-xs text-muted-foreground">Avg Turnaround</p>
+                {delivery.prev_avg_turnaround_days != null && delivery.avg_turnaround_days != null && (
+                  <p className="text-[10px] text-muted-foreground mt-1">vs {delivery.prev_avg_turnaround_days}d last month</p>
+                )}
               </div>
               <div className="text-center">
                 <p className="text-2xl font-bold">
                   {delivery.revision_rate != null ? `${delivery.revision_rate}%` : "--"}
                 </p>
                 <p className="text-xs text-muted-foreground">Revision Rate</p>
+                {delivery.revision_rate != null && (
+                  <Badge variant="secondary" className={cn("mt-1 text-[10px]",
+                    delivery.revision_rate < 10 ? "bg-green-100 text-green-700" :
+                    delivery.revision_rate <= 20 ? "bg-amber-100 text-amber-700" :
+                    "bg-red-100 text-red-700"
+                  )}>
+                    {delivery.revision_rate < 10 ? "Low" : delivery.revision_rate <= 20 ? "Moderate" : "High"}
+                  </Badge>
+                )}
               </div>
             </div>
           </CardContent>

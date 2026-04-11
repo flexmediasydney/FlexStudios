@@ -13,7 +13,7 @@ const TeamCapacityDash = React.lazy(() => import("@/components/dashboard/TeamCap
 
 function ActiveTimersStrip() {
   // Fetch ALL running timers across the team (not just current user)
-  const { data: allTimers = [] } = useQuery({
+  const { data: allTimers = [], dataUpdatedAt } = useQuery({
     queryKey: ["team-active-timers"],
     queryFn: () => api.entities.TaskTimeLog.filter({ is_active: true, status: "running" }, null, 50),
     refetchInterval: 30000,
@@ -70,6 +70,11 @@ function ActiveTimersStrip() {
           <Timer className="h-4 w-4 text-primary" />
           Active Timers
           <Badge variant="secondary">{running.length}</Badge>
+          {dataUpdatedAt && (
+            <span className="text-[10px] text-muted-foreground ml-auto">
+              Updated {formatDistanceToNow(dataUpdatedAt, { addSuffix: true })}
+            </span>
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-1.5">
