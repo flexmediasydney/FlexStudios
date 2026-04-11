@@ -81,12 +81,23 @@ module.exports = {
   			shimmer: {
   				'0%': { transform: 'translateX(-100%)' },
   				'100%': { transform: 'translateX(100%)' }
+  			},
+  			'pulse-ring': {
+  				'0%': { boxShadow: '0 0 0 0 rgba(239, 68, 68, 0.5)' },
+  				'70%': { boxShadow: '0 0 0 6px rgba(239, 68, 68, 0)' },
+  				'100%': { boxShadow: '0 0 0 0 rgba(239, 68, 68, 0)' },
+  			},
+  			'load-glow': {
+  				'0%, 100%': { boxShadow: '0 0 4px 1px rgba(239, 68, 68, 0.3)' },
+  				'50%': { boxShadow: '0 0 8px 3px rgba(239, 68, 68, 0.5)' },
   			}
   		},
   		animation: {
   			'accordion-down': 'accordion-down 0.2s ease-out',
   			'accordion-up': 'accordion-up 0.2s ease-out',
-  			shimmer: 'shimmer 1.5s ease-in-out infinite'
+  			shimmer: 'shimmer 1.5s ease-in-out infinite',
+  			'pulse-ring': 'pulse-ring 1.5s ease-out infinite',
+  			'load-glow': 'load-glow 2s ease-in-out infinite'
   		}
   	}
   },
