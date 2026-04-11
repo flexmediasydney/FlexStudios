@@ -9,12 +9,13 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { 
   ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Users, Phone,
-  ExternalLink, Edit, Archive, CheckCircle, Building,
+  ExternalLink, Edit, Archive, CheckCircle, Building, Search,
   Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera, AlertTriangle
 } from "lucide-react";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import StagePipeline from "@/components/projects/StagePipeline";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -22,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { fmtDate, fixTimestamp } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import ProjectForm from "@/components/projects/ProjectForm";
 import TaskManagement from "@/components/projects/TaskManagement";
 import ProjectMediaGallery from "@/components/projects/ProjectMediaGallery";
@@ -137,6 +139,112 @@ function InvoicedAmountInput({ value, onSave, isPending }) {
         : <span className="text-muted-foreground font-normal text-xs">Click to set</span>
       }
     </button>
+  );
+}
+
+// ── Agent Selector Dialog ─────────────────────────────────────────────────────
+function AgentSelectorDialog({ agents, currentAgentId, isPending, onSelect, onClose }) {
+  const [search, setSearch] = useState("");
+  const inputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    // Auto-focus search on open
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, []);
+
+  const filtered = React.useMemo(() => {
+    if (!search.trim()) return agents;
+    const q = search.toLowerCase();
+    return agents.filter(a =>
+      a.name?.toLowerCase().includes(q) ||
+      a.current_agency_name?.toLowerCase().includes(q) ||
+      a.email?.toLowerCase().includes(q)
+    );
+  }, [agents, search]);
+
+  // Group by agency
+  const grouped = React.useMemo(() => {
+    const map = new Map();
+    for (const a of filtered) {
+      const agency = a.current_agency_name || "No Agency";
+      if (!map.has(agency)) map.set(agency, []);
+      map.get(agency).push(a);
+    }
+    // Sort agencies alphabetically, "No Agency" last
+    return Array.from(map.entries()).sort((a, b) => {
+      if (a[0] === "No Agency") return 1;
+      if (b[0] === "No Agency") return -1;
+      return a[0].localeCompare(b[0]);
+    });
+  }, [filtered]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={onClose}>
+      <Card className="w-full max-w-md max-h-[85vh] flex flex-col animate-in scale-in-95 duration-200" onClick={e => e.stopPropagation()}>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Select Agent</CardTitle>
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground" aria-label="Close">✕</button>
+          </div>
+          <div className="relative mt-2">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              ref={inputRef}
+              placeholder="Search by name, agency, or email..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="pl-9 h-9 text-sm"
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-y-auto space-y-1 pb-4" style={{ maxHeight: '60vh' }}>
+          <button
+            className={cn(
+              "w-full text-left px-3 py-2 rounded-lg text-sm transition-colors",
+              !currentAgentId ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+            )}
+            onClick={() => onSelect(null)}
+            disabled={isPending}
+          >
+            {isPending ? "Updating..." : "Remove Agent"}
+          </button>
+
+          {grouped.length === 0 && search && (
+            <p className="text-sm text-muted-foreground text-center py-6">No agents match "{search}"</p>
+          )}
+
+          {grouped.map(([agency, agencyAgents]) => (
+            <div key={agency}>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-3 pt-3 pb-1">{agency}</div>
+              {agencyAgents.map(a => (
+                <button
+                  key={a.id}
+                  className={cn(
+                    "w-full text-left px-3 py-2.5 rounded-lg transition-colors flex items-center gap-3",
+                    currentAgentId === a.id ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+                  )}
+                  onClick={() => onSelect(a.id)}
+                  disabled={isPending}
+                >
+                  <div className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0",
+                    currentAgentId === a.id ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                  )}>
+                    {(a.name || "?")[0]?.toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate">{a.name}</div>
+                    {a.email && (
+                      <div className={cn("text-xs truncate", currentAgentId === a.id ? "text-primary-foreground/70" : "text-muted-foreground")}>{a.email}</div>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -1482,55 +1590,13 @@ export default function ProjectDetails() {
 
       {/* Agent Selector Dialog */}
        {showAgentSelector && (
-         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200" onClick={() => setShowAgentSelector(false)}>
-           <Card
-             className="w-full max-w-md max-h-[85vh] flex flex-col animate-in scale-in-95 duration-200"
-             onClick={(e) => e.stopPropagation()}
-           >
-             <CardHeader className="flex flex-row items-center justify-between">
-               <CardTitle>Select Agent</CardTitle>
-               <button 
-                 onClick={() => setShowAgentSelector(false)}
-                 className="text-muted-foreground hover:text-foreground"
-                 aria-label="Close"
-               >
-                 ✕
-               </button>
-             </CardHeader>
-             <CardContent className="space-y-2 max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-rounded scrollbar-track-rounded">
-               {allAgents.length > 0 ? (
-                 <>
-                   <Button
-                     variant={!project.agent_id ? "default" : "outline"}
-                     className="w-full justify-start text-left"
-                     onClick={() => {
-                       updateAgentMutation.mutate(null);
-                     }}
-                     disabled={updateAgentMutation.isPending}
-                   >
-                     <span>{updateAgentMutation.isPending ? "Updating..." : "Remove Agent"}</span>
-                   </Button>
-                   {allAgents.map(a => (
-                     <Button
-                       key={a.id}
-                       variant={project.agent_id === a.id ? "default" : "outline"}
-                       className="w-full justify-start flex-col h-auto py-2.5"
-                       onClick={() => {
-                         updateAgentMutation.mutate(a.id);
-                       }}
-                       disabled={updateAgentMutation.isPending}
-                     >
-                       <span className="font-medium text-sm">{a.name}</span>
-                       <span className="text-xs text-muted-foreground">{a.current_agency_name || "No agency"}</span>
-                     </Button>
-                   ))}
-                 </>
-               ) : (
-                 <p className="text-muted-foreground text-sm py-4 text-center">No agents available</p>
-               )}
-             </CardContent>
-           </Card>
-         </div>
+         <AgentSelectorDialog
+           agents={allAgents}
+           currentAgentId={project.agent_id}
+           isPending={updateAgentMutation.isPending}
+           onSelect={(agentId) => updateAgentMutation.mutate(agentId)}
+           onClose={() => setShowAgentSelector(false)}
+         />
        )}
        </ErrorBoundary>
 
