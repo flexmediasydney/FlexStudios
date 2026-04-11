@@ -1,0 +1,290 @@
+[
+    {
+        "id": "40000000-0000-4000-a000-000000000005",
+        "name": "AI Package",
+        "products": [
+            {
+                "quantity": 15,
+                "product_id": "30000000-0000-4000-a000-000000000001",
+                "product_name": "Sales Images"
+            },
+            {
+                "quantity": 4,
+                "product_id": "30000000-0000-4000-a000-000000000030",
+                "product_name": "Digital Dusk"
+            },
+            {
+                "quantity": 4,
+                "product_id": "30000000-0000-4000-a000-000000000025",
+                "product_name": "Drone Shots"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000020",
+                "product_name": "Floor and Site Plan"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000013",
+                "product_name": "AI Video"
+            }
+        ],
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "package_price": 750
+        },
+        "premium_tier": {},
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.847883+00:00",
+        "updated_at": "2026-03-20T07:44:11.847883+00:00",
+        "description": "Up to 15 day images + 4 digital dusk images + 4 drone shots + floor & site plan + AI video. Standard tier only.",
+        "notes": null
+    },
+    {
+        "id": "40000000-0000-4000-a000-000000000003",
+        "name": "Day Video Package",
+        "products": [
+            {
+                "quantity": 20,
+                "product_id": "30000000-0000-4000-a000-000000000001",
+                "product_name": "Sales Images"
+            },
+            {
+                "quantity": 4,
+                "product_id": "30000000-0000-4000-a000-000000000025",
+                "product_name": "Drone Shots"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000020",
+                "product_name": "Floor and Site Plan"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000010",
+                "product_name": "Day Video"
+            }
+        ],
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "package_price": 1450
+        },
+        "premium_tier": {
+            "package_price": 3000
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.847883+00:00",
+        "updated_at": "2026-03-20T07:44:11.847883+00:00",
+        "description": "Up to 20 day images + 4 drone shots + floor & site plan + day video.",
+        "notes": null
+    },
+    {
+        "id": "40000000-0000-4000-a000-000000000004",
+        "name": "Dusk Video Package",
+        "products": [
+            {
+                "quantity": 25,
+                "product_id": "30000000-0000-4000-a000-000000000001",
+                "product_name": "Sales Images"
+            },
+            {
+                "quantity": 4,
+                "product_id": "30000000-0000-4000-a000-000000000002",
+                "product_name": "Dusk Images"
+            },
+            {
+                "quantity": 4,
+                "product_id": "30000000-0000-4000-a000-000000000025",
+                "product_name": "Drone Shots"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000020",
+                "product_name": "Floor and Site Plan"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000011",
+                "product_name": "Dusk Video"
+            }
+        ],
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "package_price": 2250
+        },
+        "premium_tier": {
+            "package_price": 4000
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.847883+00:00",
+        "updated_at": "2026-03-20T07:44:11.847883+00:00",
+        "description": "Up to 25 day images + 4 dusk images + 4 drone shots + floor & site plan + dusk video.",
+        "notes": null
+    },
+    {
+        "id": "40000000-0000-4000-a000-000000000006",
+        "name": "Flex Package",
+        "products": [
+            {
+                "quantity": 30,
+                "product_id": "30000000-0000-4000-a000-000000000001",
+                "product_name": "Sales Images"
+            },
+            {
+                "quantity": 4,
+                "product_id": "30000000-0000-4000-a000-000000000002",
+                "product_name": "Dusk Images"
+            },
+            {
+                "quantity": 4,
+                "product_id": "30000000-0000-4000-a000-000000000025",
+                "product_name": "Drone Shots"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000020",
+                "product_name": "Floor and Site Plan"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000012",
+                "product_name": "Flex Video"
+            }
+        ],
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {},
+        "premium_tier": {
+            "package_price": 5000
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.847883+00:00",
+        "updated_at": "2026-03-20T07:44:11.847883+00:00",
+        "description": "Up to 30 day images + 4 dusk images + 4 drone shots + floor & site plan + Flex video. Premium tier only.",
+        "notes": null
+    },
+    {
+        "id": "40000000-0000-4000-a000-000000000002",
+        "name": "Gold Package",
+        "products": [
+            {
+                "quantity": 15,
+                "product_id": "30000000-0000-4000-a000-000000000001",
+                "min_quantity": 5,
+                "pricing_type": "per_unit",
+                "product_name": "Sales Images"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000020",
+                "min_quantity": 1,
+                "pricing_type": "fixed",
+                "product_name": "Floor and Site Plan"
+            },
+            {
+                "quantity": 4,
+                "product_id": "30000000-0000-4000-a000-000000000025",
+                "min_quantity": 4,
+                "pricing_type": "per_unit",
+                "product_name": "Drone Shots"
+            }
+        ],
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "package_price": 550,
+            "scheduling_time": 75
+        },
+        "premium_tier": {
+            "package_price": 1100,
+            "scheduling_time": 90
+        },
+        "standard_task_templates": [
+            {
+                "title": "Package level Template e.g.1",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "project_owner",
+                "estimated_minutes": 30,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Package level Template e.g.1",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "project_owner",
+                "estimated_minutes": 30,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.847883+00:00",
+        "updated_at": "2026-04-06T07:31:10.794201+00:00",
+        "description": "",
+        "notes": null
+    },
+    {
+        "id": "40000000-0000-4000-a000-000000000001",
+        "name": "Silver Package",
+        "products": [
+            {
+                "quantity": 10,
+                "product_id": "30000000-0000-4000-a000-000000000001",
+                "min_quantity": 5,
+                "pricing_type": "per_unit",
+                "product_name": "Sales Images"
+            },
+            {
+                "quantity": 1,
+                "product_id": "30000000-0000-4000-a000-000000000020",
+                "min_quantity": 1,
+                "pricing_type": "fixed",
+                "product_name": "Floor and Site Plan"
+            }
+        ],
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "package_price": 450,
+            "scheduling_time": 60
+        },
+        "premium_tier": {
+            "package_price": 700,
+            "scheduling_time": 75
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.847883+00:00",
+        "updated_at": "2026-03-23T14:20:56.038824+00:00",
+        "description": "",
+        "notes": null
+    }
+]

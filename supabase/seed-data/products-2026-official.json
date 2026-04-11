@@ -1,0 +1,2718 @@
+[
+    {
+        "id": "30000000-0000-4000-a000-000000000013",
+        "name": "AI Video",
+        "description": "Convert images into a video via AI technology. Highly dependent on technology shifts, style dictated by technology capabilities. Standard tier only.",
+        "product_type": "core",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 125
+        },
+        "premium_tier": {},
+        "standard_task_templates": [
+            {
+                "title": "AI Video - Submit to Platform",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_submitted",
+                "deadline_preset": "tomorrow_night",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "AI Video - QA Edit Result",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:30:53.523087+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000014",
+        "name": "Auction Video",
+        "description": "Full auction coverage, typically 60-90 sec. Styles: Traditional or Energised. Premium includes 2x shooters.",
+        "product_type": "core",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 950
+        },
+        "premium_tier": {
+            "base_price": 1500
+        },
+        "standard_task_templates": [
+            {
+                "title": "Video - Submit Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "videographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Send to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_3_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Video - Submit Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "videographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Send to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_4_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:33:56.380101+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000019",
+        "name": "Compilation Video",
+        "description": "Mash up of your best properties, sales, milestones and bloopers. Perfect for quarterly or yearly wrap ups. Only available for existing clients on an exclusivity agreement. Premium tier only.",
+        "product_type": "core",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {},
+        "premium_tier": {
+            "base_price": 1750
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [
+            {
+                "title": "Compilation Video - Prepare Storyboard",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 120,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Compilation Video - Send to Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 30,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Compilation Video - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_4_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Compilation Video - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:47:43.146653+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000018",
+        "name": "Custom Video \u2014 Editing Footage",
+        "description": "",
+        "product_type": "addon",
+        "category": "Video",
+        "pricing_type": "per_unit",
+        "min_quantity": 1,
+        "max_quantity": 20,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "unit_label": "per 15 sec",
+            "unit_price": 200,
+            "onsite_time_increment": 200
+        },
+        "premium_tier": {
+            "unit_label": "per 15 sec",
+            "unit_price": 200,
+            "onsite_time_increment": 200
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:45:50.849156+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000017",
+        "name": "Custom Video \u2014 Filming Onsite",
+        "description": "",
+        "product_type": "addon",
+        "category": "Video",
+        "pricing_type": "per_unit",
+        "min_quantity": 1,
+        "max_quantity": 14,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "unit_label": "per 30 min",
+            "unit_price": 200,
+            "onsite_time": 30,
+            "onsite_time_increment": 30
+        },
+        "premium_tier": {
+            "unit_label": "per 30 min",
+            "unit_price": 250,
+            "onsite_time": 30,
+            "onsite_time_increment": 30
+        },
+        "standard_task_templates": [
+            {
+                "title": "Custom Video - Upload Raws",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Custom Video - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_business_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Custom Video - Waiting for Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_3_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Custom Video - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Custom Video - Upload Raws",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Custom Video - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_business_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Custom Video - Waiting for Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_4_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Custom Video - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:44:40.028551+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000015",
+        "name": "Cut Down Reel",
+        "description": "",
+        "product_type": "addon",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 3,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 150,
+            "unit_price": 150
+        },
+        "premium_tier": {
+            "base_price": 300,
+            "unit_price": 300
+        },
+        "standard_task_templates": [
+            {
+                "title": "Cut Down Reel - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_uploaded",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "none",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Cut Down Reel - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_3_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Cut Down Reel - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Cut Down Reel - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_uploaded",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "none",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Cut Down Reel - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_4_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Cut Down Reel - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:35:36.438651+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000010",
+        "name": "Day Video",
+        "description": "",
+        "product_type": "core",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 850,
+            "onsite_time": 60
+        },
+        "premium_tier": {
+            "base_price": 1450,
+            "onsite_time": 90
+        },
+        "standard_task_templates": [
+            {
+                "title": "Day Video - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Day Video - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Day Video - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_3_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Day Video - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Day Video - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Day Video - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Day Video - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_4_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Day Video - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:49:38.622436+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000032",
+        "name": "Declutter Images",
+        "description": "Remove unwanted objects from an image digitally.",
+        "product_type": "addon",
+        "category": "Editing",
+        "pricing_type": "per_unit",
+        "min_quantity": 1,
+        "max_quantity": 15,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "unit_label": "per image",
+            "unit_price": 25
+        },
+        "premium_tier": {
+            "unit_label": "per image",
+            "unit_price": 35
+        },
+        "standard_task_templates": [
+            {
+                "title": "Declutter - Submit Image Clean ups to editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Declutter - QA clean up images all done correctly",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Declutter - Submit Image Clean ups to editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Declutter - QA clean up images all done correctly",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.66112+00:00",
+        "updated_at": "2026-04-11T05:13:20.151499+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000033",
+        "name": "Digital Dusk Footage",
+        "description": "",
+        "product_type": "addon",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 100
+        },
+        "premium_tier": {
+            "base_price": 200
+        },
+        "standard_task_templates": [
+            {
+                "title": "Digital Dusk Footage - Ensure Digital AI Dusk Footage Request sent to editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Digital Dusk Footage - QA Video has AI Dusk footage",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "none",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Digital Dusk Footage - Ensure Digital AI Dusk Footage Request sent to editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Digital Dusk Footage - QA Video has AI Dusk footage",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "none",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.66112+00:00",
+        "updated_at": "2026-04-11T05:09:58.241344+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000030",
+        "name": "Digital Dusk Images",
+        "description": "",
+        "product_type": "addon",
+        "category": "Editing",
+        "pricing_type": "per_unit",
+        "min_quantity": 1,
+        "max_quantity": 10,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "unit_label": "per image",
+            "unit_price": 25
+        },
+        "premium_tier": {
+            "unit_label": "per image",
+            "unit_price": 50
+        },
+        "standard_task_templates": [
+            {
+                "title": "Digital Dusk - Send to Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Digital Dusk - QA",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_night",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Digital Dusk - Send to Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Digital Dusk - QA",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_night",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.66112+00:00",
+        "updated_at": "2026-04-11T05:12:42.649989+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000031",
+        "name": "Digital Furniture",
+        "description": "",
+        "product_type": "addon",
+        "category": "Editing",
+        "pricing_type": "per_unit",
+        "min_quantity": 1,
+        "max_quantity": 10,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "unit_label": "per image",
+            "unit_price": 50
+        },
+        "premium_tier": {
+            "unit_label": "per image",
+            "unit_price": 90
+        },
+        "standard_task_templates": [
+            {
+                "title": "Digital Furniture - Send to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Digital furniture - Waiting for Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Digital furniture - QA Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    0,
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Digital Furniture - Send to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Digital furniture - Waiting for Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Digital furniture - QA Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    0,
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.66112+00:00",
+        "updated_at": "2026-04-11T08:11:16.645405+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000025",
+        "name": "Drone Shots",
+        "description": "",
+        "product_type": "core",
+        "category": "Drones",
+        "pricing_type": "per_unit",
+        "min_quantity": 4,
+        "max_quantity": 20,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 200,
+            "unit_label": "shots",
+            "unit_price": 25,
+            "onsite_time": 15,
+            "included_qty": 4,
+            "onsite_time_increment": 1
+        },
+        "premium_tier": {
+            "base_price": 350,
+            "unit_label": "shots",
+            "unit_price": 50,
+            "onsite_time": 15,
+            "included_qty": 4,
+            "onsite_time_increment": 1
+        },
+        "standard_task_templates": [
+            {
+                "title": "Drones - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - Shortlist",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - Send to Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - Waiting for Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - Markups",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    3
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - QA Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    4
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Drones - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - Shortlist",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - Send to Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_night",
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - Waiting for Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - Markups",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    3
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Drones - QA Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "drone_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    4
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.568769+00:00",
+        "updated_at": "2026-04-11T08:15:54.94312+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000002",
+        "name": "Dusk Images",
+        "description": "",
+        "product_type": "core",
+        "category": "Images",
+        "pricing_type": "per_unit",
+        "min_quantity": 4,
+        "max_quantity": 10,
+        "dusk_only": true,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 300,
+            "unit_label": "images",
+            "unit_price": 25,
+            "onsite_time": 20,
+            "included_qty": 4
+        },
+        "premium_tier": {
+            "base_price": 350,
+            "unit_label": "images",
+            "unit_price": 50,
+            "onsite_time": 20,
+            "included_qty": 4
+        },
+        "standard_task_templates": [
+            {
+                "title": "Dusk Images - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Dusk Images - Shortlist Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Dusk Images - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Dusk Images - QA Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Dusk Images - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Dusk Images - Shortlist Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Dusk Images - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_night",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Dusk Images - QA Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "custom",
+                "timer_trigger": "none",
+                "deadline_preset": null,
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.296793+00:00",
+        "updated_at": "2026-04-11T08:58:22.475202+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000011",
+        "name": "Dusk Video",
+        "description": "",
+        "product_type": "core",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": true,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 1100,
+            "onsite_time": 75
+        },
+        "premium_tier": {
+            "base_price": 1950,
+            "onsite_time": 90
+        },
+        "standard_task_templates": [
+            {
+                "title": "Video - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_uploaded",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "videographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_uploaded",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "3_business_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - QA Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Video - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_uploaded",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "videographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_uploaded",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "3_business_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - QA Edits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:26:12.36282+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000012",
+        "name": "Flex Video",
+        "description": "",
+        "product_type": "core",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": true,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {},
+        "premium_tier": {
+            "base_price": 2450,
+            "onsite_time": 150
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [
+            {
+                "title": "Video - Submit Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "videographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Send to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_3_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Video - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:29:00.475485+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000020",
+        "name": "Floor and Site Plan",
+        "description": "Includes colour 2D floorplan, siteplan and compass. Total internal/land measurements must be provided by agency. Strictly no furniture icons.",
+        "product_type": "core",
+        "category": "Floorplan",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 5,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 200,
+            "unit_price": 200,
+            "onsite_time": 20,
+            "onsite_time_increment": 20
+        },
+        "premium_tier": {
+            "base_price": 250,
+            "unit_price": 250,
+            "onsite_time": 40,
+            "onsite_time_increment": 40
+        },
+        "standard_task_templates": [
+            {
+                "title": "Floorplan - Upload Scan",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Floorplan - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "floorplan_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Floorplan - Waiting for Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_business_am",
+                "auto_assign_role": "floorplan_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Floorplan - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "floorplan_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Floorplan - Upload Scan",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Floorplan - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "floorplan_editor",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Floorplan - Waiting for Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_business_am",
+                "auto_assign_role": "floorplan_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Floorplan - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "floorplan_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.487326+00:00",
+        "updated_at": "2026-04-11T08:20:39.828385+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000006",
+        "name": "Individual Portraits",
+        "description": "",
+        "product_type": "core",
+        "category": "Images",
+        "pricing_type": "per_unit",
+        "min_quantity": 1,
+        "max_quantity": 20,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 150,
+            "unit_price": 150,
+            "onsite_time": 15,
+            "onsite_time_increment": 10
+        },
+        "premium_tier": {
+            "base_price": 150,
+            "unit_price": 150,
+            "onsite_time": 15,
+            "onsite_time_increment": 10
+        },
+        "standard_task_templates": [
+            {
+                "title": "Individual Portrait - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - Send Raws to Client",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - Waiting for Client Shortlist",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_3_nights",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - Send Shortlist to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "next_business_night",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    3
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - QA Portraits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    4
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Individual Portrait - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - Send Raws to Client",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - Waiting for Client Shortlist",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_3_nights",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - Send Shortlist to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "next_business_night",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    3
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Individual Portrait - QA Portraits",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    4
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.296793+00:00",
+        "updated_at": "2026-04-11T09:05:16.039721+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000046",
+        "name": "Location Image/Footage",
+        "description": "Additional charge per extra location for images or footage",
+        "product_type": "addon",
+        "category": "Fees",
+        "pricing_type": "per_unit",
+        "min_quantity": 1,
+        "max_quantity": 5,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 150,
+            "unit_price": 150
+        },
+        "premium_tier": {
+            "base_price": 150,
+            "unit_label": "per location",
+            "unit_price": 150
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.752013+00:00",
+        "updated_at": "2026-04-11T04:58:46.307562+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000043",
+        "name": "Onsite Cancellation Fee",
+        "description": "Fee charged for onsite cancellation or no-show.",
+        "product_type": "addon",
+        "category": "Fees",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 500
+        },
+        "premium_tier": {
+            "base_price": 500
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.752013+00:00",
+        "updated_at": "2026-04-11T05:00:55.664789+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000016",
+        "name": "Personality/Hype Reel",
+        "description": "Highly engaging, dynamic text, emotionally charged. Catches attention and retains curiosity. Must be part of a horizontal video order. Premium tier only.",
+        "product_type": "addon",
+        "category": "Video",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 3,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {},
+        "premium_tier": {
+            "base_price": 1300
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [
+            {
+                "title": "Personality Reel - Submit to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_uploaded",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Personality Reel - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_4_nights",
+                "auto_assign_role": "video_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Personality Reel - QA Edit",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "none",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.390035+00:00",
+        "updated_at": "2026-04-11T08:37:20.696295+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000004",
+        "name": "Rental Images",
+        "description": "",
+        "product_type": "core",
+        "category": "Images",
+        "pricing_type": "per_unit",
+        "min_quantity": 7,
+        "max_quantity": 30,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 150,
+            "unit_label": "images",
+            "unit_price": 15,
+            "onsite_time": 20,
+            "included_qty": 7,
+            "onsite_time_increment": 1
+        },
+        "premium_tier": {
+            "base_price": 250,
+            "unit_label": "images",
+            "unit_price": 25,
+            "onsite_time": 20,
+            "included_qty": 7,
+            "onsite_time_increment": 1
+        },
+        "standard_task_templates": [
+            {
+                "title": "Rental Images - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Rental Images - Shortlist Raws",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Rental Images - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Rental Images - QA Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Rental Images - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 0,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Rental Images - Shortlist Raws",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Rental Images - Waiting for Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Rental Images - QA Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 5,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.296793+00:00",
+        "updated_at": "2026-04-11T09:01:29.691167+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000001",
+        "name": "Sales Images",
+        "description": "",
+        "product_type": "core",
+        "category": "Images",
+        "pricing_type": "per_unit",
+        "min_quantity": 5,
+        "max_quantity": 75,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 200,
+            "unit_label": "images",
+            "unit_price": 25,
+            "onsite_time": 30,
+            "included_qty": 5,
+            "onsite_time_increment": 2
+        },
+        "premium_tier": {
+            "base_price": 275,
+            "unit_label": "images",
+            "unit_price": 50,
+            "onsite_time": 45,
+            "included_qty": 5,
+            "onsite_time_increment": 2
+        },
+        "standard_task_templates": [
+            {
+                "title": "Sales Images - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Sales Images - Shortlist Raws",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 15,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Sales Images - Waiting For Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Sales Images - QA Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Sales Images - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Sales Images - Shortlist Raws",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 30,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Sales Images - Waiting For Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_night",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Sales Images - QA Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.296793+00:00",
+        "updated_at": "2026-04-11T09:12:03.257044+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000041",
+        "name": "Saturday Surcharge",
+        "description": "Additional charge for Saturday bookings.",
+        "product_type": "addon",
+        "category": "Fees",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 250
+        },
+        "premium_tier": {
+            "base_price": 250
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.752013+00:00",
+        "updated_at": "2026-04-11T04:57:29.621692+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000040",
+        "name": "Second Dwelling Surcharge",
+        "description": "Additional charge for properties with a second dwelling.",
+        "product_type": "addon",
+        "category": "Fees",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 100
+        },
+        "premium_tier": {
+            "base_price": 350
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.752013+00:00",
+        "updated_at": "2026-04-11T05:03:45.998729+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000045",
+        "name": "Split Booking Surcharge",
+        "description": "Additional charge for forced split bookings, per split.",
+        "product_type": "addon",
+        "category": "Fees",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 3,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 250
+        },
+        "premium_tier": {
+            "base_price": 500
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.752013+00:00",
+        "updated_at": "2026-04-11T04:57:59.961526+00:00"
+    },
+    {
+        "id": "b2e68671-1d70-4bc2-b4c5-17614be4d7a2",
+        "name": "Sunday Surcharge",
+        "description": "",
+        "product_type": "addon",
+        "category": "Fees",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": null,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "admin_time": 0,
+            "base_price": 500,
+            "unit_price": 0,
+            "editor_time": 0,
+            "onsite_time": 0,
+            "onsite_time_increment": 0
+        },
+        "premium_tier": {
+            "admin_time": 0,
+            "base_price": 500,
+            "unit_price": 0,
+            "editor_time": 0,
+            "onsite_time": 0,
+            "onsite_time_increment": 0
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": "",
+        "is_active": true,
+        "created_at": "2026-04-11T05:00:27.43116+00:00",
+        "updated_at": "2026-04-11T05:01:02.216079+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000007",
+        "name": "Team Portraits",
+        "description": "",
+        "product_type": "core",
+        "category": "Images",
+        "pricing_type": "per_unit",
+        "min_quantity": 1,
+        "max_quantity": 10,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 250,
+            "unit_price": 250,
+            "onsite_time": 30,
+            "onsite_time_increment": 15
+        },
+        "premium_tier": {
+            "base_price": 250,
+            "unit_price": 250,
+            "onsite_time": 30,
+            "onsite_time_increment": 15
+        },
+        "standard_task_templates": [
+            {
+                "title": "Team Portrait - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - Send Raws to Client",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - Waiting for Client",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "3_business_nights",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - Send Shortlist to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - Waiting for Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_2_nights",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    3
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - QA Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    4
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "premium_task_templates": [
+            {
+                "title": "Team Portrait - Upload Raws",
+                "task_type": "onsite",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "project_onsite",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "photographer",
+                "estimated_minutes": 2.5,
+                "depends_on_indices": [],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - Send Raws to Client",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tomorrow_am",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    0
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - Waiting for Client",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "3_business_nights",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    1
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - Send Shortlist to Editors",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 10,
+                "depends_on_indices": [
+                    2
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - Waiting for Editor",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "in_2_nights",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    3
+                ],
+                "deadline_hours_after_trigger": 0
+            },
+            {
+                "title": "Team Portrait - QA Images",
+                "task_type": "back_office",
+                "description": "",
+                "deadline_type": "preset",
+                "timer_trigger": "dependencies_cleared",
+                "deadline_preset": "tonight",
+                "auto_assign_role": "image_editor",
+                "estimated_minutes": 0,
+                "depends_on_indices": [
+                    4
+                ],
+                "deadline_hours_after_trigger": 0
+            }
+        ],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.296793+00:00",
+        "updated_at": "2026-04-11T09:09:33.16975+00:00"
+    },
+    {
+        "id": "30000000-0000-4000-a000-000000000044",
+        "name": "Travel/City Surcharge",
+        "description": "Additional charge for out-of-area or CBD bookings.",
+        "product_type": "addon",
+        "category": "Fees",
+        "pricing_type": "fixed",
+        "min_quantity": 1,
+        "max_quantity": 1,
+        "dusk_only": false,
+        "project_type_ids": [
+            "10000000-0000-4000-a000-000000000001"
+        ],
+        "standard_tier": {
+            "base_price": 150
+        },
+        "premium_tier": {
+            "base_price": 150
+        },
+        "standard_task_templates": [],
+        "premium_task_templates": [],
+        "task_templates": [],
+        "notes": null,
+        "is_active": true,
+        "created_at": "2026-03-20T07:44:11.752013+00:00",
+        "updated_at": "2026-04-11T04:57:37.722547+00:00"
+    }
+]

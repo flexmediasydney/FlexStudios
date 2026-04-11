@@ -1,0 +1,101 @@
+[
+    {
+        "id": "aa25c17a-962b-4916-b9d8-430a05e37ba4",
+        "entity_type": "agency",
+        "entity_id": "8bbaef04-7e56-4074-af2c-18ce4ce094a5",
+        "entity_name": "Belle Property Balmain",
+        "project_type_id": "10000000-0000-4000-a000-000000000001",
+        "use_default_pricing": false,
+        "product_pricing": [
+            {
+                "product_id": "30000000-0000-4000-a000-000000000013",
+                "premium_base": 0,
+                "premium_unit": 0,
+                "product_name": "AI Video",
+                "standard_base": 150,
+                "standard_unit": 0,
+                "override_enabled": true,
+                "master_snapshot_at": "2026-03-22T11:32:34.109Z",
+                "master_premium_base": 0,
+                "master_premium_unit": 0,
+                "master_standard_base": 125,
+                "master_standard_unit": 0
+            }
+        ],
+        "package_pricing": [],
+        "blanket_discount": {
+            "enabled": false,
+            "package_percent": 20,
+            "product_percent": 10
+        },
+        "snapshot_date": null,
+        "created_at": "2026-03-22T10:19:23.174051+00:00",
+        "updated_at": "2026-03-22T11:43:34.502904+00:00",
+        "project_type_name": "Residential Real Estate",
+        "last_modified_at": "2026-03-22T11:43:34.446+00:00",
+        "last_modified_by": "joseph@flexmedia.sydney"
+    },
+    {
+        "id": "34fa09d2-077e-4fdd-a5cd-054f7eb2967b",
+        "entity_type": "agency",
+        "entity_id": "d4dcf794-841b-421f-9d45-2bf84ac089cc",
+        "entity_name": "LJ Hooker Bankstown",
+        "project_type_id": "10000000-0000-4000-a000-000000000001",
+        "use_default_pricing": true,
+        "product_pricing": [],
+        "package_pricing": [],
+        "blanket_discount": {
+            "enabled": false,
+            "package_percent": 0,
+            "product_percent": 0
+        },
+        "snapshot_date": null,
+        "created_at": "2026-03-22T10:45:57.923347+00:00",
+        "updated_at": "2026-03-22T10:45:57.923347+00:00",
+        "project_type_name": "Residential Real Estate",
+        "last_modified_at": null,
+        "last_modified_by": null
+    },
+    {
+        "id": "ab262edf-6ca0-4704-8f09-96bcd754a009",
+        "entity_type": "agency",
+        "entity_id": "66aaea7d-db6a-4ee0-8e58-5fa733d91581",
+        "entity_name": "Raine & Horne Concord",
+        "project_type_id": "10000000-0000-4000-a000-000000000001",
+        "use_default_pricing": true,
+        "product_pricing": [],
+        "package_pricing": [],
+        "blanket_discount": {
+            "enabled": false,
+            "package_percent": 0,
+            "product_percent": 0
+        },
+        "snapshot_date": null,
+        "created_at": "2026-03-22T10:47:07.777133+00:00",
+        "updated_at": "2026-03-22T10:47:07.777133+00:00",
+        "project_type_name": "Residential Real Estate",
+        "last_modified_at": null,
+        "last_modified_by": null
+    },
+    {
+        "id": "3e3d2a54-52c6-47c3-9e97-235e3a870254",
+        "entity_type": "agency",
+        "entity_id": "d054bd86-d741-4555-894d-b1a645007483",
+        "entity_name": "Ray White Strathfield",
+        "project_type_id": "10000000-0000-4000-a000-000000000001",
+        "use_default_pricing": false,
+        "product_pricing": [],
+        "package_pricing": [],
+        "blanket_discount": {
+            "enabled": true,
+            "package_percent": 30,
+            "product_percent": 20
+        },
+        "snapshot_date": null,
+        "created_at": "2026-04-07T01:52:08.366868+00:00",
+        "updated_at": "2026-04-07T01:52:24.106194+00:00",
+        "project_type_name": "Residential Real Estate",
+        "last_modified_at": "2026-04-07T01:52:24.044+00:00",
+        "last_modified_by": "joseph@flexmedia.sydney"
+    }
+]
