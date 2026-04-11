@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Users, AlertTriangle, TrendingDown } from "lucide-react";
+import { Users, AlertTriangle, TrendingDown, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDashboardStats } from "@/components/hooks/useDashboardStats";
 
@@ -66,6 +67,67 @@ function LoadingSkeleton() {
   );
 }
 
+function TeamRow({ team }) {
+  const [expanded, setExpanded] = useState(false);
+  const pct = team.utilization_pct ?? 0;
+  const color = pct > 90 ? "bg-red-500" : pct > 70 ? "bg-amber-500" : "bg-emerald-500";
+  const textColor = pct > 90 ? "text-red-600" : pct > 70 ? "text-amber-600" : "text-emerald-600";
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-3 hover:bg-muted/40 rounded-md px-1 py-1 transition-colors"
+      >
+        <ChevronDown
+          className={cn(
+            "h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform duration-200",
+            !expanded && "-rotate-90"
+          )}
+        />
+        <div className="w-32 text-left">
+          <p className="text-sm font-medium truncate">{team.team_name}</p>
+          <Badge variant="secondary" className="text-[10px] mt-0.5">
+            {team.member_count} member{team.member_count !== 1 ? "s" : ""}
+          </Badge>
+        </div>
+        <div className="flex-1 bg-muted rounded-full h-3">
+          <div
+            className={cn("h-3 rounded-full transition-all", color)}
+            style={{ width: `${Math.min(pct, 100)}%` }}
+          />
+        </div>
+        <span className={cn("text-xs font-bold w-12 text-right", textColor)}>
+          {pct}%
+        </span>
+      </button>
+      {expanded && team.members?.length > 0 && (
+        <div className="ml-8 mt-1 mb-2 space-y-1 border-l-2 border-muted pl-3">
+          {team.members.map((m) => {
+            const mPct = m.utilization_pct ?? 0;
+            const mColor = mPct > 90 ? "bg-red-500" : mPct > 70 ? "bg-amber-500" : "bg-emerald-500";
+            const mText = mPct > 90 ? "text-red-600" : mPct > 70 ? "text-amber-600" : "text-emerald-600";
+            return (
+              <div key={m.user_name} className="flex items-center gap-3">
+                <p className="w-28 text-xs text-muted-foreground truncate">{m.user_name}</p>
+                <div className="flex-1 bg-muted rounded-full h-2">
+                  <div
+                    className={cn("h-2 rounded-full transition-all", mColor)}
+                    style={{ width: `${Math.min(mPct, 100)}%` }}
+                  />
+                </div>
+                <span className={cn("text-[10px] font-bold w-10 text-right", mText)}>
+                  {mPct}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmptyState() {
   return (
     <Card className="p-8 text-center">
@@ -87,6 +149,7 @@ export default function TeamCapacityDash() {
 
   const utilization = stats?.utilization;
   const byUser = utilization?.by_user ?? [];
+  const byTeam = utilization?.by_team ?? [];
   const byRole = stats?.tasks?.by_role ?? [];
 
   if (byUser.length === 0) return <EmptyState />;
@@ -125,11 +188,38 @@ export default function TeamCapacityDash() {
         />
       </div>
 
-      {/* Staff Utilization Bars */}
+      {/* Team Overview */}
+      {byTeam.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold">Team Overview</CardTitle>
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" /> &lt;70%
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-full bg-amber-500" /> 70-90%
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-full bg-red-500" /> &gt;90%
+                </span>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {byTeam.map((t) => (
+              <TeamRow key={t.team_id} team={t} />
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Individual Staff Utilization Bars */}
       <Card>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-sm font-semibold">Staff Utilization</CardTitle>
+            <CardTitle className="text-sm font-semibold">Individual Staff</CardTitle>
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
               <span className="flex items-center gap-1">
                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" /> &lt;70%

@@ -290,6 +290,8 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
       user_id: uid,
       user_name: user?.full_name || 'Unknown',
       role: roleByUser.get(uid) || user?.role || 'unknown',
+      team_id: user?.internal_team_id || null,
+      team_name: user?.internal_team_name || null,
       hours_logged: Math.round(logged * 100) / 100,
       hours_estimated: Math.round(estimated * 100) / 100,
       utilization_pct: safePct(logged, estimated),
@@ -297,6 +299,25 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
   }
 
   byUser.sort((a, b) => b.hours_logged - a.hours_logged);
+
+  // Build team-level aggregation from by_user data
+  const teamMap = new Map<string, { team_name: string; team_id: string; hours_logged: number; hours_estimated: number; member_count: number; members: any[] }>();
+  for (const u of byUser) {
+    const teamId = u.team_id || 'unassigned';
+    const teamName = u.team_name || 'Unassigned';
+    if (!teamMap.has(teamId)) {
+      teamMap.set(teamId, { team_id: teamId, team_name: teamName, hours_logged: 0, hours_estimated: 0, member_count: 0, members: [] });
+    }
+    const team = teamMap.get(teamId)!;
+    team.hours_logged += u.hours_logged || 0;
+    team.hours_estimated += u.hours_estimated || 0;
+    team.member_count++;
+    team.members.push({ user_name: u.user_name, utilization_pct: u.utilization_pct });
+  }
+  const byTeam = Array.from(teamMap.values()).map(t => ({
+    ...t,
+    utilization_pct: t.hours_estimated > 0 ? Math.round((t.hours_logged / t.hours_estimated) * 100) : 0,
+  })).sort((a, b) => b.hours_logged - a.hours_logged);
 
   const overallPct = safePct(totalLogged, totalEstimated);
   const overloaded = byUser.filter((u) => u.utilization_pct > 90);
@@ -306,6 +327,7 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
     stat_key: 'utilization',
     stat_value: {
       by_user: byUser,
+      by_team: byTeam,
       overall_utilization_pct: overallPct,
       overloaded_users: overloaded.map((u) => ({ user_id: u.user_id, user_name: u.user_name, utilization_pct: u.utilization_pct })),
       underloaded_users: underloaded.map((u) => ({ user_id: u.user_id, user_name: u.user_name, utilization_pct: u.utilization_pct })),
