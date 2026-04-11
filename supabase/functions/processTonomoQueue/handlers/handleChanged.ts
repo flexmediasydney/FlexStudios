@@ -65,6 +65,9 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
           // Denormalize name alongside ID
           const nameField = field.replace('_id', '_name');
           if (staffNameMap[userId as string]) updates[nameField] = staffNameMap[userId as string];
+          // Webhook staff are always real users, not teams
+          const typeField = field.replace('_id', '_type');
+          updates[typeField] = 'user';
         }
       }
     }

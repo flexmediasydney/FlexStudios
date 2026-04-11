@@ -52,8 +52,21 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
     if (resolvedPhotographers.length > 0) {
       const bookingTypes = detectBookingTypes(reschServices.length > 0 ? reschServices : safeJsonParse(project.tonomo_raw_services, [] as string[]));
       const staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes);
+      // Build name map for denormalization
+      const staffNameMap: Record<string, string> = {};
+      for (const rp of resolvedPhotographers) {
+        if (rp.userId && rp.name) staffNameMap[rp.userId] = rp.name;
+      }
       for (const [field, userId] of Object.entries(staffAssignment)) {
-        if (userId && !overriddenFields.includes(field)) updates[field] = userId;
+        if (userId && !overriddenFields.includes(field)) {
+          updates[field] = userId;
+          // Denormalize name alongside ID
+          const nameField = field.replace('_id', '_name');
+          if (staffNameMap[userId as string]) updates[nameField] = staffNameMap[userId as string];
+          // Webhook staff are always real users, not teams
+          const typeField = field.replace('_id', '_type');
+          updates[typeField] = 'user';
+        }
       }
     }
     if (unresolvedPhotographers.length > 0) {

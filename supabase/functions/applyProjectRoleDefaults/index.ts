@@ -104,11 +104,18 @@ Deno.serve(async (req) => {
     for (const slot of ROLE_SLOTS) {
       const currentId = project[slot.idField];
       if (currentId) {
-        // Slot already filled — just ensure name is denormalized
+        // Slot already filled — ensure name and type are denormalized correctly
         const user = usersById.get(currentId);
         const resolvedName = user?.full_name || user?.email || null;
         if (slot.nameField && resolvedName && project[slot.nameField] !== resolvedName) {
           updates[slot.nameField] = resolvedName;
+        }
+        // Fix stale _type: if the ID resolves to a real user, ensure type='user'
+        if (user) {
+          const typeKey = slot.typeField || `${slot.role}_type`;
+          if (project[typeKey] !== 'user') {
+            updates[typeKey] = 'user';
+          }
         }
         skipped.push(slot.role);
         continue;

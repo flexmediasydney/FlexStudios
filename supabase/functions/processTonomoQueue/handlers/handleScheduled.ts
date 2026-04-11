@@ -188,6 +188,9 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
       // Set corresponding _name field
       const nameField = field.replace('_id', '_name');
       if (staffNameMap[userId as string]) sharedData[nameField] = staffNameMap[userId as string];
+      // Webhook staff are always real users, not teams
+      const typeField = field.replace('_id', '_type');
+      sharedData[typeField] = 'user';
     }
   }
 
