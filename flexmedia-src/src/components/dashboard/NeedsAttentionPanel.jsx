@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { usePriceGate } from '@/components/auth/RoleGate';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -90,6 +91,7 @@ export function LivePulseBar({ projects, tasks, timeLogs, calendarEvents }) {
 }
 
 export default function NeedsAttentionPanel({ projects, tasks, users }) {
+  const { visible: showPricing } = usePriceGate();
   const items = useMemo(() => {
     const now = new Date();
     const attention = [];
@@ -156,11 +158,14 @@ export default function NeedsAttentionPanel({ projects, tasks, users }) {
     );
     if (unpaid.length > 0) {
       const totalOwed = unpaid.reduce((s, p) => s + (p.invoiced_amount ?? p.calculated_price ?? p.price ?? 0), 0);
+      const oldestUnpaid = unpaid.sort((a, b) => new Date(fixTimestamp(a.tonomo_delivered_at)) - new Date(fixTimestamp(b.tonomo_delivered_at)))[0];
       attention.push({
         severity: unpaid.length > 3 ? 'warning' : 'info',
         icon: DollarSign,
-        title: `${unpaid.length} unpaid invoice${unpaid.length > 1 ? 's' : ''} ($${Math.round(totalOwed).toLocaleString()})`,
-        detail: `Oldest: ${unpaid.sort((a, b) => new Date(fixTimestamp(a.tonomo_delivered_at)) - new Date(fixTimestamp(b.tonomo_delivered_at)))[0]?.title || 'Unknown'} — ${differenceInDays(now, new Date(fixTimestamp(unpaid[0]?.tonomo_delivered_at)))}d overdue`,
+        title: showPricing
+          ? `${unpaid.length} unpaid invoice${unpaid.length > 1 ? 's' : ''} ($${Math.round(totalOwed).toLocaleString()})`
+          : `${unpaid.length} unpaid invoice${unpaid.length > 1 ? 's' : ''}`,
+        detail: `Oldest: ${oldestUnpaid?.title || 'Unknown'} — ${differenceInDays(now, new Date(fixTimestamp(unpaid[0]?.tonomo_delivered_at)))}d overdue`,
         action: createPageUrl('Projects'),
         actionLabel: 'View',
         priority: 30 + unpaid.length,
@@ -219,7 +224,7 @@ export default function NeedsAttentionPanel({ projects, tasks, users }) {
     }
 
     return attention.sort((a, b) => b.priority - a.priority);
-  }, [projects, tasks, users]);
+  }, [projects, tasks, users, showPricing]);
 
   if (items.length === 0) {
     return (

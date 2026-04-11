@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePrefetchProjectDetails } from "@/components/lib/prefetchRoutes";
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 const CATEGORIES = [
   { id: 'all', label: 'All categories', icon: Grid2X2 },
@@ -44,6 +45,7 @@ export default function TopSearchBar() {
   const inputRef = useRef(null);
   const dropdownRef = useRef(null);
   const { prefetch: prefetchProject } = usePrefetchProjectDetails();
+  const { visible: showPricing } = usePriceGate();
 
   // Prefetch project data when hovering over a search result
   const handleResultHover = useCallback((type, id) => {
@@ -353,7 +355,7 @@ export default function TopSearchBar() {
                           )}
                           <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                             {p.shoot_date && <span>📅 {fmtDate(p.shoot_date, 'd MMM yyyy')}</span>}
-                            {p.calculated_price && <span className="font-mono">${Math.round(p.calculated_price).toLocaleString()}</span>}
+                            {showPricing && p.calculated_price && <span className="font-mono">${Math.round(p.calculated_price).toLocaleString()}</span>}
                           </div>
                         </div>
                         <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5" />

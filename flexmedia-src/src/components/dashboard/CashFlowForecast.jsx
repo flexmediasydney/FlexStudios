@@ -2,8 +2,13 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { DollarSign, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 export default function CashFlowForecast({ data, forecastedRevenue }) {
+  const { visible: showPricing } = usePriceGate();
+
+  if (!showPricing) return null;
+
   return (
     <Card className="col-span-2">
       <CardHeader className="pb-3">

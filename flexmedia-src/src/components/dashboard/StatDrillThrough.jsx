@@ -17,32 +17,40 @@ import { createPageUrl } from '@/utils';
 import { ChevronRight, DollarSign, Zap, AlertCircle, Users, TrendingUp, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fixTimestamp } from '@/components/utils/dateUtils';
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 /**
  * StatDrillThrough - Wrapper component
  * Adds hover drill-through capability to any stat display
  */
-export function StatDrillThrough({ 
-  value, 
-  label, 
-  type, 
-  data = [], 
+export function StatDrillThrough({
+  value,
+  label,
+  type,
+  data = [],
   config = {},
   className = ''
 }) {
   const [showPopup, setShowPopup] = useState(false);
+  const { visible: showPricing } = usePriceGate();
   const drillData = useDrillData(type, data, config);
+
+  const isPricingType = type === 'revenue' || type === 'agencies' || type === 'agents';
 
   if (!drillData || drillData.records.length === 0) {
     return (
       <div className={className} title={`${label}: ${value}`}>
-        <span>{value}</span>
+        {isPricingType && !showPricing ? null : <span>{value}</span>}
       </div>
     );
   }
 
+  if (isPricingType && !showPricing) {
+    return null;
+  }
+
   return (
-    <div 
+    <div
       className={cn('relative cursor-help', className)}
       onMouseEnter={() => setShowPopup(true)}
       onMouseLeave={() => setShowPopup(false)}
@@ -52,10 +60,11 @@ export function StatDrillThrough({
         {value}
       </span>
       {showPopup && (
-        <StatDrillPopup 
-          label={label} 
+        <StatDrillPopup
+          label={label}
           type={type}
-          drillData={drillData} 
+          drillData={drillData}
+          showPricing={showPricing}
         />
       )}
     </div>
@@ -65,10 +74,10 @@ export function StatDrillThrough({
 /**
  * StatDrillPopup - Popup component showing transactional breakdown
  */
-function StatDrillPopup({ label, type, drillData }) {
+function StatDrillPopup({ label, type, drillData, showPricing }) {
   return (
     <div className="fixed z-50 pointer-events-none">
-      <div 
+      <div
         className="absolute top-full mt-2 right-0 pointer-events-auto"
         style={{ transform: 'translateX(50%)' }}
       >
@@ -85,10 +94,11 @@ function StatDrillPopup({ label, type, drillData }) {
 
           <div className="max-h-80 overflow-y-auto divide-y">
             {drillData.records.slice(0, 10).map((record, idx) => (
-              <StatDrillRow 
-                key={idx} 
-                record={record} 
+              <StatDrillRow
+                key={idx}
+                record={record}
                 type={type}
+                showPricing={showPricing}
               />
             ))}
             {drillData.records.length > 10 && (
@@ -99,7 +109,7 @@ function StatDrillPopup({ label, type, drillData }) {
           </div>
 
           {drillData.cta && (
-            <Link 
+            <Link
               to={drillData.cta.url}
               className="block px-4 py-2 border-t text-xs font-medium text-primary hover:bg-muted/50 transition-colors flex items-center justify-between group"
             >
@@ -116,8 +126,9 @@ function StatDrillPopup({ label, type, drillData }) {
 /**
  * StatDrillRow - Individual transaction row
  */
-function StatDrillRow({ record, type }) {
+function StatDrillRow({ record, type, showPricing }) {
   const isClickable = record.url && record.url !== '#';
+  const isPricingValue = record.value && typeof record.value === 'string' && record.value.startsWith('$');
 
   const rowContent = (
     <div className="flex items-center gap-3 px-3 py-2.5 text-xs">
@@ -126,7 +137,7 @@ function StatDrillRow({ record, type }) {
         <div className="font-medium truncate">{record.title}</div>
         {record.subtitle && <div className="text-[11px] text-muted-foreground truncate">{record.subtitle}</div>}
       </div>
-      {record.value && (
+      {record.value && (!isPricingValue || showPricing) && (
         <span className={cn('font-semibold whitespace-nowrap', record.valueColor)}>
           {record.value}
         </span>
@@ -291,14 +302,17 @@ function useDrillData(type, data = [], config = {}) {
  * Returns { value, drillData, StatComponent }
  */
 export function useStat(type, data, label, config = {}) {
+  const { visible: showPricing } = usePriceGate();
   const drillData = useDrillData(type, data, config);
-  const formatted = formatStatValue(type, data, config);
+  const rawFormatted = formatStatValue(type, data, config);
+  const isPricingType = type === 'revenue' || type === 'agencies' || type === 'agents';
+  const formatted = isPricingType && !showPricing ? '—' : rawFormatted;
 
   return {
     value: formatted,
     drillData,
     render: (props) => (
-      <StatDrillThrough 
+      <StatDrillThrough
         value={formatted}
         label={label}
         type={type}
