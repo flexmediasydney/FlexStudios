@@ -288,6 +288,20 @@ export default function AIAuditLog() {
         </Card>
       ) : (
         <div className="space-y-2">
+          {/* Pagination info */}
+          <div className="flex items-center justify-between px-1 pb-1">
+            <p className="text-xs text-muted-foreground">
+              Showing <span className="font-medium text-foreground">{filteredLogs.length}</span>
+              {filteredLogs.length !== logs.length && (
+                <> of <span className="font-medium text-foreground">{logs.length}</span> loaded</>
+              )}
+              {" "}entries
+            </p>
+            {filteredLogs.length !== logs.length && (
+              <p className="text-[10px] text-muted-foreground/70">Filtered from {logs.length}</p>
+            )}
+          </div>
+
           {filteredLogs.map((log) => (
             <LogEntry
               key={log.id}
@@ -326,6 +340,11 @@ function LogEntry({ log, userName, isExpanded, onToggle }) {
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
+              {isError ? (
+                <XCircle className="h-4 w-4 text-red-500 shrink-0" />
+              ) : (
+                <Check className="h-4 w-4 text-green-500 shrink-0" />
+              )}
               <span className="text-sm font-medium text-muted-foreground">
                 {formatTime(log.created_at)}
               </span>

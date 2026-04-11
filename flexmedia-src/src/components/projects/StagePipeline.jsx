@@ -107,12 +107,14 @@ function ConfirmStageDialog({ open, onConfirm, onCancel, targetLabel, currentLab
           <button
             className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card hover:bg-muted transition-colors"
             onClick={onCancel}
+            aria-label="Cancel stage change"
           >
             Cancel
           </button>
           <button
             className="px-3 py-1.5 text-xs font-medium rounded-md bg-[#1a73e8] hover:bg-[#1558b0] text-white transition-colors"
             onClick={onConfirm}
+            aria-label={`Confirm move to ${targetLabel}`}
           >
             Move to {targetLabel}
           </button>
@@ -444,6 +446,8 @@ export default function StagePipeline({ project, onStatusChange, canEdit, allTas
               <button
                 onClick={() => setExpanded(v => !v)}
                 className="sm:hidden flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded border border-transparent hover:border-border"
+                aria-label={expanded ? 'Collapse pipeline stages' : `Show ${hiddenCount} more pipeline stages`}
+                title={expanded ? 'Show fewer stages' : `Show all ${PROJECT_STAGES.length} stages`}
               >
                 {expanded ? (
                   <>Collapse <ChevronUp className="h-3 w-3" /></>

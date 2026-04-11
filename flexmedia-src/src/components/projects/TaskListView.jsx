@@ -198,6 +198,8 @@ export default function TaskListView({
                     }}
                     disabled={!canEdit || task.is_blocked || task.task_type === "onsite"}
                     className="flex-shrink-0"
+                    title={task.is_completed ? "Mark as incomplete" : task.is_blocked ? "Blocked by dependencies" : task.task_type === "onsite" ? "Onsite tasks are auto-completed" : "Mark as complete"}
+                    aria-label={task.is_completed ? `Mark "${task.title}" as incomplete` : task.is_blocked ? `Task "${task.title}" is blocked` : `Mark "${task.title}" as complete`}
                   >
                     {task.is_completed ? (
                       <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -214,12 +216,12 @@ export default function TaskListView({
                        {revTypeConfig && !task.is_completed && (
                          <span className="text-sm flex-shrink-0" title={`${revKind === "change_request" ? "Change Request" : "Revision"} — ${revTypeConfig.label}`}>{revTypeConfig.icon}</span>
                        )}
-                       <p className={cn("text-sm font-medium truncate", task.is_completed && "line-through text-muted-foreground")}>
+                       <p className={cn("text-sm font-medium truncate", task.is_completed && "line-through text-muted-foreground")} title={cleanTitle}>
                          {cleanTitle}
                        </p>
                      </div>
                      {rev && (
-                       <p className="text-xs text-muted-foreground truncate">Rev #{revNum} · {rev.title}</p>
+                       <p className="text-xs text-muted-foreground truncate" title={`Revision #${revNum}: ${rev.title}`}>Rev #{revNum} · {rev.title}</p>
                      )}
                    </div>
 

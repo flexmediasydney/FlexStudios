@@ -337,7 +337,11 @@ export default function People() {
             </>
           )}
         </div>
-        <span className="text-xs text-muted-foreground ml-auto">{filtered.length} shown</span>
+        <span className="text-xs text-muted-foreground ml-auto tabular-nums">
+          {filtered.length !== agents.length
+            ? `Showing ${filtered.length} of ${agents.length}`
+            : `${filtered.length} contacts`}
+        </span>
         <div className="flex items-center border rounded-md overflow-hidden">
           <button onClick={() => setView('table')} title="Table view" aria-label="Table view" className={cn("px-2 py-1.5 transition-colors", view === 'table' ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground")}>
             <List className="h-3.5 w-3.5" />
@@ -422,7 +426,7 @@ export default function People() {
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {filtered.slice(0, cardLimit).map(row => (
-                    <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer"
+                    <div key={row.id} className="bg-card border rounded-xl p-4 shadow-sm hover:shadow-lg hover:border-primary/30 transition-all duration-200 cursor-pointer"
                       onClick={() => navigate(createPageUrl('PersonDetails') + '?id=' + row.id)}>
                       <AgentHoverContent row={row} projects={projectsByAgent[row.id] || []} revenue={revenueByAgent[row.id] || 0} />
                       <div className="flex gap-2 mt-3 pt-3 border-t" onClick={e => e.stopPropagation()}>

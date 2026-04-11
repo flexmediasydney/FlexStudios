@@ -600,7 +600,7 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, onOp
           {(favorite.tags || []).slice(0, 3).map(tag => (
             <span
               key={tag}
-              className="text-[9px] px-1.5 py-0.5 rounded-full font-medium border"
+              className="text-[9px] min-w-[28px] text-center inline-block px-1.5 py-0.5 rounded-full font-medium border leading-tight"
               style={{
                 color: tagColorMap[tag] || '#3b82f6',
                 borderColor: (tagColorMap[tag] || '#3b82f6') + '40',
@@ -611,7 +611,7 @@ function FileFavoriteCard({ favorite, isVisible, tagColorMap, onUnfavorite, onOp
             </span>
           ))}
           {(favorite.tags || []).length > 3 && (
-            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+            <span className="text-[9px] min-w-[28px] text-center inline-block px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground leading-tight">
               +{favorite.tags.length - 3}
             </span>
           )}
@@ -1778,22 +1778,23 @@ export default function SocialMedia() {
         {/* Grid size toggle */}
         <div className="flex items-center border rounded-lg overflow-hidden shrink-0">
           {[
-            { key: 'sm', icon: Grid3x3, title: 'Small' },
-            { key: 'md', icon: Grid2x2, title: 'Medium' },
-            { key: 'lg', icon: LayoutGrid, title: 'Large' },
-          ].map(({ key, icon: Icon, title }) => (
+            { key: 'sm', icon: Grid3x3, label: 'S' },
+            { key: 'md', icon: Grid2x2, label: 'M' },
+            { key: 'lg', icon: LayoutGrid, label: 'L' },
+          ].map(({ key, icon: Icon, label }) => (
             <button
               key={key}
               onClick={() => setGridSize(key)}
-              title={title}
+              title={`${label === 'S' ? 'Small' : label === 'M' ? 'Medium' : 'Large'} grid`}
               className={cn(
-                "p-1.5 transition-colors",
+                "px-2 py-1.5 flex items-center gap-1 transition-colors text-[10px] font-medium",
                 gridSize === key
                   ? "bg-primary text-primary-foreground"
                   : "hover:bg-muted text-muted-foreground"
               )}
             >
               <Icon className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{label}</span>
             </button>
           ))}
         </div>

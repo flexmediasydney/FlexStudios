@@ -186,6 +186,15 @@ export default function MessageInput({
         )}
       </div>
 
+      {/* Character count hint */}
+      {content.length > 0 && (
+        <div className="flex justify-end">
+          <span className={`text-[11px] ${content.length > 4500 ? 'text-amber-500 font-medium' : 'text-muted-foreground/50'}`}>
+            {content.length.toLocaleString()} chars
+          </span>
+        </div>
+      )}
+
       {/* Action Buttons */}
       <div className="flex items-center gap-2">
         <input

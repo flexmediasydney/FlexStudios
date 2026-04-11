@@ -1523,9 +1523,9 @@ export default function ProjectDetails() {
                         <User className="h-3 w-3 text-primary" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="font-medium text-xs truncate">{agent.name || 'Unknown'}</p>
+                        <p className="font-medium text-xs truncate" title={agent.name || 'Unknown'}>{agent.name || 'Unknown'}</p>
                         {agent.email && (
-                          <button onClick={() => setComposeToAgent(agent.email)} className="text-[10px] text-muted-foreground hover:text-primary truncate block text-left">
+                          <button onClick={() => setComposeToAgent(agent.email)} className="text-[10px] text-muted-foreground hover:text-primary truncate block text-left" title={`Email ${agent.email}`}>
                             {agent.email}
                           </button>
                         )}
@@ -1564,7 +1564,7 @@ export default function ProjectDetails() {
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Organisation</p>
                   <Link to={createPageUrl("OrgDetails") + `?id=${agency.id}`} className="flex items-center gap-2 hover:text-primary transition-colors">
                     <Building className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                    <span className="font-medium text-xs">{agency.name}</span>
+                    <span className="font-medium text-xs truncate" title={agency.name}>{agency.name}</span>
                   </Link>
                   {agency.phone && (
                     <a href={`tel:${agency.phone}`} className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-primary mt-1 ml-5">

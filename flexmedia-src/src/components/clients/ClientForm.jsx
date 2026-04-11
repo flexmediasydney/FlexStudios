@@ -117,7 +117,7 @@ export default function ClientForm({ client, open, onClose, onSave }) {
                   onChange={(e) => handleChange("agent_email", e.target.value)}
                   placeholder="agent@email.com"
                   maxLength={LIMITS.email}
-                  className={errors.agent_email ? "border-destructive" : ""}
+                  className={errors.agent_email ? "border-destructive" : formData.agent_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.agent_email) ? "border-green-500 focus-visible:ring-green-500/30" : ""}
                 />
                 <FieldError error={errors.agent_email} />
               </div>
@@ -134,6 +134,9 @@ export default function ClientForm({ client, open, onClose, onSave }) {
                   className={errors.agent_phone ? "border-destructive" : ""}
                 />
                 <FieldError error={errors.agent_phone} />
+                {!errors.agent_phone && (
+                  <p className="text-[11px] text-muted-foreground/60 mt-0.5">Format: (04xx) xxx-xxx or +61 x xxxx xxxx</p>
+                )}
               </div>
             </div>
           </div>

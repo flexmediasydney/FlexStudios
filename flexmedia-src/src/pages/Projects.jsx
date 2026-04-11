@@ -516,7 +516,9 @@ export default function Projects() {
               <Skeleton className="inline-block w-24 h-4" />
             ) : (
               <>
-                {filteredProjects.length} {filteredProjects.length === 1 ? 'project' : 'projects'}
+                {filteredProjects.length !== allProjects.filter(p => showArchived || !p.is_archived).length
+                  ? `Showing ${filteredProjects.length} of ${allProjects.filter(p => showArchived || !p.is_archived).length} projects`
+                  : `${filteredProjects.length} ${filteredProjects.length === 1 ? 'project' : 'projects'}`}
                 {searchQuery && ` matching "${searchQuery}"`}
                 {(Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all') && !searchQuery && " with active filters"}
               </>
@@ -829,7 +831,7 @@ export default function Projects() {
                const projectTasks = tasksByProject[project.id] || [];
                const projectTimeLogs = timeLogsByProject[project.id] || [];
                return (
-                 <div key={project.id} className="cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all duration-150" onClick={() => handleEdit(project)}>
+                 <div key={project.id} className="cursor-pointer hover:shadow-lg hover:-translate-y-0.5 hover:border-primary/30 transition-all duration-200 rounded-lg border border-transparent" onClick={() => handleEdit(project)}>
                    <ProjectCard project={project} products={products} packages={packages} tasks={projectTasks} timeLogs={projectTimeLogs} />
                  </div>
                );

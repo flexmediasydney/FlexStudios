@@ -538,6 +538,7 @@ export default function ProjectProductsPackages({ project }) {
                               size="icon"
                               className="h-7 w-7 text-destructive hover:text-destructive"
                               onClick={() => handleRemoveItem("packages", pkg.id)}
+                              title={`Remove ${pkg.name} package`}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -583,6 +584,7 @@ export default function ProjectProductsPackages({ project }) {
                                       size="icon"
                                       className="h-6 w-6 text-destructive hover:text-destructive"
                                       onClick={() => handleRemoveItem("package-product", product.id, pkg.id)}
+                                      title={`Remove ${product.name} from package`}
                                     >
                                       <Trash2 className="h-3 w-3" />
                                     </Button>
@@ -607,7 +609,7 @@ export default function ProjectProductsPackages({ project }) {
                     const price = getProductDisplayPrice(product, qty, tierKey);
                     
                     return (
-                      <div key={product.id} className="flex items-center gap-3 py-2 px-3 rounded-lg border">
+                      <div key={product.id} className="flex items-center gap-3 py-2 px-3 rounded-lg border transition-all hover:shadow-sm hover:border-primary/30 hover:bg-muted/10">
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-sm">{product.name}</p>
                           {product.category && <p className="text-xs text-muted-foreground capitalize">{product.category}</p>}
@@ -640,6 +642,7 @@ export default function ProjectProductsPackages({ project }) {
                             size="icon"
                             className="h-7 w-7 text-destructive hover:text-destructive"
                             onClick={() => handleRemoveItem("products", product.id)}
+                            title={`Remove ${product.name}`}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -651,9 +654,9 @@ export default function ProjectProductsPackages({ project }) {
               )}
 
               {/* Total — always show when items exist (even if price is $0) */}
-              <div className="flex items-center justify-between pt-2 border-t mt-3">
-                <span className="text-sm font-semibold text-muted-foreground">Total</span>
-                <span className="text-base font-bold text-primary"><Price value={totalPrice} /></span>
+              <div className="flex items-center justify-between pt-3 border-t mt-3 bg-primary/5 rounded-lg px-3 py-2.5">
+                <span className="text-sm font-semibold">Estimated Total</span>
+                <span className="text-xl font-bold text-primary font-mono tabular-nums"><Price value={totalPrice} /></span>
               </div>
             </>
           )}

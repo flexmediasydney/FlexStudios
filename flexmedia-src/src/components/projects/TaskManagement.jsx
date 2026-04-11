@@ -727,7 +727,11 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
       {/* Task View */}
       {tasks.length === 0 ? (
-        <p className="text-sm text-muted-foreground text-center py-8">No tasks yet.</p>
+        <div className="text-center py-10 space-y-2">
+          <CheckCheck className="h-8 w-8 text-muted-foreground/40 mx-auto" />
+          <p className="text-sm font-medium text-muted-foreground">No tasks yet</p>
+          <p className="text-xs text-muted-foreground/70">Tasks will appear here once added to this project.</p>
+        </div>
       ) : (
         <TaskListView
           tasks={tasks}

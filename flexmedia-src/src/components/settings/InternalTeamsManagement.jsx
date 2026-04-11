@@ -264,6 +264,11 @@ export default function InternalTeamsManagement() {
                           style={{ backgroundColor: team.color }}
                         />
                         <span className="font-medium">{team.name}</span>
+                        {members.length > 0 && (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 font-normal">
+                            {members.length} {members.length === 1 ? 'member' : 'members'}
+                          </Badge>
+                        )}
                         {team.team_function && (
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                             team.team_function === 'onsite'     ? 'bg-blue-100 text-blue-700' :
@@ -319,18 +324,20 @@ export default function InternalTeamsManagement() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => handleOpen(team)} title="Edit team" disabled={!canEdit}>
-                          <Edit className="h-4 w-4" />
+                        <Button variant="ghost" size="sm" onClick={() => handleOpen(team)} title="Edit team" disabled={!canEdit} className="gap-1">
+                          <Edit className="h-3.5 w-3.5" />
+                          <span className="text-xs">Edit</span>
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleTeamDeleteClick(team)}
-                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                          className="text-destructive hover:text-destructive hover:bg-destructive/10 gap-1"
                           title="Delete team"
                           disabled={!canEdit}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span className="text-xs">Delete</span>
                         </Button>
                       </div>
                     </TableCell>

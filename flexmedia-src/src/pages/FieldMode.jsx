@@ -617,7 +617,12 @@ function TaskRow({ task, project, user, activeTimers, onToggleComplete }) {
           {/* Checkbox */}
           <button
             onClick={onToggleComplete}
-            className="mt-0.5 shrink-0 h-6 w-6 rounded-full border-2 flex items-center justify-center transition-colors"
+            className={cn(
+              "mt-0.5 shrink-0 h-6 w-6 rounded-full border-2 flex items-center justify-center transition-all duration-150",
+              task.is_completed
+                ? "border-green-500 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/40"
+                : "border-muted-foreground/30 hover:border-primary hover:bg-primary/5 active:scale-90"
+            )}
             style={{ minWidth: 24, minHeight: 24 }}
           >
             {task.is_completed ? (
@@ -709,7 +714,13 @@ function QuickNote({ project, user }) {
             onChange={(e) => setNoteText(e.target.value)}
             rows={3}
             className="resize-none text-sm"
+            maxLength={500}
           />
+          <div className="flex justify-end">
+            <span className={cn("text-[10px] tabular-nums", noteText.length > 450 ? "text-amber-500" : "text-muted-foreground/50")}>
+              {noteText.length}/500
+            </span>
+          </div>
           <Button
             size="sm"
             className="w-full gap-1.5"
@@ -891,7 +902,16 @@ function CompassTab({ project, user }) {
               <p className="text-sm text-muted-foreground font-medium">{compassDirection}</p>
             </div>
             {compassError && (
-              <p className="text-xs text-amber-600 mt-2">{compassError}</p>
+              <div className="mt-3 text-center space-y-1">
+                <p className="text-xs text-amber-600 font-medium">{compassError}</p>
+                <p className="text-[10px] text-muted-foreground leading-relaxed max-w-[250px] mx-auto">
+                  {compassError.toLowerCase().includes("denied")
+                    ? "Open your device Settings > Privacy > Motion & Orientation and allow access for this browser."
+                    : compassError.toLowerCase().includes("not available") || compassError.toLowerCase().includes("not supported")
+                    ? "Your device does not have a compass sensor, or your browser does not support orientation events."
+                    : "Try refreshing the page or using a different browser."}
+                </p>
+              </div>
             )}
           </CardContent>
         </Card>

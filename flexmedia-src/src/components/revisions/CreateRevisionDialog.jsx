@@ -331,6 +331,9 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>New Request</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Create a revision or change request for this project. Tasks will be auto-assigned to the relevant team members.
+          </p>
         </DialogHeader>
 
         <div className="space-y-4 py-1">
@@ -644,7 +647,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
                   <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-current mr-2" />
                   Creating...
                 </>
-              ) : "Create Request"}
+              ) : requestKind === "change_request" ? "Submit Change Request" : "Submit Revision Request"}
             </Button>
           </DialogFooter>
       </DialogContent>

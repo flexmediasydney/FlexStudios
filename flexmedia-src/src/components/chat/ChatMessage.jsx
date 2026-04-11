@@ -6,6 +6,22 @@ import { Pin, Trash2, Download, FileText, Image, Music, Video } from 'lucide-rea
 import { cn } from '@/lib/utils';
 import { safeWindowOpen, validateUrl } from '@/utils/sanitizeHtml';
 
+function relativeTime(ts) {
+  if (!ts) return "";
+  try {
+    const ms = Date.now() - new Date(ts).getTime();
+    if (ms < 0) return "";
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 7) return `${d}d ago`;
+    return "";
+  } catch { return ""; }
+}
+
 const getFileIcon = (fileType) => {
   if (!fileType) return FileText;
   if (fileType.startsWith('image')) return Image;
@@ -36,14 +52,18 @@ export default function ChatMessage({ message, currentUserEmail, onPin, onDelete
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-             {new Date(fixTimestamp(message.created_date)).toLocaleString('en-AU', {
-               timeZone: 'Australia/Sydney',
-               month: 'short',
-               day: 'numeric',
-               hour: '2-digit',
-               minute: '2-digit',
-               hour12: true
-             })}
+             {(() => {
+               const rel = relativeTime(fixTimestamp(message.created_date));
+               const abs = new Date(fixTimestamp(message.created_date)).toLocaleString('en-AU', {
+                 timeZone: 'Australia/Sydney',
+                 month: 'short',
+                 day: 'numeric',
+                 hour: '2-digit',
+                 minute: '2-digit',
+                 hour12: true
+               });
+               return rel ? `${rel} \u00B7 ${abs}` : abs;
+             })()}
              {message.edited_at && ` (edited ${new Date(fixTimestamp(message.edited_at)).toLocaleString('en-AU', {
                timeZone: 'Australia/Sydney',
                month: 'short',

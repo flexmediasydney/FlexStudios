@@ -14,7 +14,7 @@ import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sparkles, Send, X, Mic, MicOff, Volume2, VolumeX, Loader2, Check, XCircle } from "lucide-react";
+import { Sparkles, Send, X, Mic, MicOff, Volume2, VolumeX, Loader2, Check, XCircle, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -22,6 +22,22 @@ import { toast } from "sonner";
 
 function generateSessionId() {
   return crypto.randomUUID();
+}
+
+/** Format timestamp with date context: "Today 2:35 PM", "Yesterday 10:00 AM", or "8 Apr 2:35 PM" */
+function formatMessageTime(isoString) {
+  const d = new Date(isoString);
+  const now = new Date();
+  const time = d.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" });
+
+  if (d.toDateString() === now.toDateString()) return `Today ${time}`;
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+
+  const date = d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+  return `${date} ${time}`;
 }
 
 const SESSION_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
@@ -286,6 +302,17 @@ export default function AIChat({ projectId, projectTitle }) {
           >
             {ttsEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4 text-muted-foreground" />}
           </Button>
+          {messages.length > 0 && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+              onClick={() => { setMessages([]); setPendingConfirmation(null); setSessionId(null); }}
+              title="Clear conversation"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -345,7 +372,7 @@ export default function AIChat({ projectId, projectTitle }) {
                 )}
 
                 <p className="text-[10px] opacity-50 mt-1">
-                  {new Date(msg.timestamp).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}
+                  {formatMessageTime(msg.timestamp)}
                 </p>
               </div>
             </div>
@@ -407,7 +434,7 @@ export default function AIChat({ projectId, projectTitle }) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask the AI assistant..."
+            placeholder={projectTitle ? `Ask about ${projectTitle}...` : "Add notes, update status, assign tasks..."}
             className="flex-1 text-sm"
             disabled={isLoading}
             autoComplete="off"

@@ -102,7 +102,7 @@ export const NestedProductRow = memo(({ nestedProd, pkg, canEdit, onUpdateQty, r
       <td className="py-2 px-3 text-right font-mono text-muted-foreground">
         {isPerUnit && actualExtraQty > 0
           ? <span className="text-amber-700 font-semibold">+<Price value={extraCost} /></span>
-          : <span className="text-muted-foreground">incl.</span>
+          : <span className="text-muted-foreground cursor-help" title="Included in package — no extra charge">incl.</span>
         }
       </td>
       {canEdit && <td />}

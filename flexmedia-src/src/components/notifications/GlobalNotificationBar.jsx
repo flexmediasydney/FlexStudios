@@ -135,6 +135,7 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [prevUnread, setPrevUnread] = useState(0);
   const [pulse, setPulse] = useState(false);
+  const [confirmMarkAll, setConfirmMarkAll] = useState(false);
   const dropdownRef = useRef(null);
   const navigate = useNavigate();
 
@@ -201,15 +202,30 @@ export function NotificationBell() {
             <div className="flex items-center gap-2">
               <Bell className="h-4 w-4 text-primary" />
               <span className="font-semibold text-sm">Notifications</span>
+              <span className="text-xs text-muted-foreground">({visible.length})</span>
               {unreadCount > 0 && (
                 <Badge className="bg-red-100 text-red-700 text-xs h-5 font-bold animate-pulse">{unreadCount} unread</Badge>
               )}
             </div>
             <div className="flex items-center gap-1">
               {unreadCount > 0 && (
-                <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:bg-muted" onClick={markAllRead} title="Mark all as read">
+                <Button
+                  variant={confirmMarkAll ? "default" : "ghost"}
+                  size="sm"
+                  className={`h-7 text-xs gap-1 ${confirmMarkAll ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                  onClick={() => {
+                    if (confirmMarkAll) {
+                      markAllRead();
+                      setConfirmMarkAll(false);
+                    } else {
+                      setConfirmMarkAll(true);
+                      setTimeout(() => setConfirmMarkAll(false), 3000);
+                    }
+                  }}
+                  title={confirmMarkAll ? "Click again to confirm" : "Mark all as read"}
+                >
                   <CheckCheck className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">Mark all read</span>
+                  <span className="hidden sm:inline">{confirmMarkAll ? "Confirm?" : "Mark all read"}</span>
                 </Button>
               )}
             </div>

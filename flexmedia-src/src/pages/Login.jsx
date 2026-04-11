@@ -282,6 +282,7 @@ export default function Login() {
                 required
                 autoFocus
                 className="h-11"
+                aria-label="Email address for password reset"
               />
             </div>
             <Button type="submit" className="w-full h-11" disabled={loading}>
@@ -390,6 +391,7 @@ export default function Login() {
                 autoComplete="email"
                 autoFocus
                 className="h-11"
+                aria-label="Email address"
               />
             </div>
 
@@ -430,6 +432,7 @@ export default function Login() {
                     required
                     autoComplete="current-password"
                     className="h-11"
+                    aria-label="Password"
                   />
                 </div>
                 <div className="flex items-center justify-between">
@@ -481,7 +484,7 @@ export default function Login() {
 
 function Shell({ children }) {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 px-4">
       <Card className="w-full max-w-sm shadow-lg border-border/50">
         <CardHeader className="text-center pb-2">
           <div className="mx-auto mb-2">
@@ -505,7 +508,7 @@ function Shell({ children }) {
 
 function ErrorBanner({ message, attemptsRemaining }) {
   return (
-    <div role="alert" aria-live="assertive" className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
+    <div role="alert" aria-live="assertive" className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400 animate-in slide-in-from-left-1 duration-200">
       <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" aria-hidden="true" />
       <div>
         <span>{message}</span>
@@ -523,7 +526,8 @@ function BackLink({ onClick }) {
   return (
     <button
       onClick={onClick}
-      className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mx-auto"
+      className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mx-auto transition-colors"
+      aria-label="Go back to sign in"
     >
       <ArrowLeft className="h-3.5 w-3.5" /> Back to sign in
     </button>

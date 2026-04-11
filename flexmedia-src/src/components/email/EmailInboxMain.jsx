@@ -1070,8 +1070,9 @@ export default function EmailInboxMain() {
               folder={FOLDER_FILTERS.inbox}
               isActive={filterView === "inbox" && !filterUnread}
               count={unreadCount}
+              countClassName={unreadCount > 0 ? "bg-primary text-primary-foreground font-bold" : undefined}
               onClick={() => applyFolderFilter('inbox', {
-                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel, 
+                setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Inbox"
@@ -1343,6 +1344,13 @@ export default function EmailInboxMain() {
                        <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/50 bg-muted/60 rounded px-1.5 py-0.5 font-mono pointer-events-none">/</kbd>
                      ) : null}
                 </div>
+
+                <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap hidden sm:inline">
+                  {filteredThreads.length !== threads.length
+                    ? `${filteredThreads.length} of ${threads.length}`
+                    : `${threads.length}`}{' '}
+                  {threads.length === 1 ? 'thread' : 'threads'}
+                </span>
 
                 <TooltipProvider delayDuration={300}>
                   <Tooltip>

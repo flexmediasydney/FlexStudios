@@ -841,7 +841,12 @@ export default function CalendarPage() {
             </Button>
           </div>
 
-          <h1 className="text-sm sm:text-lg font-semibold min-w-0 sm:min-w-[200px] truncate">{headerLabel()}</h1>
+          <h1 className="text-sm sm:text-lg font-semibold min-w-0 sm:min-w-[200px] truncate flex items-center gap-2">
+            {headerLabel()}
+            {isToday(currentDate) && view === 'day' && (
+              <span className="text-[10px] font-medium bg-primary/10 text-primary px-2 py-0.5 rounded-full">Today</span>
+            )}
+          </h1>
 
           {/* Filter chips */}
           <div className="hidden sm:flex items-center gap-1.5">
@@ -972,6 +977,23 @@ export default function CalendarPage() {
             <kbd className="px-1 py-0.5 rounded border bg-muted/50 font-mono">W</kbd>
             <kbd className="px-1 py-0.5 rounded border bg-muted/50 font-mono">D</kbd>
           </div>
+        </div>
+
+        {/* Color legend */}
+        <div className="hidden sm:flex items-center gap-3 px-4 py-1.5 text-[10px] text-muted-foreground border-t bg-muted/10">
+          <span className="font-medium mr-0.5">Legend:</span>
+          {[
+            { label: 'Shoots', color: '#3b82f6' },
+            { label: 'Meetings', color: '#10b981' },
+            { label: 'Tasks', color: '#8b5cf6' },
+            { label: 'Deadlines', color: '#ef4444' },
+            { label: 'Personal', color: '#6b7280' },
+          ].map(item => (
+            <span key={item.label} className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: item.color }} />
+              {item.label}
+            </span>
+          ))}
         </div>
 
         {/* Person selector row */}

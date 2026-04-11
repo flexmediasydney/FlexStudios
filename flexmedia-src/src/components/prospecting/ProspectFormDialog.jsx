@@ -264,6 +264,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground/60 mt-1">Pipeline stage</p>
                 </div>
 
                 <div>
@@ -278,6 +279,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground/60 mt-1">Estimated deal size</p>
                 </div>
 
                 <div>
@@ -292,6 +294,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground/60 mt-1">How they found us</p>
                 </div>
               </div>
             </div>
@@ -326,6 +329,7 @@ export default function ProspectFormDialog({ open, onOpenChange, prospect = null
               maxLength={2000}
               rows={3}
             />
+            <p className="text-xs text-muted-foreground mt-1 text-right">{(formData.notes || "").length}/2000</p>
           </div>
 
           {/* Buttons */}

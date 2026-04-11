@@ -922,8 +922,10 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                         } rounded-b-md relative`}
                       >
                         {columnProjects.length === 0 && !snapshot.isDraggingOver && (
-                          <div className="absolute inset-0 flex items-center justify-center text-muted-foreground/40 text-xs font-medium pointer-events-none">
-                            Drag projects here
+                          <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground/30 pointer-events-none gap-2">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-50"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
+                            <span className="text-xs font-medium">No projects</span>
+                            <span className="text-[10px]">Drag projects here</span>
                           </div>
                         )}
                         {(() => {
@@ -958,9 +960,20 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                   onClick={() => navigate(createPageUrl("ProjectDetails") + "?id=" + project.id)}
                                 >
                                   {/* Card Header */}
-                                  <div className="px-3 py-2 border-b border-border/50">
+                                  <div className="px-3 py-2 border-b border-border/50 flex items-start gap-1.5">
+                                    {/* Drag handle indicator */}
+                                    <div className="flex-shrink-0 mt-0.5 opacity-0 group-hover/card:opacity-40 transition-opacity text-muted-foreground" aria-hidden="true" title="Drag to move">
+                                      <svg width="6" height="14" viewBox="0 0 6 14" fill="currentColor">
+                                        <circle cx="1.5" cy="1.5" r="1" /><circle cx="4.5" cy="1.5" r="1" />
+                                        <circle cx="1.5" cy="5" r="1" /><circle cx="4.5" cy="5" r="1" />
+                                        <circle cx="1.5" cy="8.5" r="1" /><circle cx="4.5" cy="8.5" r="1" />
+                                        <circle cx="1.5" cy="12" r="1" /><circle cx="4.5" cy="12" r="1" />
+                                      </svg>
+                                    </div>
+                                    <div className="min-w-0 flex-1">
                                     <h4 className="font-semibold truncate text-xs leading-tight group-hover/card:text-primary transition-colors" title={project.title}>{project.title}</h4>
                                     <p className="text-xs text-muted-foreground truncate mt-0.5" title={project.property_address}>{project.property_address}</p>
+                                    </div>
                                   </div>
 
                                   {/* Card Content */}

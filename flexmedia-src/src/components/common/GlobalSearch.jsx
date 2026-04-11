@@ -248,6 +248,11 @@ export default function GlobalSearch({ open, onClose }) {
               aria-label="Search projects, contacts, and emails"
             />
             <div className="flex items-center gap-1.5 shrink-0">
+              {q.length >= 2 && totalResults > 0 && (
+                <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full font-medium tabular-nums">
+                  {totalResults}
+                </span>
+              )}
               {query && (
                 <button
                   onClick={() => setQuery("")}
@@ -315,6 +320,20 @@ export default function GlobalSearch({ open, onClose }) {
                 <p className="text-xs mt-1 text-muted-foreground/60">
                   Type at least 2 characters to search
                 </p>
+                <div className="flex items-center justify-center gap-4 mt-4 text-[10px] text-muted-foreground/40">
+                  <span className="flex items-center gap-1">
+                    <kbd className="bg-muted/60 px-1.5 py-0.5 rounded border border-border/30">&uarr;&darr;</kbd>
+                    navigate
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <kbd className="bg-muted/60 px-1.5 py-0.5 rounded border border-border/30">&crarr;</kbd>
+                    open
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <kbd className="bg-muted/60 px-1.5 py-0.5 rounded border border-border/30">esc</kbd>
+                    close
+                  </span>
+                </div>
               </div>
             )}
 

@@ -822,6 +822,9 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
             )}
           </div>
 
+          {/* --- Section: Agent & Project Type --- */}
+          <div className="border-t pt-4 mt-2" />
+
           {/* Agent */}
           <div data-field="agent_id">
             <Label htmlFor="agent" className="flex items-center gap-1.5">
@@ -905,6 +908,9 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               {errors.project_type_id && <p className="text-xs text-destructive mt-2">{errors.project_type_id}</p>}
             </div>
           )}
+
+          {/* --- Section: Schedule & Pricing --- */}
+          <div className="border-t pt-4 mt-2" />
 
           {/* Status & Date/Time */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1220,6 +1226,9 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
             </>
           )}
 
+          {/* --- Section: Staff & Notes --- */}
+          <div className="border-t pt-4 mt-2" />
+
           {/* Staff Assignments — dynamic roles based on products/packages */}
           <div>
             <Label className="text-sm font-medium mb-1 block">
@@ -1332,6 +1341,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
               rows={3}
               className="resize-none text-sm transition-all focus-visible:ring-primary/50 focus:ring-2"
             />
+            <p className="text-[11px] text-muted-foreground mt-1">Access codes, gate combos, contact info, or special instructions for staff.</p>
             <CharacterLimitWarning current={(formData.notes || "").length} max={LIMITS.notes} />
           </div>
 
