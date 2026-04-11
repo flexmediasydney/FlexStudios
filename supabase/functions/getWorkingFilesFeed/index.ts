@@ -166,10 +166,17 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
         res = await doRequest(newToken);
         if (!res.ok) {
           const txt2 = await res.text().catch(() => '');
+          // Don't mask 429 as auth error
+          if (res.status === 429) {
+            const retryAfter = res.headers?.get('Retry-After') || '60';
+            throw new Error(`Dropbox rate limited on ${endpoint} — retry after ${retryAfter}s`);
+          }
           throw new Error(`Dropbox ${endpoint} ${res.status}: ${txt2.slice(0, 300)}`);
         }
         return res.json();
       } catch (refreshErr: any) {
+        // Pass through rate limit errors without wrapping
+        if (refreshErr.message?.includes('rate limited')) throw refreshErr;
         throw new Error(`expired_access_token: ${refreshErr.message}`);
       }
     }
@@ -182,20 +189,39 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
   return res.json();
 }
 
-// ─── Folder listing with pagination (no recursive — Dropbox disallows it on shared links) ──
+// ─── Listing strategy: resolve shared link → recursive list via actual path ──
+// This uses ONE paginated API call instead of dozens of folder-by-folder calls,
+// avoiding rate limits and discovering all files at any depth.
 
-const SUBFOLDER_CONCURRENCY = 5;
+/**
+ * Resolve a shared link to its actual folder path (team namespace).
+ * Once we have the real path, we can use recursive=true which is
+ * forbidden on shared_link but allowed on actual paths.
+ */
+async function resolveSharedLinkPath(token: string, sharedLink: string): Promise<string> {
+  const meta = await dbxPost(token, '/sharing/get_shared_link_metadata', { url: sharedLink });
+  // path_lower is the canonical team-namespace path
+  const path = meta.path_lower || meta.path_display || '';
+  if (!path) {
+    throw new Error(`Could not resolve path from shared link — got: ${JSON.stringify({ tag: meta['.tag'], name: meta.name, id: meta.id }).slice(0, 200)}`);
+  }
+  console.log(`Resolved shared link → ${path} (${meta.name})`);
+  return path;
+}
 
-async function listFolder(
+/**
+ * List ALL files recursively under a folder path using Dropbox recursive=true.
+ * Single paginated API call — no folder-by-folder walking needed.
+ */
+async function listRecursive(
   token: string,
-  path: string,
-  sharedLink: string,
+  folderPath: string,
 ): Promise<{ entries: Record<string, unknown>[]; truncated: boolean }> {
   const body: Record<string, unknown> = {
-    path,
+    path: folderPath,
+    recursive: true,
     include_deleted: false,
     limit: 2000,
-    shared_link: { url: sharedLink },
   };
 
   const data = await dbxPost(token, '/files/list_folder', body);
@@ -214,27 +240,57 @@ async function listFolder(
       break;
     }
   }
+
+  console.log(`Recursive list of ${folderPath}: ${entries.length} entries (has_more=${hasMore})`);
   return { entries, truncated };
 }
 
 /**
- * List all files under a shared link by recursively walking subfolders.
- * Dropbox doesn't allow recursive=true on shared links, so we walk manually
- * with bounded concurrency and depth limit (6 levels deep).
+ * Fallback: list via shared link (walks subfolders recursively with concurrency).
+ * Used when direct path access fails (e.g. app doesn't have team scope).
+ * Dropbox blocks recursive=true on shared links, so we walk manually.
  */
-async function listAllUnderSharedLink(
+const SUBFOLDER_CONCURRENCY = 5;
+
+async function listViaSharedLink(
   token: string,
   sharedLink: string,
   maxDepth = 6,
 ): Promise<{ entries: Record<string, unknown>[]; truncated: boolean }> {
-  const allEntries: Record<string, unknown>[] = [];
+  const allFiles: Record<string, unknown>[] = [];
   let anyTruncated = false;
 
-  async function walk(path: string, depth: number) {
-    if (allEntries.length >= MAX_LIST_ENTRIES) return;
+  async function listPage(path: string) {
+    const body: Record<string, unknown> = {
+      path,
+      include_deleted: false,
+      limit: 2000,
+      shared_link: { url: sharedLink },
+    };
+    const data = await dbxPost(token, '/files/list_folder', body);
+    let entries: Record<string, unknown>[] = data.entries || [];
+    let hasMore = !!data.has_more;
+    let cursor: string | undefined = data.cursor;
+    while (hasMore && cursor) {
+      const more = await dbxPost(token, '/files/list_folder/continue', { cursor });
+      entries = entries.concat(more.entries || []);
+      hasMore = !!more.has_more;
+      cursor = more.cursor;
+      if (entries.length >= 5000) break;
+    }
+    return entries;
+  }
 
-    const { entries, truncated } = await listFolder(token, path, sharedLink);
-    if (truncated) anyTruncated = true;
+  async function walk(path: string, depth: number) {
+    if (allFiles.length >= MAX_LIST_ENTRIES) return;
+
+    let entries: Record<string, unknown>[];
+    try {
+      entries = await listPage(path);
+    } catch (err: any) {
+      console.warn(`Shared-link walk failed at ${path || '/'}: ${err?.message}`);
+      return;
+    }
 
     const subfolders: { path: string; name: string }[] = [];
     for (const e of entries) {
@@ -242,7 +298,7 @@ async function listAllUnderSharedLink(
         if (!e.path_display) {
           e.path_display = path ? `${path}/${e.name}` : `/${e.name}`;
         }
-        allEntries.push(e);
+        allFiles.push(e);
       } else if (e['.tag'] === 'folder' && depth < maxDepth) {
         const name = e.name as string;
         if (name.includes('SHELL')) continue;
@@ -256,13 +312,9 @@ async function listAllUnderSharedLink(
       let next = 0;
       async function worker() {
         while (next < subfolders.length) {
-          if (allEntries.length >= MAX_LIST_ENTRIES) break;
+          if (allFiles.length >= MAX_LIST_ENTRIES) break;
           const idx = next++;
-          try {
-            await walk(subfolders[idx].path, depth + 1);
-          } catch (err: any) {
-            console.warn(`Failed listing ${subfolders[idx].path}: ${err?.message}`);
-          }
+          await walk(subfolders[idx].path, depth + 1);
         }
       }
       const workers = Array.from(
@@ -274,7 +326,43 @@ async function listAllUnderSharedLink(
   }
 
   await walk('', 0);
-  return { entries: allEntries, truncated: anyTruncated || allEntries.length >= MAX_LIST_ENTRIES };
+  return { entries: allFiles, truncated: anyTruncated || allFiles.length >= MAX_LIST_ENTRIES };
+}
+
+/**
+ * List all files under a shared link — tries recursive direct-path first,
+ * falls back to shared-link walk if direct access fails.
+ */
+async function listAllUnderSharedLink(
+  token: string,
+  sharedLink: string,
+): Promise<{ entries: Record<string, unknown>[]; truncated: boolean }> {
+  // Strategy 1: Resolve shared link → recursive listing (1 API call, all depths)
+  try {
+    const folderPath = await resolveSharedLinkPath(token, sharedLink);
+    const result = await listRecursive(token, folderPath);
+    const fileEntries = result.entries.filter(e => e['.tag'] === 'file');
+
+    if (fileEntries.length > 0) {
+      // Strip the resolved folder prefix from path_display so paths are relative
+      const prefix = folderPath.toLowerCase();
+      for (const e of result.entries) {
+        const pd = (e.path_display as string) || '';
+        const pl = (e.path_lower as string) || '';
+        if (pl.toLowerCase().startsWith(prefix)) {
+          e.path_display = pd.slice(folderPath.length) || `/${e.name}`;
+        }
+      }
+      // Return only files (recursive includes folders too)
+      return { entries: fileEntries, truncated: result.truncated };
+    }
+    console.warn(`Recursive listing found 0 files at ${folderPath} — falling back to shared-link walk`);
+  } catch (err: any) {
+    console.warn(`Recursive listing failed, falling back to shared-link walk: ${err?.message}`);
+  }
+
+  // Strategy 2: Shared-link walk (folder by folder, works with team namespaces)
+  return listViaSharedLink(token, sharedLink);
 }
 
 // ─── Cache helpers ──────────────────────────────────────────────────────────
