@@ -27,6 +27,14 @@ const getFileIcon = (mimeType) => {
   return FileText;
 };
 
+const formatFileSize = (bytes) => {
+  if (!bytes || bytes <= 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return (bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 1) + " " + sizes[i];
+};
+
 export default function FileAttachmentManager({
   attachments = [],
   onChange,
@@ -241,7 +249,7 @@ export default function FileAttachmentManager({
                       </a>
                       {att.file_size && (
                         <p className="text-xs text-muted-foreground">
-                          {(att.file_size / 1024).toFixed(0)}KB
+                          {formatFileSize(att.file_size)}
                         </p>
                       )}
                     </div>

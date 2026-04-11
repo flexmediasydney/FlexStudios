@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
 import { useEntityList } from "@/components/hooks/useEntityData";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -92,6 +92,7 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Assign Users</DialogTitle>
+          <DialogDescription>Select team members and teams to assign to this project.</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 max-h-96 overflow-y-auto">
@@ -111,6 +112,9 @@ export default function AssignUsersDialog({ project, open, onClose, onSave }) {
                          checked={selectedUsers.includes(user.id)}
                          onCheckedChange={() => handleToggleUser(user.id)}
                        />
+                       <div className="w-7 h-7 rounded-full bg-primary/15 flex items-center justify-center text-[10px] font-bold text-primary shrink-0">
+                         {(user.full_name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                       </div>
                        <div>
                          <p className="font-medium text-sm">{user.full_name}</p>
                          <p className="text-xs text-muted-foreground">{user.email}</p>

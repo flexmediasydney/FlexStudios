@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Building, Users, User, Plus, Edit, Trash2, Search, History, AlertCircle, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
-import { format, isAfter, subDays } from "date-fns";
+import { format, formatDistanceToNow, isAfter, subDays } from "date-fns";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 const actionIcons = {
@@ -168,7 +168,9 @@ export default function ActivityFeed() {
               <span>•</span>
               <span>{log.user_email}</span>
               <span>•</span>
-              <span>{format(new Date(log.created_date), "PPp")}</span>
+              <span title={format(new Date(log.created_date), "PPp")}>
+                {formatDistanceToNow(new Date(log.created_date), { addSuffix: true })}
+              </span>
             </div>
           </div>
         </div>

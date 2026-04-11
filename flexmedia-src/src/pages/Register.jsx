@@ -257,7 +257,13 @@ export default function Register() {
                   minLength={8}
                   maxLength={128}
                   className="h-11"
+                  aria-describedby="password-requirements"
                 />
+                <ul id="password-requirements" className="text-[10px] text-muted-foreground space-y-0.5 pl-3.5 list-disc">
+                  <li className={password.length >= 8 ? "text-green-600" : ""}>At least 8 characters</li>
+                  <li className={/[A-Z]/.test(password) ? "text-green-600" : ""}>One uppercase letter</li>
+                  <li className={/[0-9]/.test(password) ? "text-green-600" : ""}>One number</li>
+                </ul>
               </div>
 
               <div className="space-y-2">

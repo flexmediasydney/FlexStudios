@@ -34,7 +34,7 @@ export default function Breadcrumb({ items = [], className }) {
               {item.label}
             </Link>
           ) : (
-            <span className="text-foreground/70 p-1 max-w-xs truncate" aria-current="page">
+            <span className="font-medium text-foreground p-1 max-w-xs truncate" aria-current="page" title={item.label}>
               {item.label}
             </span>
           )}

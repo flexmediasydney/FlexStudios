@@ -210,7 +210,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
           <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
             <div className="flex items-center gap-1">
               <Thermometer className="h-3.5 w-3.5 text-red-400" />
-              <span className="font-medium">{weather.tempMax}°</span>
+              <span className="font-medium">{weather.tempMax}°C</span>
               <span className="text-muted-foreground/70">/ {weather.tempMin}°C</span>
             </div>
 

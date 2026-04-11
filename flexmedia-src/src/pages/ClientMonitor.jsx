@@ -119,19 +119,37 @@ export default function ClientMonitor() {
         </div>
 
         {/* Stats Bar */}
-        <div className="grid grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-4 gap-4 mb-8">
           <Card className="p-4">
-            <div className="text-sm text-muted-foreground mb-1">Internal Projects</div>
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-1">
+              <span className="inline-flex h-2 w-2 rounded-full bg-blue-500" />
+              Internal Projects
+            </div>
             <div className="text-3xl font-bold text-foreground">{agentProjects.length}</div>
           </Card>
           <Card className="p-4">
-            <div className="text-sm text-muted-foreground mb-1">External Listings</div>
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-1">
+              <ExternalLink className="h-3.5 w-3.5" />
+              External Listings
+            </div>
             <div className="text-3xl font-bold text-foreground">{externalListings.length}</div>
           </Card>
           <Card className="p-4">
-            <div className="text-sm text-muted-foreground mb-1">Matched</div>
-            <div className="text-3xl font-bold text-foreground">
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-1">
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+              Matched
+            </div>
+            <div className="text-3xl font-bold text-green-700">
               {externalListings.filter(e => e.matched_project_id).length}
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-1">
+              <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
+              Unmatched
+            </div>
+            <div className="text-3xl font-bold text-amber-700">
+              {externalListings.filter(e => !e.matched_project_id).length}
             </div>
           </Card>
         </div>

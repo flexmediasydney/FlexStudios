@@ -7,6 +7,11 @@ import {
   File
 } from "lucide-react";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
@@ -63,7 +68,11 @@ export default function AttachmentPopover({ attachments }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button className="flex items-center gap-1 text-primary hover:opacity-75 transition-opacity cursor-pointer" aria-label={`${attachments.length} attachment${attachments.length !== 1 ? 's' : ''}`}>
+        <button
+          className="flex items-center gap-1 text-primary hover:opacity-75 transition-opacity cursor-pointer"
+          aria-label={`${attachments.length} attachment${attachments.length !== 1 ? 's' : ''}`}
+          title={`${attachments.length} attachment${attachments.length !== 1 ? 's' : ''} — click to view`}
+        >
           <FileIcon className="h-4 w-4" />
           <span className="text-xs font-medium">{attachments.length}</span>
         </button>

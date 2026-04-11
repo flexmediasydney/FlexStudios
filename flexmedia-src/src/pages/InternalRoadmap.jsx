@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Map } from "lucide-react";
 
 export default function InternalRoadmap() {
   return (
@@ -8,15 +8,15 @@ export default function InternalRoadmap() {
         <p className="text-muted-foreground mt-2">Product development roadmap and feature tracking.</p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Coming Soon</CardTitle>
-          <CardDescription>Like the Monday.com board we used to have - track features and milestones.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-muted-foreground">Placeholder content - implementation in progress.</p>
-        </CardContent>
-      </Card>
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center mb-5">
+          <Map className="h-8 w-8 text-blue-500" />
+        </div>
+        <h2 className="text-lg font-semibold mb-1">Coming Soon</h2>
+        <p className="text-sm text-muted-foreground max-w-sm">
+          Track features and milestones on an interactive roadmap board. This feature is under development.
+        </p>
+      </div>
     </div>
   );
 }

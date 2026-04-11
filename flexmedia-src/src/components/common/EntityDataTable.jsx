@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Inbox } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // Pre-computed skeleton widths — avoids calling Math.random() during render,
@@ -230,8 +230,11 @@ export default function EntityDataTable({
             <tbody>
               {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length + (selectable ? 1 : 0)} className="py-10 text-center text-sm text-muted-foreground">
-                    {emptyMessage}
+                  <td colSpan={columns.length + (selectable ? 1 : 0)} className="py-12 text-center">
+                    <div className="flex flex-col items-center gap-2">
+                      <Inbox className="h-8 w-8 text-muted-foreground/30" />
+                      <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+                    </div>
                   </td>
                 </tr>
               ) : paginated.map((row, localIdx) => (

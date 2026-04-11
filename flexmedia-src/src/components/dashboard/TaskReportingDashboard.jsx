@@ -102,8 +102,9 @@ export default function TaskReportingDashboard() {
     <div className="space-y-6">
       {/* Overview Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card 
+        <Card
           className="cursor-pointer hover:shadow-lg transition-shadow"
+          title="Click to view all tasks"
           onClick={() => setBreakdownDialog({
             open: true,
             title: `All Tasks (${totalTasks})`,
@@ -124,8 +125,9 @@ export default function TaskReportingDashboard() {
           </CardContent>
         </Card>
 
-        <Card 
+        <Card
           className="cursor-pointer hover:shadow-lg transition-shadow"
+          title="Click to view completed tasks"
           onClick={() => setBreakdownDialog({
             open: true,
             title: `Completed Tasks (${completedTasks})`,
@@ -146,8 +148,9 @@ export default function TaskReportingDashboard() {
           </CardContent>
         </Card>
 
-        <Card 
+        <Card
           className="cursor-pointer hover:shadow-lg transition-shadow"
+          title="Click to view critical and overdue tasks"
           onClick={() => setBreakdownDialog({
             open: true,
             title: `Critical Tasks (${(tasksByCriticality.red || 0) + (tasksByCriticality.late || 0)})`,
@@ -309,9 +312,12 @@ export default function TaskReportingDashboard() {
               {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
           ) : taskActivities.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">
-              No recent task activity
-            </p>
+            <div className="text-center py-8">
+              <Calendar className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">
+                No recent task activity
+              </p>
+            </div>
           ) : (
             <div className="space-y-3">
               {taskActivities.map((activity, idx) => (

@@ -617,6 +617,19 @@ export default function TeamDetails() {
 
         <h1 className="text-base font-bold truncate leading-tight">{team.name}</h1>
 
+        {members.length > 0 && (
+          <Badge variant="outline" className="text-[10px] shrink-0 font-medium px-1.5 py-0 gap-1" title={`${members.length} team member${members.length !== 1 ? 's' : ''}`}>
+            <User className="h-2.5 w-2.5" />
+            {members.length}
+          </Badge>
+        )}
+
+        {projects.length > 0 && (
+          <Badge variant="outline" className="text-[10px] shrink-0 font-medium px-1.5 py-0" title={`${projects.length} project${projects.length !== 1 ? 's' : ''} (${openProjects.length} open)`}>
+            {projects.length} project{projects.length !== 1 ? 's' : ''}
+          </Badge>
+        )}
+
         {agency && (
           <Badge className="text-[11px] shrink-0 border font-medium px-2 py-0.5 bg-blue-100 text-blue-800 border-blue-200">
             {agency.name}

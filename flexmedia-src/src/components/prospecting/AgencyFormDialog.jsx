@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { Separator } from '@/components/ui/separator';
 import { AlertCircle } from 'lucide-react';
 
 export default function AgencyFormDialog({ open, onOpenChange, agency = null, onSuccess = null }) {
@@ -211,6 +212,8 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
             </div>
           </div>
 
+          <Separator />
+
           {/* Contact People */}
           <div>
             <h3 className="font-semibold text-sm mb-4">Key Contacts</h3>
@@ -254,9 +257,13 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
                   onChange={(e) => setFormData(prev => ({ ...prev, whatsapp_group_chat: e.target.value }))}
                   placeholder="https://chat.whatsapp.com/..."
                 />
+                {errors.whatsapp_group_chat && <p className="text-xs text-red-600 mt-1">{errors.whatsapp_group_chat}</p>}
+                <p className="text-xs text-muted-foreground mt-1">Paste the invite link from WhatsApp group info</p>
               </div>
             </div>
           </div>
+
+          <Separator />
 
           {/* Branding & Templates */}
           <div>
@@ -338,6 +345,8 @@ export default function AgencyFormDialog({ open, onOpenChange, agency = null, on
               </div>
             </div>
           </div>
+
+          <Separator />
 
           {/* Pricing & Agreements */}
           <div>

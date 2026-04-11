@@ -481,6 +481,8 @@ export default function ProjectActivityHub({ projectId, project }) {
             <button
               key={chip.key}
               onClick={() => toggleFilter(chip.key)}
+              aria-pressed={isActive}
+              aria-label={`Filter by ${chip.label}${count > 0 ? ` (${count})` : ''}`}
               className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium transition-colors whitespace-nowrap ${
                 isActive
                   ? 'bg-primary text-primary-foreground'
@@ -519,6 +521,13 @@ export default function ProjectActivityHub({ projectId, project }) {
           Field changes only
         </button>
       </div>
+
+      {/* ── Showing count ── */}
+      {!isLoading && filteredItems.length > 0 && (
+        <div className="px-1 text-[11px] text-muted-foreground/70 tabular-nums">
+          Showing {visibleItems.length} of {filteredItems.length} item{filteredItems.length !== 1 ? 's' : ''}
+        </div>
+      )}
 
       {/* ── Timeline Feed ── */}
       <div className="mt-1">

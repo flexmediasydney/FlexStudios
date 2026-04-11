@@ -19,8 +19,16 @@ export default function ResetPassword() {
     e.preventDefault();
     setError(null);
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    if (!/[A-Z]/.test(password)) {
+      setError('Password must contain at least one uppercase letter');
+      return;
+    }
+    if (!/[0-9]/.test(password)) {
+      setError('Password must contain at least one number');
       return;
     }
     if (password !== confirmPassword) {
@@ -76,14 +84,20 @@ export default function ResetPassword() {
                 <Input
                   id="new-password"
                   type="password"
-                  placeholder="Minimum 6 characters"
+                  placeholder="Minimum 8 characters"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  minLength={6}
+                  minLength={8}
                   autoFocus
                   className="h-11"
+                  aria-describedby="reset-password-requirements"
                 />
+                <ul id="reset-password-requirements" className="text-[10px] text-muted-foreground space-y-0.5 pl-3.5 list-disc">
+                  <li className={password.length >= 8 ? "text-green-600" : ""}>At least 8 characters</li>
+                  <li className={/[A-Z]/.test(password) ? "text-green-600" : ""}>One uppercase letter</li>
+                  <li className={/[0-9]/.test(password) ? "text-green-600" : ""}>One number</li>
+                </ul>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="confirm-password">Confirm password</Label>
@@ -94,7 +108,7 @@ export default function ResetPassword() {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
-                  minLength={6}
+                  minLength={8}
                   className="h-11"
                 />
               </div>

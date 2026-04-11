@@ -170,7 +170,10 @@ export default function IntegrationsManagement() {
           </div>
 
           <div className="bg-muted/50 rounded-lg p-4 space-y-2">
-            <p className="text-sm font-medium">About Tonomo Integration</p>
+            <p className="text-sm font-medium flex items-center gap-1.5">
+              <Plug className="h-3.5 w-3.5 text-muted-foreground" />
+              About Tonomo Integration
+            </p>
             <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
               <li>Sync property listings from Tonomo automatically</li>
               <li>Keep client information up to date</li>

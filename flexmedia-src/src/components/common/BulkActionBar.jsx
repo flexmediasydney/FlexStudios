@@ -17,7 +17,7 @@ export default function BulkActionBar({ selectedCount = 0, actions = [], onClear
   return (
     <div className="sticky top-0 z-30 flex items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/20 rounded-lg mb-3 animate-in fade-in slide-in-from-top-2">
       <span className="text-sm font-medium text-primary tabular-nums">
-        {selectedCount} selected
+        {selectedCount} {selectedCount === 1 ? 'item' : 'items'} selected
       </span>
 
       <div className="h-4 w-px bg-border" />
@@ -65,6 +65,7 @@ export default function BulkActionBar({ selectedCount = 0, actions = [], onClear
         size="sm"
         className="h-7 text-xs text-muted-foreground"
         onClick={onClear}
+        title="Clear selection"
       >
         <X className="h-3 w-3 mr-1" /> Clear
       </Button>

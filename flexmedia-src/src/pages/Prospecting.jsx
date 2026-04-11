@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useEntitiesData } from '@/components/hooks/useEntityData';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Plus, Search, Grid, List, ChevronLeft, BarChart2, Users } from 'lucide-react';
 import RelationshipStateKanban from '@/components/prospecting/RelationshipStateKanban';
@@ -176,7 +177,9 @@ export default function Prospecting() {
                   {drillDownState ? `${drillDownState} Pipeline` : 'Prospecting'}
                 </h1>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {drillDownState ? 'Manage prospecting flow' : 'People and organisations by relationship state'}
+                  {drillDownState
+                    ? 'Manage prospecting flow'
+                    : `${enrichedAgents.length} people, ${enrichedAgencies.length} organisations`}
                 </p>
               </div>
             </div>
@@ -243,22 +246,28 @@ export default function Prospecting() {
               variant={entityFilter === 'agent' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setEntityFilter('agent')}
+              className="gap-1.5"
             >
               People Only
+              <Badge variant="secondary" className="h-4 min-w-4 px-1 text-[9px] font-bold">{enrichedAgents.length}</Badge>
             </Button>
             <Button
               variant={entityFilter === 'agency' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setEntityFilter('agency')}
+              className="gap-1.5"
             >
               Orgs Only
+              <Badge variant="secondary" className="h-4 min-w-4 px-1 text-[9px] font-bold">{enrichedAgencies.length}</Badge>
             </Button>
             <Button
               variant={entityFilter === 'both' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setEntityFilter('both')}
+              className="gap-1.5"
             >
               Both
+              <Badge variant="secondary" className="h-4 min-w-4 px-1 text-[9px] font-bold">{enrichedAgents.length + enrichedAgencies.length}</Badge>
             </Button>
           </div>
         </div>

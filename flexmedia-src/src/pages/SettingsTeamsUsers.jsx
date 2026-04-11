@@ -26,8 +26,14 @@ export default function SettingsTeamsUsers() {
         
         <Tabs defaultValue="teams" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="teams">Teams</TabsTrigger>
-            <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="teams">
+              <Users className="h-4 w-4 mr-1.5" />
+              Teams
+            </TabsTrigger>
+            <TabsTrigger value="users">
+              <Users className="h-4 w-4 mr-1.5" />
+              Users
+            </TabsTrigger>
             <TabsTrigger value="calendars">
               <Calendar className="h-4 w-4 mr-1.5" />
               Calendars

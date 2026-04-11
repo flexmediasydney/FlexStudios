@@ -415,9 +415,10 @@ export default function ProjectStaffBar({ project, canEdit, onProjectUpdate }) {
              <button
                onClick={() => setShowAllRoles(prev => !prev)}
                className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-muted-foreground font-medium transition-colors"
+               title={showAllRoles ? 'Hide roles not required for this project' : `Show ${hiddenCount} role${hiddenCount > 1 ? 's' : ''} not required for this project`}
              >
                {showAllRoles ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
-               {hiddenCount} more
+               {hiddenCount} more role{hiddenCount > 1 ? 's' : ''}
              </button>
              {showAllRoles && (
                <div className="space-y-1 mt-1">

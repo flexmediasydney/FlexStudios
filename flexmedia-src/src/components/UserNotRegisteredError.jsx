@@ -22,9 +22,13 @@ const UserNotRegisteredError = ({ message }) => {
           </p>
           <div className="p-4 bg-muted/50 rounded-md text-sm text-muted-foreground">
             <p>If you believe this is an error, you can:</p>
-            <ul className="list-disc list-inside mt-2 space-y-1">
+            <ul className="list-disc list-inside mt-2 space-y-1.5">
               <li>Verify you are logged in with the correct account</li>
-              <li>Contact the app administrator for access</li>
+              <li>
+                <a href="mailto:admin@flexstudios.com.au" className="underline underline-offset-2 hover:text-foreground transition-colors">
+                  Contact the administrator
+                </a> to request access
+              </li>
               <li>Try logging out and back in again</li>
             </ul>
           </div>

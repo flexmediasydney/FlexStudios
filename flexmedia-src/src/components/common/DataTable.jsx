@@ -51,7 +51,7 @@ export default function DataTable({ columns, data, loading, empty, isLoading: is
         </TableHeader>
         <TableBody>
           {data.map((row, idx) => (
-            <TableRow key={row.id || idx} className={isLoadingRow(row) ? "opacity-50" : ""}>
+            <TableRow key={row.id || idx} className={`hover:bg-muted/50 transition-colors ${isLoadingRow(row) ? "opacity-50" : ""}`}>
               {columns.map((col) => (
                 <TableCell key={col.key} className={col.className}>
                   {col.render ? col.render(row) : row[col.key]}

@@ -425,6 +425,7 @@ export default function PriceMatrixSnapshots() {
                       e.stopPropagation();
                       setDeletingId(snapshot.id);
                     }}
+                    title="Delete this snapshot"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -671,7 +672,7 @@ function HeaderBar({
           </Button>
         )}
         {expandedData && (
-          <Button size="sm" variant="outline" onClick={onExport}>
+          <Button size="sm" variant="outline" onClick={onExport} title="Download snapshot data as JSON file">
             <Download className="h-4 w-4 mr-1.5" />
             Export JSON
           </Button>

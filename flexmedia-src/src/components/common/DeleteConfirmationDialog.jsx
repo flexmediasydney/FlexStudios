@@ -81,9 +81,15 @@ export default function DeleteConfirmationDialog({
                   riskLevel === 'high' ? 'bg-red-50 border-red-200' : 
                   riskLevel === 'medium' ? 'bg-amber-50 border-amber-200' : 'bg-blue-50 border-blue-200'
                 }`}>
-                  <p className="text-sm font-semibold">
-                    {riskLevel === 'high' ? '⚠️ High Impact - ' : riskLevel === 'medium' ? '⚠️ Medium Impact - ' : 'ℹ️ Low Impact - '}
-                    {impact.totalAffected} item{impact.totalAffected !== 1 ? 's' : ''} affected
+                  <p className="text-sm font-semibold flex items-center gap-1.5">
+                    {riskLevel === 'high' ? '⚠️ High Impact' : riskLevel === 'medium' ? '⚠️ Medium Impact' : 'ℹ️ Low Impact'}
+                    <span className="text-xs font-normal">—</span>
+                    <span className={`tabular-nums font-bold ${
+                      riskLevel === 'high' ? 'text-red-700' : riskLevel === 'medium' ? 'text-amber-700' : 'text-blue-700'
+                    }`}>
+                      {impact.totalAffected}
+                    </span>
+                    {' '}item{impact.totalAffected !== 1 ? 's' : ''} affected
                   </p>
 
                   {impact.affectedEntities && Object.entries(impact.affectedEntities).map(([key, entity]) => (
@@ -136,7 +142,7 @@ export default function DeleteConfirmationDialog({
                   <p className="text-xs text-red-600">❌ Text does not match</p>
                 )}
                 {isMatched && (
-                  <p className="text-xs text-red-600">✓ Ready to delete</p>
+                  <p className="text-xs text-green-600 font-medium">✓ Name matches — ready to delete</p>
                 )}
               </div>
               <div className="flex justify-end gap-2">

@@ -113,8 +113,9 @@ export function PermissionGuard({
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center p-8">
+      <div className="flex flex-col items-center justify-center p-8 gap-3">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Checking permissions...</p>
       </div>
     );
   }
@@ -186,8 +187,9 @@ export function PermissionGuard({
       <div className="flex items-center justify-center min-h-screen p-8">
         <Alert className="max-w-md" variant="destructive">
           <AlertCircle className="h-4 w-4" />
+          <AlertTitle>No Role Assigned</AlertTitle>
           <AlertDescription>
-            <p>Your account does not have a role assigned. Contact your admin.</p>
+            <p>Your account does not have a role assigned. Please contact your administrator to be granted access.</p>
           </AlertDescription>
         </Alert>
       </div>
@@ -203,6 +205,7 @@ export function PermissionGuard({
         <div className="flex items-center justify-center min-h-screen p-8">
           <Alert className="max-w-md" variant="destructive">
             <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Access Denied</AlertTitle>
             <AlertDescription>
               <p>You don't have permission to access this page.</p>
               <p className="text-xs mt-1 opacity-70">

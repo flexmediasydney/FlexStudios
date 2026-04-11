@@ -43,9 +43,10 @@ export default function HierarchyHealthCheck({ checks, agents, teams, agencies }
             <p className="text-sm opacity-90">Overall system integrity and data consistency</p>
           </div>
           <div className="flex flex-col items-center">
-            <div className="text-4xl font-bold">{healthScore}%</div>
+            <div className="text-xs uppercase tracking-wider opacity-75 mb-0.5">Score</div>
+            <div className="text-4xl font-bold">{healthScore}<span className="text-lg">%</span></div>
             <div className="text-xs opacity-75 mt-1">
-              {checks.filter((c) => c.type === "warning").length} warnings • {checks.filter((c) => c.type === "info").length} notices
+              {checks.filter((c) => c.type === "warning").length} warnings &middot; {checks.filter((c) => c.type === "info").length} notices
             </div>
           </div>
         </div>
@@ -153,22 +154,19 @@ export default function HierarchyHealthCheck({ checks, agents, teams, agencies }
           <div className="border-t pt-4">
             <h4 className="font-semibold text-sm mb-3">Validation Checks</h4>
             <div className="space-y-2">
-              <div className="flex items-center gap-2 text-sm">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>All agency references are valid</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>All team references are valid</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>No circular relationships detected</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                <span>Data consistency verified</span>
-              </div>
+              {[
+                { pass: !checks.some(c => c.title?.includes("Orphaned Agents")), label: "All agent references are valid" },
+                { pass: !checks.some(c => c.title?.includes("Orphaned Teams")), label: "All team references are valid" },
+                { pass: true, label: "No circular relationships detected" },
+                { pass: checks.length === 0, label: "Data consistency verified" },
+              ].map((v, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm">
+                  {v.pass
+                    ? <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    : <AlertTriangle className="h-4 w-4 text-orange-500" />}
+                  <span className={v.pass ? "" : "text-orange-700"}>{v.label}</span>
+                </div>
+              ))}
             </div>
           </div>
         </CardContent>

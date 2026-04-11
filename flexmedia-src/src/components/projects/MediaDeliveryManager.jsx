@@ -157,10 +157,15 @@ export default function MediaDeliveryManager({ projectId, project }) {
             <CardTitle>Media Delivery</CardTitle>
             <CardDescription>Configure Dropbox link and client access</CardDescription>
           </div>
-          {isConfigured && (
+          {isConfigured ? (
             <Badge className="gap-1 bg-green-100 text-green-700">
               <CheckCircle className="h-3 w-3" />
               Published
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="gap-1 text-muted-foreground">
+              <Shield className="h-3 w-3" />
+              Unpublished
             </Badge>
           )}
         </div>

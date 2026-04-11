@@ -14,7 +14,7 @@ export default function Chip({ label, onRemove, icon: Icon, variant = "default",
       {Icon && <Icon className="h-3.5 w-3.5" />}
       <span>{label}</span>
       {onRemove && (
-        <Button variant="ghost" size="sm" onClick={onRemove} className="h-5 w-5 p-0 ml-1">
+        <Button variant="ghost" size="sm" onClick={onRemove} className="h-5 w-5 p-0 ml-1 rounded-full hover:bg-black/10" title="Remove">
           <X className="h-3 w-3" />
         </Button>
       )}

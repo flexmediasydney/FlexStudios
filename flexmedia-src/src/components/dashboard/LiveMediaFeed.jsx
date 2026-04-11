@@ -283,11 +283,11 @@ function FeedSkeleton({ count = 12, gridSize = 'md', scanProgress = null }) {
   return (
     <div className="space-y-4">
       {scanProgress !== null && (
-        <div className="flex items-center gap-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <Loader2 className="h-4 w-4 text-blue-600 animate-spin shrink-0" />
+        <div className="flex items-center gap-3 px-4 py-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg">
+          <Loader2 className="h-4 w-4 text-blue-600 dark:text-blue-400 animate-spin shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-blue-900">
-              Scanning {scanProgress.current} of {scanProgress.total} projects...
+            <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
+              Scanning project {scanProgress.current} of {scanProgress.total}...
             </p>
             <div className="mt-1.5 h-1.5 bg-blue-200 rounded-full overflow-hidden">
               <div
@@ -296,7 +296,7 @@ function FeedSkeleton({ count = 12, gridSize = 'md', scanProgress = null }) {
               />
             </div>
           </div>
-          <span className="text-xs text-blue-600 font-medium shrink-0">
+          <span className="text-xs text-blue-600 dark:text-blue-400 font-mono font-medium shrink-0 tabular-nums">
             {Math.round((scanProgress.current / Math.max(1, scanProgress.total)) * 100)}%
           </span>
         </div>

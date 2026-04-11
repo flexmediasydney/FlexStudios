@@ -56,14 +56,14 @@ class ErrorBoundary extends Component {
       /* ── Compact variant for widgets / cards ────────────────────────────── */
       if (this.props.compact) {
         return (
-          <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
+          <div className="flex flex-col items-center justify-center py-8 px-4 text-center rounded-lg bg-red-50/30 dark:bg-red-950/10">
             <div className="w-10 h-10 rounded-full bg-red-50 dark:bg-red-950/40 flex items-center justify-center mb-3">
               <AlertTriangle className="h-5 w-5 text-red-500" />
             </div>
             <p className="text-sm font-medium text-foreground mb-1">
               {label ? `${label} failed to load` : "Failed to load"}
             </p>
-            <p className="text-xs text-muted-foreground mb-4 max-w-xs">{errorMessage}</p>
+            <p className="text-xs text-muted-foreground mb-4 max-w-xs line-clamp-2">{errorMessage}</p>
             <button
               onClick={this.handleReset}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"

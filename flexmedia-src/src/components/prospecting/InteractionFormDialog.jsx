@@ -138,6 +138,9 @@ export default function InteractionFormDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Log Interaction</DialogTitle>
+          {prospect?.name && (
+            <p className="text-sm text-muted-foreground">Recording interaction with {prospect.name}</p>
+          )}
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -187,6 +190,7 @@ export default function InteractionFormDialog({
                   }
                 }}
               />
+              <p className="text-xs text-muted-foreground mt-1">Defaults to now. Change if logging a past interaction.</p>
             </div>
           </div>
 

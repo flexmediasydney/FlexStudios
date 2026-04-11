@@ -312,10 +312,24 @@ export default function NotificationsPage() {
                 <CardContent className="py-16 text-center text-muted-foreground">
                   <CheckCheck className="h-10 w-10 mx-auto mb-3 text-green-500 opacity-60" />
                     <p className="text-sm font-medium text-foreground">
-                      {search ? `No results for "${search}"` : 'No notifications here'}
+                      {search
+                        ? `No results for "${search}"`
+                        : readFilter === 'unread'
+                        ? 'No unread notifications'
+                        : readFilter === 'read'
+                        ? 'No read notifications'
+                        : t.value !== 'all'
+                        ? `No ${t.label.toLowerCase()} notifications`
+                        : 'No notifications here'}
                     </p>
                     <p className="text-xs mt-1 text-muted-foreground">
-                      {search ? 'Try a different search term' : "You're all caught up"}
+                      {search
+                        ? 'Try a different search term or check another category'
+                        : readFilter !== 'all'
+                        ? `Switch to "All" to see ${readFilter === 'unread' ? 'read' : 'all'} notifications`
+                        : t.value !== 'all'
+                        ? 'Try the "All" tab to see everything'
+                        : "You're all caught up"}
                     </p>
                 </CardContent>
               </Card>

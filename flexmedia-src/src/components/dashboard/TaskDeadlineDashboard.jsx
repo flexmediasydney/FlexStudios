@@ -100,7 +100,8 @@ export default function TaskDeadlineDashboard() {
       <div>
         <h2 className="text-2xl font-bold tracking-tight mb-4">Task Deadlines</h2>
         <p className="text-sm text-muted-foreground">
-          All upcoming task due dates sorted by urgency
+          All upcoming task due dates sorted by urgency.
+          Countdown format: <span className="font-mono text-xs">DD HH:MM:SS</span>
         </p>
       </div>
 
@@ -109,7 +110,7 @@ export default function TaskDeadlineDashboard() {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <AlertCircle className="h-4 w-4 text-red-500" />
-            <h3 className="font-semibold text-red-600">Critical — Due Soon</h3>
+            <h3 className="font-semibold text-red-600" title="Tasks overdue or due within the red threshold">Critical — Due Soon</h3>
             <Badge variant="destructive" className="ml-auto">{urgentTasks.length}</Badge>
           </div>
           <div className="space-y-2">
@@ -128,7 +129,7 @@ export default function TaskDeadlineDashboard() {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-amber-500" />
-            <h3 className="font-semibold text-amber-600">Upcoming — Next 12 Hours</h3>
+            <h3 className="font-semibold text-amber-600" title="Tasks due within the next 12 hours">Upcoming — Next 12 Hours</h3>
             <Badge variant="outline" className="bg-amber-50 border-amber-200 text-amber-700 ml-auto">{warningTasks.length}</Badge>
           </div>
           <div className="space-y-2">
@@ -147,7 +148,7 @@ export default function TaskDeadlineDashboard() {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 text-green-500" />
-            <h3 className="font-semibold text-green-600">On Track</h3>
+            <h3 className="font-semibold text-green-600" title="Tasks with more than 12 hours remaining">On Track</h3>
             <Badge variant="outline" className="bg-green-50 border-green-200 text-green-700 ml-auto">{normalTasks.length}</Badge>
           </div>
           <div className="space-y-2">

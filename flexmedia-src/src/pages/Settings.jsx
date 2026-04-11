@@ -60,10 +60,16 @@ export default function Settings() {
           </TabsList>
 
           <TabsContent value="clients">
+            <div className="mb-4">
+              <p className="text-sm text-muted-foreground">Manage agencies, agents, and client accounts linked to your business.</p>
+            </div>
             <ClientsManagement />
           </TabsContent>
 
           <TabsContent value="products-packages">
+            <div className="mb-4">
+              <p className="text-sm text-muted-foreground">Configure the products you offer and bundle them into packages for quoting.</p>
+            </div>
             <Tabs defaultValue="products" className="space-y-4">
               <TabsList>
                 <TabsTrigger value="products">Products</TabsTrigger>

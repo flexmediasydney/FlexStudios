@@ -115,6 +115,32 @@ export default function AgencyDetailsEditor({ agency, onSave, products = [] }) {
         </div>
       )}
 
+      {/* Pricing Agreement — fields exist in state but had no UI section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Pricing Agreement</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label className="text-sm mb-2 block">Agreement Type</Label>
+            <Input
+              placeholder="e.g. Standard, Custom, Volume discount"
+              value={formData.pricing_agreement}
+              onChange={(e) => updateField('pricing_agreement', e.target.value)}
+            />
+          </div>
+          <div>
+            <Label className="text-sm mb-2 block">Pricing Notes</Label>
+            <Textarea
+              placeholder="Special pricing arrangements, discounts, or conditions..."
+              value={formData.pricing_notes}
+              onChange={(e) => updateField('pricing_notes', e.target.value)}
+              className="h-20"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
         {/* Floorplan Branding */}

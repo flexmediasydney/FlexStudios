@@ -82,6 +82,9 @@ export default function ExternalListingsForm({ agent, onSuccess, onCancel }) {
           required
           className="mt-1"
         />
+        <p className="text-[11px] text-muted-foreground mt-1">
+          Full street address as listed on the portal (e.g. 12 Smith St, Surry Hills NSW 2010)
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -97,6 +100,7 @@ export default function ExternalListingsForm({ agent, onSuccess, onCancel }) {
             onChange={(e) => setFormData({ ...formData, price: e.target.value })}
             className="mt-1"
           />
+          <p className="text-[11px] text-muted-foreground mt-1">Listed price or guide. Leave blank if not disclosed.</p>
         </div>
 
         <div>

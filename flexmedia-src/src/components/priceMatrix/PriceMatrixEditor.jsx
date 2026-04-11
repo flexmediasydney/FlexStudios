@@ -487,10 +487,10 @@ function OverridesTable({ activeProducts, activePackages, getProductPricing, get
               <tr className="border-b bg-muted/10">
                 <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium w-[200px]">Name</th>
                 <th className="text-center px-3 py-2 text-xs text-muted-foreground font-medium w-20">Override</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium">Std Base</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium">Std Unit</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium">Pre Base</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium">Pre Unit</th>
+                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Standard Tier — Base Price">Std Base</th>
+                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Standard Tier — Per-Unit Price">Std Unit</th>
+                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Premium Tier — Base Price">Pre Base</th>
+                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Premium Tier — Per-Unit Price">Pre Unit</th>
               </tr>
             </thead>
             <tbody>
@@ -565,8 +565,8 @@ function OverridesTable({ activeProducts, activePackages, getProductPricing, get
               <tr className="border-b bg-muted/10">
                 <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium">Name</th>
                 <th className="text-center px-3 py-2 text-xs text-muted-foreground font-medium w-20">Override</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium">Std Price</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium">Pre Price</th>
+                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Standard Tier — Package Price">Std Price</th>
+                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Premium Tier — Package Price">Pre Price</th>
               </tr>
             </thead>
             <tbody>

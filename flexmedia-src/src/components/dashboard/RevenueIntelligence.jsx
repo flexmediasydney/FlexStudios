@@ -112,7 +112,7 @@ export default function RevenueIntelligence() {
         {[
           { label: 'MTD Revenue', value: `$${Math.round(stats.mtdRevenue / 1000)}k`, sub: `${stats.growth > 0 ? '+' : ''}${stats.growth}% vs last month`, color: stats.growth > 0 ? 'text-green-600' : stats.growth < 0 ? 'text-red-600' : '' },
           { label: 'Total Revenue', value: `$${Math.round(stats.totalRevenue / 1000)}k`, sub: `${projects.length} projects`, color: '' },
-          { label: 'Avg Project Value', value: `$${Math.round(stats.avgValue)}`, sub: 'per project', color: '' },
+          { label: 'Avg Project Value', value: `$${Math.round(stats.avgValue).toLocaleString()}`, sub: 'per project', color: '' },
           { label: 'Revenue at Risk', value: `$${Math.round(atRisk.totalAtRisk / 1000)}k`, sub: `${atRisk.unpaid.length} unpaid + ${atRisk.stale.length} stale`, color: atRisk.totalAtRisk > 0 ? 'text-red-600' : 'text-green-600' },
         ].map((kpi, i) => (
           <Card key={i} className="p-4">
@@ -211,8 +211,9 @@ export default function RevenueIntelligence() {
           {quoteGap && (
             <Card className="p-4">
               <div className="flex items-center gap-2 mb-2">
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-bold">Quote → Invoice gap</span>
+                <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-bold">Quote → Invoice Gap</span>
+                <Badge variant="outline" className="text-[9px] ml-auto">{quoteGap.count} projects</Badge>
               </div>
               <div className={cn('text-2xl font-bold', quoteGap.gap >= 0 ? 'text-green-600' : 'text-red-600')}>
                 {quoteGap.gap >= 0 ? '+' : ''}{quoteGap.pct}%

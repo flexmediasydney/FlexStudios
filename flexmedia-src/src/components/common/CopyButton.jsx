@@ -20,10 +20,14 @@ export default function CopyButton({ text, className = "", size = "icon", varian
       variant={variant}
       size={size}
       onClick={handleCopy}
-      className={className}
-      title={`Copy ${label || 'text'}`}
+      className={`${className} transition-colors`}
+      title={copied ? 'Copied!' : `Copy ${label || 'text'}`}
+      aria-label={copied ? 'Copied to clipboard' : `Copy ${label || 'text'} to clipboard`}
     >
-      {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+      {copied
+        ? <Check className="h-3 w-3 text-green-600 animate-in zoom-in-50 duration-150" />
+        : <Copy className="h-3 w-3" />
+      }
       {label && <span className="ml-1">{copied ? 'Copied!' : label}</span>}
     </Button>
   );

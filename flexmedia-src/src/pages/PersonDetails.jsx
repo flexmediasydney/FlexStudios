@@ -38,7 +38,7 @@ const PROSPECT_STATUSES = ['New Lead', 'Researching', 'Attempted Contact', 'Disc
 const SOURCES = ['Referral', 'LinkedIn', 'Web Search', 'Event', 'Manual Import', 'Networking'];
 
 // ── Inline editable field (Pipedrive side-by-side layout) ──────────────────────
-function InlineField({ label, value, field, onSave, type = 'text', options, placeholder, icon: Icon, readOnly }) {
+function InlineField({ label, value, field, onSave, type = 'text', options, placeholder, icon: Icon, readOnly, actionHref, actionIcon: ActionIcon, actionLabel }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || '');
   const inputRef = useRef(null);
@@ -127,6 +127,16 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
             )}>
               {displayValue || '\u2014'}
             </span>
+            {actionHref && ActionIcon && displayValue && (
+              <a
+                href={actionHref}
+                className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-primary/10 shrink-0"
+                title={actionLabel || label}
+                onClick={e => e.stopPropagation()}
+              >
+                <ActionIcon className="h-3 w-3 text-primary" />
+              </a>
+            )}
             {!readOnly && (
               <button
                 onClick={() => setEditing(true)}
@@ -729,9 +739,15 @@ export default function PersonDetails() {
             <InlineField label="Title" value={agent.title} field="title" onSave={handleFieldSave}
               placeholder="Add job title..." />
             <InlineField label="Email" value={agent.email} field="email" onSave={handleFieldSave}
-              placeholder="Add email..." />
+              placeholder="Add email..."
+              actionHref={agent.email ? `mailto:${agent.email}` : null}
+              actionIcon={Mail}
+              actionLabel="Send email" />
             <InlineField label="Phone" value={agent.phone} field="phone" onSave={handleFieldSave}
-              placeholder="Add phone..." />
+              placeholder="Add phone..."
+              actionHref={agent.phone ? `tel:${agent.phone}` : null}
+              actionIcon={Phone}
+              actionLabel="Call" />
             <InlineField label="Organisation" value={agent.current_agency_id} field="current_agency_id"
               onSave={handleFieldSave} type="select"
               options={allAgencies.map(a => ({ value: a.id, label: a.name }))} />

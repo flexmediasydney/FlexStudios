@@ -236,8 +236,27 @@ export default function NeedsAttentionPanel({ projects, tasks, users }) {
       <div className="px-4 py-3 border-b bg-muted/20 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-amber-600" />
-          <span className="text-sm font-bold">Needs attention</span>
-          <Badge variant="outline" className="text-[10px] h-5">{items.length}</Badge>
+          <span className="text-sm font-bold">Needs Attention</span>
+          <Badge variant="outline" className="text-[10px] h-5">{items.length} item{items.length !== 1 ? 's' : ''}</Badge>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {items.filter(i => i.severity === 'critical').length > 0 && (
+            <Badge className="text-[10px] h-5 bg-red-100 text-red-700 border border-red-200 gap-0.5">
+              <AlertCircle className="h-2.5 w-2.5" />
+              {items.filter(i => i.severity === 'critical').length} critical
+            </Badge>
+          )}
+          {items.filter(i => i.severity === 'warning').length > 0 && (
+            <Badge className="text-[10px] h-5 bg-amber-100 text-amber-700 border border-amber-200 gap-0.5">
+              <AlertTriangle className="h-2.5 w-2.5" />
+              {items.filter(i => i.severity === 'warning').length} warning
+            </Badge>
+          )}
+          {items.filter(i => i.severity === 'info').length > 0 && (
+            <Badge className="text-[10px] h-5 bg-blue-100 text-blue-700 border border-blue-200 gap-0.5">
+              {items.filter(i => i.severity === 'info').length} info
+            </Badge>
+          )}
         </div>
       </div>
       <div className="divide-y max-h-[400px] overflow-y-auto">

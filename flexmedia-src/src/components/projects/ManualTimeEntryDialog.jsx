@@ -143,6 +143,13 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
           </DialogDescription>
         </DialogHeader>
 
+        {/* Project + task context */}
+        <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-2 border border-border/50">
+          <span className="font-medium text-foreground truncate">{project?.title || project?.property_address || "Project"}</span>
+          <span className="text-muted-foreground/50">|</span>
+          <span className="truncate">{task?.title || "Task"}</span>
+        </div>
+
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -188,8 +195,11 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
             </div>
           )}
 
-          <div className="text-xs text-muted-foreground bg-gray-50 p-2 rounded">
+          <div className="text-xs text-muted-foreground bg-gray-50 dark:bg-muted/40 p-2 rounded">
             Total: <span className="font-semibold">{hours || 0}h {minutes || 0}m</span>
+            <span className="text-muted-foreground/50 ml-2">
+              ({((parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0))} minutes)
+            </span>
           </div>
         </div>
 

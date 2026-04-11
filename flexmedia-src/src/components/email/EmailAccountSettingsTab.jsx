@@ -468,10 +468,12 @@ export default function EmailAccountSettingsTab() {
                     className="w-full gap-2"
                     onClick={() => syncMutation.mutate()}
                     disabled={syncMutation.isPending}
+                    title="Pull new emails from Gmail into the CRM inbox"
                   >
                     <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? "animate-spin" : ""}`} />
                     {syncMutation.isPending ? "Syncing..." : "Sync Now"}
                   </Button>
+                  <p className="text-[10px] text-muted-foreground mt-1.5">Fetches the latest emails from your connected Gmail account.</p>
                 </CardContent>
               </Card>
 

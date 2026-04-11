@@ -6,13 +6,17 @@ import ProjectRulebook from "@/components/projects/ProjectRulebook";
 import ProjectTypesManagement from "@/components/settings/ProjectTypesManagement";
 import ProductCategoriesManagement from "@/components/settings/ProductCategoriesManagement";
 import NoteTagsManagement from "@/components/settings/NoteTagsManagement";
+import { Building2 } from "lucide-react";
 
 export default function SettingsOrganisation() {
   return (
     <PermissionGuard require={["master_admin", "employee"]}>
       <div className="p-6 lg:p-8 space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Organisation Settings</h1>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <Building2 className="h-8 w-8" />
+            Organisation Settings
+          </h1>
           <p className="text-muted-foreground mt-1">
             Manage delivery, projects, and system rules
           </p>

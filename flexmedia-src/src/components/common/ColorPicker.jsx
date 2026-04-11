@@ -3,7 +3,7 @@ import { useState } from "react";
 
 const colors = [
   "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4",
-  "#3b82f6", "#8b5cf6", "#ec4899", "#6b7280", "#000000",
+  "#3b82f6", "#8b5cf6", "#ec4899", "#6b7280", "#000000", "#ffffff",
 ];
 
 export default function ColorPicker({ value = "#3b82f6", onChange, label, showPresets = true }) {
@@ -35,7 +35,7 @@ export default function ColorPicker({ value = "#3b82f6", onChange, label, showPr
             <button
               key={color}
               onClick={() => onChange(color)}
-              className={`h-8 w-8 rounded transition-transform hover:scale-110 ${value === color ? "ring-2 ring-offset-2 ring-primary" : ""}`}
+              className={`h-8 w-8 rounded transition-transform hover:scale-110 ${value === color ? "ring-2 ring-offset-2 ring-primary" : ""} ${color === "#ffffff" ? "border border-border" : ""}`}
               style={{ backgroundColor: color }}
               title={color}
               aria-label={`Select color ${color}${value === color ? ' (selected)' : ''}`}

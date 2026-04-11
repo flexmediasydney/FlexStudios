@@ -5,7 +5,7 @@ const iconMap = {
   error: AlertTriangle,
   warning: AlertTriangle,
   success: CheckCircle,
-  info: AlertCircle,
+  info: Info,
 };
 
 const classMap = {
@@ -19,7 +19,7 @@ export default function AlertBox({ type = "info", title, description, action }) 
   const Icon = iconMap[type];
 
   return (
-    <Alert className={classMap[type]}>
+    <Alert className={classMap[type]} role="alert">
       {Icon && <Icon className="h-4 w-4" />}
       <div>
         {title && <AlertTitle>{title}</AlertTitle>}

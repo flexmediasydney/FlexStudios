@@ -344,6 +344,8 @@ export default function CalendarIntegration({ selectedUserEmail, onConnectionsCh
                   <Switch
                     checked={connection.is_enabled}
                     onCheckedChange={(checked) => toggleMutation.mutate({ id: connection.id, enabled: checked })}
+                    title={connection.is_enabled ? "Disable sync for this calendar" : "Enable sync for this calendar"}
+                    aria-label={connection.is_enabled ? "Disable calendar sync" : "Enable calendar sync"}
                   />
                   <Button
                     variant="ghost"

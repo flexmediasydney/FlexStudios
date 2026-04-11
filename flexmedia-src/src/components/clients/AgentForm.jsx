@@ -305,6 +305,7 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
               onChange={(e) => handleChange("notes", e.target.value)}
               maxLength={LIMITS.notes}
               rows={3}
+              placeholder="e.g., Key decision-maker, prefers email contact, referred by..."
             />
             <p className="text-xs text-muted-foreground mt-1 text-right">{(formData.notes || "").length}/{LIMITS.notes}</p>
           </div>

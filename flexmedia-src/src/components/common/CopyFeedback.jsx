@@ -44,10 +44,16 @@ export default function CopyButton({
       onClick={handleCopy}
       disabled={!text}
       title={isCopied ? 'Copied!' : 'Copy to clipboard'}
+      aria-label={!label ? (isCopied ? 'Copied' : 'Copy to clipboard') : undefined}
       className={className}
     >
-      {showIcon && (isCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />)}
+      {showIcon && (
+        <span className="inline-flex transition-transform duration-200" style={{ transform: isCopied ? 'scale(1.15)' : 'scale(1)' }}>
+          {isCopied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+        </span>
+      )}
       {label && <span className="ml-1">{isCopied ? 'Copied!' : label}</span>}
+      <span className="sr-only" aria-live="polite">{isCopied ? 'Copied to clipboard' : ''}</span>
     </Button>
   );
 }

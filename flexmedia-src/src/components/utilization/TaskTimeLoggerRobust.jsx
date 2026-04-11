@@ -455,6 +455,14 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
     return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
+  const formatTimeHuman = (seconds) => {
+    if (seconds < 60) return `${seconds}s`;
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    if (hrs > 0) return `${hrs}h ${mins}m`;
+    return `${mins}m`;
+  };
+
   const handleStart = async () => {
     if (isSubmitting) return;
     try {
@@ -694,16 +702,23 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
         {!conflictLog && (
           <>
-            <Clock className="h-4 w-4 text-blue-600 flex-shrink-0" />
+            {isRunning && <span className="relative flex h-2.5 w-2.5 shrink-0"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" /><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" /></span>}
+            {isPaused && <span className="relative flex h-2.5 w-2.5 shrink-0"><span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" /><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" /></span>}
+            {!isRunning && !isPaused && <Clock className="h-4 w-4 text-blue-600 flex-shrink-0" />}
             <span className={`text-sm font-mono font-semibold ${
-              isFinished ? 'text-green-700' : 'text-blue-900'
-            }`}>
+              isFinished ? 'text-green-700' : isRunning ? 'text-green-900' : isPaused ? 'text-amber-800' : 'text-blue-900'
+            }`} title={formatTimeHuman(totalDisplaySeconds)}>
               {formatTime(totalDisplaySeconds)}
             </span>
-            
+            {totalDisplaySeconds > 0 && (
+              <span className="text-[10px] text-muted-foreground font-medium">
+                {formatTimeHuman(totalDisplaySeconds)}
+              </span>
+            )}
+
             {isFinished && (
-              <span className="ml-2 text-xs font-semibold text-green-700 px-2 py-1 bg-green-100 rounded">
-                ✓ Logged
+              <span className="ml-1 text-xs font-semibold text-green-700 px-2 py-1 bg-green-100 rounded">
+                Logged
               </span>
             )}
             
@@ -749,6 +764,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
                     onClick={handlePause}
                     disabled={isSubmitting}
                     className="gap-1"
+                    title="Pause timer — time stops accumulating"
                   >
                     <Pause className="h-3 w-3" /> Pause
                   </Button>
@@ -758,12 +774,13 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
                     onClick={handleFinish}
                     disabled={isSubmitting}
                     className="gap-1"
+                    title="Finish and save logged time"
                   >
                     <CheckCircle className="h-3 w-3" /> Finish
                   </Button>
                 </>
               )}
-              
+
               {isPaused && (
                 <>
                   <Button
@@ -772,7 +789,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
                     onClick={handleResume}
                     className="gap-1"
                     disabled={isSubmitting || isUnassigned}
-                    title={isUnassigned ? "Reassign task before resuming" : ""}
+                    title={isUnassigned ? "Reassign task before resuming" : "Resume timer from where you left off"}
                   >
                     <Play className="h-3 w-3" /> Resume
                   </Button>
@@ -782,6 +799,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
                     onClick={handleFinish}
                     disabled={isSubmitting}
                     className="gap-1"
+                    title="Finish and save logged time"
                   >
                     <CheckCircle className="h-3 w-3" /> Finish
                   </Button>
@@ -789,13 +807,13 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
               )}
 
               {isFinished && !currentTask?.is_locked && (
-                <Button 
-                  size="sm" 
-                  variant="outline" 
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() => setShowContinueConfirm(true)}
                   className="gap-1"
                   disabled={currentTask?.is_locked || isUnassigned}
-                  title={isUnassigned ? "Reassign task before continuing" : ""}
+                  title={isUnassigned ? "Reassign task before continuing" : "Start a new timer session (previous time is preserved)"}
                 >
                   <Play className="h-3 w-3" /> Continue
                 </Button>

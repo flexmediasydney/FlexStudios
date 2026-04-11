@@ -657,7 +657,10 @@ export default function SettingsAutomationRules() {
             </div>
 
             {rulesLoading ? (
-              <p className="text-muted-foreground text-sm">Loading rules...</p>
+              <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading rules...
+              </div>
             ) : Object.keys(groupedRules).length === 0 ? (
               <Card><CardContent className="py-12 text-center">
                 <Zap className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
@@ -721,7 +724,10 @@ export default function SettingsAutomationRules() {
               </Select>
             </div>
             {logsLoading ? (
-              <p className="text-sm text-muted-foreground">Loading logs...</p>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading logs...
+              </div>
             ) : filteredLogs.length === 0 ? (
               <Card><CardContent className="py-8 text-center text-muted-foreground text-sm">No log entries yet.</CardContent></Card>
             ) : (

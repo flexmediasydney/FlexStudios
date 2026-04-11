@@ -364,8 +364,8 @@ export default function PackagesPage() {
                           <TableCell>
                             <span className="text-sm text-muted-foreground">{pkg.products?.length || 0} products</span>
                           </TableCell>
-                          <TableCell className="font-medium">${pkg.standard_tier?.package_price?.toFixed(2) || "0.00"}</TableCell>
-                          <TableCell className="font-medium">${pkg.premium_tier?.package_price?.toFixed(2) || "0.00"}</TableCell>
+                          <TableCell className="font-medium tabular-nums">${pkg.standard_tier?.package_price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}</TableCell>
+                          <TableCell className="font-medium tabular-nums">${pkg.premium_tier?.package_price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}</TableCell>
                           <TableCell>
                             <Badge variant="outline" className={pkg.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-muted"}>
                               {pkg.is_active ? "Active" : "Inactive"}
@@ -403,7 +403,7 @@ export default function PackagesPage() {
                               <TableRow key={label} className="bg-muted/30">
                                 <TableCell></TableCell>
                                 <TableCell className="pl-8 text-sm font-medium" colSpan={2}>{label} Tier</TableCell>
-                                <TableCell className="text-sm">${tier?.package_price?.toFixed(2) || "0.00"}</TableCell>
+                                <TableCell className="text-sm tabular-nums">${tier?.package_price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "0.00"}</TableCell>
                                 <TableCell className="text-sm" colSpan={3}>
                                   <div className="flex gap-4 text-xs text-muted-foreground">
                                     <span>Scheduling: {tier?.scheduling_time || 0}min</span>

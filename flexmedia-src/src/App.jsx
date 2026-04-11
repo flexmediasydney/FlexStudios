@@ -36,8 +36,12 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 const LazyFallback = () => (
-  <div className="fixed inset-0 flex items-center justify-center">
-    <div className="w-8 h-8 border-4 border-border border-t-slate-800 rounded-full animate-spin"></div>
+  <div className="fixed inset-0 flex flex-col items-center justify-center gap-4">
+    <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center">
+      <span className="text-white font-bold text-lg">F</span>
+    </div>
+    <div className="w-6 h-6 border-3 border-border border-t-slate-800 rounded-full animate-spin"></div>
+    <p className="text-xs text-muted-foreground">Loading FlexStudios...</p>
   </div>
 );
 

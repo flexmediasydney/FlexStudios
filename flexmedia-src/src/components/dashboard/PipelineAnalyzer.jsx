@@ -123,23 +123,24 @@ export default function PipelineAnalyzer() {
     <div className="space-y-6">
       {/* Summary bar */}
       <div className="flex gap-3">
-        <Card className="flex-1 p-3">
-          <div className="text-xs text-muted-foreground">Active projects</div>
+        <Card className="flex-1 p-3" title="Projects currently in the pipeline (excluding delivered)">
+          <div className="text-xs text-muted-foreground">Active Projects</div>
           <div className="text-2xl font-bold">{projects.filter(p => !['delivered'].includes(p.status)).length}</div>
+          <div className="text-[9px] text-muted-foreground">in pipeline</div>
         </Card>
-        <Card className="flex-1 p-3">
-          <div className="text-xs text-muted-foreground">Avg lifecycle</div>
+        <Card className="flex-1 p-3" title="Average days from creation to delivery across all completed projects">
+          <div className="text-xs text-muted-foreground">Avg Lifecycle</div>
           <div className="text-2xl font-bold">{totalLifecycle.avgDays}d</div>
           <div className="text-[9px] text-muted-foreground">from {totalLifecycle.count} delivered</div>
         </Card>
-        <Card className={cn('flex-1 p-3', bottlenecks.length > 0 && 'border-amber-300 bg-amber-50/30')}>
+        <Card className={cn('flex-1 p-3', bottlenecks.length > 0 && 'border-amber-300 bg-amber-50/30')} title="Projects taking 1.5x or longer than the stage average">
           <div className="text-xs text-muted-foreground">Bottlenecks</div>
           <div className={cn('text-2xl font-bold', bottlenecks.length > 0 ? 'text-amber-700' : 'text-green-600')}>{bottlenecks.length}</div>
           <div className="text-[9px] text-muted-foreground">projects slower than normal</div>
         </Card>
-        <Card className="flex-1 p-3">
-          <div className="text-xs text-muted-foreground">Stage timers</div>
-          <div className="text-2xl font-bold">{stageTimers.length}</div>
+        <Card className="flex-1 p-3" title="Total recorded stage transitions used for velocity calculations">
+          <div className="text-xs text-muted-foreground">Stage Timers</div>
+          <div className="text-2xl font-bold">{stageTimers.length.toLocaleString()}</div>
           <div className="text-[9px] text-muted-foreground">historical data points</div>
         </Card>
       </div>
@@ -153,10 +154,13 @@ export default function PipelineAnalyzer() {
         <div className="flex items-center gap-1 overflow-x-auto pb-2">
           {flowData.map((stage, i) => (
             <div key={stage.stage} className="flex items-center">
-              <div className={cn(
-                'rounded-xl border-2 p-3 min-w-[120px] text-center transition-all',
-                stage.hasBottleneck ? 'border-amber-400 bg-amber-50/50 shadow-sm' : 'border-border bg-card'
-              )}>
+              <div
+                className={cn(
+                  'rounded-xl border-2 p-3 min-w-[120px] text-center transition-all',
+                  stage.hasBottleneck ? 'border-amber-400 bg-amber-50/50 shadow-sm' : 'border-border bg-card'
+                )}
+                title={`${stage.label}: ${stage.count} project${stage.count !== 1 ? 's' : ''} in stage, avg time ${fmtDuration(stage.avgHours)}, ${stage.volume} completed historically`}
+              >
                 <div className="text-xs font-bold mb-1">{stage.label}</div>
                 <div className="text-2xl font-black">{stage.count}</div>
                 <div className="text-[10px] text-muted-foreground mt-1">

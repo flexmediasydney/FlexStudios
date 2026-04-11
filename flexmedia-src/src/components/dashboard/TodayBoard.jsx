@@ -194,6 +194,7 @@ export default function TodayBoard() {
       </div>
 
       {/* Deliveries due */}
+      {deliveriesDue.length > 0 && <hr className="border-border/50" />}
       {deliveriesDue.length > 0 && (
         <div>
           <div className="flex items-center gap-2 mb-3">
@@ -208,6 +209,7 @@ export default function TodayBoard() {
       )}
 
       {/* Revision deadlines */}
+      {(revisionsDue.length > 0 || stuckRevisions.length > 0) && <hr className="border-border/50" />}
       {(revisionsDue.length > 0 || stuckRevisions.length > 0) && (
         <div>
           <div className="flex items-center gap-2 mb-3">
@@ -240,6 +242,7 @@ export default function TodayBoard() {
       )}
 
       {/* Tomorrow preview */}
+      {tomorrowShoots.length > 0 && <hr className="border-border/50" />}
       {tomorrowShoots.length > 0 && (
         <div>
           <div className="flex items-center gap-2 mb-3">

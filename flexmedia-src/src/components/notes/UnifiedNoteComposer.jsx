@@ -362,6 +362,7 @@ export default function UnifiedNoteComposer({
           size="sm"
           onClick={handleSave}
           disabled={saving || editorEmpty || uploadingFiles.length > 0}
+          title="Save note (Ctrl+Enter)"
           className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white"
         >
           {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}

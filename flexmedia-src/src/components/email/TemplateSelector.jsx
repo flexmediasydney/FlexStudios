@@ -39,6 +39,11 @@ export default function TemplateSelector({ onSelectTemplate, onSaveAsTemplate })
           <Button variant="outline" size="sm" className="text-xs gap-2">
             <FileText className="h-3 w-3" />
             Choose template
+            {templates.length > 0 && (
+              <span className="bg-muted text-muted-foreground rounded-full px-1.5 py-0 text-[10px] font-semibold leading-4 min-w-[18px] text-center">
+                {templates.length}
+              </span>
+            )}
             <ChevronDown className="h-3 w-3" />
           </Button>
         </DropdownMenuTrigger>
@@ -102,8 +107,15 @@ export default function TemplateSelector({ onSelectTemplate, onSaveAsTemplate })
               </div>
               </TooltipProvider>
             ) : (
-              <div className="text-center py-6 text-sm text-muted-foreground">
-                {search ? "No templates found" : "No templates yet"}
+              <div className="text-center py-6 space-y-1">
+                <p className="text-sm text-muted-foreground">
+                  {search ? "No templates found" : "No templates yet"}
+                </p>
+                {!search && (
+                  <p className="text-xs text-muted-foreground/70">
+                    Save a draft as a template to reuse it later
+                  </p>
+                )}
               </div>
             )}
           </div>

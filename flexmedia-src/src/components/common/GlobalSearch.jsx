@@ -462,7 +462,14 @@ export default function GlobalSearch({ open, onClose }) {
                           <Users className="h-3.5 w-3.5 text-emerald-600" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm">{highlight(a.name, query)}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium text-sm truncate">{highlight(a.name, query)}</p>
+                            {a.role && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-medium shrink-0 capitalize">
+                                {a.role.replace(/_/g, ' ')}
+                              </span>
+                            )}
+                          </div>
                           {/* Preview: email */}
                           {a.email && (
                             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">

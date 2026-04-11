@@ -112,9 +112,9 @@ export default function HierarchyVisualizationPanel({ agencies, teams, agents, p
             <p className="text-2xl font-bold text-green-900">{stats.agents}</p>
           </CardContent>
         </Card>
-        <Card className="bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200">
+        <Card className="bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200" title="Average number of agents per team">
           <CardContent className="pt-4 pb-4">
-            <p className="text-xs text-muted-foreground">Avg/Team</p>
+            <p className="text-xs text-muted-foreground">Avg per Team</p>
             <p className="text-2xl font-bold text-amber-900">{stats.avgAgentsPerTeam}</p>
           </CardContent>
         </Card>
@@ -153,18 +153,21 @@ export default function HierarchyVisualizationPanel({ agencies, teams, agents, p
             <CardTitle className="flex items-center gap-2">
               <Network className="h-5 w-5" />
               Organizational Hierarchy
+              <Badge variant="secondary" className="ml-1 text-xs font-normal">
+                {stats.agencies + stats.teams + stats.agents} nodes
+              </Badge>
             </CardTitle>
             <Tabs value={viewMode} onValueChange={setViewMode} className="w-auto">
               <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="hierarchy" className="gap-1">
+                <TabsTrigger value="hierarchy" className="gap-1" title="View the organizational tree">
                   <TreePine className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Hierarchy</span>
                 </TabsTrigger>
-                <TabsTrigger value="stats" className="gap-1">
+                <TabsTrigger value="stats" className="gap-1" title="View distribution and breakdown statistics">
                   <BarChart3 className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Statistics</span>
                 </TabsTrigger>
-                <TabsTrigger value="health" className="gap-1">
+                <TabsTrigger value="health" className="gap-1" title={`Data health check${healthChecks.length > 0 ? ` (${healthChecks.length} issues)` : ''}`}>
                   <AlertCircle className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Health</span>
                 </TabsTrigger>

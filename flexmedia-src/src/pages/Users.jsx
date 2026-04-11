@@ -240,7 +240,7 @@ export default function UsersManagement() {
           <h1 className="text-3xl font-bold tracking-tight">User Management <AccessBadge entityType="users" /></h1>
           <p className="text-muted-foreground mt-1">Manage team members, access levels, and invite codes</p>
         </div>
-        <Button onClick={() => setShowInviteDialog(true)} className="gap-2" disabled={!canEdit}>
+        <Button onClick={() => setShowInviteDialog(true)} className="gap-2" disabled={!canEdit} title="Send an email or code invite to a new team member">
           <Plus className="h-4 w-4" /> Invite User
         </Button>
       </div>

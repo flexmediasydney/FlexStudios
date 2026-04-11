@@ -16,14 +16,14 @@ import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 const NOTIFICATION_CATEGORIES = {
-  scheduling: { label: "Scheduling", icon: "📅", color: "bg-blue-100 text-blue-700" },
-  project:    { label: "Projects",   icon: "📁", color: "bg-violet-100 text-violet-700" },
-  task:       { label: "Tasks",      icon: "📋", color: "bg-cyan-100 text-cyan-700" },
-  revision:   { label: "Revisions",  icon: "🔄", color: "bg-amber-100 text-amber-700" },
-  tonomo:     { label: "Tonomo",     icon: "⚡", color: "bg-emerald-100 text-emerald-700" },
-  financial:  { label: "Financial",  icon: "💰", color: "bg-green-100 text-green-700" },
-  email:      { label: "Email",      icon: "📧", color: "bg-orange-100 text-orange-700" },
-  system:     { label: "System",     icon: "🔧", color: "bg-muted text-muted-foreground" },
+  scheduling: { label: "Scheduling", icon: "📅", color: "bg-blue-100 text-blue-700", description: "Shoot dates, calendar conflicts, photographer assignments" },
+  project:    { label: "Projects",   icon: "📁", color: "bg-violet-100 text-violet-700", description: "Stage changes, assignments, deliveries, pricing updates" },
+  task:       { label: "Tasks",      icon: "📋", color: "bg-cyan-100 text-cyan-700", description: "Task assignments, deadlines, completions, auto-generation" },
+  revision:   { label: "Revisions",  icon: "🔄", color: "bg-amber-100 text-amber-700", description: "Revision requests, approvals, stale revision alerts" },
+  tonomo:     { label: "Tonomo",     icon: "⚡", color: "bg-emerald-100 text-emerald-700", description: "Booking arrivals, payments, mapping gaps, auto-approvals" },
+  financial:  { label: "Financial",  icon: "💰", color: "bg-green-100 text-green-700", description: "Overdue invoices, payment receipts, first notices" },
+  email:      { label: "Email",      icon: "📧", color: "bg-orange-100 text-orange-700", description: "Client emails, reply reminders, sync failures" },
+  system:     { label: "System",     icon: "🔧", color: "bg-muted text-muted-foreground", description: "Stale projects, schema warnings, automation errors" },
 };
 
 const NOTIFICATION_TYPES_LIST = [
@@ -311,8 +311,13 @@ function MyPreferencesTab({ userId }) {
                     }}
                     onClick={e => e.stopPropagation()}
                   />
-                  <Badge className={`text-xs ${cfg.color}`}>{cfg.icon} {cfg.label}</Badge>
-                  <span className="text-xs text-muted-foreground ml-auto">
+                  <div className="flex flex-col min-w-0">
+                    <Badge className={`text-xs ${cfg.color} w-fit`}>{cfg.icon} {cfg.label}</Badge>
+                    {cfg.description && (
+                      <span className="text-[11px] text-muted-foreground mt-0.5 truncate">{cfg.description}</span>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground ml-auto shrink-0">
                     {types.length} types
                   </span>
                   {isExpanded
