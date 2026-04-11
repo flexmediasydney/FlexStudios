@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import React from "react";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import { usePermissions } from '@/components/auth/PermissionGuard';
 import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
 import { supabase } from "@/api/supabaseClient";
@@ -56,6 +57,7 @@ const STAFF_ROLE_COLORS = {
 
 export default function UsersManagement() {
   const { canEdit, canView } = useEntityAccess('users');
+  const { isOwner } = usePermissions();
   const queryClient = useQueryClient();
   const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -79,7 +81,10 @@ export default function UsersManagement() {
   // ─── Mutations ──────────────────────────────────────────────────────────
 
   const updateUserMutation = useMutation({
-    mutationFn: ({ userId, updates }) => api.entities.User.update(userId, updates),
+    mutationFn: ({ userId, updates }) => {
+      if ('role' in updates && !isOwner) throw new Error('Only the owner can change user roles');
+      return api.entities.User.update(userId, updates);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
       refetchEntityList("User");
@@ -101,6 +106,7 @@ export default function UsersManagement() {
 
   const deleteUserMutation = useMutation({
     mutationFn: async (userId) => {
+      if (!isOwner) throw new Error('Only the owner can delete users');
       try {
         const allProjects = await api.entities.Project.filter({}, null, 2000);
         const affected = allProjects.filter(p =>
@@ -143,6 +149,7 @@ export default function UsersManagement() {
   });
 
   const handleDeleteClick = async (user) => {
+    if (!isOwner) { toast.error('Only the owner can delete users'); return; }
     setDeletingUser(user);
     setDeleteImpact(null);
     setImpactLoading(true);
@@ -429,10 +436,14 @@ export default function UsersManagement() {
                               <DropdownMenuItem onClick={() => toggleActiveMutation.mutate({ userId: user.id, isActive: !user.is_active })}>
                                 {user.is_active ? <><UserX className="h-3.5 w-3.5 mr-2" /> Deactivate</> : <><UserCheck className="h-3.5 w-3.5 mr-2" /> Activate</>}
                               </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem onClick={() => handleDeleteClick(user)} className="text-red-600 focus:text-red-600">
-                                <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete User
-                              </DropdownMenuItem>
+                              {isOwner && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={() => handleDeleteClick(user)} className="text-red-600 focus:text-red-600">
+                                    <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete User
+                                  </DropdownMenuItem>
+                                </>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </TableCell>
@@ -474,16 +485,25 @@ export default function UsersManagement() {
               </div>
               <div className="space-y-2">
                 <Label>Security Level</Label>
-                <Select value={editingUser.role} onValueChange={(v) => setEditingUser(p => ({ ...p, role: v }))}>
-                  <SelectTrigger className="h-11"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="master_admin">Owner</SelectItem>
-                    <SelectItem value="admin">Administrator</SelectItem>
-                    <SelectItem value="manager">Manager</SelectItem>
-                    <SelectItem value="employee">Staff</SelectItem>
-                    <SelectItem value="contractor">Contractor</SelectItem>
-                  </SelectContent>
-                </Select>
+                {isOwner ? (
+                  <Select value={editingUser.role} onValueChange={(v) => setEditingUser(p => ({ ...p, role: v }))}>
+                    <SelectTrigger className="h-11"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="master_admin">Owner</SelectItem>
+                      <SelectItem value="admin">Administrator</SelectItem>
+                      <SelectItem value="manager">Manager</SelectItem>
+                      <SelectItem value="employee">Staff</SelectItem>
+                      <SelectItem value="contractor">Contractor</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="h-11 px-3 flex items-center rounded-md border bg-muted/50">
+                    <Badge variant="outline" className={`${(roleConfig[editingUser.role] || roleConfig.employee).color} border text-xs`}>
+                      {(roleConfig[editingUser.role] || roleConfig.employee).label}
+                    </Badge>
+                    <span className="ml-2 text-xs text-muted-foreground">(only owner can change)</span>
+                  </div>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Team</Label>
