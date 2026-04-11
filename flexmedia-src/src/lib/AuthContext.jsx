@@ -53,13 +53,38 @@ export const AuthProvider = ({ children }) => {
   const initDoneRef = useRef(false);
 
   // ── Simulation / Impersonation ──────────────────────────────────────────
-  // Stored in sessionStorage so it survives navigation but dies on tab close.
-  const [simulatedUser, setSimulatedUser] = useState(() => {
+  // NOTE: Do NOT restore from sessionStorage in useState initializer.
+  // The real user hasn't been authenticated yet at that point, so we can't
+  // verify the master_admin guard. Instead, defer restore to a useEffect
+  // that runs after auth completes.
+  const [simulatedUser, setSimulatedUser] = useState(null);
+
+  // Restore simulation from sessionStorage ONLY after real user is confirmed master_admin.
+  // This prevents: (a) race conditions where simulated user loads before auth,
+  // (b) simulation persisting across different user logins.
+  useEffect(() => {
+    if (!user || !isAuthenticated) return;
+    if (user.role !== 'master_admin') {
+      // Non-owner logged in — clear any leftover simulation
+      sessionStorage.removeItem(SIM_STORAGE_KEY);
+      setSimulatedUser(null);
+      return;
+    }
+    // Owner logged in — restore simulation if one was active
     try {
       const stored = sessionStorage.getItem(SIM_STORAGE_KEY);
-      return stored ? JSON.parse(stored) : null;
-    } catch { return null; }
-  });
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.id && parsed?.role) {
+          setSimulatedUser(parsed);
+        } else {
+          sessionStorage.removeItem(SIM_STORAGE_KEY);
+        }
+      }
+    } catch {
+      sessionStorage.removeItem(SIM_STORAGE_KEY);
+    }
+  }, [user?.id, isAuthenticated]); // Only re-run when the real user changes
 
   // Race condition fix: track pending fetch as a promise so concurrent callers
   // (e.g. two TOKEN_REFRESHED events) coalesce onto the same request instead of racing.
@@ -180,6 +205,9 @@ export const AuthProvider = ({ children }) => {
           setUser(null);
           setIsAuthenticated(false);
           setIsLoadingAuth(false);
+          // Always clear simulation on sign out
+          setSimulatedUser(null);
+          sessionStorage.removeItem(SIM_STORAGE_KEY);
           // BUG FIX: preserve deactivation error so the UI keeps showing
           // the "account deactivated" message instead of the login form
           setAuthError(prev => prev?.type === 'user_deactivated' ? prev : null);
@@ -217,6 +245,9 @@ export const AuthProvider = ({ children }) => {
   const logout = useCallback(async (shouldRedirect = true) => {
     setUser(null);
     setIsAuthenticated(false);
+    // Always clear simulation on logout
+    setSimulatedUser(null);
+    sessionStorage.removeItem(SIM_STORAGE_KEY);
     await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
     if (shouldRedirect) {
       window.location.href = '/login';
@@ -251,19 +282,35 @@ export const AuthProvider = ({ children }) => {
   // ── Simulation methods ───────────────────────────────────────────────────
   const startSimulation = useCallback(async (userId) => {
     // Only master_admin (owner) can impersonate
-    if (user?.role !== 'master_admin') return;
+    if (user?.role !== 'master_admin') return 'not_authorized';
+    // Cannot impersonate yourself
+    if (userId === user.id) return 'self';
     try {
+      // Use authenticated request (Bearer token) for proper RLS enforcement
+      let accessToken = '';
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        accessToken = session?.access_token || '';
+      } catch { /* fallback to anon */ }
+
+      const headers = { 'apikey': SUPABASE_ANON_KEY, 'Accept': 'application/vnd.pgrst.object+json' };
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+
       const res = await fetch(
         `${SUPABASE_URL}/rest/v1/users?id=eq.${encodeURIComponent(userId)}&select=*`,
-        { headers: { 'apikey': SUPABASE_ANON_KEY, 'Accept': 'application/vnd.pgrst.object+json' } }
+        { headers }
       );
-      if (!res.ok) return;
+      if (!res.ok) return 'fetch_failed';
       const targetUser = await res.json();
-      if (!targetUser?.id) return;
+      if (!targetUser?.id) return 'not_found';
+      if (!targetUser.is_active) return 'deactivated';
+
       setSimulatedUser(targetUser);
       sessionStorage.setItem(SIM_STORAGE_KEY, JSON.stringify(targetUser));
+      return 'ok';
     } catch (err) {
       console.error('Failed to start simulation:', err);
+      return 'error';
     }
   }, [user]);
 

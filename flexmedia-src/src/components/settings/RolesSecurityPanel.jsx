@@ -393,20 +393,30 @@ function PeopleMode({ onViewAs, onSimulateUser }) {
 
             {/* Actions */}
             <div className="flex gap-2 pt-2 border-t">
+              {selected.id !== currentUser?.id && selected.is_active && (
               <Button
                 size="sm"
                 className="flex-1 h-8 text-xs text-white"
                 style={{ backgroundColor: ROLES[selected.role]?.fill }}
-                onClick={() => {
-                  onSimulateUser(selected.id);
-                  toast.success(`Now viewing as ${selected.full_name || selected.email}`, {
-                    description: `Role: ${ROLES[selected.role]?.label || selected.role}. Use the banner at the top to end the simulation.`,
-                  });
+                onClick={async () => {
+                  const result = await onSimulateUser(selected.id);
+                  if (result === 'ok') {
+                    toast.success(`Now viewing as ${selected.full_name || selected.email}`, {
+                      description: `Role: ${ROLES[selected.role]?.label || selected.role}. Use the amber banner to end the simulation.`,
+                    });
+                  } else if (result === 'deactivated') {
+                    toast.error('Cannot impersonate a deactivated user');
+                  } else if (result === 'self') {
+                    toast.error('Cannot impersonate yourself');
+                  } else {
+                    toast.error('Failed to start simulation');
+                  }
                 }}
               >
                 <Eye className="h-3 w-3 mr-1.5" />
                 Impersonate {(selected.full_name || "").split(" ")[0]}
               </Button>
+              )}
               {selected.is_active ? (
                 <Button
                   size="sm"
@@ -613,7 +623,7 @@ export default function RolesSecurityPanel() {
 
   const modes = [
     { key: "people", label: "People" },
-    { key: "simulate", label: "Simulate" },
+    { key: "simulate", label: "Role Preview" },
     { key: "security-matrix", label: "Security Matrix" },
     { key: "overrides", label: "Overrides" },
     { key: "blocked", label: "Blocked UX" },

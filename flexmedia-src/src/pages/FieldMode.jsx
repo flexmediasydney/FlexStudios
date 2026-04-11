@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { useAuth } from "@/lib/AuthContext";
 import { ActiveTimersProvider, useActiveTimers } from "@/components/utilization/ActiveTimersContext";
 import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -28,6 +29,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import AIChat from "@/components/ai/AIChat";
+import { Eye, XCircle } from "lucide-react";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -100,12 +102,34 @@ function StatusBadge({ status }) {
 
 // ─── Main Component (wraps in ActiveTimersProvider) ─────────────────────────
 
+// FieldMode bypasses Layout — render SimulationBanner independently
+function FieldModeSimBanner() {
+  const { isSimulating, simulatedUser, endSimulation } = useAuth();
+  if (!isSimulating) return null;
+  const roleBadge = { master_admin: 'Owner', admin: 'Admin', manager: 'Manager', employee: 'Staff', contractor: 'Contractor' }[simulatedUser?.role] || simulatedUser?.role;
+  return (
+    <div className="fixed top-0 left-0 right-0 z-[200] bg-amber-500 dark:bg-amber-600 text-amber-950 h-9 flex items-center justify-center gap-3 text-xs font-bold shadow-lg select-none">
+      <Eye className="h-3.5 w-3.5 flex-shrink-0" />
+      <span>Viewing as <span className="font-black">{simulatedUser?.name || simulatedUser?.full_name || '?'}</span>
+        <span className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-700/20 text-[10px] uppercase tracking-wide">{roleBadge}</span>
+      </span>
+      <button onClick={endSimulation} className="ml-2 inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-800/25 hover:bg-amber-800/40 text-[10px] font-bold uppercase tracking-wide transition-colors">
+        <XCircle className="h-3 w-3" /> End
+      </button>
+    </div>
+  );
+}
+
 export default function FieldMode() {
   const { data: user } = useCurrentUser();
+  const { isSimulating } = useAuth();
 
   return (
     <ActiveTimersProvider currentUser={user || null}>
-      <FieldModeInner user={user} />
+      <FieldModeSimBanner />
+      <div className={isSimulating ? "pt-9" : ""}>
+        <FieldModeInner user={user} />
+      </div>
     </ActiveTimersProvider>
   );
 }

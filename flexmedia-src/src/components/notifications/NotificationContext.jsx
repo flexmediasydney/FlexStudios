@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { useAuth } from "@/lib/AuthContext";
 
 const NotificationContext = createContext(null);
 
@@ -23,6 +24,10 @@ function playNotificationBeep() {
 
 export function NotificationProvider({ children }) {
   const { data: currentUser } = useCurrentUser();
+  // During simulation, always fetch/filter notifications for the REAL user
+  // so the owner doesn't miss their own alerts while impersonating someone.
+  const { realUser, isSimulating } = useAuth();
+  const notifUser = isSimulating ? realUser : currentUser;
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -39,12 +44,12 @@ export function NotificationProvider({ children }) {
   const pollRef = useRef(null);
 
   const fetchNotifications = useCallback(async (silent = false) => {
-    if (!currentUser?.id) return;
+    if (!notifUser?.id) return;
     if (!silent) setLoading(true);
     try {
       // Filter server-side by user_id so the limit applies per-user, not globally
       const mine = await api.entities.Notification.filter(
-        { user_id: currentUser.id, is_dismissed: false },
+        { user_id: notifUser.id, is_dismissed: false },
         "-created_date",
         MAX_DISPLAY
       );
@@ -53,38 +58,38 @@ export function NotificationProvider({ children }) {
       setLastFetched(new Date());
     } catch { /* silent fail */ }
     finally { if (!silent) setLoading(false); }
-  }, [currentUser?.id]);
+  }, [notifUser?.id]);
 
   useEffect(() => {
-    if (currentUser?.id) fetchNotifications();
-  }, [currentUser?.id, fetchNotifications]);
+    if (notifUser?.id) fetchNotifications();
+  }, [notifUser?.id, fetchNotifications]);
 
   // Fetch digest settings (sound_enabled, show_previews, etc.) once per user
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!notifUser?.id) return;
     let cancelled = false;
     (async () => {
       try {
         const rows = await api.entities.NotificationDigestSettings.list("-created_date", 10);
         if (cancelled) return;
-        const mine = rows.find(d => d.user_id === currentUser.id);
+        const mine = rows.find(d => d.user_id === notifUser.id);
         if (mine) setDigestSettings(mine);
       } catch { /* silent fail — defaults are safe */ }
     })();
     return () => { cancelled = true; };
-  }, [currentUser?.id]);
+  }, [notifUser?.id]);
 
   // Realtime subscription — listen for INSERT/UPDATE/DELETE on notifications table
   // and update local state immediately without waiting for the next poll
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!notifUser?.id) return;
 
     const unsubscribe = api.entities.Notification.subscribe((event) => {
       if (!event) return;
 
       if (event.type === 'create' && event.data) {
         // Only add if this notification belongs to the current user
-        if (event.data.user_id !== currentUser.id) return;
+        if (event.data.user_id !== notifUser.id) return;
         if (event.data.is_dismissed) return;
 
         setNotifications(prev => {
@@ -103,7 +108,7 @@ export function NotificationProvider({ children }) {
         }
       } else if (event.type === 'update' && event.data) {
         // Only process if this is our notification
-        if (event.data.user_id !== currentUser.id) return;
+        if (event.data.user_id !== notifUser.id) return;
 
         // BUG FIX (subscription audit): Previous approach called setUnreadCount
         // inside a setNotifications updater — an anti-pattern that is fragile under
@@ -134,14 +139,14 @@ export function NotificationProvider({ children }) {
     });
 
     return unsubscribe;
-  }, [currentUser?.id]);
+  }, [notifUser?.id]);
 
   // Fallback polling (reduced frequency since realtime handles most updates)
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!notifUser?.id) return;
     pollRef.current = setInterval(() => fetchNotifications(true), POLL_INTERVAL_MS);
     return () => clearInterval(pollRef.current);
-  }, [currentUser?.id, fetchNotifications]);
+  }, [notifUser?.id, fetchNotifications]);
 
   // BUG FIX: compute wasUnread inside the updater and call setUnreadCount from there,
   // matching the pattern used in dismiss(). The previous approach relied on the

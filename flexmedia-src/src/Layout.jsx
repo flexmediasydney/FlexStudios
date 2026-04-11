@@ -459,10 +459,6 @@ function LayoutContent({ currentPageName, children }) {
   };
 
   const { isSimulating } = useAuth();
-  // When simulating, push all fixed elements down by banner height (36px)
-  const simOffset = isSimulating ? 'top-9' : 'top-0';
-  const simHeaderOffset = isSimulating ? 'top-[calc(4rem+36px)]' : '';
-  const simPt = isSimulating ? 'pt-9' : '';
 
   return (
     <>
