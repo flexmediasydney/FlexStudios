@@ -92,17 +92,16 @@ export default function TagManager({ favoriteId, currentTags = [], onTagsChanged
     }
   }, [open]);
 
-  // Autocomplete suggestions: tags from registry that match input and aren't already applied
+  // Autocomplete suggestions: show ALL existing tags when empty, filter when typing
   const suggestions = useMemo(() => {
-    if (!input.trim()) return [];
     const lower = input.trim().toLowerCase();
     return (allTags || [])
       .filter(t =>
-        t.name.toLowerCase().includes(lower) &&
-        !currentTags.includes(t.name)
+        !currentTags.includes(t.name) &&
+        (!lower || t.name.toLowerCase().includes(lower))
       )
       .sort((a, b) => (b.usage_count || 0) - (a.usage_count || 0))
-      .slice(0, 8);
+      .slice(0, 12);
   }, [input, allTags, currentTags]);
 
   // Quick-add tags: top used tags not already applied
