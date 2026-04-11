@@ -1,4 +1,5 @@
 import React from "react";
+import { usePriceGate } from "@/components/auth/RoleGate";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, User, Building2, Users, FileText, Calendar } from "lucide-react";
 
 export default function FieldInsertMenu({ onInsert }) {
+  const { showPricing } = usePriceGate();
   const fields = {
     "Client (Agent)": [
       { label: "First Name", value: "{{agent_first_name}}", icon: User },
@@ -31,7 +33,7 @@ export default function FieldInsertMenu({ onInsert }) {
       { label: "Property Address", value: "{{project_address}}", icon: FileText },
       { label: "Shoot Date", value: "{{project_shoot_date}}", icon: Calendar },
       { label: "Delivery Date", value: "{{project_delivery_date}}", icon: Calendar },
-      { label: "Price", value: "{{project_price}}", icon: FileText },
+      ...(showPricing ? [{ label: "Price", value: "{{project_price}}", icon: FileText }] : []),
     ],
     General: [
       { label: "Current Date", value: "{{current_date}}", icon: Calendar },

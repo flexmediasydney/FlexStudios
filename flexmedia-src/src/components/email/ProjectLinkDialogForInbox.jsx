@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Search, Link2, X } from "lucide-react";
 import { toast } from "sonner";
+import { usePriceGate } from "@/components/auth/RoleGate";
 
 export default function ProjectLinkDialogForInbox({
   thread,
@@ -22,6 +23,7 @@ export default function ProjectLinkDialogForInbox({
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const queryClient = useQueryClient();
+  const { showPricing } = usePriceGate();
 
   // Fetch recent projects once, filter client-side (avoids re-fetching on every keystroke)
   const { data: allProjects = [], isLoading } = useQuery({
@@ -141,7 +143,7 @@ export default function ProjectLinkDialogForInbox({
                             {project.status}
                           </Badge>
                         )}
-                        {project.price && (
+                        {showPricing && project.price && (
                           <Badge variant="secondary" className="text-xs">
                             A${project.price}
                           </Badge>
