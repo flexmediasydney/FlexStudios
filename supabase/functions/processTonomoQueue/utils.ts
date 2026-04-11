@@ -219,6 +219,9 @@ export function assignStaffToProjectFields(resolvedPhotographers: any[], booking
     const mapping = person.role ? roleToField[person.role] : null;
     if (mapping && !fields[mapping.idField]) {
       fields[mapping.idField] = person.userId;
+      // Webhook staff are always users, not teams — set type explicitly
+      const typeField = mapping.idField.replace('_id', '_type');
+      fields[typeField] = 'user';
       if (mapping.onsiteField) fields[mapping.onsiteField] = person.userId;
       assigned.add(person.userId);
     }
@@ -229,9 +232,11 @@ export function assignStaffToProjectFields(resolvedPhotographers: any[], booking
     if (assigned.has(person.userId)) continue;
     if (bookingTypes.isVideoBooking && !fields.videographer_id) {
       fields.videographer_id   = person.userId;
+      fields.videographer_type = 'user';
       fields.onsite_staff_2_id = person.userId;
     } else if (!fields.photographer_id) {
       fields.photographer_id   = person.userId;
+      fields.photographer_type = 'user';
       fields.onsite_staff_1_id = person.userId;
     }
     assigned.add(person.userId);
