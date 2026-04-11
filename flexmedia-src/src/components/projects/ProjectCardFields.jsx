@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Calendar, Clock, User, Building, DollarSign, Flag, CheckSquare, ExternalLink, FileText, CreditCard, CheckCircle2 } from "lucide-react";
+import { usePriceGate } from '@/components/auth/RoleGate';
 import { fmtDate, fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { CountdownTimer } from "./TaskManagement";
 import ProjectStatusTimer from "./ProjectStatusTimer";
@@ -30,6 +31,7 @@ const paymentColors = {
  * Shared across Kanban, Grid, and List views.
  */
 export function ProjectFieldValue({ fieldId, project, products = [], packages = [], tasks = [], timeLogs = [] }) {
+  const { visible: showPricing } = usePriceGate();
   switch (fieldId) {
     case "agency_name": {
       const name = project.client_name || project.agency_name;
@@ -80,6 +82,7 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
       );
     }
     case "price": {
+      if (!showPricing) return null;
       const displayPrice = project.calculated_price || project.price;
       if (!displayPrice) return null;
       return (

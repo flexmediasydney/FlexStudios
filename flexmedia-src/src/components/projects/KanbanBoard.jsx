@@ -24,6 +24,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { usePrefetchProjectDetails } from "@/components/lib/prefetchRoutes";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import { usePriceGate } from '@/components/auth/RoleGate';
 
 const statusColumns = PROJECT_STAGES.map(s => ({ id: s.value, label: s.label, color: s.color }));
 
@@ -309,7 +310,7 @@ function KanbanFilterBar({ filters, onFiltersChange, projects }) {
 }
 
 /* ─────────────────────────── Collapsed Column View ─────────────────────────── */
-function CollapsedColumnView({ columns, activeProjects, allTasks }) {
+function CollapsedColumnView({ columns, activeProjects, allTasks, showPricing }) {
   const navigate = useNavigate();
 
   return (
@@ -351,12 +352,14 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
 
             {/* Mini stats */}
             <div className="space-y-1.5 text-xs text-muted-foreground">
+              {showPricing && (
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1"><DollarSign className="h-3 w-3" /> Revenue</span>
                 <span className="font-medium text-foreground">
                   {revenue >= 1000 ? `$${(revenue / 1000).toFixed(1)}k` : `$${revenue.toFixed(0)}`}
                 </span>
               </div>
+              )}
               {tasksTotal > 0 && (
                 <div className="flex items-center justify-between">
                   <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Tasks</span>
@@ -390,6 +393,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks }) {
 /* ═══════════════════════════ Main KanbanBoard ═══════════════════════════ */
 export default function KanbanBoard({ projects = [], products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs }) {
   const { canEdit, canView } = useEntityAccess('projects');
+  const { visible: showPricing, mask: maskPrice } = usePriceGate();
   const navigate = useNavigate();
   const { enabledFields } = useCardFields();
   // Bug fix: use tasks/timeLogs from parent when available to avoid duplicate entity subscriptions
@@ -679,6 +683,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
           columns={statusColumns}
           activeProjects={filteredProjects}
           allTasks={allTasks}
+          showPricing={showPricing}
         />
       )}
 
@@ -742,6 +747,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                     {/* Column Metrics */}
                     <div className="grid grid-cols-2 gap-1.5 mt-2">
                       {/* Revenue */}
+                      {showPricing && (
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
                           <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
@@ -787,6 +793,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                           </div>
                         </HoverCardContent>
                       </HoverCard>
+                      )}
 
                       {/* Tasks Done */}
                       <HoverCard openDelay={200}>
