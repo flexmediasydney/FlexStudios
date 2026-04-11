@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
-import { LRUBlobCache, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
+import { SHARED_THUMB_CACHE, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,8 +24,8 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // ─── Image proxy with concurrent loading + progress tracking ────────
-// PERF: LRU blob cache with max 200 entries — revokes oldest blob URLs automatically
-const blobCache = new LRUBlobCache(200);
+// PERF: Uses shared singleton from mediaPerf (500-entry LRU)
+const blobCache = SHARED_THUMB_CACHE;
 const pending = new Set();
 
 /** Canonical cache key */

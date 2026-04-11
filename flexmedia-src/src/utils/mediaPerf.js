@@ -89,12 +89,15 @@ export class LRUBlobCache {
   }
 }
 
+// Shared singleton — all media components should use this instead of creating their own
+export const SHARED_THUMB_CACHE = new LRUBlobCache(500);
+
 
 // ─── Global Fetch Concurrency Limiter ────────────────────────────────────────
 // Prevents all media views from collectively overwhelming Dropbox/Supabase.
 // Individual per-component queues MUST use this instead of their own counters.
 
-const GLOBAL_MAX_CONCURRENT = 12; // Max simultaneous fetches across ALL views
+const GLOBAL_MAX_CONCURRENT = 20; // Max simultaneous fetches across ALL views
 let _globalActive = 0;
 const _globalQueue = [];
 
@@ -202,11 +205,14 @@ export async function fetchMediaProxy(cache, filePath, mode = 'thumb', retries =
   if (_pending.has(cacheKey)) return null;
   _pending.add(cacheKey);
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
       body: JSON.stringify({ action: mode, file_path: filePath }),
+      signal: controller.signal,
     });
 
     // 503 = token was refreshed, retry once
@@ -217,7 +223,7 @@ export async function fetchMediaProxy(cache, filePath, mode = 'thumb', retries =
 
     if (!res.ok) return null;
     const blob = await res.blob();
-    if (blob.size < 500) return null;
+    if (!blob.type?.startsWith('image/') && blob.size < 500) return null;
     const url = URL.createObjectURL(blob);
     cache.set(cacheKey, url);
 
@@ -227,9 +233,13 @@ export async function fetchMediaProxy(cache, filePath, mode = 'thumb', retries =
     }
 
     return url;
-  } catch {
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      console.warn('[mediaPerf] Thumbnail fetch timed out:', filePath);
+    }
     return null;
   } finally {
+    clearTimeout(timeoutId);
     _pending.delete(cacheKey);
   }
 }

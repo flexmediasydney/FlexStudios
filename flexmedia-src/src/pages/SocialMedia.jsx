@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { api } from "@/api/supabaseClient";
-import { LRUBlobCache, fetchMediaProxy } from "@/utils/mediaPerf";
+import { SHARED_THUMB_CACHE, fetchMediaProxy } from "@/utils/mediaPerf";
 import { downloadFile, preloadAdjacentImages, getVideoStreamUrl } from "@/utils/mediaActions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -88,7 +88,7 @@ if (typeof document !== 'undefined' && !document.getElementById(STYLE_ID)) {
 
 // ---- Image proxy with shared LRU blob cache ----
 // Delegates to fetchMediaProxy from mediaPerf (shared concurrency limiter + 503 retry)
-const blobCache = new LRUBlobCache(200);
+const blobCache = SHARED_THUMB_CACHE;
 
 function fetchProxyImage(filePath, mode = 'thumb') {
   return fetchMediaProxy(blobCache, filePath, mode);

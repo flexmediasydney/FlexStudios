@@ -7,7 +7,7 @@ const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','tiff','tif','
 const VIDEO_EXTS = new Set(['mp4','mov','avi','webm','mkv','m4v','wmv']);
 const DOC_EXTS   = new Set(['pdf','ai','eps','svg','dwg']);
 
-const DBX_TIMEOUT_MS = 10_000;
+const DBX_TIMEOUT_MS = 20_000;
 const DBX_CONTENT_TIMEOUT_MS = 60_000; // 60s for binary content (videos can be 100MB+)
 const SUBFOLDER_CONCURRENCY = 5;
 const MAX_PROXY_BYTES = 100 * 1024 * 1024; // 100 MB cap on proxied files
@@ -744,11 +744,11 @@ Deno.serve(async (req) => {
         return errResponse('PROXY_FAILED', 'Could not retrieve file from Dropbox', 502, req);
       }
 
-      // Enforce size cap on proxied content
+      // BEFORE downloading the file, check if it's too large for thumbnail fallback
       const cl = proxyRes.headers.get('content-length');
-      if (cl && parseInt(cl, 10) > MAX_PROXY_BYTES) {
+      if (cl && parseInt(cl, 10) > 10_000_000) { // 10MB max for thumbnail fallback
         await proxyRes.body?.cancel();
-        return errResponse('FILE_TOO_LARGE', 'Requested file exceeds maximum proxy size', 413, req);
+        return errResponse('THUMB_FALLBACK_TOO_LARGE', 'File too large for thumbnail fallback', 413, req);
       }
 
       return new Response(proxyRes.body, {

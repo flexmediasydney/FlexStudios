@@ -148,9 +148,10 @@ export function getVideoStreamUrl(proxyPath) {
  * NOTE: For videos, use getVideoStreamUrl() instead (streaming, no download).
  *
  * @param {string} proxyPath - full Dropbox path
+ * @param {number} retries - retry attempts remaining (default 3)
  * @returns {Promise<string|null>} blob URL
  */
-export async function fetchFullRes(proxyPath) {
+export async function fetchFullRes(proxyPath, retries = 3) {
   if (!proxyPath) return null;
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
@@ -158,11 +159,17 @@ export async function fetchFullRes(proxyPath) {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
       body: JSON.stringify({ action: 'proxy', file_path: proxyPath }),
     });
+    // If 503, retry up to 3 times with backoff
+    if (res.status === 503 && retries > 0) {
+      await new Promise(r => setTimeout(r, 200 * (4 - retries)));
+      return fetchFullRes(proxyPath, retries - 1);
+    }
     if (!res.ok) return null;
     const blob = await res.blob();
     if (blob.size < 1000) return null; // error JSON
     return URL.createObjectURL(blob);
-  } catch {
+  } catch (err) {
+    console.warn('[media]', err.message);
     return null;
   }
 }

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { api } from '@/api/supabaseClient';
 import { useEntityList } from '@/components/hooks/useEntityData';
 import { useFavorites } from '@/components/favorites/useFavorites';
-import { LRUBlobCache, enqueueFetch, decodeImage } from '@/utils/mediaPerf';
+import { SHARED_THUMB_CACHE, enqueueFetch, decodeImage } from '@/utils/mediaPerf';
 import { downloadFile, preloadAdjacentImages, getVideoStreamUrl } from "@/utils/mediaActions";
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -119,8 +119,8 @@ if (typeof document !== 'undefined' && !document.getElementById(DELIVERY_STYLES_
 // ─── Proxy image loading (uses shared LRU cache + global concurrency limiter) ─
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
-// PERF: Replaced ad-hoc Map + manual eviction with shared LRUBlobCache (max 200)
-const imgBlobCache = new LRUBlobCache(200);
+// PERF: Uses shared singleton from mediaPerf (500-entry LRU)
+const imgBlobCache = SHARED_THUMB_CACHE;
 const imgPending = new Set();
 
 // PERF: Uses global concurrency limiter + img.decode() before caching

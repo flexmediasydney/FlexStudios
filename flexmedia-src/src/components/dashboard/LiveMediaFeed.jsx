@@ -26,14 +26,14 @@ import { cn } from "@/lib/utils";
 import { formatDistanceToNow, differenceInDays, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
 import TagManager from "@/components/favorites/TagManager";
-import { LRUBlobCache, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
+import { SHARED_THUMB_CACHE, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // ---- Image proxy with concurrency limiter + LRU blob cache ----
-// PERF: LRU cache with max 200 entries, auto-revokes oldest blob URLs
-const blobCache = new LRUBlobCache(200);
+// PERF: Uses shared singleton from mediaPerf (500-entry LRU)
+const blobCache = SHARED_THUMB_CACHE;
 const pending = new Set();
 
 // PERF: Uses global concurrency limiter + img.decode() before caching
