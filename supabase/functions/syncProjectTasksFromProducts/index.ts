@@ -135,11 +135,31 @@ Deno.serve(async (req) => {
 
         if (activeTaskTemplateIds.has(canonicalTemplateId)) {
           const existingTask = existingTasks.find((t: any) => t.template_id === canonicalTemplateId && !t.is_deleted);
-          if (existingTask && typeof template.estimated_minutes === 'number') {
-            const newEstimate = template.estimated_minutes;
-            if (existingTask.estimated_minutes !== newEstimate) {
-              retryWithBackoff(() => entities.ProjectTask.update(existingTask.id, { estimated_minutes: newEstimate }))
-                .catch((err: any) => console.warn(`Failed to update estimated_minutes for task ${existingTask.id}:`, err.message));
+          if (existingTask) {
+            const updates: Record<string, any> = {};
+            if (typeof template.estimated_minutes === 'number' && existingTask.estimated_minutes !== template.estimated_minutes) {
+              updates.estimated_minutes = template.estimated_minutes;
+            }
+            // Re-sync assignment from current project role
+            if (template.auto_assign_role && template.auto_assign_role !== 'none') {
+              const rk = `${template.auto_assign_role}_id`;
+              const rnk = `${template.auto_assign_role}_name`;
+              const rtk = `${template.auto_assign_role}_type`;
+              const rid = project[rk] || null;
+              const rname = project[rnk] || null;
+              const isTeam = project[rtk] === 'team';
+              const newTo = isTeam ? null : rid;
+              const newToName = isTeam ? null : rname;
+              const newTeam = isTeam ? rid : null;
+              const newTeamName = isTeam ? rname : null;
+              if (existingTask.assigned_to !== newTo) updates.assigned_to = newTo;
+              if (existingTask.assigned_to_name !== newToName) updates.assigned_to_name = newToName;
+              if (existingTask.assigned_to_team_id !== newTeam) updates.assigned_to_team_id = newTeam;
+              if (existingTask.assigned_to_team_name !== newTeamName) updates.assigned_to_team_name = newTeamName;
+            }
+            if (Object.keys(updates).length > 0) {
+              retryWithBackoff(() => entities.ProjectTask.update(existingTask.id, updates))
+                .catch((err: any) => console.warn(`Failed to update task ${existingTask.id}:`, err.message));
             }
           }
           skippedCount++;
