@@ -9,10 +9,10 @@ const CACHE_KEY = 'working_files::all';
 const CACHE_TTL_MS = 30 * 60 * 1000;   // 30 min hard expiry
 const CACHE_STALE_MS = 5 * 60 * 1000;  // 5 min — serve stale + background refresh
 
-const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','tiff','tif','heic','heif']);
+const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','tiff','tif','heic','heif','cr2','cr3','dng','arw','nef','orf','raf','rw2','raw','nrw']);
 const VIDEO_EXTS = new Set(['mp4','mov','avi','webm','mkv','m4v','wmv']);
 const DOC_EXTS   = new Set(['pdf','ai','eps','svg','dwg']);
-const SKIP_EXTS  = new Set(['dng','cr2','cr3','arw','nef','orf','raf','rw2','raw','nrw']);
+const SKIP_EXTS  = new Set<string>(); // Show ALL files including RAW/CR3
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -22,7 +22,7 @@ interface WorkingFile {
   property: string;
   source: 'images' | 'video';
   type: 'image' | 'video' | 'document' | 'other';
-  ext: string;
+  extension: string;
   size: number;
   client_modified: string;
   server_modified: string;
@@ -218,81 +218,63 @@ async function listFolder(
 }
 
 /**
- * List all files under a shared link by walking subfolders manually.
- * Dropbox doesn't allow recursive=true on shared links, so we list the
- * top level to discover property folders, then list each subfolder.
+ * List all files under a shared link by recursively walking subfolders.
+ * Dropbox doesn't allow recursive=true on shared links, so we walk manually
+ * with bounded concurrency and depth limit (6 levels deep).
  */
 async function listAllUnderSharedLink(
   token: string,
   sharedLink: string,
+  maxDepth = 6,
 ): Promise<{ entries: Record<string, unknown>[]; truncated: boolean }> {
-  const { entries: topEntries, truncated: topTruncated } = await listFolder(token, '', sharedLink);
-
-  const subfolders: Record<string, unknown>[] = [];
   const allEntries: Record<string, unknown>[] = [];
-  let anyTruncated = topTruncated;
+  let anyTruncated = false;
 
-  for (const e of topEntries) {
-    if (e['.tag'] === 'folder') {
-      subfolders.push(e);
-    } else if (e['.tag'] === 'file') {
-      allEntries.push(e);
-    }
-  }
+  async function walk(path: string, depth: number) {
+    if (allEntries.length >= MAX_LIST_ENTRIES) return;
 
-  // List each subfolder (property folder) with concurrency limit
-  // Shared-link entries often lack path_display, so we construct paths manually.
-  let next = 0;
-  async function worker() {
-    while (next < subfolders.length) {
-      const idx = next++;
-      const sf = subfolders[idx];
-      const sfName = sf.name as string;
-      // Skip shell/template folders
-      if (sfName.includes('SHELL')) continue;
+    const { entries, truncated } = await listFolder(token, path, sharedLink);
+    if (truncated) anyTruncated = true;
 
-      try {
-        const sfPath = (sf.path_display as string) || (sf.path_lower as string) || `/${sfName}`;
-        const { entries: subEntries, truncated: subTruncated } = await listFolder(token, sfPath, sharedLink);
-        if (subTruncated) anyTruncated = true;
-
-        for (const se of subEntries) {
-          if (se['.tag'] === 'file') {
-            // Ensure path_display is set for files
-            if (!se.path_display) {
-              se.path_display = `${sfPath}/${se.name}`;
-            }
-            allEntries.push(se);
-          } else if (se['.tag'] === 'folder') {
-            // Go one more level deep (property > room/area > files)
-            const deepName = se.name as string;
-            const deepPath = (se.path_display as string) || (se.path_lower as string) || `${sfPath}/${deepName}`;
-            try {
-              const { entries: deepEntries, truncated: deepTruncated } = await listFolder(token, deepPath, sharedLink);
-              if (deepTruncated) anyTruncated = true;
-              for (const de of deepEntries) {
-                if (de['.tag'] === 'file') {
-                  if (!de.path_display) {
-                    de.path_display = `${deepPath}/${de.name}`;
-                  }
-                  allEntries.push(de);
-                }
-              }
-            } catch (deepErr: any) {
-              console.warn(`Failed listing deep folder ${deepPath}: ${deepErr?.message}`);
-            }
-          }
+    const subfolders: { path: string; name: string }[] = [];
+    for (const e of entries) {
+      if (e['.tag'] === 'file') {
+        if (!e.path_display) {
+          e.path_display = path ? `${path}/${e.name}` : `/${e.name}`;
         }
-      } catch (err: any) {
-        console.warn(`Failed listing subfolder ${sfName}: ${err?.message}`);
+        allEntries.push(e);
+      } else if (e['.tag'] === 'folder' && depth < maxDepth) {
+        const name = e.name as string;
+        if (name.includes('SHELL')) continue;
+        const folderPath = (e.path_display as string) || (e.path_lower as string) || (path ? `${path}/${name}` : `/${name}`);
+        subfolders.push({ path: folderPath, name });
       }
     }
+
+    // Walk subfolders with bounded concurrency
+    if (subfolders.length > 0) {
+      let next = 0;
+      async function worker() {
+        while (next < subfolders.length) {
+          if (allEntries.length >= MAX_LIST_ENTRIES) break;
+          const idx = next++;
+          try {
+            await walk(subfolders[idx].path, depth + 1);
+          } catch (err: any) {
+            console.warn(`Failed listing ${subfolders[idx].path}: ${err?.message}`);
+          }
+        }
+      }
+      const workers = Array.from(
+        { length: Math.min(SUBFOLDER_CONCURRENCY, subfolders.length) },
+        () => worker()
+      );
+      await Promise.all(workers);
+    }
   }
 
-  const workers = Array.from({ length: Math.min(SUBFOLDER_CONCURRENCY, subfolders.length) }, () => worker());
-  await Promise.all(workers);
-
-  return { entries: allEntries, truncated: anyTruncated };
+  await walk('', 0);
+  return { entries: allEntries, truncated: anyTruncated || allEntries.length >= MAX_LIST_ENTRIES };
 }
 
 // ─── Cache helpers ──────────────────────────────────────────────────────────
@@ -386,7 +368,7 @@ async function fetchWorkingFiles(token: string): Promise<{ files: WorkingFile[];
           property: extractProperty(path),
           source,
           type: classifyFile(name),
-          ext,
+          extension: ext,
           size: (e.size as number) || 0,
           client_modified: (e.client_modified as string) || '',
           server_modified: (e.server_modified as string) || '',

@@ -11,7 +11,7 @@ import {
   RefreshCw, Table2, FolderOpen, ArrowUpDown, Clock
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format } from "date-fns";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -27,6 +27,8 @@ function getTypeColor(ext) {
   const e = ext?.toLowerCase();
   if (["jpg", "jpeg", "png", "webp", "heic", "tiff"].includes(e))
     return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400";
+  if (["cr2", "cr3", "dng", "arw", "nef", "orf", "raf", "rw2", "raw", "nrw"].includes(e))
+    return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400";
   if (["mp4", "mov", "avi", "mkv", "wmv"].includes(e))
     return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
   if (["pdf", "doc", "docx"].includes(e))
@@ -45,6 +47,7 @@ function getSourceBadge(file) {
 function getTypeBadge(ext) {
   const e = ext?.toLowerCase();
   if (["jpg", "jpeg", "png", "webp", "heic", "tiff"].includes(e)) return { label: "IMG", color: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" };
+  if (["cr2", "cr3", "dng", "arw", "nef", "orf", "raf", "rw2", "raw", "nrw"].includes(e)) return { label: "RAW", color: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400" };
   if (["mp4", "mov", "avi", "mkv", "wmv", "mxf", "prores"].includes(e)) return { label: "VID", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400" };
   if (["pdf", "doc", "docx"].includes(e)) return { label: "DOC", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" };
   if (["zip", "rar", "7z"].includes(e)) return { label: "ZIP", color: "bg-muted text-muted-foreground" };
@@ -52,7 +55,7 @@ function getTypeBadge(ext) {
 }
 
 function isImageExt(ext) {
-  return ["jpg", "jpeg", "png", "webp", "heic", "tiff", "raw", "cr2", "nef", "arw"].includes(ext?.toLowerCase());
+  return ["jpg", "jpeg", "png", "webp", "heic", "tiff", "cr2", "cr3", "dng", "arw", "nef", "orf", "raf", "rw2", "raw", "nrw"].includes(ext?.toLowerCase());
 }
 
 function isVideoExt(ext) {
@@ -79,6 +82,18 @@ function buildComparator(sortBy, sortDir) {
       case "property":
         av = (a.property || "").toLowerCase();
         bv = (b.property || "").toLowerCase();
+        return dir * av.localeCompare(bv);
+      case "sub1":
+        av = (a.sub1 || "").toLowerCase();
+        bv = (b.sub1 || "").toLowerCase();
+        return dir * av.localeCompare(bv);
+      case "sub2":
+        av = (a.sub2 || "").toLowerCase();
+        bv = (b.sub2 || "").toLowerCase();
+        return dir * av.localeCompare(bv);
+      case "sub3":
+        av = (a.sub3 || "").toLowerCase();
+        bv = (b.sub3 || "").toLowerCase();
         return dir * av.localeCompare(bv);
       case "type":
         av = (a.extension || "").toLowerCase();
@@ -127,14 +142,13 @@ function SortHeader({ label, field, sortBy, sortDir, onSort, className }) {
 // ── File row ─────────────────────────────────────────────────────────────────
 
 function FileRow({ file, idx }) {
-  const source = getSourceBadge(file);
-  const SourceIcon = source.icon;
   const typeBadge = getTypeBadge(file.extension);
+  const sourceColor = file.source === "video" ? "bg-purple-500" : "bg-blue-500";
   const created = file.client_modified
-    ? formatDistanceToNow(new Date(file.client_modified), { addSuffix: true })
+    ? format(new Date(file.client_modified), "dd MMM yy HH:mm")
     : "—";
   const modified = file.server_modified
-    ? formatDistanceToNow(new Date(file.server_modified), { addSuffix: true })
+    ? format(new Date(file.server_modified), "dd MMM yy HH:mm")
     : "—";
 
   return (
@@ -142,18 +156,23 @@ function FileRow({ file, idx }) {
       "group border-b border-border/30 hover:bg-muted/30 transition-colors",
       idx % 2 === 0 && "bg-muted/10"
     )}>
-      {/* Source Directory */}
-      <td className="px-3 py-2">
-        <span className={cn("inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap", source.color)}>
-          <SourceIcon className="h-3 w-3" />
-          {source.label}
-        </span>
-      </td>
       {/* Property */}
       <td className="px-3 py-2 max-w-[160px]">
         <span className="text-xs font-mono truncate block" title={file.property || "—"}>
           {file.property || "Root"}
         </span>
+      </td>
+      {/* Folder 1 */}
+      <td className="px-3 py-2 max-w-[120px] hidden xl:table-cell">
+        <span className="text-xs truncate block text-muted-foreground" title={file.sub1 || ""}>{file.sub1 || "—"}</span>
+      </td>
+      {/* Folder 2 */}
+      <td className="px-3 py-2 max-w-[120px] hidden xl:table-cell">
+        <span className="text-xs truncate block text-muted-foreground" title={file.sub2 || ""}>{file.sub2 || "—"}</span>
+      </td>
+      {/* Folder 3 */}
+      <td className="px-3 py-2 max-w-[100px] hidden 2xl:table-cell">
+        <span className="text-xs truncate block text-muted-foreground" title={file.sub3 || ""}>{file.sub3 || "—"}</span>
       </td>
       {/* File Name */}
       <td className="px-3 py-2 max-w-[220px]">
@@ -161,21 +180,24 @@ function FileRow({ file, idx }) {
           {file.name || "—"}
         </span>
       </td>
-      {/* Type */}
+      {/* Type + Source indicator */}
       <td className="px-3 py-2">
-        <span className={cn("inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold", typeBadge.color)}>
-          {typeBadge.label}
+        <span className="inline-flex items-center gap-1.5">
+          <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", sourceColor)} title={file.source === "video" ? "Video Dir" : "Images Dir"} />
+          <span className={cn("inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold", typeBadge.color)}>
+            {typeBadge.label}
+          </span>
         </span>
       </td>
       {/* Size */}
       <td className="px-3 py-2 text-right">
         <span className="text-xs font-mono tabular-nums">{formatSize(file.size)}</span>
       </td>
-      {/* Created */}
+      {/* Created (actual timestamp) */}
       <td className="px-3 py-2 text-right hidden lg:table-cell">
         <span className="text-xs font-mono text-muted-foreground tabular-nums" title={file.client_modified || ""}>{created}</span>
       </td>
-      {/* Modified */}
+      {/* Modified (actual timestamp) */}
       <td className="px-3 py-2 text-right">
         <span className="text-xs font-mono text-muted-foreground tabular-nums" title={file.server_modified || ""}>{modified}</span>
       </td>
@@ -192,7 +214,7 @@ function PropertyGroup({ property, files, sortBy, sortDir, onSort }) {
   const videoCount = files.filter(f => isVideoExt(f.extension)).length;
   const totalSize = files.reduce((s, f) => s + (f.size || 0), 0);
   const latestMod = files.reduce((latest, f) => {
-    const t = f.modified ? new Date(f.modified).getTime() : 0;
+    const t = f.server_modified ? new Date(f.server_modified).getTime() : 0;
     return t > latest ? t : latest;
   }, 0);
 
@@ -229,7 +251,7 @@ function PropertyGroup({ property, files, sortBy, sortDir, onSort }) {
           {latestMod > 0 && (
             <span className="flex items-center gap-1">
               <Clock className="h-3 w-3" />
-              {formatDistanceToNow(new Date(latestMod), { addSuffix: false })}
+              {format(new Date(latestMod), "dd MMM yy HH:mm")}
             </span>
           )}
         </div>
@@ -240,20 +262,32 @@ function PropertyGroup({ property, files, sortBy, sortDir, onSort }) {
           <table className="w-full text-left">
             <thead>
               <tr className="bg-muted/50 border-b border-border/50">
-                <th className="px-3 py-1.5 w-[70px]">
-                  <SortHeader label="Source" field="type" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+                <th className="px-3 py-1.5">
+                  <SortHeader label="Property" field="property" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+                </th>
+                <th className="px-3 py-1.5 hidden xl:table-cell">
+                  <SortHeader label="Folder 1" field="sub1" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+                </th>
+                <th className="px-3 py-1.5 hidden xl:table-cell">
+                  <SortHeader label="Folder 2" field="sub2" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+                </th>
+                <th className="px-3 py-1.5 hidden 2xl:table-cell">
+                  <SortHeader label="Folder 3" field="sub3" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
                 </th>
                 <th className="px-3 py-1.5">
                   <SortHeader label="File Name" field="name" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
                 </th>
-                <th className="px-3 py-1.5 w-[70px]">
+                <th className="px-3 py-1.5 w-[80px]">
                   <SortHeader label="Type" field="type" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
                 </th>
                 <th className="px-3 py-1.5 w-[80px] text-right">
                   <SortHeader label="Size" field="size" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="justify-end" />
                 </th>
-                <th className="px-3 py-1.5 w-[90px] text-right">
-                  <SortHeader label="Modified" field="modified" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="justify-end" />
+                <th className="px-3 py-1.5 w-[110px] text-right hidden lg:table-cell">
+                  <SortHeader label="Created" field="client_modified" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="justify-end" />
+                </th>
+                <th className="px-3 py-1.5 w-[110px] text-right">
+                  <SortHeader label="Modified" field="server_modified" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="justify-end" />
                 </th>
               </tr>
             </thead>
@@ -307,7 +341,16 @@ export default function WorkingFilesPulse() {
     queryKey: ["working-files-feed"],
     queryFn: async () => {
       const res = await api.functions.invoke("getWorkingFilesFeed", {});
-      return res?.data || res || {};
+      const data = res?.data || res || {};
+      // Compute subfolder path levels from path (between property and filename)
+      if (data.files) {
+        data.files = data.files.map(f => {
+          const pathParts = (f.path || '').replace(/^\/+/, '').split('/');
+          const subs = pathParts.slice(1, -1); // skip property (idx 0) and filename (last)
+          return { ...f, sub1: subs[0] || '', sub2: subs[1] || '', sub3: subs[2] || '' };
+        });
+      }
+      return data;
     },
     refetchInterval: 45_000,
     staleTime: 30_000,
@@ -350,6 +393,9 @@ export default function WorkingFilesPulse() {
       result = result.filter(f =>
         (f.name || "").toLowerCase().includes(q) ||
         (f.property || "").toLowerCase().includes(q) ||
+        (f.sub1 || "").toLowerCase().includes(q) ||
+        (f.sub2 || "").toLowerCase().includes(q) ||
+        (f.sub3 || "").toLowerCase().includes(q) ||
         (f.extension || "").toLowerCase().includes(q)
       );
     }
@@ -404,8 +450,8 @@ export default function WorkingFilesPulse() {
     }
     // Sort groups by latest modified
     return Object.entries(groups).sort(([, a], [, b]) => {
-      const la = Math.max(...a.map(f => f.modified ? new Date(f.modified).getTime() : 0));
-      const lb = Math.max(...b.map(f => f.modified ? new Date(f.modified).getTime() : 0));
+      const la = Math.max(...a.map(f => f.server_modified ? new Date(f.server_modified).getTime() : 0));
+      const lb = Math.max(...b.map(f => f.server_modified ? new Date(f.server_modified).getTime() : 0));
       return lb - la;
     });
   }, [filtered]);
@@ -552,25 +598,31 @@ export default function WorkingFilesPulse() {
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-muted/50 border-b border-border/50">
-                  <th className="px-3 py-2 w-[100px]">
-                    <SortHeader label="Source" field="source" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
-                  </th>
                   <th className="px-3 py-2">
                     <SortHeader label="Property" field="property" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  </th>
+                  <th className="px-3 py-2 hidden xl:table-cell">
+                    <SortHeader label="Folder 1" field="sub1" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  </th>
+                  <th className="px-3 py-2 hidden xl:table-cell">
+                    <SortHeader label="Folder 2" field="sub2" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  </th>
+                  <th className="px-3 py-2 hidden 2xl:table-cell">
+                    <SortHeader label="Folder 3" field="sub3" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   </th>
                   <th className="px-3 py-2">
                     <SortHeader label="File Name" field="name" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   </th>
-                  <th className="px-3 py-2 w-[60px]">
+                  <th className="px-3 py-2 w-[80px]">
                     <SortHeader label="Type" field="type" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   </th>
                   <th className="px-3 py-2 w-[80px] text-right">
                     <SortHeader label="Size" field="size" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="justify-end" />
                   </th>
-                  <th className="px-3 py-2 w-[100px] text-right hidden lg:table-cell">
+                  <th className="px-3 py-2 w-[110px] text-right hidden lg:table-cell">
                     <SortHeader label="Created" field="client_modified" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="justify-end" />
                   </th>
-                  <th className="px-3 py-2 w-[100px] text-right">
+                  <th className="px-3 py-2 w-[110px] text-right">
                     <SortHeader label="Modified" field="server_modified" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="justify-end" />
                   </th>
                 </tr>
