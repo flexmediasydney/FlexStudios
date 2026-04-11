@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useEntityList } from '@/components/hooks/useEntityData';
+import { usePriceGate } from '@/components/auth/RoleGate';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
@@ -12,6 +13,7 @@ import { createPageUrl } from '@/utils';
 const pv = (p) => p.invoiced_amount ?? p.calculated_price ?? p.price ?? 0;
 
 export default function RevenueIntelligence() {
+  const { visible: showPricing } = usePriceGate();
   const [period, setPeriod] = useState('weekly');
   const { data: projects = [], loading } = useEntityList('Project', '-created_date', 1000);
   const { data: agencies = [] } = useEntityList('Agency', 'name');
@@ -103,6 +105,7 @@ export default function RevenueIntelligence() {
 
   const maxWeekly = Math.max(...weeklyData.map(w => w.total), 1);
 
+  if (!showPricing) return null;
   if (loading) return <div className="space-y-4">{[...Array(3)].map((_, i) => <div key={i} className="h-28 bg-muted animate-pulse rounded-xl" />)}</div>;
 
   return (

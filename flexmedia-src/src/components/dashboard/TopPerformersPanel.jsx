@@ -4,8 +4,10 @@ import { Badge } from "@/components/ui/badge";
 import { Trophy, TrendingUp, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { usePriceGate } from "@/components/auth/RoleGate";
 
 export default function TopPerformersPanel({ topAgencies, topAgents, topUsers }) {
+  const { visible: showPricing } = usePriceGate();
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -37,7 +39,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
                     {agency.name}
                   </p>
                   <p className="text-xs text-muted-foreground tabular-nums">
-                    ${(agency.revenue / 1000).toFixed(1)}k • {agency.count} projects
+                    {showPricing ? `$${(agency.revenue / 1000).toFixed(1)}k • ` : ''}{agency.count} projects
                   </p>
                 </div>
                 <TrendingUp className="h-4 w-4 text-green-600 opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -68,7 +70,7 @@ export default function TopPerformersPanel({ topAgencies, topAgents, topUsers })
                     {agent.name}
                   </p>
                   <p className="text-xs text-muted-foreground tabular-nums">
-                    ${((agent.revenue || 0) / 1000).toFixed(1)}k • {agent.count || 0} projects
+                    {showPricing ? `$${((agent.revenue || 0) / 1000).toFixed(1)}k • ` : ''}{agent.count || 0} projects
                   </p>
                 </div>
               </Link>

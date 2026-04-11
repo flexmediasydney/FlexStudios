@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useEntityList, useEntityData } from '@/components/hooks/useEntityData';
-import { useCurrentUser } from '@/components/auth/PermissionGuard';
+import { useCurrentUser, usePermissions } from '@/components/auth/PermissionGuard';
 import { api } from '@/api/supabaseClient';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ArrowLeft, Mail, Phone, Building, AlertCircle } from 'lucide-react';
 import { createPageUrl } from '@/utils';
+import { toast } from 'sonner';
 import { Link, useNavigate } from 'react-router-dom';
 import ProspectEditPanel from '@/components/prospecting/ProspectEditPanel';
 import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
@@ -17,6 +18,7 @@ export default function ProspectDetails() {
   const urlParams = new URLSearchParams(window.location.search);
   const agentId = urlParams.get('id');
   const { data: currentUser } = useCurrentUser();
+  const { canManageContacts } = usePermissions();
   const { data: agent, loading, error } = useEntityData('Agent', agentId);
    const { data: interactions = [] } = useEntityList(agentId ? 'InteractionLog' : null, '-date_time', 500, agentId ? { entity_type: 'Agent', entity_id: agentId } : null);
    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -24,6 +26,7 @@ export default function ProspectDetails() {
    const prospectInteractions = interactions?.sort((a, b) => new Date(b.date_time) - new Date(a.date_time)) || [];
 
   const handleDelete = async () => {
+    if (!canManageContacts) { toast.error('Permission denied'); return; }
     try {
       // Clean up orphans BEFORE deleting the agent
       const [logs, matrices, events] = await Promise.all([
@@ -176,44 +179,46 @@ export default function ProspectDetails() {
         </Tabs>
 
         {/* Delete Section */}
-        <div className="mt-12 pt-8 border-t">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="font-semibold">Delete Person</h3>
-              <p className="text-sm text-muted-foreground mt-1">This action cannot be undone</p>
+        {canManageContacts && (
+          <div className="mt-12 pt-8 border-t">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold">Delete Person</h3>
+                <p className="text-sm text-muted-foreground mt-1">This action cannot be undone</p>
+              </div>
+              <Button
+                variant="destructive"
+                onClick={() => setShowDeleteConfirm(true)}
+              >
+                Delete
+              </Button>
             </div>
-            <Button
-              variant="destructive"
-              onClick={() => setShowDeleteConfirm(true)}
-            >
-              Delete
-            </Button>
-          </div>
 
-          {showDeleteConfirm && (
-            <div className="mt-4 p-4 bg-destructive/10 border border-destructive/30 rounded-lg flex gap-3 items-center">
-              <div className="flex-1">
-                <p className="font-semibold text-sm">Confirm deletion?</p>
+            {showDeleteConfirm && (
+              <div className="mt-4 p-4 bg-destructive/10 border border-destructive/30 rounded-lg flex gap-3 items-center">
+                <div className="flex-1">
+                  <p className="font-semibold text-sm">Confirm deletion?</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowDeleteConfirm(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleDelete}
+                  >
+                    Delete Person
+                  </Button>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowDeleteConfirm(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleDelete}
-                >
-                  Delete Person
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

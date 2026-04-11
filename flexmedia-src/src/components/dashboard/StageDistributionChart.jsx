@@ -2,8 +2,10 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { PROJECT_STAGES } from "@/components/projects/projectStatuses";
 import { Layers } from "lucide-react";
+import { usePriceGate } from "@/components/auth/RoleGate";
 
 export default function StageDistributionChart({ projects }) {
+  const { visible: showPricing } = usePriceGate();
   const data = PROJECT_STAGES.map(stage => {
     const stageProjects = projects.filter(p => p.status === stage.value);
     const revenue = stageProjects.reduce((sum, p) => sum + (p.calculated_price || p.price || 0), 0);
@@ -45,10 +47,11 @@ export default function StageDistributionChart({ projects }) {
                 boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
                 fontSize: '12px'
               }}
-              formatter={(value, name) => [
-                name === 'count' ? `${value} projects` : `$${value.toLocaleString()}`,
-                name === 'count' ? 'Projects' : 'Revenue'
-              ]}
+              formatter={(value, name) => {
+                if (name === 'count') return [`${value} projects`, 'Projects'];
+                if (!showPricing) return [null, null];
+                return [`$${value.toLocaleString()}`, 'Revenue'];
+              }}
             />
             <Bar dataKey="count" radius={[0, 4, 4, 0]}>
               {data.map((entry, index) => (

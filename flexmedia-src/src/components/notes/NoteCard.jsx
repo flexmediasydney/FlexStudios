@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { api } from '@/api/supabaseClient';
+import { usePermissions } from '@/components/auth/PermissionGuard';
 
 export default function NoteCard({ 
   note, 
@@ -20,6 +21,7 @@ export default function NoteCard({
   replyCount = 0
 }) {
   const [isLoading, setIsLoading] = useState(false);
+  const { isManagerOrAbove } = usePermissions();
 
   const handlePin = async () => {
     setIsLoading(true);
@@ -78,10 +80,12 @@ export default function NoteCard({
               <MessageCircle className="h-4 w-4 mr-2" />
               Reply
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleDelete} className="text-red-600">
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </DropdownMenuItem>
+            {isManagerOrAbove && (
+              <DropdownMenuItem onClick={handleDelete} className="text-red-600">
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

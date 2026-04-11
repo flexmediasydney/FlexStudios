@@ -1,4 +1,5 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { usePriceGate } from "@/components/auth/RoleGate";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DollarSign, TrendingUp, AlertTriangle, BarChart3 } from "lucide-react";
@@ -111,8 +112,10 @@ function EmptyState() {
 /* ---------- main component ---------- */
 
 export default function BusinessIntelDash() {
+  const { visible: showPricing } = usePriceGate();
   const { data: stats, isLoading } = useDashboardStats();
 
+  if (!showPricing) return null;
   if (isLoading) return <LoadingSkeleton />;
 
   const revenue = stats?.revenue;
