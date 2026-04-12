@@ -330,8 +330,15 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
 
   const r2 = (n: number) => Math.round(n * 100) / 100;
 
-  // Build per-user stats
-  const allUserIds = new Set([...userLoggedThisWeek.keys(), ...userDueThisWeek.keys(), ...userOverdue.keys(), ...userUnscheduled.keys()]);
+  // Build per-user stats — include ALL active users, not just those with time/tasks.
+  // Users with zero load still show up as having free capacity.
+  const allUserIds = new Set([
+    ...userLoggedThisWeek.keys(),
+    ...userDueThisWeek.keys(),
+    ...userOverdue.keys(),
+    ...userUnscheduled.keys(),
+    ...users.filter((u: any) => u.is_active).map((u: any) => u.id),
+  ]);
   const byUser: any[] = [];
   let totalCommitted = 0, totalLogged = 0, totalTarget = 0;
 
