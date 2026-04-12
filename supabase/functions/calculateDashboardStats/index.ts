@@ -252,7 +252,7 @@ function computeTasks(tasks: any[]): StatGroup {
   };
 }
 
-function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employeeRoles: any[]): StatGroup {
+function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employeeRoles: any[], goalProjectIds: Set<string>): StatGroup {
   const now = new Date();
 
   // Week boundaries (Mon-Sun Sydney time)
@@ -286,6 +286,19 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
     if (logDate && weekStartStr && weekEndStr && logDate >= weekStartStr && logDate < weekEndStr) {
       const hrs = (log.total_seconds || 0) / 3600;
       userLoggedThisWeek.set(log.user_id, (userLoggedThisWeek.get(log.user_id) || 0) + hrs);
+    }
+  }
+
+  // Goal hours THIS WEEK per user (subset of total logged)
+  const userGoalHoursThisWeek = new Map<string, number>();
+  for (const log of timeLogs) {
+    if (!log.user_id || !log.start_time || !log.project_id) continue;
+    if (!goalProjectIds.has(log.project_id)) continue;
+    const parsed = parseTs(String(log.start_time));
+    const logDate = sydneyDate(parsed);
+    if (logDate && weekStartStr && weekEndStr && logDate >= weekStartStr && logDate < weekEndStr) {
+      const hrs = (log.total_seconds || 0) / 3600;
+      userGoalHoursThisWeek.set(log.user_id, (userGoalHoursThisWeek.get(log.user_id) || 0) + hrs);
     }
   }
 
@@ -376,6 +389,8 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
       // SECONDARY
       progress_pct: progressPct,
       hours_logged: r2(logged),
+      goal_hours_logged: r2(userGoalHoursThisWeek.get(uid) || 0),
+      production_hours_logged: r2(logged - (userGoalHoursThisWeek.get(uid) || 0)),
       // BREAKDOWN
       hours_due_this_week: r2(dueThisWeek),
       hours_overdue: r2(overdue),
@@ -619,15 +634,20 @@ Deno.serve(async (req) => {
 
     const now = new Date();
 
+    // Split production vs goal projects — goals are excluded from revenue/pipeline/delivery/velocity
+    const productionProjects = projects.filter((p: any) => p.source !== 'goal');
+    const goalProjects = projects.filter((p: any) => p.source === 'goal');
+    const goalProjectIds = new Set(goalProjects.map((p: any) => p.id));
+
     // ── Compute all stat groups ──────────────────────────────────────────
 
     const statGroups: StatGroup[] = [
-      computeRevenue(projects, agencies, now),
-      computePipeline(projects, tasks, now),
+      computeRevenue(productionProjects, agencies, now),
+      computePipeline(productionProjects, tasks, now),
       computeTasks(tasks),
-      computeUtilization(timeLogs, tasks, users, employeeRoles),
-      computeDelivery(projects, revisions, now),
-      computeVelocity(projects, now),
+      computeUtilization(timeLogs, tasks, users, employeeRoles, goalProjectIds),
+      computeDelivery(productionProjects, revisions, now),
+      computeVelocity(productionProjects, now),
     ];
 
     // ── Upsert all stats ─────────────────────────────────────────────────
