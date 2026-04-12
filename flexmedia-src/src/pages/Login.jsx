@@ -471,9 +471,12 @@ export default function Login() {
             </p>
           </form>
         )}
-        {/* Contact admin notice */}
+        {/* Register link */}
         <p className="text-center text-xs text-muted-foreground/70 pt-2 border-t border-border/40">
-          Need an account? Contact your administrator.
+          Have an invite code?{' '}
+          <a href="/register" className="text-primary font-medium hover:underline">
+            Register here
+          </a>
         </p>
       </div>
     </Shell>
