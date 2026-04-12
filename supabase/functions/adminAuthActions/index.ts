@@ -120,38 +120,79 @@ Deno.serve(async (req) => {
       const { email, password, fullName, code } = body;
       if (!email || !password || !code) return error('email, password, code required', 400);
 
+      const normalizedEmail = email.toLowerCase().trim();
+
       // Validate invite code (using atomic claim)
       const { data: codeData, error: claimErr } = await admin.rpc('claim_invite_code', { p_code: code });
       if (claimErr) return error('Invalid, expired, or fully used invite code', 400);
 
-      // Create auth user
-      const { data: authData, error: signupErr } = await admin.auth.admin.createUser({
-        email: email.toLowerCase().trim(),
-        password,
-        email_confirm: true,
-        user_metadata: { full_name: fullName, role: codeData.role },
-      });
-      if (signupErr) return error(signupErr.message, 400);
+      let userId: string;
 
-      // Create users table record
-      await admin.from('users').insert({
-        id: authData.user.id,
-        email: email.toLowerCase().trim(),
-        full_name: fullName || email.split('@')[0],
+      // Check if auth user already exists (e.g., from Google SSO or previous attempt)
+      let existing: any = null;
+      try {
+        const { data: { users: found } } = await admin.auth.admin.listUsers({ page: 1, perPage: 50 });
+        existing = (found || []).find((u: any) => u.email === normalizedEmail) || null;
+      } catch { /* no existing user */ }
+
+      if (existing) {
+        // Auth user exists (Google SSO or previous partial attempt)
+        // Update their password and metadata instead of creating new
+        userId = existing.id;
+        const { error: updateErr } = await admin.auth.admin.updateUserById(userId, {
+          password,
+          email_confirm: true,
+          user_metadata: {
+            ...existing.user_metadata,
+            full_name: fullName || existing.user_metadata?.full_name,
+            role: codeData.role,
+          },
+        });
+        if (updateErr) {
+          // Rollback: unclaim the invite code
+          await admin.from('invite_codes').update({ use_count: admin.rpc ? 0 : 0 }).eq('code', code);
+          return error(updateErr.message, 400);
+        }
+      } else {
+        // Create new auth user
+        const { data: authData, error: signupErr } = await admin.auth.admin.createUser({
+          email: normalizedEmail,
+          password,
+          email_confirm: true,
+          user_metadata: { full_name: fullName, role: codeData.role },
+        });
+        if (signupErr) {
+          // Rollback: unclaim the invite code
+          await admin.rpc('unclaim_invite_code', { p_code: code }).catch(() => {
+            // If unclaim RPC doesn't exist, manually decrement
+            admin.from('invite_codes')
+              .update({ use_count: 0 })
+              .eq('code', code)
+              .catch(() => {});
+          });
+          return error(signupErr.message, 400);
+        }
+        userId = authData.user.id;
+      }
+
+      // Create/update users table record (upsert handles partial previous attempts)
+      await admin.from('users').upsert({
+        id: userId,
+        email: normalizedEmail,
+        full_name: fullName || normalizedEmail.split('@')[0],
         role: codeData.role,
         is_active: true,
-        auth_provider: 'email',
-      });
+      }, { onConflict: 'id' });
 
       // Log auth event
       await admin.from('auth_events').insert({
-        user_id: authData.user.id,
-        user_email: email,
+        user_id: userId,
+        user_email: normalizedEmail,
         event_type: 'user_registered',
-        metadata: { invite_code: code, role: codeData.role },
-      });
+        metadata: { invite_code: code, role: codeData.role, had_existing_auth: !!existing },
+      }).catch(() => {}); // non-fatal
 
-      return json({ success: true, user_id: authData.user.id, role: codeData.role });
+      return json({ success: true, user_id: userId, role: codeData.role });
     }
 
     return error(`Unknown action: ${action}`, 400);
