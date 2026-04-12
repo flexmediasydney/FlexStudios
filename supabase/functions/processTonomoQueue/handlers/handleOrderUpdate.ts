@@ -1,4 +1,4 @@
-import { invokeFunction } from '../../_shared/supabase.ts';
+import { invokeFunction, getAdminClient } from '../../_shared/supabase.ts';
 import { ACTIVE_STAGES } from '../types.ts';
 import {
   deduplicateProjectItems,
@@ -11,13 +11,48 @@ import {
 } from '../utils.ts';
 import { handleScheduled } from './handleScheduled.ts';
 
-export async function handleOrderUpdate(entities: any, orderId: string, p: any) {
-  const project = await findProjectByOrderId(entities, orderId);
+/**
+ * Fallback: try to find a project by appointment ID.
+ * Payment webhooks from Tonomo often send the appointment ID as orderId,
+ * not the order-level ID that was stored when the project was created.
+ */
+async function findProjectByAppointmentId(appointmentId: string): Promise<any> {
+  if (!appointmentId) return null;
+  try {
+    const admin = getAdminClient();
+    const { data } = await admin
+      .from('projects')
+      .select('*')
+      .contains('tonomo_appointment_ids', JSON.stringify([appointmentId]))
+      .limit(1)
+      .maybeSingle();
+    return data || null;
+  } catch { return null; }
+}
+
+export async function handleOrderUpdate(entities: any, orderId: string, p: any, paymentOnly = false) {
+  // Try primary lookup by order ID, then fallback to appointment ID
+  let project = await findProjectByOrderId(entities, orderId);
+  let matchedBy = 'order_id';
 
   if (!project) {
+    // Fallback: the orderId might actually be an appointment ID
+    project = await findProjectByAppointmentId(orderId);
+    if (project) matchedBy = 'appointment_id';
+  }
+
+  if (!project) {
+    // ── Payment-only events: NEVER create a project ─────────────────────
+    if (paymentOnly) {
+      await writeAudit(entities, {
+        action: 'payment_updated', entity_type: 'Project', entity_id: null,
+        operation: 'skipped', tonomo_order_id: orderId,
+        notes: `Payment update for unknown order "${orderId}" — no matching project found. Skipping (payment events never create projects).`,
+      });
+      return { summary: `Skipped payment update — no project for ${orderId}`, skipped: true };
+    }
+
     // GUARD: If orderId matches the event/appointment ID, refuse to create.
-    // BUT: On order-level payloads, p.id is the invoiceId (same as orderId), NOT an event ID.
-    // Only skip when p.id is genuinely a calendar event ID, not an invoice/order ID.
     const eventId = p.id;
     const isInvoiceId = eventId && (eventId === p.invoiceId || p.entityTypeName === 'OrderEntity' || p.orderId === eventId);
     if (eventId && orderId === eventId && !isInvoiceId) {
@@ -29,15 +64,13 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any) 
       return { summary: `Skipped — orderId ${orderId} is an event ID`, skipped: true };
     }
 
-    // STRICT: Only create a project from booking_created_or_changed if the payload has
-    // sufficient data indicating this is a genuine new booking — not just a metadata update.
+    // STRICT: Only create if the payload looks like a genuine new booking
     const orderName = p.order?.orderName || p.orderName || null;
     const address = p.address?.formatted_address || p.location || p.order?.property_address?.formatted_address || null;
     const hasServices = (p.order?.services_a_la_cart || p.services_a_la_cart || p.order?.services || p.services || []).length > 0;
     const hasBookingFlow = !!(p.order?.bookingFlow || p.bookingFlow);
     const hasAppointment = !!(p.when?.start_time);
 
-    // Require address/name AND at least one of: services, booking flow, or appointment time
     if ((!orderName && !address) || (!hasServices && !hasBookingFlow && !hasAppointment)) {
       await writeAudit(entities, {
         action: 'booking_created_or_changed', entity_type: 'Project', entity_id: null,

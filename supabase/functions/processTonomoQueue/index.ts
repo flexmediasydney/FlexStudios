@@ -45,6 +45,7 @@ async function processItem(entities: any, item: any, payload: any) {
   if (action === 'changed') return handleChanged(entities, orderId, payload);
   if (action === 'booking_created_or_changed' && isOrderCancelled) return handleCancelled(entities, orderId, payload);
   if (action === 'booking_created_or_changed') return handleOrderUpdate(entities, orderId, payload);
+  if (action === 'payment_updated') return handleOrderUpdate(entities, orderId, payload, true); // paymentOnly flag
   if (action === 'booking_completed') return handleDelivered(entities, orderId, payload);
   if (action === 'new_customer') return handleNewCustomer(entities, payload);
 

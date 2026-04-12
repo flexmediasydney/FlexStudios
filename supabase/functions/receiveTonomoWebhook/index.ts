@@ -107,6 +107,21 @@ function detectAction(p: any): string {
   if (p.action) return p.action;
   if (p.bookingFlow && p.user) return 'new_customer';
   if (p.orderStatus === 'complete' && p.shouldNotifyOrderCompletion === true) return 'booking_completed';
+
+  // ── Payment-only update detection ────────────────────────────────────────
+  // If the payload has paymentStatus but NO scheduling signals (no address,
+  // no services, no appointment time, no booking flow), this is a pure
+  // payment/invoice status update — NOT a new booking. Route it to a
+  // dedicated handler that ONLY updates existing projects (never creates).
+  if (p.paymentStatus && !p.action) {
+    const hasSchedulingSignals = !!(
+      p.address || p.services || p.services_a_la_cart ||
+      p.order?.services || p.order?.services_a_la_cart ||
+      p.when?.start_time || p.bookingFlow || p.isValidatedForWebhook
+    );
+    if (!hasSchedulingSignals) return 'payment_updated';
+  }
+
   // Require isValidatedForWebhook explicitly, or orderStatus with additional booking signals
   // to avoid misclassifying metadata pings that happen to have orderStatus
   if (p.isValidatedForWebhook) return 'booking_created_or_changed';
