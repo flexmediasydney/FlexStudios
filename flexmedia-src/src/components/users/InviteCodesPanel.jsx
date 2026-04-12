@@ -90,8 +90,8 @@ export default function InviteCodesPanel() {
     toast.success('Code copied to clipboard');
   };
 
-  const roleLabel = { master_admin: 'Admin', admin: 'Admin', employee: 'Staff' };
-  const roleBadge = { master_admin: 'bg-red-100 text-red-700', admin: 'bg-red-100 text-red-700', employee: 'bg-blue-100 text-blue-700' };
+  const roleLabel = { master_admin: 'Owner', admin: 'Admin', manager: 'Manager', employee: 'Staff', contractor: 'Contractor' };
+  const roleBadge = { master_admin: 'bg-red-100 text-red-700', admin: 'bg-orange-100 text-orange-700', manager: 'bg-purple-100 text-purple-700', employee: 'bg-blue-100 text-blue-700', contractor: 'bg-gray-100 text-gray-700' };
 
   const activeCodes = useMemo(() => codes.filter(c => c.is_active), [codes]);
   const expiredCodes = useMemo(() => codes.filter(c => !c.is_active), [codes]);
@@ -248,8 +248,11 @@ export default function InviteCodesPanel() {
               <Select value={newCode.role} onValueChange={(v) => setNewCode(p => ({ ...p, role: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="master_admin">Owner</SelectItem>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="manager">Manager</SelectItem>
                   <SelectItem value="employee">Staff</SelectItem>
-                  <SelectItem value="master_admin">Admin</SelectItem>
+                  <SelectItem value="contractor">Contractor</SelectItem>
                 </SelectContent>
               </Select>
             </div>
