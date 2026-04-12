@@ -15,6 +15,8 @@ import { handleScheduled } from './handleScheduled.ts';
  * Fallback: try to find a project by appointment ID.
  * Payment webhooks from Tonomo often send the appointment ID as orderId,
  * not the order-level ID that was stored when the project was created.
+ * NOTE: tonomo_appointment_ids is a TEXT column storing a JSON array string,
+ * so we use ilike for text matching (not JSONB contains).
  */
 async function findProjectByAppointmentId(appointmentId: string): Promise<any> {
   if (!appointmentId) return null;
@@ -23,11 +25,14 @@ async function findProjectByAppointmentId(appointmentId: string): Promise<any> {
     const { data } = await admin
       .from('projects')
       .select('*')
-      .contains('tonomo_appointment_ids', JSON.stringify([appointmentId]))
+      .ilike('tonomo_appointment_ids', `%${appointmentId}%`)
       .limit(1)
       .maybeSingle();
     return data || null;
-  } catch { return null; }
+  } catch (err: any) {
+    console.warn(`findProjectByAppointmentId failed for ${appointmentId}:`, err?.message);
+    return null;
+  }
 }
 
 export async function handleOrderUpdate(entities: any, orderId: string, p: any, paymentOnly = false) {
