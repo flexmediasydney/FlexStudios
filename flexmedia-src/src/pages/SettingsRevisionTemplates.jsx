@@ -4,7 +4,7 @@ import { FileText } from "lucide-react";
 
 export default function SettingsRevisionTemplates() {
   return (
-    <PermissionGuard require={["master_admin", "employee"]}>
+    <PermissionGuard require={["master_admin", "admin"]}>
       <div className="p-6 lg:p-8 space-y-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">

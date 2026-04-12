@@ -3,7 +3,7 @@ import ClientsManagement from "@/components/settings/ClientsManagement";
 
 export default function SettingsClients() {
   return (
-    <PermissionGuard require={["master_admin", "employee"]}>
+    <PermissionGuard require={["master_admin", "admin"]}>
       <div className="p-6 lg:p-8">
         <ClientsManagement />
       </div>

@@ -10,7 +10,7 @@ import { Building2 } from "lucide-react";
 
 export default function SettingsOrganisation() {
   return (
-    <PermissionGuard require={["master_admin", "employee"]}>
+    <PermissionGuard require={["master_admin", "admin"]}>
       <div className="p-6 lg:p-8 space-y-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">

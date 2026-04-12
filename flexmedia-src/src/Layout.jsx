@@ -116,12 +116,18 @@ function ThemeToggle() {
 
 const roleColors = {
   master_admin: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+  admin: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+  manager: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
   employee: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  contractor: "bg-gray-100 text-gray-700 dark:bg-gray-800/60 dark:text-gray-400",
 };
 
 const roleLabels = {
-  master_admin: "Admin",
+  master_admin: "Owner",
+  admin: "Admin",
+  manager: "Manager",
   employee: "Staff",
+  contractor: "Contractor",
 };
 
 export default function Layout({ children, currentPageName }) {

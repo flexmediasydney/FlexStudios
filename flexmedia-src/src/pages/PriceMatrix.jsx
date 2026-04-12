@@ -117,7 +117,7 @@ export default function PriceMatrixPage() {
   const isPricing = viewTab === "agency" || viewTab === "agent";
 
   return (
-    <PermissionGuard require={["master_admin", "employee"]}>
+    <PermissionGuard require={["master_admin", "admin"]}>
       <TooltipProvider>
         <div className="p-6 lg:p-8 space-y-6">
           <div className="flex items-start justify-between gap-4">

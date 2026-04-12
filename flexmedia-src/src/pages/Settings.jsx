@@ -19,7 +19,7 @@ export default function Settings() {
   const { isMasterAdmin } = usePermissions();
 
   return (
-    <PermissionGuard require={["master_admin", "employee"]}>
+    <PermissionGuard require={["master_admin", "admin"]}>
       <div className="p-6 lg:p-8">
         <div className="mb-6">
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">

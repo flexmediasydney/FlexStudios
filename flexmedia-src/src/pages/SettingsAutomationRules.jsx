@@ -599,7 +599,7 @@ export default function SettingsAutomationRules() {
   }, [logs, logFilter]);
 
   return (
-    <PermissionGuard require={["master_admin"]}>
+    <PermissionGuard require={["master_admin", "admin"]}>
       <div className="p-6 lg:p-8 space-y-6 max-w-5xl">
         <div className="flex items-center gap-3">
           <Link to={createPageUrl("SettingsOrganisation")}>
