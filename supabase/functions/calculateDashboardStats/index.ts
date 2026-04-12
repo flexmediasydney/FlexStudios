@@ -273,11 +273,17 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
   const weekEndStr = sydneyDate(weekEnd);
 
   // Hours logged THIS WEEK per user
+  // FIX: Supabase returns timestamps as "2026-04-11T13:10:44.7+00:00" (with offset).
+  // Only append 'Z' if the timestamp has NO timezone info at all.
+  const hasTimezone = (ts: string) => /Z$|[+-]\d{2}:\d{2}$/.test(ts);
+  const parseTs = (raw: string) => new Date(hasTimezone(raw) ? raw : raw + 'Z');
+
   const userLoggedThisWeek = new Map<string, number>();
   for (const log of timeLogs) {
     if (!log.user_id || !log.start_time) continue;
-    const logDate = sydneyDate(new Date(String(log.start_time).endsWith('Z') ? log.start_time : log.start_time + 'Z'));
-    if (logDate && logDate >= weekStartStr && logDate < weekEndStr) {
+    const parsed = parseTs(String(log.start_time));
+    const logDate = sydneyDate(parsed);
+    if (logDate && weekStartStr && weekEndStr && logDate >= weekStartStr && logDate < weekEndStr) {
       const hrs = (log.total_seconds || 0) / 3600;
       userLoggedThisWeek.set(log.user_id, (userLoggedThisWeek.get(log.user_id) || 0) + hrs);
     }
@@ -553,6 +559,9 @@ Deno.serve(async (req) => {
     return jsonResponse({ status: 'ok', function: 'calculateDashboardStats' }, 200, req);
   }
 
+  // Parse request body (for debug flags)
+  const body = await req.json().catch(() => ({}));
+
   // ── Auth: require any authenticated user or service role ──
   const user = await getUserFromReq(req).catch(() => null);
   if (!user) {
@@ -653,12 +662,26 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Include debug info when requested
+    const debugPayload = body?._debug ? {
+      timeLogs_count: timeLogs.length,
+      completedTimeLogs_count: completedTimeLogs.length,
+      activeTimeLogs_count: activeTimeLogs.length,
+      timeLogs_sample: timeLogs.slice(0, 5).map((l: any) => ({
+        user_name: l.user_name, start_time: l.start_time, total_seconds: l.total_seconds, status: l.status, _active: l._active,
+      })),
+      utilization_by_user: statGroups.find(g => g.stat_key === 'utilization')?.stat_value?.by_user?.map((u: any) => ({
+        user_name: u.user_name, hours_logged: u.hours_logged, load_pct: u.load_pct, progress_pct: u.progress_pct,
+      })),
+    } : undefined;
+
     return jsonResponse(
       {
         success: true,
         computed: statGroups.length,
         stat_keys: statGroups.map((g) => g.stat_key),
         elapsed_ms: elapsed,
+        ...(debugPayload ? { _debug: debugPayload } : {}),
       },
       200,
       req,
