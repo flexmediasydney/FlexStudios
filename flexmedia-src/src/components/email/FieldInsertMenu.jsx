@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, User, Building2, Users, FileText, Calendar } from "lucide-react";
 
 export default function FieldInsertMenu({ onInsert }) {
-  const { showPricing } = usePriceGate();
+  const { visible: showPricing } = usePriceGate();
   const fields = {
     "Client (Agent)": [
       { label: "First Name", value: "{{agent_first_name}}", icon: User },

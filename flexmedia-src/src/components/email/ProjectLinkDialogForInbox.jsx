@@ -23,7 +23,7 @@ export default function ProjectLinkDialogForInbox({
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const queryClient = useQueryClient();
-  const { showPricing } = usePriceGate();
+  const { visible: showPricing } = usePriceGate();
 
   // Fetch recent projects once, filter client-side (avoids re-fetching on every keystroke)
   const { data: allProjects = [], isLoading } = useQuery({

@@ -92,10 +92,6 @@ export default function Reports() {
   const [period, setPeriod] = useState("3m");
   const [drillDown, setDrillDown] = useState(null);
 
-  if (!canSeeReports) {
-    return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
-  }
-
   const { data: allProjects = [], loading: projectsLoading } = useEntityList("Project");
   const { data: allUsers = [], loading: usersLoading }       = useEntityList("User");
 
@@ -215,6 +211,10 @@ export default function Reports() {
       activeProjects: allProjects.filter(p => !["delivered","cancelled"].includes(p.status)).length,
     };
   }, [allProjects]);
+
+  if (!canSeeReports) {
+    return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
+  }
 
   if (isLoading) {
     return (

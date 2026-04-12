@@ -65,9 +65,6 @@ function getChangedFields(oldData, newData) {
 }
 export default function ProductsPage() {
   const { canAccessSettings } = usePermissions();
-  if (!canAccessSettings) {
-    return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
-  }
   const [showDialog, setShowDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [deletingProduct, setDeletingProduct] = useState(null);
@@ -244,12 +241,16 @@ export default function ProductsPage() {
   };
   const toggleExpanded = (id) => setExpandedProducts(prev => ({ ...prev, [id]: !prev[id] }));
 
-  const filteredProducts = useMemo(() => 
+  const filteredProducts = useMemo(() =>
     (products || []).filter(p =>
       p?.name?.toLowerCase().includes(searchQuery.toLowerCase())
     ),
     [products, searchQuery]
   );
+
+  if (!canAccessSettings) {
+    return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
+  }
 
   return (
     <div className="space-y-6">

@@ -221,12 +221,6 @@ export default function PackagesPage() {
     },
   });
 
-  // Access guards - must be AFTER all hooks to satisfy React Rules of Hooks
-  if (!canAccessSettings) {
-    return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
-  }
-  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
-
   const handleOpen = async (pkg = null) => {
     setEditingPackage(pkg);
     setShowDialog(true);
@@ -245,6 +239,12 @@ export default function PackagesPage() {
       : (p.project_type_ids || []).includes(filterTypeId);
     return matchesSearch && matchesType;
   }), [packages, searchQuery, filterTypeId]);
+
+  // Access guards - must be AFTER all hooks to satisfy React Rules of Hooks
+  if (!canAccessSettings) {
+    return <div className="p-8 text-center text-muted-foreground">Access denied</div>;
+  }
+  if (!canView) return <div className="p-8 text-center text-muted-foreground">You don't have access to this section.</div>;
 
   return (
     <div className="space-y-6">

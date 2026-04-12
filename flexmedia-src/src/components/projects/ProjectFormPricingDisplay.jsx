@@ -18,13 +18,13 @@ export default function ProjectFormPricingDisplay({
   products_data = [],
   packages_data = [],
 }) {
-  if (!products?.length && !packages?.length) return null;
-
   const tierKey = pricingTier === "premium" ? "premium_tier" : "standard_tier";
 
   const formState = useMemo(() => ({ products, packages }), [products, packages]);
 
   const { breakdown } = useProjectPricingCalculator(formState, products_data, packages_data, tierKey);
+
+  if (!products?.length && !packages?.length) return null;
 
   const allItems = [
     ...breakdown.packages.map((item, idx) => ({ type: "package", item, idx })),

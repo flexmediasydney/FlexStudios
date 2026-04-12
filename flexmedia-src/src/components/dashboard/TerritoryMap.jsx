@@ -327,8 +327,7 @@ function DriveRadiusOverlay({ selectedRadius }) {
 
 // ─── Suburb detail panel ──────────────────────────────────────────────
 function SuburbPanel({ cluster, onClose, allProjects }) {
-  if (!cluster) return null;
-  const projects = cluster.projects;
+  const projects = cluster?.projects ?? [];
   const totalRevenue = projects.reduce((s, p) => s + projectValue(p), 0);
   const agencies = {};
   projects.forEach(p => { const n = p.agency_name || p.agent_name; if (n) agencies[n] = (agencies[n] || 0) + 1; });
@@ -391,6 +390,8 @@ function SuburbPanel({ cluster, onClose, allProjects }) {
     });
     return Object.values(agentMap).sort((a, b) => b.count - a.count).slice(0, 3);
   }, [projects]);
+
+  if (!cluster) return null;
 
   return (
     <div className="absolute top-0 right-0 h-full w-80 bg-background border-l shadow-xl z-20 flex flex-col">
