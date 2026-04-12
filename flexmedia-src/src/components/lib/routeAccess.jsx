@@ -23,6 +23,8 @@ export const ROUTE_ACCESS = {
   // ── PROJECTS (all levels) ─────────────────────────────────
   Projects: ALL_LEVELS,
   ProjectDetails: ALL_LEVELS,
+  Goals: ALL_LEVELS,
+  GoalDetails: ALL_LEVELS,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,

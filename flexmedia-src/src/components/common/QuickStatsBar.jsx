@@ -4,8 +4,9 @@ import { usePriceGate } from '@/components/auth/RoleGate';
 
 export default function QuickStatsBar({ projects = [], tasks = [] }) {
   const { visible: showPricing } = usePriceGate();
-  const totalProjects = projects.length;
-  const totalRevenue = projects.reduce((sum, p) => sum + (p.calculated_price || p.price || 0), 0);
+  const productionProjects = projects.filter(p => p.source !== 'goal');
+  const totalProjects = productionProjects.length;
+  const totalRevenue = productionProjects.reduce((sum, p) => sum + (p.calculated_price || p.price || 0), 0);
   
   const overdueTasks = tasks.filter(t => {
     if (t.is_completed || !t.due_date) return false;

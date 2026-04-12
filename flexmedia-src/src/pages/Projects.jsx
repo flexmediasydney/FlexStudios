@@ -194,6 +194,8 @@ export default function Projects() {
   const filteredProjects = useMemo(() => {
     return allProjects
     .filter(project => {
+      // Exclude goal-sourced records — they belong to the Goals page
+      if (project.source === 'goal') return false;
       // Hide archived unless toggled on
       if (!showArchived && project.is_archived) return false;
 

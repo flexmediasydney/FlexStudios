@@ -168,6 +168,7 @@ export default function TopSearchBar() {
     setIsOpen(false);
     setQuery("");
     
+    if (type === 'goal') navigate(createPageUrl('GoalDetails') + `?id=${id}`);
     if (type === 'project') navigate(createPageUrl('ProjectDetails') + `?id=${id}`);
     if (type === 'person') navigate(createPageUrl('PersonDetails') + `?id=${id}`);
     if (type === 'organization') navigate(createPageUrl('ClientAgents') + `?agency=${id}`);
@@ -327,10 +328,10 @@ export default function TopSearchBar() {
                     {filteredResults.projects.map(p => (
                       <button
                         key={p.id}
-                        onClick={() => handleSelect('project', p.id, p.title || p.property_address)}
+                        onClick={() => handleSelect(p.source === 'goal' ? 'goal' : 'project', p.id, p.title || p.property_address)}
                         onMouseEnter={() => handleResultHover('project', p.id)}
                         className="w-full flex items-start gap-3 px-3 py-2.5 hover:bg-muted rounded-md transition-colors duration-150 text-left group"
-                        aria-label={`Go to project ${p.title || p.property_address}`}
+                        aria-label={`Go to ${p.source === 'goal' ? 'goal' : 'project'} ${p.title || p.property_address}`}
                       >
                         <Camera className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                         <div className="flex-1 min-w-0">
@@ -338,7 +339,12 @@ export default function TopSearchBar() {
                             <span className="font-medium text-sm">
                               {highlight(p.title || p.property_address, query)}
                             </span>
-                            {p.status && (() => {
+                            {p.source === 'goal' && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                Goal
+                              </span>
+                            )}
+                            {p.source !== 'goal' && p.status && (() => {
                               const cfg = stageConfig(p.status);
                               return (
                                 <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium", cfg.color, cfg.textColor)}>

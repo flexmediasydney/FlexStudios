@@ -248,6 +248,7 @@ function LayoutContent({ currentPageName, children }) {
         collapsible: true,
         items: [
           can("Projects") && { name: "Projects", href: "Projects", icon: Camera },
+          can("Goals") && { name: "Goals", href: "Goals", icon: Target },
           can("TonomoIntegrationDashboard") && {
             name: "Bookings Engine", href: "TonomoIntegrationDashboard", icon: Bot, badge: navBadges.TonomoIntegrationDashboard,
             children: [
