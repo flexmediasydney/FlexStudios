@@ -12,17 +12,22 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    // ── Auth: require master_admin ──
-    const user = await getUserFromReq(req);
-    if (!user || user.role !== 'master_admin') {
-      return new Response(JSON.stringify({ error: 'Only the account owner can perform admin auth actions' }), {
-        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    const caller = user;
-
+    // Parse body first so we can check if it's a registration (no auth needed)
     const body = await req.json();
     const { action } = body;
+
+    // ── Auth: require master_admin for all actions EXCEPT register_with_code ──
+    // Registration is done by unauthenticated users with a valid invite code.
+    // The invite code itself serves as the authorization mechanism.
+    const user = await getUserFromReq(req).catch(() => null);
+    if (action !== 'register_with_code') {
+      if (!user || user.role !== 'master_admin') {
+        return new Response(JSON.stringify({ error: 'Only the account owner can perform admin auth actions' }), {
+          status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+    const caller = user;
 
     // ─── INVITE USER ───
     if (action === 'invite_user') {
