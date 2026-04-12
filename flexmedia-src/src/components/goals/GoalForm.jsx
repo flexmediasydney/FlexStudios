@@ -140,6 +140,9 @@ export default function GoalForm({ goal, open, onClose, onSave }) {
         parent_goal_id: data.parent_goal_id || null,
         goal_category: data.goal_category || null,
         goal_target_quarter: data.goal_target_quarter || null,
+        goal_business_area: data.goal_business_area || null,
+        goal_vision: data.goal_vision || null,
+        title_desc: data.title_desc || null,
       };
 
       if (goal?.id) {

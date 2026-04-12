@@ -480,12 +480,6 @@ const VIEW_MODES = [
   { id: "roadmap", label: "Roadmap", Icon: Calendar },
 ];
 
-const BUSINESS_AREAS = [
-  "FlexMedia",
-  "FlexStudios",
-  "FlexAgency",
-  "Shared",
-];
 
 export default function Goals() {
   const queryClient = useQueryClient();
@@ -495,7 +489,7 @@ export default function Goals() {
 
   const { data: allGoalsRaw = [], loading: isLoading } = useEntityList("Project", "-created_at", 500);
   const goals = useMemo(
-    () => allGoalsRaw.filter((p) => p.source === "goal"),
+    () => allGoalsRaw.filter((p) => p.source === "goal" && !p.is_deleted && !p.is_archived),
     [allGoalsRaw]
   );
 
@@ -738,6 +732,10 @@ export default function Goals() {
 
   const handleDragEnd = useCallback(
     (result) => {
+      if (!isManagerOrAbove) {
+        toast.error("Only managers and above can change goal status");
+        return;
+      }
       const { draggableId, destination, source } = result;
       if (!destination) return;
       if (destination.droppableId === source.droppableId) return;
@@ -786,6 +784,13 @@ export default function Goals() {
   const activeQuarters = useMemo(() => {
     return [...new Set(goals.map((g) => g.goal_target_quarter).filter(Boolean))].sort();
   }, [goals]);
+
+  // ── Business areas derived from actual goal data ────────────────────────────
+
+  const activeAreas = useMemo(
+    () => [...new Set(goals.map((g) => g.goal_business_area).filter(Boolean))].sort(),
+    [goals]
+  );
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -922,7 +927,7 @@ export default function Goals() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All areas</SelectItem>
-              {BUSINESS_AREAS.map((a) => (
+              {activeAreas.map((a) => (
                 <SelectItem key={a} value={a}>{a}</SelectItem>
               ))}
             </SelectContent>

@@ -330,6 +330,20 @@ export default function GoalDetails() {
     );
   }
 
+  // Guard — soft-deleted goals must not be viewable via direct URL
+  if (goal.is_deleted) {
+    return (
+      <div className="p-8 flex items-center justify-center min-h-[60vh]">
+        <Card className="p-8 max-w-md text-center">
+          <Target className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+          <h2 className="text-lg font-semibold mb-1">Goal Deleted</h2>
+          <p className="text-sm text-muted-foreground mb-4">This goal has been removed.</p>
+          <Link to="/Goals"><Button>Back to Goals</Button></Link>
+        </Card>
+      </div>
+    );
+  }
+
   // Sanity check — goal must be source=goal
   if (goal.source !== "goal") {
     return (
