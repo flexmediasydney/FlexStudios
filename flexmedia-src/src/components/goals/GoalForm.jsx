@@ -256,15 +256,15 @@ export default function GoalForm({ goal, open, onClose, onSave }) {
             <div>
               <Label htmlFor="goal-category">Category</Label>
               <Select
-                value={formData.goal_category}
-                onValueChange={(v) => handleChange("goal_category", v)}
+                value={formData.goal_category || "__none__"}
+                onValueChange={(v) => handleChange("goal_category", v === "__none__" ? null : v)}
                 disabled={!canEdit || saveMutation.isPending}
               >
                 <SelectTrigger id="goal-category">
                   <SelectValue placeholder="Select category" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">— None —</SelectItem>
+                  <SelectItem value="__none__">— None —</SelectItem>
                   {GOAL_CATEGORIES.map((cat) => (
                     <SelectItem key={cat} value={cat}>
                       {cat}
@@ -292,15 +292,15 @@ export default function GoalForm({ goal, open, onClose, onSave }) {
             <div>
               <Label htmlFor="goal-quarter">Target Quarter</Label>
               <Select
-                value={formData.goal_target_quarter}
-                onValueChange={(v) => handleChange("goal_target_quarter", v)}
+                value={formData.goal_target_quarter || "__none__"}
+                onValueChange={(v) => handleChange("goal_target_quarter", v === "__none__" ? null : v)}
                 disabled={!canEdit || saveMutation.isPending}
               >
                 <SelectTrigger id="goal-quarter">
                   <SelectValue placeholder="Select quarter" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">— None —</SelectItem>
+                  <SelectItem value="__none__">— None —</SelectItem>
                   {GOAL_QUARTERS.map((q) => (
                     <SelectItem key={q} value={q}>
                       {q}
@@ -362,8 +362,8 @@ export default function GoalForm({ goal, open, onClose, onSave }) {
           <div>
             <Label htmlFor="goal-owner">Goal Owner</Label>
             <Select
-              value={formData.project_owner_id}
-              onValueChange={(v) => handleChange("project_owner_id", v)}
+              value={formData.project_owner_id || "__none__"}
+              onValueChange={(v) => handleChange("project_owner_id", v === "__none__" ? null : v)}
               disabled={!canEdit || saveMutation.isPending || loadingUsers}
             >
               <SelectTrigger id="goal-owner">
@@ -376,7 +376,7 @@ export default function GoalForm({ goal, open, onClose, onSave }) {
                 )}
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">— Unassigned —</SelectItem>
+                <SelectItem value="__none__">— Unassigned —</SelectItem>
                 {users.map((u) => (
                   <SelectItem key={u.id} value={u.id}>
                     {u.full_name || u.email || u.id}
@@ -393,8 +393,8 @@ export default function GoalForm({ goal, open, onClose, onSave }) {
               <span className="text-muted-foreground font-normal text-xs">(optional)</span>
             </Label>
             <Select
-              value={formData.parent_goal_id}
-              onValueChange={(v) => handleChange("parent_goal_id", v)}
+              value={formData.parent_goal_id || "__none__"}
+              onValueChange={(v) => handleChange("parent_goal_id", v === "__none__" ? null : v)}
               disabled={!canEdit || saveMutation.isPending || loadingGoals}
             >
               <SelectTrigger id="goal-parent">
@@ -407,7 +407,7 @@ export default function GoalForm({ goal, open, onClose, onSave }) {
                 )}
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">— No parent —</SelectItem>
+                <SelectItem value="__none__">— No parent —</SelectItem>
                 {parentOptions.map((g) => (
                   <SelectItem key={g.id} value={g.id}>
                     {g.title || g.id}

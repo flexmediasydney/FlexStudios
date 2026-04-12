@@ -493,7 +493,7 @@ export default function Goals() {
 
   // ── Data ────────────────────────────────────────────────────────────────────
 
-  const { data: allGoalsRaw = [], isLoading } = useEntityList("Project", "-created_at", 500);
+  const { data: allGoalsRaw = [], loading: isLoading } = useEntityList("Project", "-created_at", 500);
   const goals = useMemo(
     () => allGoalsRaw.filter((p) => p.source === "goal"),
     [allGoalsRaw]

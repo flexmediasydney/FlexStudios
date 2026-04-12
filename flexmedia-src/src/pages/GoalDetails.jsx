@@ -1,15 +1,13 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useSearchParams, Link, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
-import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
+import { usePermissions } from "@/components/auth/PermissionGuard";
 import {
-  GOAL_STAGES,
   goalStageLabel,
   goalStageConfig,
-  GOAL_CATEGORIES,
 } from "@/components/goals/goalStatuses";
 import GoalStatusPipeline, { GoalStatusBadge } from "@/components/goals/GoalStatusPipeline";
 import GoalForm from "@/components/goals/GoalForm";
@@ -188,7 +186,6 @@ export default function GoalDetails() {
 
   const queryClient = useQueryClient();
   const { isManagerOrAbove } = usePermissions();
-  const { data: currentUser } = useCurrentUser();
 
   const [showEditForm, setShowEditForm] = useState(false);
 
@@ -296,11 +293,11 @@ export default function GoalDetails() {
   });
 
   // ── Redirect if no ID ───────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!goalId) navigate(createPageUrl("Goals"));
+  }, [goalId, navigate]);
 
-  if (!goalId) {
-    navigate(createPageUrl("Goals"));
-    return null;
-  }
+  if (!goalId) return null;
 
   // ── Loading state ───────────────────────────────────────────────────────────
 
