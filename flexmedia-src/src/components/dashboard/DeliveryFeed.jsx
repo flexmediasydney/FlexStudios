@@ -1036,6 +1036,7 @@ function getPrimaryState(project) {
 
 // ─── DeliveryCard ────────────────────────────────────────────────────────────
 function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, getFavorite, ensureFavoriteAndTag, newestFileDateMap, projectRevisions }) {
+  const { visible: showPricing } = usePriceGate();
   const [expanded, setExpanded] = useState(false);
   const [mediaResult, setMediaResult] = useState(null); // { folders: [...] } or null
   const [flatFiles, setFlatFiles] = useState([]); // backward compat for flat response
