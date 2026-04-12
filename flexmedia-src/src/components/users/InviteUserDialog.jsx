@@ -119,13 +119,19 @@ export default function InviteUserDialog({ open, onClose, onSuccess }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="master_admin">Master Admin</SelectItem>
+                <SelectItem value="master_admin">Owner</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+                <SelectItem value="manager">Manager</SelectItem>
                 <SelectItem value="employee">Staff</SelectItem>
+                <SelectItem value="contractor">Contractor</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground mt-1">
               {role === "master_admin" && "Full access to all settings, users, and data management"}
-              {role === "employee" && "Standard access to projects, clients, and day-to-day operations"}
+              {role === "admin" && "Settings access, can manage integrations and products"}
+              {role === "manager" && "Can manage projects, contacts, view pricing and reports"}
+              {role === "employee" && "Standard access to projects, tasks, and day-to-day operations"}
+              {role === "contractor" && "Limited access — assigned tasks and field mode only"}
             </p>
           </div>
 
