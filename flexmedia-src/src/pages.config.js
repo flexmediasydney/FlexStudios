@@ -70,6 +70,7 @@ import __Layout from './Layout.jsx';
 
 // Lazy-loaded pages (code-split into separate chunks)
 const GoalDetails = React.lazy(() => import('./pages/GoalDetails'));
+const Goals = React.lazy(() => import('./pages/Goals'));
 const BusinessRequirementsDocument = React.lazy(() => import('./pages/BusinessRequirementsDocument'));
 const Calendar = React.lazy(() => import('./pages/Calendar'));
 const ClientAgents = React.lazy(() => import('./pages/ClientAgents'));
@@ -120,6 +121,7 @@ export const PAGES = {
     "EmailSyncSettings": EmailSyncSettings,
     "FieldMode": FieldMode,
     "GoalDetails": GoalDetails,
+    "Goals": Goals,
     "HierarchyVisualization": HierarchyVisualization,
     "Inbox": Inbox,
     "InternalRoadmap": InternalRoadmap,
