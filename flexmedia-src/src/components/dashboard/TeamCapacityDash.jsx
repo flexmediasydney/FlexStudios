@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,7 +26,10 @@ import {
   CheckCircle2,
   Circle,
   Loader2,
+  RefreshCw,
+  Clock,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
@@ -1489,8 +1493,22 @@ const PULSE_SHADOW_CSS = `
 /* ================================================================== */
 
 export default function TeamCapacityDash() {
-  const { data, isLoading } = useDashboardStats();
+  const { data, isLoading, computed_at } = useDashboardStats();
   const [drillDown, setDrillDown] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const queryClient = useQueryClient();
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await api.functions.invoke('calculateDashboardStats', {});
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    } catch { /* fallback: just re-read cache */
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    } finally {
+      setTimeout(() => setRefreshing(false), 1000);
+    }
+  }, [queryClient]);
 
   // Fetch a lightweight project map for showing project names in drill-downs
   const { data: projectMap = {} } = useQuery({
@@ -1525,6 +1543,22 @@ export default function TeamCapacityDash() {
     <>
       <style>{PULSE_SHADOW_CSS}</style>
       <div className="space-y-4">
+        {/* Refresh bar */}
+        <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
+          <Clock className="h-3 w-3" />
+          <span>Stats computed {computed_at ? new Date(computed_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            disabled={refreshing}
+            onClick={handleRefresh}
+          >
+            <RefreshCw className={cn("h-3 w-3", refreshing && "animate-spin")} />
+            {refreshing ? 'Recomputing...' : 'Refresh'}
+          </Button>
+        </div>
+
         {/* Section 1: Health Banner Strip */}
         <HealthBanner utilization={utilization} byUser={byUser} />
 
