@@ -5,6 +5,7 @@ import { Plus, RefreshCw, LayoutDashboard, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useSearchParams } from "react-router-dom";
+import { api } from "@/api/supabaseClient";
 import ProjectForm from "@/components/projects/ProjectForm";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -114,7 +115,23 @@ export default function Dashboard() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>Updated {formatDistanceToNow(new Date(computed_at || Date.now()), { addSuffix: true })}</span>
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] })} title="Refresh stats">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              title="Recompute stats now"
+              onClick={async () => {
+                try {
+                  // Trigger the actual stats recompute (not just cache re-read)
+                  await api.functions.invoke('calculateDashboardStats', {});
+                  // Then refresh the client-side cache
+                  queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+                } catch {
+                  // Fallback: at least re-read the cache
+                  queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+                }
+              }}
+            >
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </div>

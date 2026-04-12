@@ -572,19 +572,33 @@ Deno.serve(async (req) => {
 
     console.log('Loading data...');
 
-    const [projects, tasks, timeLogs, users, revisions, agencies, employeeRoles] = await Promise.all([
+    const [projects, tasks, completedTimeLogs, activeTimeLogs, users, revisions, agencies, employeeRoles] = await Promise.all([
       entities.Project.list('-created_at'),
       entities.ProjectTask.filter({ is_deleted: false }),
       entities.TaskTimeLog.filter({ status: 'completed' }),
+      entities.TaskTimeLog.filter({ is_active: true }),
       entities.User.list(),
       entities.ProjectRevision.list(),
       entities.Agency.list(),
       entities.EmployeeRole.list(),
     ]);
 
+    // Merge completed + active timers. For active timers, compute elapsed
+    // time dynamically so running timers are reflected in utilisation stats.
+    const nowMs = Date.now();
+    const timeLogs = [
+      ...completedTimeLogs,
+      ...activeTimeLogs.map((log: any) => {
+        const startMs = log.start_time ? new Date(log.start_time).getTime() : nowMs;
+        const elapsedSeconds = Math.max(0, Math.floor((nowMs - startMs) / 1000));
+        return { ...log, total_seconds: elapsedSeconds, _active: true };
+      }),
+    ];
+
     console.log(
       `Data loaded: ${projects.length} projects, ${tasks.length} tasks, ` +
-      `${timeLogs.length} timeLogs, ${users.length} users, ${revisions.length} revisions`
+      `${timeLogs.length} timeLogs (${completedTimeLogs.length} completed + ${activeTimeLogs.length} active), ` +
+      `${users.length} users, ${revisions.length} revisions`
     );
 
     const now = new Date();
