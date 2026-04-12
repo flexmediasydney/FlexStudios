@@ -80,8 +80,16 @@ function cycleLevel(current) {
   return ACCESS_LEVELS[(idx + 1) % ACCESS_LEVELS.length];
 }
 
+const ROLE_LABELS = {
+  master_admin: "Owner",
+  admin: "Admin",
+  manager: "Manager",
+  employee: "Staff",
+  contractor: "Contractor",
+};
+
 function formatRole(role) {
-  return role.charAt(0).toUpperCase() + role.slice(1).replace(/_/g, " ");
+  return ROLE_LABELS[role] || role.charAt(0).toUpperCase() + role.slice(1).replace(/_/g, " ");
 }
 
 export default function EntityAccessMatrix() {
