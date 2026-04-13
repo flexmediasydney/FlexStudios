@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
-import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
 import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search } from "lucide-react";
 import BrandingPreferencesModule from "@/components/agencies/BrandingPreferencesModule";
 import { createPageUrl } from "@/utils";
@@ -224,6 +224,12 @@ export default function OrgDetails() {
         current_team_id: null,
         current_team_name: null,
       });
+      updateEntityInCache('Agent', agent.id, {
+        current_agency_id: agencyId,
+        current_agency_name: agency?.name || "",
+        current_team_id: null,
+        current_team_name: null,
+      });
       api.auth.me().then(user => {
         api.entities.AuditLog.create({
           entity_type: 'agent', entity_id: agent.id, entity_name: agent.name,
@@ -235,6 +241,7 @@ export default function OrgDetails() {
           ],
           user_name: user?.full_name || '', user_email: user?.email || '',
         }).catch(() => {});
+        refetchEntityList('AuditLog');
       }).catch(() => {});
       await Promise.all([refetchAgents(), refetchEntityList("Agent")]);
       toast.success(`${agent.name} linked to ${agency?.name}`);

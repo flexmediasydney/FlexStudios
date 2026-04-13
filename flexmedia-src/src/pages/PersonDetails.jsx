@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useNavigate } from 'react-router-dom';
 import { useSmartEntityData } from '@/components/hooks/useSmartEntityData';
-import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
+import { useEntityList, refetchEntityList, updateEntityInCache } from '@/components/hooks/useEntityData';
 import { api } from '@/api/supabaseClient';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
@@ -616,6 +616,7 @@ export default function PersonDetails() {
         payload.current_team_name = tm?.name || '';
       }
       await api.entities.Agent.update(agent.id, payload);
+      updateEntityInCache('Agent', agent.id, payload);
 
       const user = await api.auth.me();
       await api.entities.AuditLog.create({
@@ -627,6 +628,7 @@ export default function PersonDetails() {
         user_name: user?.full_name || '',
         user_email: user?.email || '',
       }).catch(() => {});
+      refetchEntityList('AuditLog');
 
       // Recompute data integrity after save
       const updatedAgent = { ...agent, ...payload };
@@ -652,6 +654,7 @@ export default function PersonDetails() {
     const tags = [...oldTags, newTag.trim()];
     try {
       await api.entities.Agent.update(agent.id, { tags });
+      updateEntityInCache('Agent', agent.id, { tags });
 
       const user = await api.auth.me();
       await api.entities.AuditLog.create({
@@ -663,6 +666,7 @@ export default function PersonDetails() {
         user_name: user?.full_name || '',
         user_email: user?.email || '',
       }).catch(() => {});
+      refetchEntityList('AuditLog');
 
       refetchEntityList('Agent');
       setNewTag('');
@@ -677,6 +681,7 @@ export default function PersonDetails() {
     const tags = oldTags.filter(t => t !== tagToRemove);
     try {
       await api.entities.Agent.update(agent.id, { tags });
+      updateEntityInCache('Agent', agent.id, { tags });
 
       const user = await api.auth.me();
       await api.entities.AuditLog.create({
@@ -688,6 +693,7 @@ export default function PersonDetails() {
         user_name: user?.full_name || '',
         user_email: user?.email || '',
       }).catch(() => {});
+      refetchEntityList('AuditLog');
 
       refetchEntityList('Agent');
     } catch (err) {

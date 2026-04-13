@@ -191,6 +191,7 @@ export default function BrandingPreferencesModule({ agency }) {
         branding_files_link: filesLink
       });
 
+      refetchEntityList('Agency');
       setPreferences(cleanPrefs);
       setMessage({ type: 'success', text: 'Branding preferences saved successfully' });
     } catch (err) {

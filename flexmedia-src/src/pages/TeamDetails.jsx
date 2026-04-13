@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useNavigate, Link } from 'react-router-dom';
 import { useSmartEntityData } from '@/components/hooks/useSmartEntityData';
-import { useEntityList, refetchEntityList } from '@/components/hooks/useEntityData';
+import { useEntityList, refetchEntityList, updateEntityInCache } from '@/components/hooks/useEntityData';
 import { api } from '@/api/supabaseClient';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
@@ -539,6 +539,7 @@ export default function TeamDetails() {
         updates.agency_name = newAgency?.name || null;
       }
       await api.entities.Team.update(team.id, updates);
+      updateEntityInCache('Team', team.id, updates);
 
       // Propagate team name change to all agents and users with this team
       if (field === 'name' && value !== oldValue) {
@@ -547,6 +548,7 @@ export default function TeamDetails() {
           await Promise.all(teamAgents.map(a =>
             api.entities.Agent.update(a.id, { current_team_name: value || '' }).catch(() => {})
           ));
+          refetchEntityList('Agent');
         } catch { /* non-fatal propagation */ }
         try {
           const allUsers = await api.entities.User.filter({ internal_team_id: team.id }, null, 200);
@@ -567,6 +569,7 @@ export default function TeamDetails() {
         user_name: user?.full_name || '',
         user_email: user?.email || '',
       }).catch(() => {}); // non-fatal
+      refetchEntityList('AuditLog');
 
       refetchEntityList('Team');
     } catch (err) {
@@ -581,6 +584,7 @@ export default function TeamDetails() {
         current_team_id: team.id,
         current_team_name: team.name,
       });
+      updateEntityInCache('Agent', agent.id, { current_team_id: team.id, current_team_name: team.name });
       toast.success(`${agent.name} added to ${team.name}`);
       api.auth.me().then(user => {
         api.entities.AuditLog.create({
@@ -589,6 +593,7 @@ export default function TeamDetails() {
           changed_fields: [{ field: 'current_team_id', old_value: null, new_value: team?.id }, { field: 'current_team_name', old_value: null, new_value: team?.name }],
           user_name: user?.full_name || '', user_email: user?.email || '',
         }).catch(() => {});
+        refetchEntityList('AuditLog');
       }).catch(() => {});
       await refetchEntityList('Agent');
       setShowAddMemberPicker(false);
@@ -606,6 +611,7 @@ export default function TeamDetails() {
         current_team_id: null,
         current_team_name: null,
       });
+      updateEntityInCache('Agent', agent.id, { current_team_id: null, current_team_name: null });
       toast.success(`${agent.name} removed from ${team.name}`);
       api.auth.me().then(user => {
         api.entities.AuditLog.create({
@@ -614,6 +620,7 @@ export default function TeamDetails() {
           changed_fields: [{ field: 'current_team_id', old_value: team?.id, new_value: null }, { field: 'current_team_name', old_value: team?.name, new_value: null }],
           user_name: user?.full_name || '', user_email: user?.email || '',
         }).catch(() => {});
+        refetchEntityList('AuditLog');
       }).catch(() => {});
       await refetchEntityList('Agent');
     } catch (err) {

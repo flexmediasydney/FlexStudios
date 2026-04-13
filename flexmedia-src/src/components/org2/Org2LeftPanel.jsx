@@ -4,7 +4,7 @@ import { createPageUrl } from "@/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api } from "@/api/supabaseClient";
-import { refetchEntityList } from "@/components/hooks/useEntityData";
+import { refetchEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
 import { toast } from "sonner";
 import {
   ChevronDown, ChevronRight, MapPin, Mail, Phone, Calendar,
@@ -265,7 +265,9 @@ export default function Org2LeftPanel({
      if (onFieldSave) { onFieldSave(field, value); return; }
      try {
        const oldValue = agency[field];
-       await api.entities.Agency.update(agency.id, { [field]: value || null });
+       const payload = { [field]: value || null };
+       await api.entities.Agency.update(agency.id, payload);
+       updateEntityInCache('Agency', agency.id, payload);
 
        // Write audit log
        const user = await api.auth.me();
@@ -278,6 +280,7 @@ export default function Org2LeftPanel({
          user_name: user?.full_name || '',
          user_email: user?.email || '',
        }).catch(() => {}); // non-fatal
+       refetchEntityList('AuditLog');
 
        refetchEntityList('Agency');
      } catch (err) {
