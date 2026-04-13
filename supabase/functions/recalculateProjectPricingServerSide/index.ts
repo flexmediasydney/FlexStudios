@@ -45,6 +45,8 @@ Deno.serve(async (req) => {
         products, packages,
         pricing_tier: project.pricing_tier || 'standard',
         project_type_id: project.project_type_id || null,
+        discount_type: project.discount_type || 'fixed',
+        discount_value: project.discount_value || 0,
       });
     } catch (invokeErr: any) {
       console.error('calculateProjectPricing invoke failed:', invokeErr?.message);

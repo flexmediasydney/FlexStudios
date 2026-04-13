@@ -389,6 +389,8 @@ export default function ProjectPricingTable({
     setFormState({
       products: project?.products || [],
       packages: project?.packages || [],
+      discount_type: project?.discount_type || 'fixed',
+      discount_value: project?.discount_value || 0,
     });
     setPendingTotal(null);
     setPendingCalcResult(null);
@@ -637,6 +639,11 @@ export default function ProjectPricingTable({
                         step={formState.discount_type === 'percent' ? 1 : 5}
                         value={formState.discount_value || ''}
                         onChange={e => setFormState(prev => ({ ...prev, discount_value: e.target.value }))}
+                        onBlur={e => {
+                          let val = Math.max(0, parseFloat(e.target.value) || 0);
+                          if (formState.discount_type === 'percent') val = Math.min(100, val);
+                          setFormState(prev => ({ ...prev, discount_value: val }));
+                        }}
                         placeholder="0"
                         className="h-8 w-24 text-right font-mono text-sm"
                       />
@@ -674,7 +681,7 @@ export default function ProjectPricingTable({
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
                       {pricingTier === "premium" ? "Premium" : "Standard"} tier · Matrix-adjusted
-                      {hasChanges && <span className="text-amber-500"> · estimate</span>}
+                      {hasChanges && <span className="text-amber-500"> · estimate (excludes matrix discounts)</span>}
                     </p>
                   </div>
                 </div>
@@ -722,6 +729,12 @@ export default function ProjectPricingTable({
                   <p className="text-3xl font-bold text-primary font-mono">
                     <Price value={pendingTotal ?? 0} />
                   </p>
+                  {pendingCalcResult?.manual_discount_applied > 0 && (
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Includes discount: −${pendingCalcResult.manual_discount_applied.toLocaleString()}
+                      ({pendingCalcResult.discount_type === 'percent' ? `${pendingCalcResult.discount_value}%` : 'fixed'})
+                    </p>
+                  )}
                 </div>
                 <p className="text-xs text-destructive/80 font-medium">
                   This will overwrite the stored project price. This action cannot be undone automatically.

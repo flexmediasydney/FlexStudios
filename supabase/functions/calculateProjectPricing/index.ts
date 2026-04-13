@@ -315,9 +315,9 @@ Deno.serve(async (req) => {
     const discVal = Math.max(0, parseFloat(String(discount_value)) || 0);
     if (discVal > 0) {
       if (discount_type === 'percent') {
-        manualDiscountApplied = Math.min(finalPrice, Math.ceil((finalPrice * discVal) / 100 / 5) * 5);
+        manualDiscountApplied = Math.min(finalPrice, Math.round((finalPrice * discVal) / 100 * 100) / 100);
       } else {
-        manualDiscountApplied = Math.min(finalPrice, Math.ceil(discVal / 5) * 5);
+        manualDiscountApplied = Math.min(finalPrice, discVal);
       }
       finalPrice = Math.max(0, finalPrice - manualDiscountApplied);
     }

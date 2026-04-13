@@ -207,7 +207,9 @@ export function useProjectPricingCalculator(formState, allProducts, allPackages,
 
     // Manual per-project discount (Pipedrive-style)
     const discType = formState.discount_type || 'fixed';
-    const discVal = Math.max(0, parseFloat(formState.discount_value) || 0);
+    const discVal = discType === 'percent'
+      ? Math.min(100, Math.max(0, parseFloat(formState.discount_value) || 0))
+      : Math.max(0, parseFloat(formState.discount_value) || 0);
     let manualDiscount = 0;
     if (discVal > 0) {
       if (discType === 'percent') {
