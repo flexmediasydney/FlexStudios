@@ -28,6 +28,7 @@ import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
 import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
+import NurturingSequences from '@/components/nurturing/NurturingSequences';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { toast } from 'sonner';
@@ -1308,7 +1309,10 @@ export default function PersonDetails() {
             )}
 
             {activeTab === 'touchpoints' && (
-              <TouchpointTimeline entityType="agent" entityId={agentId} entityLabel={agent?.name} />
+              <div className="space-y-6">
+                <NurturingSequences agentId={agentId} agentName={agent?.name} />
+                <TouchpointTimeline entityType="agent" entityId={agentId} entityLabel={agent?.name} />
+              </div>
             )}
 
             {activeTab === 'retention' && (

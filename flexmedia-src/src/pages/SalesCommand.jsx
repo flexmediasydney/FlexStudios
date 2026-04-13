@@ -13,6 +13,7 @@ import { createPageUrl } from "@/utils";
 import WarmthScoreBadge from "@/components/nurturing/WarmthScoreBadge";
 import DailyPunchList from "@/components/nurturing/DailyPunchList";
 import QuickLogTouchpoint from "@/components/nurturing/QuickLogTouchpoint";
+import WeeklyPlanner from "@/components/nurturing/WeeklyPlanner";
 import {
   Crosshair, Users, AlertTriangle, TrendingUp, Shield, ShieldAlert,
   Phone, Mail, MessageCircle, Video, Footprints, MapPin, Gift, Briefcase,
@@ -21,6 +22,8 @@ import {
   Plus, RefreshCw, Loader2, Search, ChevronDown, ChevronUp, ArrowUpRight,
   Zap, Clock, Calendar, BarChart3, Target, Building2, User, Rss,
   CheckCircle2, XCircle, Eye, Flag, Activity,
+  Lightbulb, Brain, Shuffle, ThermometerSnowflake, Star, Route, GitBranch, Archive,
+  CalendarClock, AlarmClock, SkipForward, Check, X,
 } from "lucide-react";
 
 // ─── Icon map (mirrors QuickLogTouchpoint) ──────────────────────────────────
@@ -146,6 +149,35 @@ function SortHeader({ label, field, tableSort, setTableSort }) {
   );
 }
 
+// ─── Insight type config ────────────────────────────────────────────────────
+
+const INSIGHT_CONFIG = {
+  channel_imbalance:  { icon: Shuffle,                color: "text-blue-600",   bg: "bg-blue-50",   border: "border-blue-200" },
+  warmth_cliff:       { icon: ThermometerSnowflake,   color: "text-cyan-600",   bg: "bg-cyan-50",   border: "border-cyan-200" },
+  hot_neglected:      { icon: Star,                   color: "text-amber-600",  bg: "bg-amber-50",  border: "border-amber-200" },
+  territory:          { icon: Route,                  color: "text-green-600",  bg: "bg-green-50",  border: "border-green-200" },
+  conversion_pattern: { icon: GitBranch,              color: "text-purple-600", bg: "bg-purple-50", border: "border-purple-200" },
+  stale_pipeline:     { icon: Archive,                color: "text-gray-600",   bg: "bg-gray-50",   border: "border-gray-200" },
+  pulse_triggered:    { icon: Rss,                    color: "text-rose-600",   bg: "bg-rose-50",   border: "border-rose-200" },
+  gift_roi:           { icon: Gift,                   color: "text-pink-600",   bg: "bg-pink-50",   border: "border-pink-200" },
+};
+
+// ─── Suburb parser helper ───────────────────────────────────────────────────
+
+function parseSuburb(address) {
+  if (!address) return null;
+  // Try to parse suburb from Australian addresses: "123 Street, Suburb NSW 2000" or "Suburb, NSW"
+  const parts = address.split(",").map(s => s.trim());
+  if (parts.length >= 2) {
+    // Second-to-last part often has suburb + state + postcode
+    const candidate = parts[parts.length - 2] || parts[parts.length - 1];
+    // Strip postcode and state abbreviation
+    return candidate.replace(/\s+(NSW|VIC|QLD|SA|WA|TAS|NT|ACT)\s*\d{0,4}\s*$/i, "").trim();
+  }
+  // Fallback: first part before comma
+  return parts[0].replace(/^\d+\s+/, "").trim();
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // ██  SalesCommand Component
 // ═════════════════════════════════════════════════════════════════════════════
@@ -169,6 +201,8 @@ export default function SalesCommand() {
   const [showFullTable, setShowFullTable] = useState(false);
   const [cadenceFilter, setCadenceFilter] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [dismissedInsights, setDismissedInsights] = useState(new Set());
+  const [completingTouchpointId, setCompletingTouchpointId] = useState(null);
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const openLogForAgent = useCallback((agentId) => {
@@ -205,6 +239,24 @@ export default function SalesCommand() {
     () => agents.filter(a => a.relationship_state === "Prospecting" || a.relationship_state === "Active"),
     [agents]
   );
+
+  // ── Computed: agent map for lookups ───────────────────────────────────────
+  const agentMap = useMemo(() => {
+    const m = {};
+    agents.forEach(a => { m[a.id] = a; });
+    return m;
+  }, [agents]);
+
+  // ── Computed: touchpoints grouped by agent ────────────────────────────────
+  const tpByAgent = useMemo(() => {
+    const m = {};
+    touchpoints.forEach(tp => {
+      if (!tp.agent_id) return;
+      if (!m[tp.agent_id]) m[tp.agent_id] = [];
+      m[tp.agent_id].push(tp);
+    });
+    return m;
+  }, [touchpoints]);
 
   // ── KPI computations ─────────────────────────────────────────────────────
   const kpis = useMemo(() => {
@@ -250,21 +302,330 @@ export default function SalesCommand() {
 
   // ── Recent activity (last 10 touchpoints) ─────────────────────────────────
   const recentActivity = useMemo(() => {
-    const agentMap = {};
-    agents.forEach(a => { agentMap[a.id] = a; });
     return touchpoints.slice(0, 10).map(tp => {
       const agent = tp.agent_id ? agentMap[tp.agent_id] : null;
       const tpType = tp.touchpoint_type_id ? tpTypeMap[tp.touchpoint_type_id] : tpTypeMap[tp.touchpoint_type_name];
       const IconComp = tpType?.icon_name ? (ICON_MAP[tpType.icon_name] || Phone) : Phone;
       return { ...tp, agent, tpType, IconComp };
     });
-  }, [touchpoints, agents, tpTypeMap]);
+  }, [touchpoints, agentMap, tpTypeMap]);
 
   // ── Pulse signals (new & actionable) ──────────────────────────────────────
   const actionableSignals = useMemo(
     () => pulseSignals.filter(s => s.status === "new" && s.is_actionable),
     [pulseSignals]
   );
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // ██  FEATURE 1: Intelligent Insights Engine
+  // ═════════════════════════════════════════════════════════════════════════
+
+  const smartInsights = useMemo(() => {
+    const insights = [];
+    const now = Date.now();
+    const DAY = 86400000;
+
+    // Helper: days since a date string
+    const daysSince = (dateStr) => dateStr ? Math.round((now - new Date(dateStr).getTime()) / DAY) : null;
+
+    // ─── 1. Channel Imbalance ───────────────────────────────────────────
+    monitored.forEach(agent => {
+      const agentTps = tpByAgent[agent.id] || [];
+      if (agentTps.length < 4) return;
+      // Count by touchpoint type name
+      const typeCounts = {};
+      agentTps.forEach(tp => {
+        const name = tp.touchpoint_type_name || "Other";
+        typeCounts[name] = (typeCounts[name] || 0) + 1;
+      });
+      const types = Object.entries(typeCounts);
+      // Check if any single type has 4+ and represents >80% of all touchpoints
+      types.forEach(([typeName, count]) => {
+        if (count >= 4 && types.length <= 2 && count / agentTps.length >= 0.75) {
+          insights.push({
+            id: `channel_${agent.id}_${typeName}`,
+            type: "channel_imbalance",
+            title: "Channel imbalance detected",
+            description: `You've ${typeName.toLowerCase()}'d ${agent.name} ${count} times with little variety. Mix it up \u2014 phone calls convert 3x better after email-only sequences.`,
+            agentIds: [agent.id],
+            action: `Try a different channel for ${agent.name}`,
+            priority: 3,
+          });
+        }
+      });
+    });
+
+    // ─── 2. Warmth Cliff ────────────────────────────────────────────────
+    agents.forEach(agent => {
+      if (agent.warmth_trend === "declining" && (agent.warmth_score || 0) < 50) {
+        const prevScore = (agent.warmth_score || 0) + 20; // Estimate previous
+        insights.push({
+          id: `warmth_cliff_${agent.id}`,
+          type: "warmth_cliff",
+          title: "Warmth dropping fast",
+          description: `${agent.name} has dropped to ${agent.warmth_score || 0} warmth and is declining. They may be going cold. Priority reach-out recommended.`,
+          agentIds: [agent.id],
+          action: `Urgent: reach out to ${agent.name} before they go cold`,
+          priority: 1,
+        });
+      }
+    });
+
+    // ─── 3. Hot Prospect Neglected ──────────────────────────────────────
+    monitored.forEach(agent => {
+      const agentTps = tpByAgent[agent.id] || [];
+      // Count "high-signal" touchpoints (meetings, events, walk-ins, positive outcomes)
+      const highSignalCount = agentTps.filter(tp => {
+        const tpType = tp.touchpoint_type_id ? tpTypeMap[tp.touchpoint_type_id] : tpTypeMap[tp.touchpoint_type_name];
+        const cat = tpType?.category || "";
+        return cat === "meeting" || cat === "event" || tp.outcome === "positive" ||
+               tp.touchpoint_type_name === "Walk-in Visit" || tp.touchpoint_type_name === "Office Visit";
+      }).length;
+
+      if (highSignalCount >= 2) {
+        const dSince = daysSince(agent.last_touchpoint_at);
+        const cadence = getEffectiveCadence(agent);
+        if (dSince && dSince > cadence) {
+          insights.push({
+            id: `hot_neglected_${agent.id}`,
+            type: "hot_neglected",
+            title: "Hot prospect going quiet",
+            description: `${agent.name} has ${highSignalCount} high-signal interactions but hasn't been contacted in ${dSince} days. Don't let this one slip.`,
+            agentIds: [agent.id],
+            action: `Re-engage ${agent.name} immediately`,
+            priority: 1,
+          });
+        }
+      }
+    });
+
+    // ─── 4. Territory Opportunity ───────────────────────────────────────
+    const overdueAgents = monitored.filter(a =>
+      a.cadence_health === "overdue" || a.cadence_health === "critical"
+    );
+    // Group overdue agents by suburb (via their agency address)
+    const suburbGroups = {};
+    overdueAgents.forEach(agent => {
+      const agency = agent.agency_id ? agencyMap[agent.agency_id] : null;
+      if (!agency?.address) return;
+      const suburb = parseSuburb(agency.address);
+      if (!suburb) return;
+      const key = suburb.toLowerCase();
+      if (!suburbGroups[key]) suburbGroups[key] = { suburb, agents: [] };
+      suburbGroups[key].agents.push(agent);
+    });
+    Object.values(suburbGroups).forEach(group => {
+      if (group.agents.length >= 3) {
+        insights.push({
+          id: `territory_${group.suburb}`,
+          type: "territory",
+          title: `Walk-in run: ${group.suburb}`,
+          description: `You have ${group.agents.length} overdue agents near each other in ${group.suburb}. Plan a walk-in run to hit them all.`,
+          agentIds: group.agents.map(a => a.id),
+          action: `Plan walk-in visits in ${group.suburb}`,
+          priority: 2,
+        });
+      }
+    });
+
+    // ─── 5. Conversion Pattern ──────────────────────────────────────────
+    // Find recently converted agents (Active state with decent touchpoint history)
+    const converted = agents.filter(a => a.relationship_state === "Active" && (a.touchpoint_count || 0) >= 5);
+    if (converted.length >= 2) {
+      // Calculate average touchpoints and walk-in count for converted agents
+      const convertedStats = converted.map(a => {
+        const agentTps = tpByAgent[a.id] || [];
+        const walkIns = agentTps.filter(tp =>
+          tp.touchpoint_type_name === "Walk-in Visit" || tp.touchpoint_type_name === "Office Visit"
+        ).length;
+        return { count: a.touchpoint_count || agentTps.length, walkIns };
+      });
+      const avgTpCount = Math.round(convertedStats.reduce((s, c) => s + c.count, 0) / convertedStats.length);
+      const avgWalkIns = Math.round(convertedStats.reduce((s, c) => s + c.walkIns, 0) / convertedStats.length);
+
+      // Find prospects close to conversion pattern
+      monitored.filter(a => a.relationship_state === "Prospecting").forEach(agent => {
+        const agentTps = tpByAgent[agent.id] || [];
+        const tpCount = agent.touchpoint_count || agentTps.length;
+        const walkIns = agentTps.filter(tp =>
+          tp.touchpoint_type_name === "Walk-in Visit" || tp.touchpoint_type_name === "Office Visit"
+        ).length;
+
+        if (tpCount >= avgTpCount * 0.6 && walkIns >= 1 && tpCount < avgTpCount) {
+          insights.push({
+            id: `conversion_${agent.id}`,
+            type: "conversion_pattern",
+            title: "Close to conversion pattern",
+            description: `Your conversions average ${avgTpCount} touches with ${avgWalkIns}+ walk-ins. ${agent.name} has ${tpCount} touches and ${walkIns} walk-in${walkIns !== 1 ? "s" : ""} \u2014 they're close.`,
+            agentIds: [agent.id],
+            action: `Push ${agent.name} over the line with another walk-in`,
+            priority: 2,
+          });
+        }
+      });
+    }
+
+    // ─── 6. Stale Pipeline ──────────────────────────────────────────────
+    const staleAgents = agents.filter(a => {
+      if (a.relationship_state !== "Prospecting") return false;
+      const ageMs = a.created_date ? now - new Date(a.created_date).getTime() : 0;
+      const ageMonths = ageMs / (30 * DAY);
+      return ageMonths >= 6 && (a.touchpoint_count || 0) < 3;
+    });
+    if (staleAgents.length >= 2) {
+      insights.push({
+        id: "stale_pipeline",
+        type: "stale_pipeline",
+        title: "Stale pipeline clogging your view",
+        description: `${staleAgents.length} agents have been in Prospecting for 6+ months with fewer than 3 touchpoints. Consider re-engaging or archiving them.`,
+        agentIds: staleAgents.slice(0, 5).map(a => a.id),
+        action: "Review and clean up stale prospects",
+        priority: 4,
+      });
+    }
+
+    // ─── 7. Pulse-Triggered ─────────────────────────────────────────────
+    actionableSignals.forEach(sig => {
+      const linkedAgentIds = sig.linked_agent_ids || [];
+      // Find linked agents that are in the pipeline (Prospecting/Active)
+      const pipelineLinked = linkedAgentIds.filter(id => {
+        const a = agentMap[id];
+        return a && (a.relationship_state === "Prospecting" || a.relationship_state === "Active");
+      });
+      if (pipelineLinked.length > 0 && sig.title) {
+        const eventDate = sig.event_date ? ` on ${fmtDate(sig.event_date)}` : "";
+        insights.push({
+          id: `pulse_${sig.id}`,
+          type: "pulse_triggered",
+          title: `Pulse: ${sig.title}`,
+          description: `${sig.title}${eventDate}. ${pipelineLinked.length} of your prospect${pipelineLinked.length !== 1 ? "s" : ""} ${pipelineLinked.length !== 1 ? "are" : "is"} linked \u2014 attend and log touchpoints.`,
+          agentIds: pipelineLinked,
+          action: "Attend the event and log touchpoints",
+          priority: 2,
+        });
+      }
+    });
+
+    // ─── 8. Gift ROI ────────────────────────────────────────────────────
+    const agentsWithGifts = [];
+    const agentsWithoutGifts = [];
+    monitored.forEach(agent => {
+      const agentTps = tpByAgent[agent.id] || [];
+      const hasGift = agentTps.some(tp => {
+        const tpType = tp.touchpoint_type_id ? tpTypeMap[tp.touchpoint_type_id] : tpTypeMap[tp.touchpoint_type_name];
+        return tpType?.category === "gift" || tp.touchpoint_type_name === "Gift Drop-off";
+      });
+      if (hasGift) agentsWithGifts.push(agent);
+      else agentsWithoutGifts.push(agent);
+    });
+
+    if (agentsWithGifts.length >= 3 && agentsWithoutGifts.length >= 3) {
+      const avgGift = Math.round(agentsWithGifts.reduce((s, a) => s + (a.warmth_score || 0), 0) / agentsWithGifts.length);
+      const avgNoGift = Math.round(agentsWithoutGifts.reduce((s, a) => s + (a.warmth_score || 0), 0) / agentsWithoutGifts.length);
+      if (avgGift > avgNoGift) {
+        const liftPct = avgNoGift > 0 ? Math.round(((avgGift - avgNoGift) / avgNoGift) * 100) : 0;
+        // Suggest gifting to top prospects without gifts
+        const topProspects = agentsWithoutGifts
+          .filter(a => a.relationship_state === "Prospecting" && (a.warmth_score || 0) >= 30)
+          .sort((a, b) => (b.warmth_score || 0) - (a.warmth_score || 0))
+          .slice(0, 5);
+        if (topProspects.length > 0) {
+          insights.push({
+            id: "gift_roi",
+            type: "gift_roi",
+            title: "Gifts are working",
+            description: `Agents who received gifts average ${avgGift} warmth vs ${avgNoGift} without (${liftPct}% lift). Consider a gift touchpoint for your top ${topProspects.length} prospect${topProspects.length !== 1 ? "s" : ""}.`,
+            agentIds: topProspects.map(a => a.id),
+            action: "Send gifts to top ungifted prospects",
+            priority: 3,
+          });
+        }
+      }
+    }
+
+    // ── Sort by priority, then take top 5 ──
+    insights.sort((a, b) => a.priority - b.priority);
+    return insights;
+  }, [agents, monitored, touchpoints, tpByAgent, tpTypeMap, agentMap, agencyMap, actionableSignals]);
+
+  // Visible insights (not dismissed)
+  const visibleInsights = useMemo(
+    () => smartInsights.filter(i => !dismissedInsights.has(i.id)).slice(0, 5),
+    [smartInsights, dismissedInsights]
+  );
+
+  const dismissInsight = useCallback((insightId) => {
+    setDismissedInsights(prev => new Set([...prev, insightId]));
+  }, []);
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // ██  FEATURE 2: Upcoming Follow-Ups
+  // ═════════════════════════════════════════════════════════════════════════
+
+  const plannedFollowUps = useMemo(() => {
+    return touchpoints.filter(tp => tp.is_planned && !tp.completed_at && tp.follow_up_date);
+  }, [touchpoints]);
+
+  const followUpGroups = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const endOfWeek = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    const endOfNextWeek = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+
+    const overdue = [];
+    const todayItems = [];
+    const tomorrowItems = [];
+    const thisWeek = [];
+    const nextWeek = [];
+    const later = [];
+
+    plannedFollowUps.forEach(tp => {
+      const d = tp.follow_up_date?.slice(0, 10);
+      if (!d) return;
+      const enriched = {
+        ...tp,
+        agent: tp.agent_id ? agentMap[tp.agent_id] : null,
+        tpType: tp.touchpoint_type_id ? tpTypeMap[tp.touchpoint_type_id] : tpTypeMap[tp.touchpoint_type_name],
+        daysUntil: Math.round((new Date(d).getTime() - new Date(today).getTime()) / 86400000),
+      };
+      if (d < today) overdue.push(enriched);
+      else if (d === today) todayItems.push(enriched);
+      else if (d === tomorrow) tomorrowItems.push(enriched);
+      else if (d <= endOfWeek) thisWeek.push(enriched);
+      else if (d <= endOfNextWeek) nextWeek.push(enriched);
+      else later.push(enriched);
+    });
+
+    // Sort each group by date
+    const sortByDate = (a, b) => (a.follow_up_date || "").localeCompare(b.follow_up_date || "");
+    overdue.sort(sortByDate);
+    todayItems.sort(sortByDate);
+    tomorrowItems.sort(sortByDate);
+    thisWeek.sort(sortByDate);
+    nextWeek.sort(sortByDate);
+    later.sort(sortByDate);
+
+    return { overdue, today: todayItems, tomorrow: tomorrowItems, thisWeek, nextWeek, later };
+  }, [plannedFollowUps, agentMap, tpTypeMap]);
+
+  const totalFollowUps = plannedFollowUps.length;
+
+  const handleSnooze = useCallback(async (touchpointId) => {
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    try {
+      await api.entities.Touchpoint.update(touchpointId, { follow_up_date: tomorrow });
+      refetchEntityList("Touchpoint");
+      toast.success("Snoozed to tomorrow");
+    } catch {
+      toast.error("Failed to snooze");
+    }
+  }, []);
+
+  const handleCompleteFollowUp = useCallback((touchpoint) => {
+    setLogTouchpointAgentId(touchpoint.agent_id);
+    setCompletingTouchpointId(touchpoint.id);
+    setShowLogTouchpoint(true);
+  }, []);
 
   // ── Agents at risk ────────────────────────────────────────────────────────
   const atRiskAgents = useMemo(() => {
@@ -558,6 +919,83 @@ export default function SalesCommand() {
             </div>
           </div>
 
+          {/* ─── NEW: Smart Insights Widget ───────────────────────────────── */}
+          {visibleInsights.length > 0 && (
+            <div className="rounded-xl border bg-card p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Lightbulb className="h-4 w-4 text-amber-500" />
+                  Smart Insights
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5">
+                    {smartInsights.filter(i => !dismissedInsights.has(i.id)).length}
+                  </Badge>
+                </h3>
+                {dismissedInsights.size > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-[10px] px-2 gap-1"
+                    onClick={() => setDismissedInsights(new Set())}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Show dismissed
+                  </Button>
+                )}
+              </div>
+              <div className="space-y-2">
+                {visibleInsights.map(insight => {
+                  const cfg = INSIGHT_CONFIG[insight.type] || INSIGHT_CONFIG.stale_pipeline;
+                  const IconComp = cfg.icon;
+                  return (
+                    <div
+                      key={insight.id}
+                      className={cn(
+                        "flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-all",
+                        cfg.bg, cfg.border
+                      )}
+                    >
+                      <div className={cn("mt-0.5 shrink-0")}>
+                        <IconComp className={cn("h-4 w-4", cfg.color)} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <p className="text-xs font-semibold truncate">{insight.title}</p>
+                          <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">
+                            P{insight.priority}
+                          </Badge>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
+                          {insight.description}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {insight.agentIds.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="h-6 text-[10px] px-2 gap-1"
+                            onClick={() => openLogForAgent(insight.agentIds[0])}
+                          >
+                            <Zap className="h-3 w-3" />
+                            Take Action
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                          onClick={() => dismissInsight(insight.id)}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* ─── Row 3: Recent Activity + Pulse Signals ────────────────────── */}
           <div className="grid grid-cols-2 gap-4">
             {/* Recent Activity */}
@@ -653,6 +1091,88 @@ export default function SalesCommand() {
             </div>
           </div>
 
+          {/* ─── NEW: Upcoming Follow-Ups Widget ──────────────────────────── */}
+          {totalFollowUps > 0 && (
+            <div className="rounded-xl border bg-card p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <CalendarClock className="h-4 w-4 text-muted-foreground" />
+                  Upcoming Follow-Ups
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5">{totalFollowUps}</Badge>
+                  {followUpGroups.overdue.length > 0 && (
+                    <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-5">
+                      {followUpGroups.overdue.length} overdue
+                    </Badge>
+                  )}
+                </h3>
+              </div>
+
+              <div className="space-y-3">
+                {/* Overdue group */}
+                {followUpGroups.overdue.length > 0 && (
+                  <FollowUpGroup
+                    label="Overdue"
+                    items={followUpGroups.overdue}
+                    isOverdue
+                    onComplete={handleCompleteFollowUp}
+                    onSnooze={handleSnooze}
+                    agencyMap={agencyMap}
+                  />
+                )}
+                {/* Today */}
+                {followUpGroups.today.length > 0 && (
+                  <FollowUpGroup
+                    label="Today"
+                    items={followUpGroups.today}
+                    onComplete={handleCompleteFollowUp}
+                    onSnooze={handleSnooze}
+                    agencyMap={agencyMap}
+                  />
+                )}
+                {/* Tomorrow */}
+                {followUpGroups.tomorrow.length > 0 && (
+                  <FollowUpGroup
+                    label="Tomorrow"
+                    items={followUpGroups.tomorrow}
+                    onComplete={handleCompleteFollowUp}
+                    onSnooze={handleSnooze}
+                    agencyMap={agencyMap}
+                  />
+                )}
+                {/* This Week */}
+                {followUpGroups.thisWeek.length > 0 && (
+                  <FollowUpGroup
+                    label="This Week"
+                    items={followUpGroups.thisWeek}
+                    onComplete={handleCompleteFollowUp}
+                    onSnooze={handleSnooze}
+                    agencyMap={agencyMap}
+                  />
+                )}
+                {/* Next Week */}
+                {followUpGroups.nextWeek.length > 0 && (
+                  <FollowUpGroup
+                    label="Next Week"
+                    items={followUpGroups.nextWeek}
+                    onComplete={handleCompleteFollowUp}
+                    onSnooze={handleSnooze}
+                    agencyMap={agencyMap}
+                  />
+                )}
+                {/* Later */}
+                {followUpGroups.later.length > 0 && (
+                  <FollowUpGroup
+                    label="Later"
+                    items={followUpGroups.later}
+                    onComplete={handleCompleteFollowUp}
+                    onSnooze={handleSnooze}
+                    agencyMap={agencyMap}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
           {/* ─── Row 4: Agents At Risk ─────────────────────────────────────── */}
           {atRiskAgents.length > 0 && (
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -734,6 +1254,9 @@ export default function SalesCommand() {
               </div>
             </div>
           )}
+
+          {/* ─── Row 5b: Weekly Planner ────────────────────────────────────── */}
+          <WeeklyPlanner onLogTouchpoint={openLogForAgent} />
 
           {/* ─── Row 6: Full Pipeline Table ────────────────────────────────── */}
           <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -957,11 +1480,125 @@ export default function SalesCommand() {
       <QuickLogTouchpoint
         open={showLogTouchpoint}
         onClose={() => {
+          if (completingTouchpointId) {
+            api.entities.Touchpoint.update(completingTouchpointId, {
+              completed_at: new Date().toISOString(),
+            }).then(() => {
+              refetchEntityList("Touchpoint");
+            });
+            setCompletingTouchpointId(null);
+          }
           setShowLogTouchpoint(false);
           setLogTouchpointAgentId(null);
         }}
         preselectedAgentId={logTouchpointAgentId}
       />
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ██  FollowUpGroup — sub-component for Upcoming Follow-Ups
+// ═════════════════════════════════════════════════════════════════════════════
+
+function FollowUpGroup({ label, items, isOverdue, onComplete, onSnooze, agencyMap }) {
+  if (!items || items.length === 0) return null;
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className={cn(
+          "text-[11px] font-semibold uppercase tracking-wider",
+          isOverdue ? "text-red-600" : "text-muted-foreground"
+        )}>
+          {label}
+        </span>
+        <Badge
+          variant={isOverdue ? "destructive" : "secondary"}
+          className="text-[9px] px-1.5 py-0 h-4"
+        >
+          {items.length}
+        </Badge>
+      </div>
+      <div className="space-y-1">
+        {items.map(tp => {
+          const agent = tp.agent;
+          const agencyName = agent?.agency_id ? agencyMap[agent.agency_id]?.name : "";
+          const tpType = tp.tpType;
+          const IconComp = tpType?.icon_name ? (ICON_MAP[tpType.icon_name] || CalendarClock) : CalendarClock;
+          const daysLabel = tp.daysUntil < 0
+            ? `${Math.abs(tp.daysUntil)}d overdue`
+            : tp.daysUntil === 0
+              ? "Today"
+              : `in ${tp.daysUntil}d`;
+
+          return (
+            <div
+              key={tp.id}
+              className={cn(
+                "flex items-center gap-2.5 px-2 py-2 rounded-lg transition-colors group",
+                isOverdue ? "bg-red-50/60 hover:bg-red-50" : "hover:bg-muted/50"
+              )}
+            >
+              <IconComp className={cn("h-4 w-4 shrink-0", isOverdue ? "text-red-500" : "text-muted-foreground")} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  {agent ? (
+                    <Link
+                      to={createPageUrl(`PersonDetails?id=${tp.agent_id}`)}
+                      className="text-xs font-medium hover:underline truncate"
+                    >
+                      {agent.name || "Unknown"}
+                    </Link>
+                  ) : (
+                    <span className="text-xs font-medium text-muted-foreground">Unknown agent</span>
+                  )}
+                  {agencyName && (
+                    <span className="text-[10px] text-muted-foreground truncate">{agencyName}</span>
+                  )}
+                </div>
+                {(tp.follow_up_notes || tp.notes) && (
+                  <p className="text-[10px] text-muted-foreground truncate">
+                    {(tp.follow_up_notes || tp.notes || "").slice(0, 60)}
+                  </p>
+                )}
+              </div>
+              {tpType?.name && (
+                <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">
+                  {tpType.name}
+                </Badge>
+              )}
+              <span className={cn(
+                "text-[10px] font-medium whitespace-nowrap shrink-0",
+                isOverdue ? "text-red-600" : "text-muted-foreground"
+              )}>
+                {daysLabel}
+              </span>
+              <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-6 text-[10px] px-2 gap-1"
+                  onClick={() => onComplete(tp)}
+                >
+                  <Check className="h-3 w-3" />
+                  Complete
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-[10px] px-2 gap-1"
+                  onClick={() => onSnooze(tp.id)}
+                  title="Snooze to tomorrow"
+                >
+                  <SkipForward className="h-3 w-3" />
+                  Snooze
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
