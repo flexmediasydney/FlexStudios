@@ -417,6 +417,41 @@ export async function refetchEntityList(entityName) {
 }
 
 /**
+ * Optimistically update a single entity in BOTH the single-entity cache
+ * AND the list cache, then notify all listeners. Use this after an API
+ * update call to make the UI react instantly without waiting for a
+ * full list refetch or Realtime event.
+ *
+ * @param {string} entityName - e.g. 'Agent', 'Team', 'Agency'
+ * @param {string} entityId - UUID of the entity
+ * @param {object} updates - partial field updates to merge
+ */
+export function updateEntityInCache(entityName, entityId, updates) {
+  if (!entityName || !entityId || !updates) return;
+
+  // Update single-entity cache
+  const singleKey = `${entityName}:${entityId}`;
+  const existing = singleCache.get(singleKey);
+  if (existing) {
+    const merged = { ...existing, ...updates };
+    singleCache.set(singleKey, merged);
+    cacheTimestamps.set(singleKey, Date.now());
+    notifySingleListeners(entityName, entityId);
+  }
+
+  // Update list cache entry
+  const listData = entityCache.get(entityName);
+  if (Array.isArray(listData)) {
+    const idx = listData.findIndex(item => item.id === entityId);
+    if (idx !== -1) {
+      listData[idx] = { ...listData[idx], ...updates };
+      entityCache.set(entityName, [...listData]); // new array ref to trigger re-renders
+      notifyListListeners(entityName);
+    }
+  }
+}
+
+/**
  * Clear ALL caches and subscriptions. Must be called on logout.
  * Also resets the request throttler to clear any backoff state.
  */
