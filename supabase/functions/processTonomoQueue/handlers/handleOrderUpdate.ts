@@ -236,22 +236,41 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
     }
   }
 
-  // Sync calendar event time when shoot date changes
+  // Sync calendar event time when shoot date changes — or CREATE one if missing
   if (updates.shoot_date || updates.shoot_time) {
     try {
       const calEvents = await entities.CalendarEvent.filter({ project_id: project.id }, null, 50);
       const tonomoEvent = calEvents.find((ev: any) => ev.event_source === 'tonomo' && !ev.is_done);
-      if (tonomoEvent && updates.shoot_date) {
-        const timeStr = updates.shoot_time || project.shoot_time || '09:00';
-        // Determine correct Sydney offset: AEDT (+11) first Sun in Oct → first Sun in Apr, else AEST (+10)
-        const dateStr = updates.shoot_date || project.shoot_date;
-        const month = new Date(dateStr + 'T00:00:00Z').getUTCMonth(); // 0-indexed
-        // Rough DST check: Oct(9)–Mar(2) = AEDT(+11), Apr(3)–Sep(8) = AEST(+10)
-        const sydneyOffset = (month >= 9 || month <= 2) ? '+11:00' : '+10:00';
-        const startDt = new Date(`${dateStr}T${timeStr}:00${sydneyOffset}`);
+      const dateStr = updates.shoot_date || project.shoot_date;
+      const timeStr = updates.shoot_time || project.shoot_time || '09:00';
+      // Extract date-only (Supabase returns "2026-04-13T00:00:00+00:00")
+      const dateOnly = String(dateStr).slice(0, 10);
+      const month = new Date(dateOnly + 'T00:00:00Z').getUTCMonth();
+      const sydneyOffset = (month >= 9 || month <= 2) ? '+11:00' : '+10:00';
+      const startDt = new Date(`${dateOnly}T${timeStr}:00${sydneyOffset}`);
+
+      if (tonomoEvent) {
+        // Update existing event
         await entities.CalendarEvent.update(tonomoEvent.id, {
           start_time: startDt.toISOString(),
         }).catch(() => {});
+      } else if (dateOnly && dateOnly !== '1970-01-01') {
+        // No calendar event exists — create one (handles case where initial
+        // webhook had no appointment time but a later update adds it)
+        const endTime = p.when?.end_time
+          ? new Date(p.when.end_time * 1000).toISOString()
+          : new Date(startDt.getTime() + 90 * 60 * 1000).toISOString(); // default 90min
+        const address = p.address?.formatted_address || project.property_address || '';
+        await entities.CalendarEvent.create({
+          title: project.title || address || `Order ${orderId}`,
+          description: `Tonomo appointment for order ${orderId}`,
+          start_time: startDt.toISOString(),
+          end_time: endTime,
+          location: address,
+          project_id: project.id,
+          event_source: 'tonomo',
+          recurrence: 'none',
+        }).catch((err: any) => console.warn('Failed to create calendar event:', err?.message));
       }
     } catch { /* non-fatal */ }
   }
