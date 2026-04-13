@@ -270,7 +270,7 @@ function MatchedCard({ match, isSimulated }) {
 /* ------------------------------------------------------------------ */
 /*  All Listings Table                                                */
 /* ------------------------------------------------------------------ */
-function AllListingsTable({ listings, matches }) {
+function AllListingsTable({ listings, matches, dataSource }) {
   const matchedIds = useMemo(
     () => new Set((matches || []).map((m) => m.listing?.domain_listing_id)),
     [matches]
@@ -645,7 +645,7 @@ export default function ClientMonitor() {
               {/* ---- All Listings Tab ---- */}
               <TabsContent value="all" className="mt-5">
                 <Card className="border-0 shadow-sm overflow-hidden">
-                  <AllListingsTable listings={allListings} matches={matches} />
+                  <AllListingsTable listings={allListings} matches={matches} dataSource={dataSource} />
                 </Card>
               </TabsContent>
             </Tabs>

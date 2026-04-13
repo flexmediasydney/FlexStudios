@@ -345,6 +345,21 @@ export default function Org2LeftPanel({
            </div>
          </Section>
 
+         {/* Engagement */}
+         <Section title="Engagement" defaultOpen>
+           <InlineField
+             label="Type"
+             value={agency.engagement_type || ''}
+             field="engagement_type"
+             onSave={handleFieldSave}
+             type="select"
+             options={[
+               { value: 'exclusive', label: 'Exclusive' },
+               { value: 'non_exclusive', label: 'Non-Exclusive' },
+             ]}
+           />
+         </Section>
+
          {/* Organisation insights */}
          <Section title="Organisation insights" defaultOpen>
            <div className="space-y-2.5">

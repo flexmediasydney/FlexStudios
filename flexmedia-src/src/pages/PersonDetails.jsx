@@ -976,7 +976,20 @@ export default function PersonDetails() {
               options={[{ value: '__none__', label: 'No team' }, ...availableTeams.map(t => ({ value: t.id, label: t.name }))]} />
             <InlineField label="State" value={agent.relationship_state} field="relationship_state"
               onSave={handleFieldSave} type="select" options={RELATIONSHIP_STATES} />
+          </Section>
 
+          {/* Engagement section */}
+          <Section title="Engagement" defaultOpen>
+            <InlineField label="Type" value={agent.engagement_type} field="engagement_type"
+              onSave={handleFieldSave} type="select"
+              options={[
+                { value: 'exclusive', label: 'Exclusive' },
+                { value: 'non_exclusive', label: 'Non-Exclusive' },
+              ]} />
+          </Section>
+
+          {/* Relationship section (continued) */}
+          <Section title="Relationship" defaultOpen>
             {/* Quick stats inline */}
             {(projects.length > 0 || totalRev > 0) && (
               <div className="flex items-start gap-2 py-1 px-3">
