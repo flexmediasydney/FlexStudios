@@ -82,6 +82,11 @@ const NOTIFICATION_TYPES: Record<string, {
   email_received_from_client:   { category: 'email',      severity: 'info',     cta_label: 'View Email',      default_roles: ['project_owner'] },
   email_requires_reply:         { category: 'email',      severity: 'warning',  cta_label: 'Reply',           default_roles: ['project_owner', 'master_admin'] },
   email_sync_failed:            { category: 'system',     severity: 'critical', cta_label: 'Fix Sync',        default_roles: ['master_admin'] },
+
+  // RETENTION
+  retention_red_flag:           { category: 'system',     severity: 'critical', cta_label: 'View Alerts',     default_roles: ['master_admin'] },
+  retention_sweep_complete:     { category: 'system',     severity: 'info',     cta_label: 'View Summary',    default_roles: ['master_admin'] },
+  retention_status_changed:     { category: 'system',     severity: 'info',     cta_label: 'View Alert',      default_roles: ['master_admin'] },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

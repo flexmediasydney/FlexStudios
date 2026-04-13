@@ -10,7 +10,7 @@ import { fmtDate, fmtTimestampCustom, fixTimestamp } from '@/components/utils/da
 import {
   ArrowLeft, ChevronDown, ChevronRight, Mail, Phone, Building2, Calendar,
   DollarSign, MessageSquare, FileText, Activity, Info, AlertCircle, Plus, Trash2, User, Copy, Check,
-  Bell, AlertTriangle, Clock, Tag, X, Hash, Star, Users, Paperclip, Pencil
+  Bell, AlertTriangle, Clock, Tag, X, Hash, Star, Users, Paperclip, Pencil, Shield
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +26,7 @@ import EntityEmailTab from '@/components/email/EntityEmailTab';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
 import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
+import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { toast } from 'sonner';
@@ -536,6 +537,7 @@ const TABS = [
   { id: 'files', label: 'Files', icon: Paperclip },
   { id: 'pricing', label: 'Pricing', icon: DollarSign },
   { id: 'calendar', label: 'Activities', icon: Calendar },
+  { id: 'retention', label: 'Retention', icon: Shield },
 ];
 
 // ── History sub-filter tabs for Notes unified view ───────────────────────────
@@ -1301,6 +1303,10 @@ export default function PersonDetails() {
                   entityLabel={agent?.name || 'Person'}
                 />
               </div>
+            )}
+
+            {activeTab === 'retention' && (
+              <RetentionSubtab entityType="agent" entityId={agentId} entityLabel={agent?.name} />
             )}
           </div>
         </div>
