@@ -300,6 +300,113 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── Project-type task templates ──────────────────────────────────────────
+    if (project.project_type_id) {
+      let projectType: any = null;
+      try {
+        projectType = await retryWithBackoff(() => entities.ProjectType.get(project.project_type_id));
+      } catch (err: any) {
+        console.warn(`Failed to fetch ProjectType ${project.project_type_id}:`, err.message);
+      }
+
+      const ptTemplates: any[] = projectType?.task_templates
+        ? (Array.isArray(projectType.task_templates)
+            ? projectType.task_templates
+            : (() => { try { return JSON.parse(projectType.task_templates); } catch { return []; } })())
+        : [];
+
+      const typeId = project.project_type_id;
+
+      for (let idx = 0; idx < ptTemplates.length; idx++) {
+        const template = ptTemplates[idx];
+        const canonicalTemplateId = `project_type:${typeId}:${idx}`;
+
+        if (activeTaskTemplateIds.has(canonicalTemplateId)) {
+          const existingTask = existingTasks.find((t: any) => t.template_id === canonicalTemplateId && !t.is_deleted);
+          if (existingTask) {
+            const updates: Record<string, any> = {};
+            if (typeof template.estimated_minutes === 'number' && existingTask.estimated_minutes !== template.estimated_minutes) {
+              updates.estimated_minutes = template.estimated_minutes;
+            }
+            if (template.auto_assign_role && template.auto_assign_role !== 'none') {
+              const rk = `${template.auto_assign_role}_id`;
+              const rnk = `${template.auto_assign_role}_name`;
+              const rtk = `${template.auto_assign_role}_type`;
+              const rid = project[rk] || null;
+              const rname = project[rnk] || null;
+              const isTeam = project[rtk] === 'team';
+              const newTo = isTeam ? null : rid;
+              const newToName = isTeam ? null : rname;
+              const newTeam = isTeam ? rid : null;
+              const newTeamName = isTeam ? rname : null;
+              if (existingTask.assigned_to !== newTo) updates.assigned_to = newTo;
+              if (existingTask.assigned_to_name !== newToName) updates.assigned_to_name = newToName;
+              if (existingTask.assigned_to_team_id !== newTeam) updates.assigned_to_team_id = newTeam;
+              if (existingTask.assigned_to_team_name !== newTeamName) updates.assigned_to_team_name = newTeamName;
+            }
+            if (Object.keys(updates).length > 0) {
+              retryWithBackoff(() => entities.ProjectTask.update(existingTask.id, updates))
+                .catch((err: any) => console.warn(`Failed to update project-type task ${existingTask.id}:`, err.message));
+            }
+          }
+          skippedCount++;
+          continue;
+        }
+
+        const deletedPtTask = existingTasks.find((t: any) => t.template_id === canonicalTemplateId && t.is_deleted);
+        if (deletedPtTask) {
+          tasksToCreate.push({ type: 'reactivate', taskId: deletedPtTask.id });
+          createdCount++;
+          continue;
+        }
+
+        let assignedTo = null; let assignedToName = null;
+        let assignedToTeamId = null; let assignedToTeamName = null;
+
+        if (template.auto_assign_role && template.auto_assign_role !== 'none') {
+          const roleKey = `${template.auto_assign_role}_id`;
+          const roleNameKey = `${template.auto_assign_role}_name`;
+          const roleTypeKey = `${template.auto_assign_role}_type`;
+          assignedTo = project[roleKey] || null;
+          assignedToName = project[roleNameKey] || null;
+          if (project[roleTypeKey] === 'team') {
+            assignedToTeamId = assignedTo; assignedToTeamName = assignedToName;
+            assignedTo = null; assignedToName = null;
+          }
+          const productionRoles = ['photographer', 'videographer', 'image_editor', 'video_editor', 'floorplan_editor', 'drone_editor'];
+          if (!assignedTo && !assignedToTeamId && productionRoles.includes(template.auto_assign_role)) {
+            assignedTo = project.project_owner_id || null;
+            assignedToName = project.project_owner_name || null;
+            if (project.project_owner_type === 'team') {
+              assignedToTeamId = assignedTo; assignedToTeamName = assignedToName;
+              assignedTo = null; assignedToName = null;
+            }
+          }
+        }
+
+        const dependsOnIndices = (template.depends_on_indices || []).map((i: number) => Math.round(i));
+        if (dependsOnIndices.length > 0) {
+          pendingDependencies.push({ taskArrayIndex: tasksToCreate.length, depends_on_template_indices: dependsOnIndices, source: 'project_type', projectTypeId: typeId });
+        }
+
+        tasksToCreate.push({
+          type: 'create', project_id, title: template.title, description: template.description || '',
+          assigned_to: assignedTo, assigned_to_name: assignedToName,
+          assigned_to_team_id: assignedToTeamId, assigned_to_team_name: assignedToTeamName,
+          auto_generated: true, template_id: canonicalTemplateId, product_id: null, package_id: null,
+          order: existingTasks.length + tasksToCreate.length,
+          is_completed: false, depends_on_task_ids: [], is_blocked: false,
+          auto_assign_role: template.auto_assign_role || 'none',
+          estimated_minutes: typeof template.estimated_minutes === 'number' ? template.estimated_minutes : 0,
+          timer_trigger: template.timer_trigger || 'none',
+          deadline_type: template.deadline_type || 'custom',
+          deadline_preset: template.deadline_preset || null,
+          deadline_hours_after_trigger: template.deadline_hours_after_trigger || 0
+        });
+      }
+    }
+    // ── End project-type task templates ──────────────────────────────────────
+
     // Clean up orphaned tasks
     const currentProductIds = new Set(productSources.keys());
     const currentPackageIds = packageIdSet;
@@ -393,7 +500,12 @@ Deno.serve(async (req) => {
           if (!childId) continue;
           const depTaskIds: string[] = [];
           for (const depIdx of pending.depends_on_template_indices) {
-            const depTemplateId = `product:${pending.productId}:${pricingTier}:${depIdx}`;
+            let depTemplateId: string;
+            if (pending.source === 'project_type') {
+              depTemplateId = `project_type:${pending.projectTypeId}:${depIdx}`;
+            } else {
+              depTemplateId = `product:${pending.productId}:${pricingTier}:${depIdx}`;
+            }
             const depCreatedId = templateToCreatedId.get(depTemplateId);
             if (depCreatedId) { depTaskIds.push(depCreatedId); }
             else { const existing = existingTasks.find((t: any) => t.template_id === depTemplateId); if (existing) depTaskIds.push(existing.id); }
