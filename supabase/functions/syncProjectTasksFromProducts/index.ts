@@ -301,6 +301,8 @@ Deno.serve(async (req) => {
     }
 
     // ── Project-type task templates ──────────────────────────────────────────
+    // Hoisted so orphan cleanup can check template count even outside this block
+    let ptTemplates: any[] = [];
     if (project.project_type_id) {
       let projectType: any = null;
       try {
@@ -309,7 +311,7 @@ Deno.serve(async (req) => {
         console.warn(`Failed to fetch ProjectType ${project.project_type_id}:`, err.message);
       }
 
-      const ptTemplates: any[] = projectType?.task_templates
+      ptTemplates = projectType?.task_templates
         ? (Array.isArray(projectType.task_templates)
             ? projectType.task_templates
             : (() => { try { return JSON.parse(projectType.task_templates); } catch { return []; } })())
@@ -407,13 +409,22 @@ Deno.serve(async (req) => {
     }
     // ── End project-type task templates ──────────────────────────────────────
 
-    // Clean up orphaned tasks
+    // Clean up orphaned tasks (products/packages removed from project)
     const currentProductIds = new Set(productSources.keys());
     const currentPackageIds = packageIdSet;
     const orphanedTasks = existingTasks.filter((task: any) => {
       if (!task.auto_generated || task.is_deleted) return false;
+      // Product/package orphans: task references a product/package no longer on the project
       if (task.product_id && !currentProductIds.has(task.product_id)) return true;
       if (task.package_id && !currentPackageIds.has(task.package_id)) return true;
+      // Project-type orphans: template index >= current template count (template was removed from type)
+      if (task.template_id?.startsWith('project_type:')) {
+        const parts = task.template_id.split(':');
+        const idx = parseInt(parts[2], 10);
+        if (isNaN(idx)) return false;
+        const typeTemplateCount = ptTemplates ? ptTemplates.length : 0;
+        if (idx >= typeTemplateCount) return true;
+      }
       return false;
     });
 
