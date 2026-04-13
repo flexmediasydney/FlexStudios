@@ -6,8 +6,8 @@ const DROPBOX_API = 'https://api.dropboxapi.com/2';
 const DBX_TIMEOUT_MS = 20_000;
 const MAX_LIST_ENTRIES = 5000;
 const CACHE_KEY = 'working_files::all';
-const CACHE_TTL_MS = 30 * 60 * 1000;   // 30 min hard expiry
-const CACHE_STALE_MS = 5 * 60 * 1000;  // 5 min — serve stale + background refresh
+const CACHE_TTL_MS = 2 * 60 * 60 * 1000;  // 2 hour hard expiry (was 30 min — too aggressive, causes rate limits)
+const CACHE_STALE_MS = 15 * 60 * 1000;   // 15 min — serve stale + background refresh
 
 const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','tiff','tif','heic','heif','cr2','cr3','dng','arw','nef','orf','raf','rw2','raw','nrw']);
 const VIDEO_EXTS = new Set(['mp4','mov','avi','webm','mkv','m4v','wmv']);
@@ -571,10 +571,10 @@ Deno.serve(async (req) => {
 
     const forceRefresh = !!body?.force_refresh;
 
-    // ─── Check cache first ────────────────────────────────────────────
-    const cached = forceRefresh ? null : await getCacheEntry(CACHE_KEY);
+    // ─── Always check cache — even on force_refresh we need fallback ──
+    const cached = await getCacheEntry(CACHE_KEY);
 
-    if (cached) {
+    if (cached && !forceRefresh) {
       const cachedData = cached.data as { files: WorkingFile[]; truncated?: boolean };
 
       if (!isCacheStale(cached)) {
@@ -593,13 +593,17 @@ Deno.serve(async (req) => {
         try {
           const freshToken = await getAccessToken();
           const { files, truncated } = await fetchWorkingFiles(freshToken);
-          await upsertCacheEntry({
-            cache_key: CACHE_KEY,
-            cache_type: 'working_files_listing',
-            data: { files, truncated },
-            expires_at: new Date(Date.now() + CACHE_TTL_MS).toISOString(),
-          });
-          console.log(`Background refresh complete: ${files.length} working files cached`);
+          if (files.length > 0) {
+            await upsertCacheEntry({
+              cache_key: CACHE_KEY,
+              cache_type: 'working_files_listing',
+              data: { files, truncated },
+              expires_at: new Date(Date.now() + CACHE_TTL_MS).toISOString(),
+            });
+            console.log(`Background refresh complete: ${files.length} working files cached`);
+          } else {
+            console.warn('Background refresh returned 0 files — keeping stale cache');
+          }
         } catch (err: any) {
           console.error('Background cache refresh failed:', err?.message);
         }
@@ -608,16 +612,44 @@ Deno.serve(async (req) => {
       return jsonResponse(payload, 200, req);
     }
 
-    // ─── No cache — fetch from Dropbox ────────────────────────────────
-    const { files, truncated } = await fetchWorkingFiles(token);
+    // ─── Force refresh or no cache — fetch from Dropbox ───────────────
+    let files: WorkingFile[] = [];
+    let truncated = false;
+    try {
+      const result = await fetchWorkingFiles(token);
+      files = result.files;
+      truncated = result.truncated;
+    } catch (err: any) {
+      console.error('Dropbox fetch failed:', err?.message);
+      // If fetch fails but we have stale cache, serve it
+      if (cached) {
+        const cachedData = cached.data as { files: WorkingFile[]; truncated?: boolean };
+        const payload = buildResponse(cachedData.files, cachedData.truncated);
+        payload.cache = 'stale_fallback';
+        payload.refresh_error = err?.message;
+        return jsonResponse(payload, 200, req);
+      }
+      throw err;
+    }
 
-    // Store in cache
-    await upsertCacheEntry({
-      cache_key: CACHE_KEY,
-      cache_type: 'working_files_listing',
-      data: { files, truncated },
-      expires_at: new Date(Date.now() + CACHE_TTL_MS).toISOString(),
-    });
+    // If Dropbox returned 0 files (rate limit / error) but cache exists, use cache
+    if (files.length === 0 && cached) {
+      const cachedData = cached.data as { files: WorkingFile[]; truncated?: boolean };
+      const payload = buildResponse(cachedData.files, cachedData.truncated);
+      payload.cache = 'stale_fallback';
+      payload.refresh_error = 'Dropbox returned 0 files (possible rate limit)';
+      return jsonResponse(payload, 200, req);
+    }
+
+    // Store in cache (only if we got real data)
+    if (files.length > 0) {
+      await upsertCacheEntry({
+        cache_key: CACHE_KEY,
+        cache_type: 'working_files_listing',
+        data: { files, truncated },
+        expires_at: new Date(Date.now() + CACHE_TTL_MS).toISOString(),
+      });
+    }
 
     const payload = buildResponse(files, truncated);
     payload.cache = 'miss';
