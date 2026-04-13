@@ -243,7 +243,12 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
       const tonomoEvent = calEvents.find((ev: any) => ev.event_source === 'tonomo' && !ev.is_done);
       if (tonomoEvent && updates.shoot_date) {
         const timeStr = updates.shoot_time || project.shoot_time || '09:00';
-        const startDt = new Date(`${updates.shoot_date}T${timeStr}:00+11:00`);
+        // Determine correct Sydney offset: AEDT (+11) first Sun in Oct → first Sun in Apr, else AEST (+10)
+        const dateStr = updates.shoot_date || project.shoot_date;
+        const month = new Date(dateStr + 'T00:00:00Z').getUTCMonth(); // 0-indexed
+        // Rough DST check: Oct(9)–Mar(2) = AEDT(+11), Apr(3)–Sep(8) = AEST(+10)
+        const sydneyOffset = (month >= 9 || month <= 2) ? '+11:00' : '+10:00';
+        const startDt = new Date(`${dateStr}T${timeStr}:00${sydneyOffset}`);
         await entities.CalendarEvent.update(tonomoEvent.id, {
           start_time: startDt.toISOString(),
         }).catch(() => {});
