@@ -345,6 +345,7 @@ export default function HierarchyTableView({
                     onInlineSave={handleInlineSave}
                     navigate={navigate}
                     showPricing={showPricing}
+                    canEdit={canEdit}
                   />
                 ))
               )}
@@ -361,7 +362,7 @@ const ContactRow = React.memo(function ContactRow({
   agent, activeCols, agencyMap, teamMap, stats,
   isSelected, toggleSelect, showCheckbox,
   onEdit, onDelete, onOpenActivityPanel, onInlineSave, navigate,
-  showPricing
+  showPricing, canEdit
 }) {
   const [hovered, setHovered] = useState(false);
   const activityInfo = lastActivityInfo(agent);
