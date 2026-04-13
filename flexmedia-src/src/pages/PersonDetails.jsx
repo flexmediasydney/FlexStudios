@@ -643,6 +643,12 @@ export default function PersonDetails() {
 
   const handleDelete = async () => {
     try {
+      const user = await api.auth.me();
+      api.entities.AuditLog.create({
+        entity_type: 'agent', entity_id: agent?.id, entity_name: agent?.name,
+        action: 'delete',
+        user_name: user?.full_name || '', user_email: user?.email || '',
+      }).catch(() => {});
       await api.entities.Agent.delete(agentId);
       toast.success('Person deleted');
       navigate(createPageUrl('People'));

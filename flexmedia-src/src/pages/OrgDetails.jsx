@@ -224,6 +224,18 @@ export default function OrgDetails() {
         current_team_id: null,
         current_team_name: null,
       });
+      api.auth.me().then(user => {
+        api.entities.AuditLog.create({
+          entity_type: 'agent', entity_id: agent.id, entity_name: agent.name,
+          action: 'update',
+          changed_fields: [
+            { field: 'current_agency_id', old_value: agent.current_agency_id, new_value: agency?.id },
+            { field: 'current_agency_name', old_value: agent.current_agency_name, new_value: agency?.name },
+            { field: 'current_team_id', old_value: agent.current_team_id, new_value: null },
+          ],
+          user_name: user?.full_name || '', user_email: user?.email || '',
+        }).catch(() => {});
+      }).catch(() => {});
       await Promise.all([refetchAgents(), refetchEntityList("Agent")]);
       toast.success(`${agent.name} linked to ${agency?.name}`);
       setShowLinkAgent(false);

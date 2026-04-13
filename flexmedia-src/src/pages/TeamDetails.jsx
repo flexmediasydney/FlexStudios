@@ -516,6 +516,12 @@ export default function TeamDetails() {
 
   const handleDelete = async () => {
     try {
+      const user = await api.auth.me();
+      api.entities.AuditLog.create({
+        entity_type: 'team', entity_id: team?.id, entity_name: team?.name,
+        action: 'delete',
+        user_name: user?.full_name || '', user_email: user?.email || '',
+      }).catch(() => {});
       await api.entities.Team.delete(teamId);
       toast.success('Team deleted');
       navigate(createPageUrl('Teams'));
@@ -576,6 +582,14 @@ export default function TeamDetails() {
         current_team_name: team.name,
       });
       toast.success(`${agent.name} added to ${team.name}`);
+      api.auth.me().then(user => {
+        api.entities.AuditLog.create({
+          entity_type: 'agent', entity_id: agent.id, entity_name: agent.name,
+          action: 'update',
+          changed_fields: [{ field: 'current_team_id', old_value: null, new_value: team?.id }, { field: 'current_team_name', old_value: null, new_value: team?.name }],
+          user_name: user?.full_name || '', user_email: user?.email || '',
+        }).catch(() => {});
+      }).catch(() => {});
       await refetchEntityList('Agent');
       setShowAddMemberPicker(false);
       setAddMemberSearch('');
@@ -593,6 +607,14 @@ export default function TeamDetails() {
         current_team_name: null,
       });
       toast.success(`${agent.name} removed from ${team.name}`);
+      api.auth.me().then(user => {
+        api.entities.AuditLog.create({
+          entity_type: 'agent', entity_id: agent.id, entity_name: agent.name,
+          action: 'update',
+          changed_fields: [{ field: 'current_team_id', old_value: team?.id, new_value: null }, { field: 'current_team_name', old_value: team?.name, new_value: null }],
+          user_name: user?.full_name || '', user_email: user?.email || '',
+        }).catch(() => {});
+      }).catch(() => {});
       await refetchEntityList('Agent');
     } catch (err) {
       toast.error(err?.message || 'Failed to remove member');
