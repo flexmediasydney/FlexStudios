@@ -34,6 +34,20 @@ const STATE_BADGE = {
   'Do Not Contact': 'bg-red-100 text-red-800 border-red-200',
 };
 
+const INTEGRITY_LABELS = {
+  missing_organisation: 'No organisation linked',
+  missing_email: 'Email address missing',
+  missing_phone: 'Phone number missing',
+};
+
+function computeIntegrityIssues(agent) {
+  const issues = [];
+  if (!agent.current_agency_id) issues.push('missing_organisation');
+  if (!agent.email?.trim()) issues.push('missing_email');
+  if (!agent.phone?.trim()) issues.push('missing_phone');
+  return issues;
+}
+
 const RELATIONSHIP_STATES = ['Active', 'Prospecting', 'Dormant', 'Do Not Contact'];
 const VALUE_OPTIONS = ['Low', 'Medium', 'High', 'Enterprise'];
 const PROSPECT_STATUSES = ['New Lead', 'Researching', 'Attempted Contact', 'Discovery Call Scheduled', 'Proposal Sent', 'Nurturing', 'Qualified', 'Unqualified', 'Converted to Client', 'Lost'];
@@ -480,6 +494,18 @@ export default function PersonDetails() {
         user_email: user?.email || '',
       }).catch(() => {});
 
+      // Recompute data integrity after save
+      const updatedAgent = { ...agent, ...payload };
+      const newIssues = computeIntegrityIssues(updatedAgent);
+      const issuesChanged = JSON.stringify(newIssues) !== JSON.stringify(agent.data_integrity_issues || []);
+      const needsReviewChanged = agent.needs_review !== (newIssues.length > 0);
+      if (issuesChanged || needsReviewChanged) {
+        await api.entities.Agent.update(agent.id, {
+          data_integrity_issues: newIssues,
+          needs_review: newIssues.length > 0,
+        }).catch(() => {});
+      }
+
       refetchEntityList('Agent');
     } catch (err) {
       toast.error(`Failed to save ${field}`);
@@ -738,7 +764,34 @@ export default function PersonDetails() {
                 {agent.relationship_state.toUpperCase()}
               </Badge>
             )}
+            {agent.auto_created && (
+              <Badge className="text-[10px] border font-medium px-2 py-0.5 bg-sky-50 text-sky-700 border-sky-200 ml-1">
+                Auto-created from Tonomo
+              </Badge>
+            )}
           </div>
+
+          {/* Data integrity banner */}
+          {agent.needs_review && (
+            <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700/50 px-3 py-2">
+              <div className="flex items-center gap-1.5 mb-1">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                <span className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">This contact needs review</span>
+              </div>
+              {(() => {
+                const issues = Array.isArray(agent.data_integrity_issues) ? agent.data_integrity_issues : [];
+                return issues.length > 0 ? (
+                  <ul className="space-y-0.5 ml-5">
+                    {issues.map(issue => (
+                      <li key={issue} className="text-[10px] text-amber-700 dark:text-amber-400 list-disc">
+                        {INTEGRITY_LABELS[issue] || issue}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null;
+              })()}
+            </div>
+          )}
 
           {/* Summary section */}
           <Section title="Summary" defaultOpen>

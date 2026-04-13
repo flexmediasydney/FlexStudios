@@ -204,14 +204,21 @@ export default function People() {
     {
       key: 'name', label: 'Person', sortable: true,
       render: (row) => (
-        <HoverCard openDelay={300} closeDelay={100}>
-          <HoverCardTrigger asChild>
-            <span className="font-medium text-sm text-foreground hover:text-primary cursor-pointer transition-colors">{row.name}</span>
-          </HoverCardTrigger>
-          <HoverCardContent side="right" className="w-72 p-4" onClick={e => e.stopPropagation()}>
-            <AgentHoverContent row={row} projects={projectsByAgent[row.id] || []} revenue={revenueByAgent[row.id] || 0} />
-          </HoverCardContent>
-        </HoverCard>
+        <div className="flex items-center gap-1.5">
+          <HoverCard openDelay={300} closeDelay={100}>
+            <HoverCardTrigger asChild>
+              <span className="font-medium text-sm text-foreground hover:text-primary cursor-pointer transition-colors">{row.name}</span>
+            </HoverCardTrigger>
+            <HoverCardContent side="right" className="w-72 p-4" onClick={e => e.stopPropagation()}>
+              <AgentHoverContent row={row} projects={projectsByAgent[row.id] || []} revenue={revenueByAgent[row.id] || 0} />
+            </HoverCardContent>
+          </HoverCard>
+          {row.needs_review && (
+            <span title="Needs review — data integrity issues" className="shrink-0">
+              <AlertTriangle className="h-3 w-3 text-amber-500" />
+            </span>
+          )}
+        </div>
       ),
     },
     {

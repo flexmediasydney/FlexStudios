@@ -495,23 +495,47 @@ export async function resolveEntity(entities: any, tonomoUid: string, email: str
   let match = byEmail?.[0] || byName?.[0] || null;
 
   // Auto-create Agent record when no match found — Tonomo agents are real estate
-  // agents who booked shoots and should exist in FlexStudios for project linking
+  // agents who booked shoots and should exist in FlexStudios for project linking.
+  // Only creates if the Tonomo UID hasn't been mapped before.
   if (!match && mappingType === 'agent' && entityDbName === 'Agent' && (name || email)) {
-    try {
-      const newAgent = await entities.Agent.create({
-        name: name || email || 'Unknown Agent',
-        email: email || null,
-        source: 'tonomo',
-        tonomo_uid: tonomoUid,
-        current_agency_id: agencyId || null,
-      });
-      if (newAgent?.id) {
-        match = newAgent;
-        console.log(`[agent-autocreate] Created Agent "${name}" (${newAgent.id}) from Tonomo uid ${tonomoUid}`);
+    // Check if this UID was already seen (even unconfirmed) — don't duplicate
+    const existingMapping = allMappings.find((m: any) => m.tonomo_id === tonomoUid && m.mapping_type === 'agent');
+    if (!existingMapping?.flexmedia_entity_id) {
+      try {
+        // Compute data integrity issues
+        const integrityIssues: string[] = [];
+        if (!email) integrityIssues.push('missing_email');
+        if (!agencyId) integrityIssues.push('missing_organisation');
+        // Phone is never available from Tonomo webhooks — always flag
+        integrityIssues.push('missing_phone');
+
+        const newAgent = await entities.Agent.create({
+          name: name || email || 'Unknown Agent',
+          email: email || null,
+          source: 'tonomo',
+          tonomo_uid: tonomoUid,
+          current_agency_id: agencyId || null,
+          status: 'active',
+          relationship_state: 'New',
+          auto_created: true,
+          needs_review: true,
+          data_integrity_issues: JSON.stringify(integrityIssues),
+        });
+        if (newAgent?.id) {
+          match = newAgent;
+          console.log(`[agent-autocreate] Created Agent "${name}" (${newAgent.id}) from Tonomo uid ${tonomoUid}. Integrity issues: ${integrityIssues.join(', ') || 'none'}`);
+        }
+      } catch (createErr: any) {
+        console.error(`[agent-autocreate] Failed to create Agent "${name}":`, createErr?.message);
       }
-    } catch (createErr: any) {
-      console.error(`[agent-autocreate] Failed to create Agent "${name}":`, createErr?.message);
     }
+  }
+
+  // For existing agents matched by email/name, update their tonomo_uid if not set
+  if (match && !match.tonomo_uid && tonomoUid) {
+    try {
+      await entities.Agent.update(match.id, { tonomo_uid: tonomoUid });
+    } catch { /* non-fatal */ }
   }
 
   await upsertMappingSuggestion(entities, tonomoUid, name || email || tonomoUid, mappingType, entityDbName, match?.id || null, match?.[nameField] || null, match ? 'high' : 'low', allMappings);

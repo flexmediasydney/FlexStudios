@@ -8,7 +8,7 @@ import {
   ChevronUp, ChevronDown, Building2, User,
   Mail, Phone, Calendar, MoreHorizontal, Pencil, Trash2,
   FolderOpen, MessageSquarePlus, ArrowUpDown, Clock,
-  ExternalLink
+  ExternalLink, AlertTriangle
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -385,12 +385,19 @@ const ContactRow = React.memo(function ContactRow({
               {initials}
             </div>
             <div className="min-w-0">
-              <button
-                className="text-sm font-medium text-foreground hover:text-primary hover:underline truncate block text-left"
-                onClick={(e) => { e.stopPropagation(); navigate(createPageUrl("PersonDetails") + "?id=" + agent.id); }}
-              >
-                {agent.name}
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  className="text-sm font-medium text-foreground hover:text-primary hover:underline truncate block text-left"
+                  onClick={(e) => { e.stopPropagation(); navigate(createPageUrl("PersonDetails") + "?id=" + agent.id); }}
+                >
+                  {agent.name}
+                </button>
+                {agent.needs_review && (
+                  <span title="Needs review — data integrity issues" className="shrink-0">
+                    <AlertTriangle className="h-3 w-3 text-amber-500" />
+                  </span>
+                )}
+              </div>
               {agent.title && (
                 <span className="text-[11px] text-muted-foreground truncate block">{agent.title}</span>
               )}
