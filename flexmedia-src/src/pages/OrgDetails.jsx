@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
-import { useEntityList } from "@/components/hooks/useEntityData";
-import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, Paperclip, DollarSign, Calendar, Network, Palette, Loader2 } from "lucide-react";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
+import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search } from "lucide-react";
 import BrandingPreferencesModule from "@/components/agencies/BrandingPreferencesModule";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,12 @@ import { fixTimestamp } from "@/components/utils/dateUtils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
+import { usePermissions } from '@/components/auth/PermissionGuard';
+import TeamForm from "@/components/clients/TeamForm";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { api } from "@/api/supabaseClient";
+import { toast } from "sonner";
 
 const STATE_BADGE = {
   Active:           "bg-green-100 text-green-800 border-green-200",
@@ -61,6 +67,7 @@ function ErrorState({ navigate, title, message }) {
 export default function OrgDetails() {
   const { canEdit, canView } = useEntityAccess('agencies');
   const { visible: showPricing } = usePriceGate();
+  const { isManagerOrAbove } = usePermissions();
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
   const agencyId = urlParams.get("id");
@@ -85,8 +92,8 @@ export default function OrgDetails() {
   const interactionFilter = useCallback(e => e.entity_type === "Agency" && e.entity_id === agencyId, [agencyId]);
   const noteFilter        = useCallback(e => e.agency_id === agencyId, [agencyId]);
 
-  const { data: agents = [], loading: agentsLoading }  = useEntityList("Agent",          "name",          null, agentFilter);
-  const { data: teams = [], loading: teamsLoading }    = useEntityList("Team",           "name",          null, teamFilter);
+  const { data: agents = [], loading: agentsLoading, refetch: refetchAgents }  = useEntityList("Agent",          "name",          null, agentFilter);
+  const { data: teams = [], loading: teamsLoading, refetch: refetchTeams }    = useEntityList("Team",           "name",          null, teamFilter);
   const { data: projects = [] }     = useEntityList("Project",        "-created_date", 500,  projectFilter);
   const { data: interactions = [] } = useEntityList("InteractionLog", "-date_time",    null, interactionFilter);
   const { data: orgNotes = [] }     = useEntityList("OrgNote",        "-created_date", null, noteFilter);
@@ -161,7 +168,7 @@ export default function OrgDetails() {
 
   // Email activity tracking for Activity tab integration
   const [emailActivities, setEmailActivities] = useState([]);
-  
+
   const handleEmailActivity = useCallback((action, data) => {
     setEmailActivities(prev => [
       {
@@ -172,6 +179,60 @@ export default function OrgDetails() {
       ...prev,
     ].slice(0, 50)); // Keep last 50 email activities
   }, []);
+
+  // ── Feature 1: Create Team dialog ─────────────────────────────────────────
+  const [showTeamForm, setShowTeamForm] = useState(false);
+
+  // ── Feature 2: Link existing agent dialog ─────────────────────────────────
+  const [showLinkAgent, setShowLinkAgent] = useState(false);
+  const [linkSearch, setLinkSearch] = useState("");
+  const [allAgents, setAllAgents] = useState([]);
+  const [allAgentsLoading, setAllAgentsLoading] = useState(false);
+  const [linkingAgentId, setLinkingAgentId] = useState(null);
+
+  const openLinkAgent = useCallback(async () => {
+    setLinkSearch("");
+    setShowLinkAgent(true);
+    setAllAgentsLoading(true);
+    try {
+      const list = await api.entities.Agent.list("name", 2000);
+      setAllAgents(list);
+    } catch {
+      toast.error("Failed to load agents");
+    } finally {
+      setAllAgentsLoading(false);
+    }
+  }, []);
+
+  const agentCurrentIds = useMemo(() => new Set(agents.map(a => a.id)), [agents]);
+
+  const filteredLinkAgents = useMemo(() => {
+    const q = linkSearch.trim().toLowerCase();
+    return allAgents.filter(a => {
+      if (agentCurrentIds.has(a.id)) return false; // already in this agency
+      if (!q) return true;
+      return (a.name || "").toLowerCase().includes(q) || (a.email || "").toLowerCase().includes(q);
+    });
+  }, [allAgents, agentCurrentIds, linkSearch]);
+
+  const handleLinkAgent = useCallback(async (agent) => {
+    setLinkingAgentId(agent.id);
+    try {
+      await api.entities.Agent.update(agent.id, {
+        current_agency_id: agencyId,
+        current_agency_name: agency?.name || "",
+        current_team_id: null,
+        current_team_name: null,
+      });
+      await Promise.all([refetchAgents(), refetchEntityList("Agent")]);
+      toast.success(`${agent.name} linked to ${agency?.name}`);
+      setShowLinkAgent(false);
+    } catch {
+      toast.error("Failed to link agent");
+    } finally {
+      setLinkingAgentId(null);
+    }
+  }, [agencyId, agency, refetchAgents]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -508,11 +569,37 @@ export default function OrgDetails() {
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                   </div>
                 ) : (
-                  <Org2Hierarchy
-                    agency={agency}
-                    teams={teams}
-                    agents={agents}
-                  />
+                  <>
+                    {isManagerOrAbove && (
+                      <div className="flex items-center gap-2 px-4 pt-4 pb-0">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 h-8 text-xs"
+                          onClick={() => setShowTeamForm(true)}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Create Team
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 h-8 text-xs"
+                          onClick={openLinkAgent}
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          Link Existing Person
+                        </Button>
+                      </div>
+                    )}
+                    <Org2Hierarchy
+                      agency={agency}
+                      teams={teams}
+                      agents={agents}
+                      onAddTeam={isManagerOrAbove ? () => setShowTeamForm(true) : undefined}
+                      onRefresh={() => { refetchAgents(); refetchTeams(); }}
+                    />
+                  </>
                 )}
               </div>
             )}
@@ -526,6 +613,89 @@ export default function OrgDetails() {
         </div>
       </div>
     </div>
+
+    {/* ── Feature 1: Create Team dialog ──────────────────────────────── */}
+    <TeamForm
+      open={showTeamForm}
+      onClose={() => { setShowTeamForm(false); refetchTeams(); }}
+      preselectedAgencyId={agencyId}
+    />
+
+    {/* ── Feature 2: Link existing agent dialog ──────────────────────── */}
+    <Dialog open={showLinkAgent} onOpenChange={open => { if (!open) setShowLinkAgent(false); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <UserPlus className="h-4 w-4" />
+            Link Existing Person
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Select a person to move into <span className="font-semibold">{agency?.name}</span>. Their current team assignment will be cleared.
+          </p>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              className="pl-8 h-8 text-sm"
+              placeholder="Search by name or email…"
+              value={linkSearch}
+              onChange={e => setLinkSearch(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto space-y-1 -mx-1 px-1">
+            {allAgentsLoading ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : filteredLinkAgents.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-6">
+                {linkSearch ? "No matching people found" : "All agents are already in this agency"}
+              </p>
+            ) : (
+              filteredLinkAgents.map(agent => (
+                <button
+                  key={agent.id}
+                  disabled={linkingAgentId === agent.id}
+                  onClick={() => handleLinkAgent(agent)}
+                  className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md hover:bg-muted/60 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <div className="w-7 h-7 rounded-full bg-green-100 flex items-center justify-center shrink-0">
+                    {linkingAgentId === agent.id
+                      ? <Loader2 className="h-3.5 w-3.5 text-green-600 animate-spin" />
+                      : <span className="text-xs font-bold text-green-700">{(agent.name || '?')[0].toUpperCase()}</span>
+                    }
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium truncate">{agent.name}</p>
+                    {(agent.email || agent.current_agency_name) && (
+                      <p className="text-[10px] text-muted-foreground truncate">
+                        {agent.email}
+                        {agent.email && agent.current_agency_name ? " · " : ""}
+                        {agent.current_agency_name && <span className="opacity-70">currently at {agent.current_agency_name}</span>}
+                      </p>
+                    )}
+                  </div>
+                  {agent.relationship_state && (
+                    <Badge
+                      className={cn("text-[9px] px-1 py-0 shrink-0", {
+                        "bg-green-100 text-green-700": agent.relationship_state === "Active",
+                        "bg-amber-100 text-amber-700": agent.relationship_state === "Dormant",
+                        "bg-blue-100 text-blue-700": agent.relationship_state === "Prospecting",
+                        "bg-red-100 text-red-700": agent.relationship_state === "Do Not Contact",
+                      })}
+                    >
+                      {agent.relationship_state}
+                    </Badge>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
     </ErrorBoundary>
   );
 }
