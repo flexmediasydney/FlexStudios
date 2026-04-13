@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { DollarSign, Plus, AlertCircle, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { DollarSign, Plus, AlertCircle, Loader2, ChevronLeft, ChevronRight, Percent, Tag } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import Price from '@/components/common/Price';
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -68,6 +69,8 @@ export default function ProjectPricingTable({
         ...pkg,
         products: (pkg.products || []).map(np => ({ ...np }))
       })),
+      discount_type: project?.discount_type || 'fixed',
+      discount_value: project?.discount_value || 0,
     };
     setFormState(newFormState);
     setPendingTotal(null);
@@ -237,6 +240,8 @@ export default function ProjectPricingTable({
         packages: formState.packages,
         pricing_tier: pricingTier,
         project_type_id: project?.project_type_id || null,
+        discount_type: formState.discount_type || 'fixed',
+        discount_value: formState.discount_value || 0,
       });
       if (response.data?.success) {
         // Store verified result to use on confirm
@@ -300,6 +305,8 @@ export default function ProjectPricingTable({
         price: pendingCalcResult.calculated_price,
         price_matrix_snapshot: pendingCalcResult.price_matrix_snapshot,
         pricing_tier: pricingTier,
+        discount_type: formState.discount_type || 'fixed',
+        discount_value: parseFloat(formState.discount_value) || 0,
         manually_overridden_fields: JSON.stringify([...overrideSet]),
       });
       
@@ -414,6 +421,12 @@ export default function ProjectPricingTable({
   const hasChanges = useMemo(() => {
     const origProducts = project?.products || [];
     const origPackages = project?.packages || [];
+    // Discount changes
+    const origDiscType = project?.discount_type || 'fixed';
+    const origDiscVal = parseFloat(project?.discount_value) || 0;
+    if ((formState.discount_type || 'fixed') !== origDiscType) return true;
+    if ((parseFloat(formState.discount_value) || 0) !== origDiscVal) return true;
+
     if (formState.products.length !== origProducts.length) return true;
     if (formState.packages.length !== origPackages.length) return true;
     if (formState.products.some((prod, idx) =>
@@ -584,10 +597,71 @@ export default function ProjectPricingTable({
                 })()}
               </div>
 
-              {/* Total */}
+              {/* Subtotal + Discount + Total */}
               <div className="pt-2">
                 <Separator className="my-3" />
-                <div className="flex items-center justify-between bg-primary/5 rounded-lg p-4 border border-primary/20">
+
+                {/* Subtotal line */}
+                <div className="flex items-center justify-between px-4 py-2">
+                  <span className="text-sm text-muted-foreground">Subtotal</span>
+                  <span className="text-sm font-mono tabular-nums">
+                    <Price value={breakdown.subtotal} />
+                  </span>
+                </div>
+
+                {/* Manual discount row */}
+                <div className="flex items-center justify-between px-4 py-2 gap-3">
+                  <div className="flex items-center gap-2">
+                    <Tag className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">Discount</span>
+                  </div>
+                  {canEdit ? (
+                    <div className="flex items-center gap-1.5">
+                      {/* $ / % toggle */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newType = formState.discount_type === 'percent' ? 'fixed' : 'percent';
+                          setFormState(prev => ({ ...prev, discount_type: newType }));
+                        }}
+                        className="flex items-center justify-center h-8 w-8 rounded border border-border text-xs font-bold text-muted-foreground hover:bg-muted transition-colors shrink-0"
+                        title={`Switch to ${formState.discount_type === 'percent' ? 'fixed $' : 'percentage %'}`}
+                      >
+                        {formState.discount_type === 'percent' ? <Percent className="h-3.5 w-3.5" /> : <DollarSign className="h-3.5 w-3.5" />}
+                      </button>
+                      {/* Value input */}
+                      <Input
+                        type="number"
+                        min="0"
+                        max={formState.discount_type === 'percent' ? 100 : undefined}
+                        step={formState.discount_type === 'percent' ? 1 : 5}
+                        value={formState.discount_value || ''}
+                        onChange={e => setFormState(prev => ({ ...prev, discount_value: e.target.value }))}
+                        placeholder="0"
+                        className="h-8 w-24 text-right font-mono text-sm"
+                      />
+                      {/* Show computed discount amount */}
+                      {breakdown.manualDiscount > 0 && (
+                        <span className="text-sm font-mono tabular-nums text-red-600 whitespace-nowrap">
+                          −<Price value={breakdown.manualDiscount} />
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-sm font-mono tabular-nums text-red-600">
+                      {breakdown.manualDiscount > 0 ? (
+                        <>−<Price value={breakdown.manualDiscount} />
+                          <span className="text-xs text-muted-foreground ml-1">
+                            ({formState.discount_type === 'percent' ? `${formState.discount_value}%` : `$${formState.discount_value}`})
+                          </span>
+                        </>
+                      ) : '—'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Total */}
+                <div className="flex items-center justify-between bg-primary/5 rounded-lg p-4 border border-primary/20 mt-2">
                   <div>
                     <span className="font-semibold text-lg">Total Project Value</span>
                     {canEdit && hasChanges && (

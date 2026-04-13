@@ -63,6 +63,8 @@ Deno.serve(async (req) => {
       packages = [],
       pricing_tier = 'standard',
       project_type_id = null,
+      discount_type = 'fixed',
+      discount_value = 0,
     } = body;
 
     // Input validation
@@ -308,6 +310,18 @@ Deno.serve(async (req) => {
       finalPrice = Math.max(0, totalPrice - appliedDiscount);
     }
 
+    // Manual per-project discount (Pipedrive-style)
+    let manualDiscountApplied = 0;
+    const discVal = Math.max(0, parseFloat(String(discount_value)) || 0);
+    if (discVal > 0) {
+      if (discount_type === 'percent') {
+        manualDiscountApplied = Math.min(finalPrice, Math.ceil((finalPrice * discVal) / 100 / 5) * 5);
+      } else {
+        manualDiscountApplied = Math.min(finalPrice, Math.ceil(discVal / 5) * 5);
+      }
+      finalPrice = Math.max(0, finalPrice - manualDiscountApplied);
+    }
+
     return jsonResponse({
       success: true,
       calculated_price: finalPrice,
@@ -315,6 +329,9 @@ Deno.serve(async (req) => {
       line_items: lineItems,
       subtotal: totalPrice,
       blanket_discount_applied: appliedDiscount,
+      manual_discount_applied: manualDiscountApplied,
+      discount_type: discount_type || 'fixed',
+      discount_value: discVal,
       price_matrix_snapshot: agentM || agencyM || rawAgentM || rawAgencyM,
     });
 

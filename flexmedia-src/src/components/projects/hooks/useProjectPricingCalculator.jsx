@@ -205,11 +205,26 @@ export function useProjectPricingCalculator(formState, allProducts, allPackages,
        productItems.reduce((sum, p) => sum + p.lineTotal, 0)) * 100
     ) / 100;
 
+    // Manual per-project discount (Pipedrive-style)
+    const discType = formState.discount_type || 'fixed';
+    const discVal = Math.max(0, parseFloat(formState.discount_value) || 0);
+    let manualDiscount = 0;
+    if (discVal > 0) {
+      if (discType === 'percent') {
+        manualDiscount = Math.min(subtotal, Math.round(subtotal * discVal / 100 * 100) / 100);
+      } else {
+        manualDiscount = Math.min(subtotal, discVal);
+      }
+    }
+
     return {
       packages: packageItems,
       products: productItems,
       subtotal: Math.max(0, subtotal),
-      total: Math.max(0, subtotal),
+      manualDiscount,
+      discountType: discType,
+      discountValue: discVal,
+      total: Math.max(0, subtotal - manualDiscount),
     };
   }, [formState, productMap, packageMap, tierKey]);
 
