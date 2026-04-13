@@ -8,8 +8,18 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   CheckCircle2, Circle, XCircle, Search,
-  Link2, Unlink, ChevronDown, Users, Wrench, Package, User, RefreshCw, Loader2, Workflow, Layers
+  Link2, Unlink, ChevronDown, Users, Wrench, Package, User, RefreshCw, Loader2, Workflow, Layers,
+  Archive, ArchiveRestore
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { relativeTime, parseTS } from "@/components/tonomo/tonomoUtils";
 import { toast } from "sonner";
 
@@ -44,8 +54,11 @@ const STATUS = {
 // Main page
 export default function SettingsTonomoMappings() {
   const [activeType, setActiveType] = useState("service");
+  const [archiveView, setArchiveView] = useState("active"); // "active" | "archived"
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [archiveTarget, setArchiveTarget] = useState(null);   // mapping to archive
+  const [unarchiveTarget, setUnarchiveTarget] = useState(null); // mapping to unarchive
   const queryClient = useQueryClient();
 
   const { data: mappings = [], isLoading, refetch } = useQuery({
@@ -108,6 +121,25 @@ export default function SettingsTonomoMappings() {
     onError: (err) => toast.error(err?.message || "Operation failed"),
   });
 
+  const archiveMutation = useMutation({
+    mutationFn: ({ id, archived }) => api.entities.TonomoMappingTable.update(id, { is_archived: archived }),
+    onSuccess: (_, { archived }) => {
+      queryClient.invalidateQueries({ queryKey: ["tonomoMappings"] });
+      toast.success(archived ? "Mapping archived" : "Mapping restored to active");
+    },
+    onError: (err) => toast.error(err?.message || "Operation failed"),
+  });
+
+  const handleArchiveConfirm = useCallback((mapping) => {
+    archiveMutation.mutate({ id: mapping.id, archived: true });
+    setArchiveTarget(null);
+  }, [archiveMutation]);
+
+  const handleUnarchiveConfirm = useCallback((mapping) => {
+    archiveMutation.mutate({ id: mapping.id, archived: false });
+    setUnarchiveTarget(null);
+  }, [archiveMutation]);
+
   // Generate virtual mappings for unmapped FlexStudios entities
   const allTabMappings = useMemo(() => {
     // Booking flows tab — driven by TonomoBookingFlowTier records directly
@@ -162,6 +194,7 @@ export default function SettingsTonomoMappings() {
         auto_suggested: false,
         confidence: "none",
         is_virtual: true,
+        is_archived: false,
         last_seen_at: null,
         seen_count: 0,
       }));
@@ -173,8 +206,15 @@ export default function SettingsTonomoMappings() {
   const tabMappings = useMemo(() => {
     const entKey = TYPE_CONFIG[activeType]?.rightEntity;
     const ents = rightEntities[entKey] || [];
+    // bookingflow and projecttype rows don't have is_archived — always show in active view
+    const isArchivableType = activeType !== 'bookingflow' && activeType !== 'projecttype';
     return allTabMappings
       .filter(m => {
+        // Archive view filter (only for archivable types)
+        if (isArchivableType) {
+          if (archiveView === "active"   && m.is_archived)  return false;
+          if (archiveView === "archived" && !m.is_archived) return false;
+        }
         const s = getStatus(m, ents);
         if (statusFilter !== "all" && s !== statusFilter) return false;
         if (search) {
@@ -190,7 +230,7 @@ export default function SettingsTonomoMappings() {
         const e2 = rightEntities[entKey2] || [];
         return (order[getStatus(a, e2)] ?? 2) - (order[getStatus(b, e2)] ?? 2);
       });
-  }, [allTabMappings, activeType, statusFilter, search, products, packages, users, agents, bookingFlows, projectTypeMappings, flexProjectTypes]);
+  }, [allTabMappings, activeType, archiveView, statusFilter, search, products, packages, users, agents, bookingFlows, projectTypeMappings, flexProjectTypes]);
 
   // Tab counts (show all entities including unmapped)
   const tabCounts = useMemo(() => {
@@ -284,7 +324,7 @@ export default function SettingsTonomoMappings() {
             return (
               <button
                 key={type}
-                onClick={() => setActiveType(type)}
+                onClick={() => { setActiveType(type); setArchiveView("active"); }}
                 className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all relative ${
                   isActive
                     ? "bg-primary text-primary-foreground shadow-sm"
@@ -316,6 +356,34 @@ export default function SettingsTonomoMappings() {
           <StatusPill status="unlinked"  count={stats.unlinked}  label="Unlinked" />
           {stats.broken > 0 && <StatusPill status="broken" count={stats.broken} />}
         </div>
+
+        {/* Active / Archived sub-view toggle — only for archivable types */}
+        {activeType !== 'bookingflow' && activeType !== 'projecttype' && (
+          <div className="flex items-center rounded-md border overflow-hidden text-xs">
+            <button
+              onClick={() => setArchiveView("active")}
+              className={`px-3 py-1.5 flex items-center gap-1.5 transition-colors ${
+                archiveView === "active"
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              <CheckCircle2 className="h-3 w-3" />
+              Active
+            </button>
+            <button
+              onClick={() => setArchiveView("archived")}
+              className={`px-3 py-1.5 flex items-center gap-1.5 border-l transition-colors ${
+                archiveView === "archived"
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              <Archive className="h-3 w-3" />
+              Archived
+            </button>
+          </div>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -446,13 +514,32 @@ export default function SettingsTonomoMappings() {
                  onUnlink={handleUnlink}
                  onConfirm={handleConfirm}
                  onUpdateUser={updateUserMutation}
-                 isSaving={saveMutation.isPending}
+                 isSaving={saveMutation.isPending || archiveMutation.isPending}
+                 isArchiveView={archiveView === "archived"}
+                 onArchive={() => setArchiveTarget(mapping)}
+                 onUnarchive={() => setUnarchiveTarget(mapping)}
                />
              )
            ))
          )}
       </div>
     </div>
+
+    {/* Archive confirmation dialog */}
+    <ArchiveConfirmDialog
+      mapping={archiveTarget}
+      onClose={() => setArchiveTarget(null)}
+      onConfirm={handleArchiveConfirm}
+      isPending={archiveMutation.isPending}
+    />
+
+    {/* Unarchive confirmation dialog */}
+    <UnarchiveConfirmDialog
+      mapping={unarchiveTarget}
+      onClose={() => setUnarchiveTarget(null)}
+      onConfirm={handleUnarchiveConfirm}
+      isPending={archiveMutation.isPending}
+    />
     </ErrorBoundary>
   );
 }
@@ -630,7 +717,7 @@ function StatusPill({ status, count, label }) {
 }
 
 // Single mapping row
-function MappingRow({ mapping, type, entities, users, onLink, onUnlink, onConfirm, onUpdateUser, isSaving }) {
+function MappingRow({ mapping, type, entities, users, onLink, onUnlink, onConfirm, onUpdateUser, isSaving, isArchiveView, onArchive, onUnarchive }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
   const pickerRef = useRef(null);
@@ -859,7 +946,126 @@ function MappingRow({ mapping, type, entities, users, onLink, onUnlink, onConfir
             <Unlink className="h-3 w-3" />
           </Button>
         )}
+        {/* Archive / Unarchive — only for real (non-virtual) mappings */}
+        {!mapping.is_virtual && (
+          isArchiveView ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-green-600"
+              onClick={onUnarchive}
+              disabled={isSaving}
+              title="Restore to active"
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-amber-600"
+              onClick={onArchive}
+              disabled={isSaving}
+              title="Archive mapping"
+            >
+              <Archive className="h-3.5 w-3.5" />
+            </Button>
+          )
+        )}
       </div>
     </div>
+  );
+}
+
+// Archive confirmation dialog — requires typing the mapping name
+function ArchiveConfirmDialog({ mapping, onClose, onConfirm, isPending }) {
+  const [typed, setTyped] = useState("");
+  const label = mapping?.tonomo_label || mapping?.flexmedia_label || "this mapping";
+  const canConfirm = typed.trim() === label.trim();
+
+  // Reset typed value when dialog opens/closes
+  useEffect(() => { setTyped(""); }, [mapping]);
+
+  return (
+    <AlertDialog open={!!mapping} onOpenChange={open => { if (!open) onClose(); }}>
+      <AlertDialogContent className="max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center gap-2">
+            <Archive className="h-5 w-5 text-amber-500" />
+            Archive mapping?
+          </AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-3 text-sm text-muted-foreground">
+              <p>
+                This mapping will be moved to the archive. It will{" "}
+                <span className="font-medium text-foreground">no longer be used for automatic matching</span>.
+              </p>
+              <div className="rounded-md bg-muted px-3 py-2 font-medium text-foreground text-sm break-words">
+                {label}
+              </div>
+              <p>Type the mapping name to confirm:</p>
+              <Input
+                autoFocus
+                placeholder={label}
+                value={typed}
+                onChange={e => setTyped(e.target.value)}
+                className="text-sm"
+              />
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={onClose}>Cancel</AlertDialogCancel>
+          <Button
+            variant="default"
+            className="bg-amber-600 hover:bg-amber-700 text-white"
+            disabled={!canConfirm || isPending}
+            onClick={() => onConfirm(mapping)}
+          >
+            {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Archive className="h-3.5 w-3.5 mr-1.5" />}
+            Archive
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+// Unarchive confirmation dialog — simple confirm
+function UnarchiveConfirmDialog({ mapping, onClose, onConfirm, isPending }) {
+  const label = mapping?.tonomo_label || mapping?.flexmedia_label || "this mapping";
+
+  return (
+    <AlertDialog open={!!mapping} onOpenChange={open => { if (!open) onClose(); }}>
+      <AlertDialogContent className="max-w-sm">
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center gap-2">
+            <ArchiveRestore className="h-5 w-5 text-green-600" />
+            Restore mapping?
+          </AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-3 text-sm text-muted-foreground">
+              <p>Restore this mapping to active?</p>
+              <div className="rounded-md bg-muted px-3 py-2 font-medium text-foreground text-sm break-words">
+                {label}
+              </div>
+              <p>It will resume being used for automatic matching.</p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={onClose}>Cancel</AlertDialogCancel>
+          <Button
+            variant="default"
+            className="bg-green-600 hover:bg-green-700 text-white"
+            disabled={isPending}
+            onClick={() => onConfirm(mapping)}
+          >
+            {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <ArchiveRestore className="h-3.5 w-3.5 mr-1.5" />}
+            Restore
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
