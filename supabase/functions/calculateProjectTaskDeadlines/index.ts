@@ -79,22 +79,42 @@ function calculatePresetDeadline(preset: string, triggerDate: any, timezone = AP
   }
 }
 
+// Ordered project pipeline — index determines "at or past" comparison
+const STAGE_ORDER = [
+  'pending_review', 'to_be_scheduled', 'scheduled', 'onsite',
+  'uploaded', 'submitted', 'in_progress', 'in_production',
+  'ready_for_partial', 'in_revision', 'delivered',
+];
+const TRIGGER_TO_STAGE: Record<string, string> = {
+  'project_onsite': 'onsite',
+  'project_uploaded': 'uploaded',
+  'project_submitted': 'submitted',
+};
+
 function isTriggerConditionMet(triggerType: string, project: any) {
   if (!triggerType || triggerType === 'none') return false;
-  switch (triggerType) {
-    case 'project_onsite': return project?.status === 'onsite' || !!project?.shooting_started_at;
-    case 'project_uploaded': return project?.status === 'uploaded';
-    case 'project_submitted': return project?.status === 'submitted';
-    default: return false;
-  }
+  // Special case: shooting_started_at always satisfies onsite trigger
+  if (triggerType === 'project_onsite' && !!project?.shooting_started_at) return true;
+  const requiredStage = TRIGGER_TO_STAGE[triggerType];
+  if (!requiredStage) return false;
+  const currentIdx = STAGE_ORDER.indexOf(project?.status);
+  const requiredIdx = STAGE_ORDER.indexOf(requiredStage);
+  if (currentIdx === -1 || requiredIdx === -1) return false;
+  // "At or past" — project stage index >= required stage index
+  return currentIdx >= requiredIdx;
 }
 
 function getTriggerTime(triggerType: string, project: any) {
   if (!isTriggerConditionMet(triggerType, project)) return null;
+  // Try specific timestamp first, then last_status_change, then fallback to now.
+  // Many projects have null timestamps (created before tracking was added),
+  // but if the trigger condition IS met, the task should not stay blocked.
   switch (triggerType) {
-    case 'project_onsite': return project?.shooting_started_at || project?.last_status_change || null;
+    case 'project_onsite':
+      return project?.shooting_started_at || project?.last_status_change || new Date().toISOString();
     case 'project_uploaded':
-    case 'project_submitted': return project?.last_status_change || null;
+    case 'project_submitted':
+      return project?.last_status_change || new Date().toISOString();
     default: return null;
   }
 }
