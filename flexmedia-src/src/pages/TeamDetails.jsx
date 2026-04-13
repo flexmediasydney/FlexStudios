@@ -11,11 +11,13 @@ import { fmtDate, fixTimestamp, formatRelative } from '@/components/utils/dateUt
 import {
   ArrowLeft, ChevronDown, Mail, Phone, Building2,
   MessageSquare, Activity, AlertCircle, Plus, Trash2, Calendar, User, Paperclip, Pencil,
-  FileText, Users
+  FileText, Users, UserPlus, X
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import UnifiedNotesPanel from '@/components/notes/UnifiedNotesPanel';
 import ProjectStatusBadge from '@/components/dashboard/ProjectStatusBadge';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
@@ -25,6 +27,7 @@ import ContactFiles from '@/components/contacts/ContactFiles';
 import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
+import { usePermissions } from '@/components/auth/PermissionGuard';
 
 // ── Tab definitions (Pipedrive-style, matching PersonDetails) ────────────────
 const TABS = [
@@ -390,6 +393,7 @@ function MemberCard({ member }) {
 
 export default function TeamDetails() {
   const { canEdit, canView } = useEntityAccess('internal_teams');
+  const { isManagerOrAbove } = usePermissions();
   const { visible: showPricing } = usePriceGate();
   const navigate = useNavigate();
   const urlParams = new URLSearchParams(window.location.search);
@@ -406,6 +410,9 @@ export default function TeamDetails() {
   const [historyFilter, setHistoryFilter] = useState('all');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [emailActivities, setEmailActivities] = useState([]);
+  const [showAddMemberPicker, setShowAddMemberPicker] = useState(false);
+  const [addMemberSearch, setAddMemberSearch] = useState('');
+  const [addMemberLoading, setAddMemberLoading] = useState(false);
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
@@ -441,6 +448,14 @@ export default function TeamDetails() {
 
   // members must be declared BEFORE memberIds/projectFilter that depend on it
   const { data: members = [] } = useEntityList('Agent', 'name', null, memberFilter);
+
+  // All agents in the same agency — used by the Add Member picker
+  const agencyAgentFilter = useCallback(
+    a => !!team?.agency_id && a.current_agency_id === team.agency_id,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [team?.agency_id]
+  );
+  const { data: agencyAgents = [] } = useEntityList('Agent', 'name', null, team?.agency_id ? agencyAgentFilter : null);
 
   // Project filter: match projects where any assigned staff is a member of this team.
   // Staff ID fields hold agent (person) IDs, not team IDs, so we compare against member IDs.
@@ -552,6 +567,53 @@ export default function TeamDetails() {
       toast.error(`Failed to save ${field}`);
     }
   };
+
+  const handleAddMember = async (agent) => {
+    setAddMemberLoading(true);
+    try {
+      await api.entities.Agent.update(agent.id, {
+        current_team_id: team.id,
+        current_team_name: team.name,
+      });
+      toast.success(`${agent.name} added to ${team.name}`);
+      await refetchEntityList('Agent');
+      setShowAddMemberPicker(false);
+      setAddMemberSearch('');
+    } catch (err) {
+      toast.error(err?.message || 'Failed to add member');
+    } finally {
+      setAddMemberLoading(false);
+    }
+  };
+
+  const handleRemoveMember = async (agent) => {
+    try {
+      await api.entities.Agent.update(agent.id, {
+        current_team_id: null,
+        current_team_name: null,
+      });
+      toast.success(`${agent.name} removed from ${team.name}`);
+      await refetchEntityList('Agent');
+    } catch (err) {
+      toast.error(err?.message || 'Failed to remove member');
+    }
+  };
+
+  // Agents in the same agency who are NOT already on this team — candidate list for the picker
+  const memberIdSet = useMemo(() => new Set(members.map(m => m.id)), [members]);
+  const pickerCandidates = useMemo(
+    () => agencyAgents.filter(a => !memberIdSet.has(a.id)),
+    [agencyAgents, memberIdSet]
+  );
+  const filteredCandidates = useMemo(() => {
+    const q = addMemberSearch.trim().toLowerCase();
+    if (!q) return pickerCandidates;
+    return pickerCandidates.filter(a =>
+      (a.name || '').toLowerCase().includes(q) ||
+      (a.email || '').toLowerCase().includes(q) ||
+      (a.title || '').toLowerCase().includes(q)
+    );
+  }, [pickerCandidates, addMemberSearch]);
 
   const agencyOptions = useMemo(() => [
     { value: '', label: 'No agency' },
@@ -737,31 +799,61 @@ export default function TeamDetails() {
             </Section>
 
             {/* Members */}
-            <Section title="Members" badge={members.length} defaultOpen={true}>
-              {members.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No members assigned</p>
-              ) : (
-                <div className="space-y-2">
-                  {members.slice(0, 10).map(member => (
-                    <Link
-                      key={member.id}
-                      to={createPageUrl(`PersonDetails?id=${member.id}`)}
-                      className="flex items-center gap-2 p-2 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary"
-                    >
-                      <div className="h-6 w-6 rounded-full bg-primary/10 text-primary text-[9px] font-bold flex items-center justify-center flex-shrink-0">
-                        {(member.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+            <div className="border-b border-border/50">
+              <div className="flex items-center gap-2 px-4 py-2.5">
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs font-semibold uppercase tracking-wide flex-1">Members</span>
+                {members.length > 0 && (
+                  <span className="bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                    {members.length}
+                  </span>
+                )}
+                {isManagerOrAbove && (
+                  <button
+                    onClick={() => { setShowAddMemberPicker(true); setAddMemberSearch(''); }}
+                    className="ml-1 flex items-center gap-0.5 text-[10px] text-primary hover:text-primary/80 font-semibold transition-colors"
+                    title="Add member to team"
+                  >
+                    <UserPlus className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+              <div className="px-4 pb-4 animate-in fade-in duration-200">
+                {members.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No members assigned</p>
+                ) : (
+                  <div className="space-y-2">
+                    {members.slice(0, 10).map(member => (
+                      <div key={member.id} className="group flex items-center gap-2 p-2 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all duration-200">
+                        <Link
+                          to={createPageUrl(`PersonDetails?id=${member.id}`)}
+                          className="flex items-center gap-2 flex-1 min-w-0"
+                        >
+                          <div className="h-6 w-6 rounded-full bg-primary/10 text-primary text-[9px] font-bold flex items-center justify-center flex-shrink-0">
+                            {(member.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-primary hover:underline block truncate">
+                              {member.name}
+                            </p>
+                            {member.title && <p className="text-[10px] text-muted-foreground truncate">{member.title}</p>}
+                          </div>
+                        </Link>
+                        {isManagerOrAbove && (
+                          <button
+                            onClick={() => handleRemoveMember(member)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0"
+                            title={`Remove ${member.name} from team`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-primary hover:underline block truncate">
-                          {member.name}
-                        </p>
-                        {member.title && <p className="text-[10px] text-muted-foreground truncate">{member.title}</p>}
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </Section>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* Projects */}
             {projects.length > 0 && (
@@ -914,10 +1006,34 @@ export default function TeamDetails() {
             {activeTab === 'members' && (
               <div className="h-full overflow-y-auto p-6">
                 <div className="max-w-3xl">
-                  <h2 className="text-lg font-semibold mb-4">Team Members</h2>
+                  <div className="flex items-center gap-3 mb-4">
+                    <h2 className="text-lg font-semibold flex-1">Team Members</h2>
+                    {isManagerOrAbove && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5 h-8 text-xs"
+                        onClick={() => { setShowAddMemberPicker(true); setAddMemberSearch(''); }}
+                      >
+                        <UserPlus className="h-3.5 w-3.5" />
+                        Add Member
+                      </Button>
+                    )}
+                  </div>
                   {members.length === 0 ? (
                     <div className="bg-muted rounded-lg p-6 text-center">
                       <p className="text-sm text-muted-foreground">No members assigned to this team</p>
+                      {isManagerOrAbove && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 mt-3 text-xs"
+                          onClick={() => { setShowAddMemberPicker(true); setAddMemberSearch(''); }}
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          Add Member
+                        </Button>
+                      )}
                     </div>
                   ) : (
                     <div className="space-y-6">
@@ -929,7 +1045,18 @@ export default function TeamDetails() {
                             </h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                               {stateMembers.map(member => (
-                                <MemberCard key={member.id} member={member} />
+                                <div key={member.id} className="relative group">
+                                  <MemberCard member={member} />
+                                  {isManagerOrAbove && (
+                                    <button
+                                      onClick={() => handleRemoveMember(member)}
+                                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-full bg-background/80 hover:bg-destructive/10 text-muted-foreground hover:text-destructive shadow-sm border border-border/50"
+                                      title={`Remove ${member.name} from team`}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  )}
+                                </div>
                               ))}
                             </div>
                           </div>
@@ -967,6 +1094,56 @@ export default function TeamDetails() {
         onCancel={() => setShowDeleteConfirm(false)}
         danger
       />
+
+      {/* ── Add Member picker dialog ─────────────────────────────── */}
+      <Dialog open={showAddMemberPicker} onOpenChange={open => { setShowAddMemberPicker(open); if (!open) setAddMemberSearch(''); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-4 w-4 text-primary" />
+              Add Member to {team?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Search by name, email, or role…"
+              value={addMemberSearch}
+              onChange={e => setAddMemberSearch(e.target.value)}
+              autoFocus
+              className="h-8 text-sm"
+            />
+            <div className="max-h-72 overflow-y-auto space-y-1 -mx-1 px-1">
+              {filteredCandidates.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">
+                  {pickerCandidates.length === 0
+                    ? 'All agency members are already on this team'
+                    : 'No agents match your search'}
+                </p>
+              ) : (
+                filteredCandidates.map(agent => (
+                  <button
+                    key={agent.id}
+                    disabled={addMemberLoading}
+                    onClick={() => handleAddMember(agent)}
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-muted/60 transition-colors text-left disabled:opacity-50"
+                  >
+                    <div className="h-7 w-7 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center flex-shrink-0">
+                      {(agent.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{agent.name}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {[agent.title, agent.email].filter(Boolean).join(' · ')}
+                      </p>
+                    </div>
+                    <Plus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
     </ErrorBoundary>
   );
