@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useEntityList } from '@/components/hooks/useEntityData';
@@ -215,9 +216,21 @@ export default function EmployeeDetailModal({
                         {isRunning && <span className="ml-2 text-emerald-600 font-medium">● Running</span>}
                         {isPaused && <span className="ml-2 text-amber-600 font-medium">⏸ Paused</span>}
                       </p>
-                      <p className="text-xs text-muted-foreground capitalize">
-                        {log.role?.replace(/_/g, ' ')}
-                      </p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <p className="text-xs text-muted-foreground capitalize">
+                          {log.role?.replace(/_/g, ' ')}
+                        </p>
+                        {(log.log_source === 'auto_completion' || log.log_source === 'auto_onsite') && (
+                          <Badge variant="outline" className="text-[9px] font-medium bg-violet-50 text-violet-600 border-violet-200 dark:bg-violet-900/30 dark:text-violet-400 dark:border-violet-700">
+                            Auto
+                          </Badge>
+                        )}
+                        {(log.log_source === 'manual' || log.is_manual) && (
+                          <Badge variant="outline" className="text-[9px] font-medium bg-sky-50 text-sky-600 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-700">
+                            Manual
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                     <p className={cn(
                       'text-sm font-bold flex-shrink-0',

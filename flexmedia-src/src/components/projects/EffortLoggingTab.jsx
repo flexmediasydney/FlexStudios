@@ -401,6 +401,16 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
                     <span className={`text-xs font-semibold ${colors.text}`}>
                       {(parentLog.status || 'unknown').charAt(0).toUpperCase() + (parentLog.status || 'unknown').slice(1)}
                     </span>
+                    {(parentLog.log_source === 'auto_completion' || parentLog.log_source === 'auto_onsite') && (
+                      <Badge variant="outline" className="text-[9px] font-medium bg-violet-50 text-violet-600 border-violet-200 dark:bg-violet-900/30 dark:text-violet-400 dark:border-violet-700">
+                        Auto
+                      </Badge>
+                    )}
+                    {(parentLog.log_source === 'manual' || parentLog.is_manual) && (
+                      <Badge variant="outline" className="text-[9px] font-medium bg-sky-50 text-sky-600 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-700">
+                        Manual
+                      </Badge>
+                    )}
                     {isMultiSession && (
                       <span className="text-xs text-muted-foreground ml-auto">
                         {logs.length} sessions
@@ -446,9 +456,21 @@ function CardViewContent({ groupedLogs, tasks, expandedLogs, toggleExpand, onLog
                  {logs.map((log, idx) => (
                    <div key={log.id} className="bg-muted/30 rounded-lg p-3 cursor-pointer hover:bg-muted/50" onClick={() => onLogClick(log)}>
                      <div className="flex items-center justify-between mb-2">
-                       <span className="text-xs font-semibold text-muted-foreground">
-                         Session {idx + 1}
-                       </span>
+                       <div className="flex items-center gap-1.5">
+                         <span className="text-xs font-semibold text-muted-foreground">
+                           Session {idx + 1}
+                         </span>
+                         {(log.log_source === 'auto_completion' || log.log_source === 'auto_onsite') && (
+                           <Badge variant="outline" className="text-[9px] font-medium bg-violet-50 text-violet-600 border-violet-200 dark:bg-violet-900/30 dark:text-violet-400 dark:border-violet-700">
+                             Auto
+                           </Badge>
+                         )}
+                         {(log.log_source === 'manual' || log.is_manual) && (
+                           <Badge variant="outline" className="text-[9px] font-medium bg-sky-50 text-sky-600 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-700">
+                             Manual
+                           </Badge>
+                         )}
+                       </div>
                        <span className="text-xs font-mono font-bold">
                          {formatDuration(computeLiveSeconds(log))}
                        </span>
@@ -525,7 +547,7 @@ function TableViewContent({ timeLogs, tasks, onLogClick, currentUser, isMasterAd
                         Auto
                       </Badge>
                     )}
-                    {log.log_source === 'manual' && (
+                    {(log.log_source === 'manual' || log.is_manual) && (
                       <Badge variant="outline" className="text-[9px] font-medium bg-sky-50 text-sky-600 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-700">
                         Manual
                       </Badge>

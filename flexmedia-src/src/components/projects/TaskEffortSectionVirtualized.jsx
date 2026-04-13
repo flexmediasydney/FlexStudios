@@ -160,9 +160,21 @@ export default function TaskEffortSectionVirtualized({ taskId, onLogClick, task,
                   </TableCell>
                   <TableCell className="text-xs capitalize">{log.role || 'admin'}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-[10px] font-semibold ${colors.text}`}>
-                      {log.status}
-                    </Badge>
+                    <div className="flex items-center gap-1">
+                      <Badge variant="outline" className={`text-[10px] font-semibold ${colors.text}`}>
+                        {log.status}
+                      </Badge>
+                      {(log.log_source === 'auto_completion' || log.log_source === 'auto_onsite') && (
+                        <Badge variant="outline" className="text-[9px] font-medium bg-violet-50 text-violet-600 border-violet-200 dark:bg-violet-900/30 dark:text-violet-400 dark:border-violet-700">
+                          Auto
+                        </Badge>
+                      )}
+                      {(log.log_source === 'manual' || log.is_manual) && (
+                        <Badge variant="outline" className="text-[9px] font-medium bg-sky-50 text-sky-600 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-700">
+                          Manual
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="font-mono text-[10px]">
                     {fmtTimestampCustom(log.start_time, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}

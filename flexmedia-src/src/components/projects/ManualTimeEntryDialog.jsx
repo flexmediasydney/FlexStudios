@@ -89,6 +89,7 @@ export default function ManualTimeEntryDialog({ open, onClose, task, project, us
         status: "completed",
         is_active: false,
         is_manual: true,
+        log_source: 'manual',
         start_time: startTime,
         end_time: endTime,
         total_seconds: totalSeconds,

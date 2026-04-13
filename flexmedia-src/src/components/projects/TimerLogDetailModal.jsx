@@ -192,9 +192,19 @@ export default function TimerLogDetailModal({ log, onClose, currentUser, isMaste
             </div>
           )}
 
-          {log.is_manual && (
-            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
-              📝 Manual entry
+          {(log.log_source === 'auto_completion' || log.log_source === 'auto_onsite' || log.log_source === 'manual' || log.is_manual) && (
+            <div className="flex items-center gap-2 pt-2 border-t">
+              <p className="text-xs text-muted-foreground">Source</p>
+              {(log.log_source === 'auto_completion' || log.log_source === 'auto_onsite') && (
+                <Badge variant="outline" className="text-[9px] font-medium bg-violet-50 text-violet-600 border-violet-200 dark:bg-violet-900/30 dark:text-violet-400 dark:border-violet-700">
+                  Auto
+                </Badge>
+              )}
+              {(log.log_source === 'manual' || log.is_manual) && (
+                <Badge variant="outline" className="text-[9px] font-medium bg-sky-50 text-sky-600 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-700">
+                  Manual
+                </Badge>
+              )}
             </div>
           )}
         </div>
