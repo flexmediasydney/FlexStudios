@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
 import { useEntityList, refetchEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
-import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search, Shield } from "lucide-react";
+import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search, Shield, Activity } from "lucide-react";
 import BrandingPreferencesModule from "@/components/agencies/BrandingPreferencesModule";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import EntityActivitiesTab from "@/components/calendar/EntityActivitiesTab";
 import ContactActivityLog from "@/components/contacts/ContactActivityLog";
 import ContactFiles from "@/components/contacts/ContactFiles";
 import RetentionSubtab from '@/components/retention/RetentionSubtab';
+import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
@@ -46,6 +47,7 @@ const TABS = [
   { id: 'calendar', label: 'Activities', icon: Calendar },
   { id: 'hierarchy', label: 'Hierarchy', icon: Network },
   { id: 'branding', label: 'Branding', icon: Palette },
+  { id: 'touchpoints', label: 'Touchpoints', icon: Activity },
   { id: 'retention', label: 'Retention', icon: Shield },
 ];
 
@@ -629,6 +631,10 @@ export default function OrgDetails() {
               <div className="h-full overflow-y-auto p-6">
                 <BrandingPreferencesModule agency={agency} />
               </div>
+            )}
+
+            {activeTab === 'touchpoints' && (
+              <TouchpointTimeline entityType="agency" entityId={agencyId} entityLabel={agency?.name} />
             )}
 
             {activeTab === 'retention' && (

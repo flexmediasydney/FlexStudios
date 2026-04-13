@@ -27,6 +27,7 @@ import {
   Rss,
   Heart,
   Sparkles,
+  MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -281,8 +282,10 @@ function LayoutContent({ currentPageName, children }) {
         label: 'Growth',
         collapsible: true,
         items: [
+          can("IndustryPulse") && { name: "Industry Pulse", href: "IndustryPulse", icon: Rss },
           can("Prospecting") && { name: "Prospecting", href: "Prospecting", icon: Target },
-          can("ClientMonitor") && { name: "Client Monitor", href: "ClientMonitor", icon: UserCheck },
+          can("SalesMap") && { name: "Sales Map", href: "SalesMap", icon: MapPin },
+          can("ClientMonitor") && { name: "Client Retention", href: "ClientMonitor", icon: UserCheck },
         ].filter(Boolean)
       },
       can("SettingsProductsPackages") && {

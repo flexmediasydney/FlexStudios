@@ -27,6 +27,7 @@ import EntityActivitiesTab from '@/components/calendar/EntityActivitiesTab';
 import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
 import RetentionSubtab from '@/components/retention/RetentionSubtab';
+import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { toast } from 'sonner';
@@ -537,6 +538,7 @@ const TABS = [
   { id: 'files', label: 'Files', icon: Paperclip },
   { id: 'pricing', label: 'Pricing', icon: DollarSign },
   { id: 'calendar', label: 'Activities', icon: Calendar },
+  { id: 'touchpoints', label: 'Touchpoints', icon: Activity },
   { id: 'retention', label: 'Retention', icon: Shield },
 ];
 
@@ -1303,6 +1305,10 @@ export default function PersonDetails() {
                   entityLabel={agent?.name || 'Person'}
                 />
               </div>
+            )}
+
+            {activeTab === 'touchpoints' && (
+              <TouchpointTimeline entityType="agent" entityId={agentId} entityLabel={agent?.name} />
             )}
 
             {activeTab === 'retention' && (

@@ -36,6 +36,8 @@ export const ROUTE_ACCESS = {
   Prospecting: MANAGER_AND_ABOVE,
   ProspectDetails: MANAGER_AND_ABOVE,
   ClientMonitor: MANAGER_AND_ABOVE,
+  IndustryPulse: MANAGER_AND_ABOVE,
+  SalesMap: MANAGER_AND_ABOVE,
 
   // ── SOCIAL MEDIA (all levels) ─────────────────────────────
   SocialMedia: ALL_LEVELS,

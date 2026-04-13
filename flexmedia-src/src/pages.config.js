@@ -76,6 +76,8 @@ const Calendar = React.lazy(() => import('./pages/Calendar'));
 const ClientAgents = React.lazy(() => import('./pages/ClientAgents'));
 const ClientGallery = React.lazy(() => import('./pages/ClientGallery'));
 const ClientMonitor = React.lazy(() => import('./pages/ClientMonitor'));
+const IndustryPulse = React.lazy(() => import('./pages/IndustryPulse'));
+const SalesMap = React.lazy(() => import('./pages/SalesMap'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard'));
 const FieldMode = React.lazy(() => import('./pages/FieldMode'));
 const NotificationsPage = React.lazy(() => import('./pages/NotificationsPage'));
@@ -117,6 +119,8 @@ export const PAGES = {
     "ClientAgents": ClientAgents,
     "ClientGallery": ClientGallery,
     "ClientMonitor": ClientMonitor,
+    "IndustryPulse": IndustryPulse,
+    "SalesMap": SalesMap,
     "Dashboard": Dashboard,
     "EmailSyncSettings": EmailSyncSettings,
     "FieldMode": FieldMode,
