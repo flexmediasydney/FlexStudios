@@ -563,9 +563,11 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
         scheduleDeadlineSync(projectId, triggerMap[newStatus], 500);
       }
 
-      const UPLOADED_OR_LATER = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
-      const PRE_UPLOAD = ['to_be_scheduled', 'scheduled', 'onsite', 'pending_review'];
-      if (UPLOADED_OR_LATER.includes(newStatus) && PRE_UPLOAD.includes(oldStatus)) {
+      // Trigger onsite effort logging when project reaches uploaded or further
+      const STAGE_ORDER_KB = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','submitted','in_progress','in_production','ready_for_partial','in_revision','delivered'];
+      const newIdxKB = STAGE_ORDER_KB.indexOf(newStatus);
+      const uploadedIdxKB = STAGE_ORDER_KB.indexOf('uploaded');
+      if (newIdxKB >= uploadedIdxKB) {
         api.functions.invoke('logOnsiteEffortOnUpload', {
           project_id: projectId,
           old_status: oldStatus,

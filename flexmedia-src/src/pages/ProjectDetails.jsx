@@ -612,11 +612,15 @@ export default function ProjectDetails() {
        }, 500);
      }
 
-     // Trigger onsite effort logging on any transition INTO uploaded-or-later stages
-      // (not just "uploaded" — handles skipped stages like onsite → submitted)
-      const UPLOADED_OR_LATER = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
-     const PRE_UPLOAD = ['to_be_scheduled', 'scheduled', 'onsite', 'pending_review'];
-     if (UPLOADED_OR_LATER.includes(newStatus) && PRE_UPLOAD.includes(oldStatus)) {
+     // Trigger onsite effort logging when project reaches uploaded or further.
+      // Uses "at or past" logic — fires if new stage >= uploaded index, regardless
+      // of what the old stage was. The edge function itself is idempotent (won't
+      // double-log if onsite tasks are already completed).
+      const STAGE_ORDER = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','submitted','in_progress','in_production','ready_for_partial','in_revision','delivered'];
+      const newIdx = STAGE_ORDER.indexOf(newStatus);
+      const uploadedIdx = STAGE_ORDER.indexOf('uploaded');
+      const hasIncompleteOnsiteTasks = (projectTasks || []).some(t => t.task_type === 'onsite' && !t.is_completed && !t.is_deleted);
+      if (newIdx >= uploadedIdx && hasIncompleteOnsiteTasks) {
        api.functions.invoke('logOnsiteEffortOnUpload', {
          project_id: projectId,
          old_status: oldStatus,

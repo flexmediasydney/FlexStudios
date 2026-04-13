@@ -63,33 +63,19 @@ Deno.serve(async (req) => {
       return errorResponse('Project not found', 404);
     }
 
-    // Guard: only process valid forward transitions to uploaded-or-later stages
-    const VALID_PRE_STAGES = ['to_be_scheduled', 'scheduled', 'onsite'];
+    // Guard: only process if project is currently at "uploaded" or further.
+    // Uses ordered stage index — no hardcoded stage lists. Handles skipped stages
+    // (e.g., pending_review → in_production skipping uploaded) correctly.
+    const STAGE_ORDER = [
+      'pending_review', 'to_be_scheduled', 'scheduled', 'onsite',
+      'uploaded', 'submitted', 'in_progress', 'in_production',
+      'ready_for_partial', 'in_revision', 'delivered',
+    ];
+    const currentIdx = STAGE_ORDER.indexOf(project.status);
+    const uploadedIdx = STAGE_ORDER.indexOf('uploaded');
 
-    if (old_status && !VALID_PRE_STAGES.includes(old_status)) {
-      return jsonResponse({ skipped: true, reason: `Invalid transition from ${old_status} — skipping effort logging` });
-    }
-
-    const uploadedStages = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
-    const preUploadStages = ['to_be_scheduled', 'scheduled', 'onsite'];
-
-    // If triggered via automation, only act when transitioning INTO an uploaded stage
-    if (old_status !== undefined && old_status !== null) {
-      const wasPreUpload = preUploadStages.includes(old_status) || !uploadedStages.includes(old_status);
-      const isNowUploaded = uploadedStages.includes(project.status);
-      if (!wasPreUpload || !isNowUploaded) {
-        return jsonResponse({
-          message: 'No transition to uploaded stage detected',
-          old_status,
-          new_status: project.status,
-          skipped: true,
-        });
-      }
-    } else {
-      // Direct call — still check the stage is appropriate
-      if (!uploadedStages.includes(project.status)) {
-        return jsonResponse({ message: 'Project not yet at uploaded stage', status: project.status });
-      }
+    if (currentIdx < uploadedIdx) {
+      return jsonResponse({ message: 'Project not yet at uploaded stage', status: project.status, skipped: true });
     }
 
     // Find existing onsite tasks created by syncOnsiteEffortTasks
@@ -128,7 +114,9 @@ Deno.serve(async (req) => {
       if (!project.shoot_date) return new Date().toISOString();
       const rawTime = project.shoot_time || '09:00';
       const timeStr = /^\d{1,2}:\d{2}$/.test(rawTime) ? rawTime : '09:00';
-      const naiveDateStr = `${project.shoot_date}T${timeStr}:00`;
+      // shoot_date may come as "2026-04-10T00:00:00+00:00" or "2026-04-10" — extract just the date part
+      const dateOnly = String(project.shoot_date).slice(0, 10);
+      const naiveDateStr = `${dateOnly}T${timeStr}:00`;
       const targetHour = parseInt(timeStr.split(':')[0], 10);
       const tryOffset = (offset: string) => {
         const d = new Date(`${naiveDateStr}${offset}`);
