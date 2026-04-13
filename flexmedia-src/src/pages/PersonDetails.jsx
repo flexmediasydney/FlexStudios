@@ -14,6 +14,9 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import UnifiedNotesPanel from '@/components/notes/UnifiedNotesPanel';
@@ -60,13 +63,103 @@ const INTEGRITY_FIELDS = {
   phone: 'Missing phone',
 };
 
+// ── SelectCombobox: searchable popover used for type="select" fields ──────────
+function SelectCombobox({ value, options, onSave, field, placeholder, prefixIcon: PrefixIcon, onCancel }) {
+  const [open, setOpen] = useState(true);
+  const [search, setSearch] = useState('');
+
+  const normalise = (o) => typeof o === 'string' ? { value: o, label: o } : o;
+  const normOptions = options.map(normalise);
+
+  const filtered = search.trim()
+    ? normOptions.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+    : normOptions;
+
+  const displayValue = normOptions.find(o => o.value === value)?.label ?? value;
+
+  const commit = (val) => {
+    setOpen(false);
+    if (val !== (value || '')) onSave(field, val);
+  };
+
+  // When popover closes without a selection, call onCancel so parent resets editing state
+  const handleOpenChange = (next) => {
+    setOpen(next);
+    if (!next) onCancel();
+  };
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        {/* Invisible trigger — popover is opened programmatically via open=true */}
+        <button
+          className={cn(
+            "flex items-center gap-1.5 text-sm px-2 py-0.5 rounded-md border border-primary/40 bg-background",
+            "focus:outline-none focus:ring-2 focus:ring-primary/25 w-full text-left",
+            "transition-colors"
+          )}
+          aria-haspopup="listbox"
+        >
+          {PrefixIcon && <PrefixIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+          <span className={cn("flex-1 truncate", displayValue ? "text-foreground" : "text-muted-foreground/50")}>
+            {displayValue || placeholder || 'Select…'}
+          </span>
+          <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={4}
+        className="w-[220px] p-0 shadow-lg"
+        onKeyDown={e => { if (e.key === 'Escape') { setOpen(false); onCancel(); } }}
+      >
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder="Search…"
+            value={search}
+            onValueChange={setSearch}
+          />
+          <CommandList>
+            <CommandEmpty className="py-3 text-center text-xs text-muted-foreground">
+              No results
+            </CommandEmpty>
+            <CommandGroup>
+              {filtered.map(o => (
+                <CommandItem
+                  key={o.value}
+                  value={o.value}
+                  onSelect={() => commit(o.value)}
+                  className={cn(
+                    "cursor-pointer text-sm gap-2",
+                    o.value === value && "bg-accent font-medium"
+                  )}
+                >
+                  {o.value === value && (
+                    <Check className="h-3.5 w-3.5 text-primary shrink-0" />
+                  )}
+                  <span className={o.value === value ? 'ml-0' : 'ml-5'}>{o.label}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ── InlineField: unified inline-edit row (Pipedrive side-by-side layout) ──────
 function InlineField({ label, value, field, onSave, type = 'text', options, placeholder, icon: Icon, readOnly, actionHref, actionIcon: ActionIcon, actionLabel }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || '');
   const inputRef = useRef(null);
 
   useEffect(() => { setDraft(value || ''); }, [value]);
-  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+
+  // Auto-focus text/textarea inputs when entering edit mode
+  useEffect(() => {
+    if (editing && type !== 'select' && inputRef.current) inputRef.current.focus();
+  }, [editing, type]);
 
   const cancel = () => {
     setDraft(value || '');
@@ -83,96 +176,128 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
     if (e.key === 'Escape') cancel();
   };
 
+  // Resolve human-readable display value for select fields
   const displayValue = type === 'select' && options
     ? (options.find(o => (o.value ?? o) === value)?.label ?? value)
     : value;
 
+  // Prefix icon for specific select fields
+  const selectPrefixIcon =
+    field === 'current_agency_id' ? Building2 :
+    field === 'team_id' ? Users :
+    undefined;
+
+  // ── Editing state ──────────────────────────────────────────────────────────
+  const editingNode = (() => {
+    if (type === 'select') {
+      return (
+        <SelectCombobox
+          value={value}
+          options={options}
+          field={field}
+          onSave={onSave}
+          placeholder={placeholder}
+          prefixIcon={selectPrefixIcon}
+          onCancel={cancel}
+        />
+      );
+    }
+    if (type === 'textarea') {
+      return (
+        <textarea
+          ref={inputRef}
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
+          rows={3}
+          className={cn(
+            "w-full text-sm rounded-md border border-input bg-background px-2 py-1",
+            "resize-none outline-none transition-shadow",
+            "focus:ring-2 focus:ring-primary/25 focus:border-primary"
+          )}
+        />
+      );
+    }
+    // text / date / number / email / tel
+    return (
+      <input
+        ref={inputRef}
+        type={type === 'date' ? 'date' : type === 'number' ? 'number' : 'text'}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        className={cn(
+          "w-full text-sm rounded-md border border-input bg-background px-2 py-0.5",
+          "outline-none transition-all duration-150",
+          "focus:ring-2 focus:ring-primary/25 focus:border-primary"
+        )}
+      />
+    );
+  })();
+
+  // ── Display state ──────────────────────────────────────────────────────────
+  const emptyNode = INTEGRITY_FIELDS[field]
+    ? (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+        {INTEGRITY_FIELDS[field]}
+      </span>
+    ) : (
+      <span className="text-muted-foreground/40 italic text-xs">
+        {readOnly ? '—' : (placeholder ? `Click to add ${label.toLowerCase()}…` : '—')}
+      </span>
+    );
+
+  const DisplayPrefixIcon = selectPrefixIcon;
+
+  const displayNode = (
+    <>
+      {/* Optional prefix icon for select fields in display mode */}
+      {displayValue && DisplayPrefixIcon && (
+        <DisplayPrefixIcon className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0 mt-px" />
+      )}
+      <span className={cn(
+        "text-sm flex-1 min-w-0 truncate leading-relaxed",
+        displayValue ? "text-foreground" : ""
+      )}>
+        {displayValue || emptyNode}
+      </span>
+      {/* Action link (e.g. mailto, tel) */}
+      {actionHref && ActionIcon && displayValue && (
+        <a
+          href={actionHref}
+          className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-primary/10 shrink-0"
+          title={actionLabel || label}
+          onClick={e => e.stopPropagation()}
+        >
+          <ActionIcon className="h-3 w-3 text-primary" />
+        </a>
+      )}
+      {/* Pencil affordance */}
+      {!readOnly && (
+        <span className="opacity-0 group-hover:opacity-60 transition-opacity shrink-0 mt-px">
+          <Pencil className="h-3 w-3 text-muted-foreground" />
+        </span>
+      )}
+    </>
+  );
+
   return (
     <div
       className={cn(
-        "group flex items-start gap-2 py-1 px-3 rounded-md",
-        !readOnly && "hover:bg-muted/30"
+        "group flex items-start gap-2 py-1 px-3 rounded-md transition-colors",
+        !readOnly && !editing && "cursor-pointer hover:bg-muted/40",
+        editing && "bg-muted/20"
       )}
+      onClick={!readOnly && !editing ? () => setEditing(true) : undefined}
     >
-      <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide">
+      <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide leading-relaxed">
         {label}
       </label>
       <div className="flex-1 min-w-0 flex items-start gap-1">
-        {editing ? (
-          type === 'select' ? (
-            <select
-              ref={inputRef}
-              value={draft}
-              onChange={e => {
-                const val = e.target.value;
-                setDraft(val);
-                // Auto-save and close on selection (Pipedrive behavior)
-                setEditing(false);
-                if (val !== (value || '')) onSave(field, val);
-              }}
-              onBlur={save}
-              onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
-              className="w-full text-sm border rounded px-2 py-0.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
-            >
-              <option value="">-- Select --</option>
-              {options.map(o => (
-                <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
-              ))}
-            </select>
-          ) : type === 'textarea' ? (
-            <textarea
-              ref={inputRef}
-              value={draft}
-              onChange={e => setDraft(e.target.value)}
-              onBlur={save}
-              onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
-              rows={3}
-              className="w-full text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none"
-            />
-          ) : (
-            <input
-              ref={inputRef}
-              type={type === 'date' ? 'date' : type === 'number' ? 'number' : 'text'}
-              value={draft}
-              onChange={e => setDraft(e.target.value)}
-              onBlur={save}
-              onKeyDown={handleKeyDown}
-              placeholder={placeholder}
-              className="w-full text-sm border rounded px-2 py-0.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
-            />
-          )
-        ) : (
-          <>
-            <span className={cn(
-              "text-sm flex-1",
-              displayValue ? "text-foreground" : "text-muted-foreground/40"
-            )}>
-              {displayValue || (INTEGRITY_FIELDS[field]
-                ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{INTEGRITY_FIELDS[field]}</span>
-                : '\u2014'
-              )}
-            </span>
-            {actionHref && ActionIcon && displayValue && (
-              <a
-                href={actionHref}
-                className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-primary/10 shrink-0"
-                title={actionLabel || label}
-                onClick={e => e.stopPropagation()}
-              >
-                <ActionIcon className="h-3 w-3 text-primary" />
-              </a>
-            )}
-            {!readOnly && (
-              <button
-                onClick={() => setEditing(true)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted shrink-0"
-                title={`Edit ${label}`}
-              >
-                <Pencil className="h-3 w-3 text-muted-foreground" />
-              </button>
-            )}
-          </>
-        )}
+        {editing ? editingNode : displayNode}
       </div>
     </div>
   );
