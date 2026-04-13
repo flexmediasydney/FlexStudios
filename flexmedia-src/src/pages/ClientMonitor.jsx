@@ -1,7 +1,7 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import AgentSearch from "@/components/clientMonitor/AgentSearch";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,10 +10,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  Search, CheckCircle2, AlertTriangle, Shield, ShieldAlert,
-  Home, Bed, Bath, Car, Calendar, Eye, RefreshCw, Loader2,
-  MoreHorizontal, ArrowRight, Clock, User, FileText,
-  RotateCcw, Flag, CheckCheck, CircleDot
+  Shield, ShieldAlert, CheckCircle2, AlertTriangle, RefreshCw, Loader2,
+  ChevronDown, ChevronRight, MoreHorizontal, ArrowLeft,
+  Eye, Flag, CheckCheck, CircleDot, Clock, User, FileText, Building2,
+  Users, RotateCcw, Calendar, Search, TrendingDown
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -121,35 +121,18 @@ function formatDate(dateStr) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Generate synthetic alerts from gaps (fallback)                     */
+/*  Risk level priority helper                                         */
 /* ------------------------------------------------------------------ */
-function generateAlertsFromGaps(gaps, engagementType) {
-  if (!gaps || gaps.length === 0) return [];
-  return gaps.map((g, i) => {
-    const listing = g.listing || g;
-    return {
-      id: `gap-${listing.domain_listing_id || i}`,
-      address: listing.address,
-      headline: listing.headline,
-      display_price: listing.display_price,
-      listing_status: listing.status,
-      date_listed: listing.date_listed,
-      investigation_status: "identified",
-      risk_level: engagementType === "exclusive" ? "critical" : "medium",
-      engagement_type: engagementType,
-      investigated_by_name: null,
-      investigated_at: null,
-      resolved_at: null,
-      notes: null,
-      notes_updated_by: null,
-      notes_updated_at: null,
-      times_seen: 1,
-      first_detected_at: listing.date_listed,
-      last_seen_at: new Date().toISOString(),
-      is_active: true,
-      _synthetic: true,
-    };
-  });
+const RISK_PRIORITY = { critical: 0, high: 1, medium: 2, low: 3 };
+
+function worstRiskLevel(alerts) {
+  let worst = "low";
+  for (const a of alerts) {
+    if (a.risk_level && (RISK_PRIORITY[a.risk_level] ?? 4) < (RISK_PRIORITY[worst] ?? 4)) {
+      worst = a.risk_level;
+    }
+  }
+  return worst;
 }
 
 /* ------------------------------------------------------------------ */
@@ -179,13 +162,11 @@ function AlertActionPopover({ alert, onAction, isPending }) {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 p-0">
         <div className="p-4 space-y-4">
-          {/* Current status header */}
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</span>
             <InvestigationStatusBadge status={status} />
           </div>
 
-          {/* Status transition buttons */}
           <div className="space-y-2">
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</span>
 
@@ -251,7 +232,6 @@ function AlertActionPopover({ alert, onAction, isPending }) {
             )}
           </div>
 
-          {/* Notes section */}
           <div className="space-y-2 border-t pt-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Notes</span>
@@ -285,7 +265,7 @@ function AlertActionPopover({ alert, onAction, isPending }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Alerts Table                                                       */
+/*  Alerts Investigation Table (agent drill-down)                      */
 /* ------------------------------------------------------------------ */
 function AlertsTable({ alerts, onAction, isPending }) {
   if (!alerts || alerts.length === 0) {
@@ -373,152 +353,289 @@ function AlertsTable({ alerts, onAction, isPending }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  All Listings Table                                                 */
+/*  Stat card component                                                */
 /* ------------------------------------------------------------------ */
-function AllListingsTable({ listings, matches, alerts, dataSource }) {
-  const matchedIds = useMemo(
-    () => new Set((matches || []).map((m) => m.listing?.domain_listing_id)),
-    [matches]
-  );
-
-  const alertsByListing = useMemo(() => {
-    const map = {};
-    (alerts || []).forEach((a) => {
-      if (a.address) map[a.address] = a;
-    });
-    return map;
-  }, [alerts]);
-
+function StatCard({ label, value, icon: Icon, iconBg, iconColor, valueColor }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-border">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="bg-muted/50 border-b border-border text-left">
-            <th className="px-4 py-3 font-medium text-muted-foreground">Address</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Status</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Price</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center">Beds</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center">Baths</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center">Cars</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center">Match</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center">Risk</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {(listings || []).map((l, i) => {
-            const isMatched = matchedIds.has(l.domain_listing_id);
-            const alert = !isMatched ? alertsByListing[l.address] : null;
-            return (
-              <tr key={l.domain_listing_id || i} className="hover:bg-muted/30 transition-colors">
-                <td className="px-4 py-3 font-medium text-foreground max-w-[280px] truncate">
-                  {l.address}
-                  {dataSource === "simulation" && (
-                    <Badge variant="outline" className="ml-2 text-[8px] uppercase tracking-wider font-bold bg-amber-100 text-amber-600 border-amber-300">Sample</Badge>
-                  )}
-                </td>
-                <td className="px-4 py-3"><ListingStatusBadge status={l.status} /></td>
-                <td className="px-4 py-3 text-foreground whitespace-nowrap">{l.display_price || "--"}</td>
-                <td className="px-4 py-3 text-center tabular-nums">{l.bedrooms ?? "--"}</td>
-                <td className="px-4 py-3 text-center tabular-nums">{l.bathrooms ?? "--"}</td>
-                <td className="px-4 py-3 text-center tabular-nums">{l.carspaces ?? "--"}</td>
-                <td className="px-4 py-3 text-center">
-                  {isMatched ? (
-                    <span className="inline-flex items-center gap-1 text-emerald-600 text-xs font-medium">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> Matched
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-amber-600 text-xs font-medium">
-                      <AlertTriangle className="h-3.5 w-3.5" /> Gap
-                    </span>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-center">
-                  {alert ? <RiskBadge level={alert.risk_level} /> : (
-                    <span className="text-xs text-muted-foreground">--</span>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {(!listings || listings.length === 0) && (
-        <div className="text-center py-12 text-muted-foreground text-sm">No listings found</div>
-      )}
-    </div>
+    <Card className="border-0 shadow-sm">
+      <CardContent className="p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</p>
+            <p className={cn("text-3xl font-bold tabular-nums mt-1", valueColor || "text-foreground")}>
+              {value}
+            </p>
+          </div>
+          <div className={cn("h-11 w-11 rounded-xl flex items-center justify-center", iconBg || "bg-slate-100")}>
+            <Icon className={cn("h-5 w-5", iconColor || "text-slate-500")} />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
 /* ================================================================== */
-/*  MAIN PAGE — Client Retention Engine                                */
+/*  MAIN PAGE — Client Retention Dashboard                             */
 /* ================================================================== */
 export default function ClientMonitor() {
-  const [selectedAgent, setSelectedAgent] = useState(null);
-  const [activeView, setActiveView] = useState("alerts");
+  const [selectedAgentId, setSelectedAgentId] = useState(null);
+  const [expandedOrgs, setExpandedOrgs] = useState(new Set());
+  const [searchQuery, setSearchQuery] = useState("");
   const queryClient = useQueryClient();
 
-  /* ---- Current user (for mutations) ---- */
+  /* ---- Current user (for investigation mutations) ---- */
   const { data: user } = useQuery({
     queryKey: ["currentUser"],
     queryFn: () => api.auth.me(),
   });
 
-  /* ---- Main data query ---- */
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["domain-monitor", selectedAgent?.id],
-    queryFn: async () => {
-      const res = await api.functions.invoke("domainAgentMonitor", { agent_id: selectedAgent.id });
-      return res?.data || res || {};
-    },
-    enabled: !!selectedAgent?.id,
-    staleTime: 5 * 60 * 1000,
-  });
+  /* ================================================================ */
+  /*  DASHBOARD DATA                                                   */
+  /* ================================================================ */
 
-  /* ---- Derived data ---- */
-  const stats = data?.stats || {};
-  const agent = data?.agent || selectedAgent || {};
-  const gaps = data?.gaps || [];
-  const matches = data?.matches || [];
-  const allListings = data?.all_listings || [];
-  const dataSource = data?.data_source;
-  const engagementType = agent.engagement_type;
+  const { data: monitoredAgents = [], loading: agentsLoading } = useEntityList("Agent", "name");
+  const filteredAgents = useMemo(
+    () => monitoredAgents.filter((a) => a.domain_agent_id),
+    [monitoredAgents]
+  );
 
-  // Use server-provided alerts or fall back to generating from gaps
-  const alerts = useMemo(() => {
-    if (data?.alerts && data.alerts.length > 0) return data.alerts;
-    return generateAlertsFromGaps(gaps, engagementType);
-  }, [data?.alerts, gaps, engagementType]);
+  const { data: allAlerts = [], loading: alertsLoading } = useEntityList("RetentionAlert", "first_detected_at");
+  const { data: allAgencies = [], loading: agenciesLoading } = useEntityList("Agency", "name");
 
-  const activeAlerts = useMemo(() => alerts.filter((a) => a.is_active !== false), [alerts]);
+  const isLoadingDashboard = agentsLoading || alertsLoading || agenciesLoading;
 
-  const worstRisk = useMemo(() => {
-    const priority = { critical: 0, high: 1, medium: 2, low: 3 };
-    let worst = "low";
-    for (const a of activeAlerts) {
-      if (a.risk_level && (priority[a.risk_level] ?? 4) < (priority[worst] ?? 4)) {
-        worst = a.risk_level;
+  /* ---- Aggregate org + agent stats ---- */
+  const { orgStats, totals } = useMemo(() => {
+    // Build agent lookup
+    const agentById = {};
+    for (const a of filteredAgents) {
+      agentById[a.id] = a;
+    }
+
+    // Build agency lookup
+    const agencyById = {};
+    for (const ag of allAgencies) {
+      agencyById[ag.id] = ag;
+    }
+
+    // Group alerts by agent
+    const alertsByAgent = {};
+    for (const alert of allAlerts) {
+      if (!alertsByAgent[alert.agent_id]) alertsByAgent[alert.agent_id] = [];
+      alertsByAgent[alert.agent_id].push(alert);
+    }
+
+    // Build per-agent stats
+    const agentStats = {};
+    for (const agent of filteredAgents) {
+      const agentAlerts = alertsByAgent[agent.id] || [];
+      const active = agentAlerts.filter((a) => a.is_active !== false);
+      const critical = active.filter((a) => a.risk_level === "critical");
+      const identified = active.filter((a) => a.investigation_status === "identified");
+      const investigating = active.filter((a) => a.investigation_status === "investigating");
+      const resolved = agentAlerts.filter((a) =>
+        ["passed", "checked"].includes(a.investigation_status)
+      );
+      const redFlagged = active.filter((a) => a.investigation_status === "red_flag");
+
+      // Coverage: resolved + passed / total
+      const total = agentAlerts.length;
+      const covPct = total > 0 ? Math.round((resolved.length / total) * 100) : 100;
+
+      // Last swept: most recent last_seen_at or sweep_date
+      let lastSwept = null;
+      for (const al of agentAlerts) {
+        const d = al.last_seen_at || al.sweep_date;
+        if (d && (!lastSwept || d > lastSwept)) lastSwept = d;
+      }
+
+      agentStats[agent.id] = {
+        agent,
+        alerts: agentAlerts,
+        activeAlerts: active,
+        activeCount: active.length,
+        criticalCount: critical.length,
+        identifiedCount: identified.length,
+        investigatingCount: investigating.length,
+        resolvedCount: resolved.length,
+        redFlagCount: redFlagged.length,
+        worstRisk: worstRiskLevel(active),
+        coverage: covPct,
+        lastSwept,
+      };
+    }
+
+    // Group agents by agency
+    const orgMap = {};
+    const noOrg = { id: "__unassigned__", name: "Unassigned" };
+
+    for (const agent of filteredAgents) {
+      const orgId = agent.current_agency_id || "__unassigned__";
+      if (!orgMap[orgId]) {
+        const agency = agencyById[orgId] || noOrg;
+        orgMap[orgId] = {
+          id: orgId,
+          name: agency.name || "Unassigned",
+          agents: [],
+          activeCount: 0,
+          criticalCount: 0,
+          identifiedCount: 0,
+          investigatingCount: 0,
+          resolvedCount: 0,
+          redFlagCount: 0,
+          worstRisk: "low",
+          coverage: 0,
+          engagementTypes: new Set(),
+        };
+      }
+      const org = orgMap[orgId];
+      const stat = agentStats[agent.id];
+      org.agents.push(stat);
+      org.activeCount += stat.activeCount;
+      org.criticalCount += stat.criticalCount;
+      org.identifiedCount += stat.identifiedCount;
+      org.investigatingCount += stat.investigatingCount;
+      org.resolvedCount += stat.resolvedCount;
+      org.redFlagCount += stat.redFlagCount;
+
+      if (agent.engagement_type) org.engagementTypes.add(agent.engagement_type);
+
+      // Worst risk across agents in org
+      if ((RISK_PRIORITY[stat.worstRisk] ?? 4) < (RISK_PRIORITY[org.worstRisk] ?? 4)) {
+        org.worstRisk = stat.worstRisk;
       }
     }
-    return worst;
-  }, [activeAlerts]);
 
-  /* ---- Alert mutation ---- */
+    // Compute average coverage per org
+    for (const org of Object.values(orgMap)) {
+      if (org.agents.length > 0) {
+        org.coverage = Math.round(
+          org.agents.reduce((sum, a) => sum + a.coverage, 0) / org.agents.length
+        );
+      }
+    }
+
+    // Sort orgs: those with critical alerts first, then by active count desc
+    const sorted = Object.values(orgMap).sort((a, b) => {
+      if (a.criticalCount !== b.criticalCount) return b.criticalCount - a.criticalCount;
+      if (a.activeCount !== b.activeCount) return b.activeCount - a.activeCount;
+      return a.name.localeCompare(b.name);
+    });
+
+    // Compute grand totals
+    const totalActive = allAlerts.filter((a) => a.is_active !== false);
+    const totalCritical = totalActive.filter((a) => a.risk_level === "critical");
+    const totalInvestigating = totalActive.filter((a) => a.investigation_status === "investigating");
+
+    return {
+      orgStats: sorted,
+      totals: {
+        monitoredAgents: filteredAgents.length,
+        activeAlerts: totalActive.length,
+        critical: totalCritical.length,
+        investigating: totalInvestigating.length,
+      },
+    };
+  }, [allAlerts, filteredAgents, allAgencies]);
+
+  // Search filtering for orgs
+  const filteredOrgStats = useMemo(() => {
+    if (!searchQuery.trim()) return orgStats;
+    const q = searchQuery.toLowerCase();
+    return orgStats
+      .map((org) => {
+        // Check if org name matches
+        if (org.name.toLowerCase().includes(q)) return org;
+        // Otherwise filter agents within org
+        const matchingAgents = org.agents.filter((a) =>
+          a.agent.name?.toLowerCase().includes(q) ||
+          a.agent.email?.toLowerCase().includes(q)
+        );
+        if (matchingAgents.length === 0) return null;
+        return { ...org, agents: matchingAgents };
+      })
+      .filter(Boolean);
+  }, [orgStats, searchQuery]);
+
+  /* ---- Most recent sweep date ---- */
+  const lastSweptDate = useMemo(() => {
+    let latest = null;
+    for (const a of allAlerts) {
+      const d = a.last_seen_at || a.sweep_date;
+      if (d && (!latest || d > latest)) latest = d;
+    }
+    return latest;
+  }, [allAlerts]);
+
+  /* ================================================================ */
+  /*  SWEEP MUTATION                                                   */
+  /* ================================================================ */
+  const sweepMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.functions.invoke("retentionSweep", { source: "manual" });
+      return res?.data || res;
+    },
+    onSuccess: (data) => {
+      toast.success(
+        `Sweep complete: ${data?.agents_scanned ?? data?.agents?.length ?? 0} agents scanned, ${data?.new_alerts ?? data?.totalNewAlerts ?? 0} new alerts`
+      );
+      queryClient.invalidateQueries({ queryKey: ["RetentionAlert"] });
+      refetchEntityList("RetentionAlert");
+    },
+    onError: () => toast.error("Sweep failed"),
+  });
+
+  /* ================================================================ */
+  /*  AGENT DRILL-DOWN                                                 */
+  /* ================================================================ */
+
+  const selectedAgent = useMemo(
+    () => filteredAgents.find((a) => a.id === selectedAgentId),
+    [filteredAgents, selectedAgentId]
+  );
+
+  const { data: agentData, isLoading: agentDataLoading, isFetching: agentDataFetching } = useQuery({
+    queryKey: ["domain-monitor", selectedAgentId],
+    queryFn: async () => {
+      const res = await api.functions.invoke("domainAgentMonitor", { agent_id: selectedAgentId });
+      return res?.data || res;
+    },
+    enabled: !!selectedAgentId,
+    staleTime: 5 * 60_000,
+  });
+
+  const drillDownAlerts = useMemo(() => {
+    if (!agentData?.alerts) return [];
+    return agentData.alerts;
+  }, [agentData]);
+
+  const drillDownActiveAlerts = useMemo(
+    () => drillDownAlerts.filter((a) => a.is_active !== false),
+    [drillDownAlerts]
+  );
+
+  /* ---- Alert mutation (drill-down) ---- */
   const alertMutation = useMutation({
     mutationFn: async ({ action, alert_id, notes }) => {
-      const res = await api.functions.invoke("updateRetentionAlert", {
-        action,
-        alert_id,
-        notes,
-        user_id: user?.id,
-        user_name: user?.full_name || user?.email,
-      });
+      const statusMap = {
+        start_investigating: "investigating",
+        pass: "passed",
+        check: "checked",
+        red_flag: "red_flag",
+        reopen: "investigating",
+      };
+      const body = action === "update_notes"
+        ? { action: "update_notes", alert_id, notes, user_name: user?.full_name || user?.email, user_email: user?.email }
+        : { action: "update_status", alert_id, status: statusMap[action] || action, user_id: user?.id, user_name: user?.full_name || user?.email, user_email: user?.email };
+      const res = await api.functions.invoke("updateRetentionAlert", body);
       return res?.data || res;
     },
     onMutate: async ({ action, alert_id, notes }) => {
-      await queryClient.cancelQueries({ queryKey: ["domain-monitor", selectedAgent?.id] });
-      const prev = queryClient.getQueryData(["domain-monitor", selectedAgent?.id]);
+      await queryClient.cancelQueries({ queryKey: ["domain-monitor", selectedAgentId] });
+      const prev = queryClient.getQueryData(["domain-monitor", selectedAgentId]);
 
-      queryClient.setQueryData(["domain-monitor", selectedAgent?.id], (old) => {
+      queryClient.setQueryData(["domain-monitor", selectedAgentId], (old) => {
         if (!old?.alerts) return old;
         const statusMap = {
           start_investigating: "investigating",
@@ -550,7 +667,7 @@ export default function ClientMonitor() {
     },
     onError: (_err, _vars, context) => {
       if (context?.prev) {
-        queryClient.setQueryData(["domain-monitor", selectedAgent?.id], context.prev);
+        queryClient.setQueryData(["domain-monitor", selectedAgentId], context.prev);
       }
       toast.error("Failed to update alert");
     },
@@ -566,324 +683,565 @@ export default function ClientMonitor() {
       toast.success(labels[action] || "Alert updated");
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["domain-monitor", selectedAgent?.id] });
+      queryClient.invalidateQueries({ queryKey: ["domain-monitor", selectedAgentId] });
+      refetchEntityList("RetentionAlert");
     },
   });
 
-  const handleAlertAction = (payload) => {
-    alertMutation.mutate(payload);
-  };
+  const handleAlertAction = useCallback(
+    (payload) => alertMutation.mutate(payload),
+    [alertMutation]
+  );
 
-  /* ---------------------------------------------------------------- */
-  /*  Phase 1: Agent Selection                                        */
-  /* ---------------------------------------------------------------- */
-  if (!selectedAgent) {
+  /* ---- Toggle org expansion ---- */
+  const toggleOrg = useCallback((orgId) => {
+    setExpandedOrgs((prev) => {
+      const next = new Set(prev);
+      if (next.has(orgId)) next.delete(orgId);
+      else next.add(orgId);
+      return next;
+    });
+  }, []);
+
+  /* ================================================================ */
+  /*  RENDER: AGENT DRILL-DOWN MODE                                    */
+  /* ================================================================ */
+  if (selectedAgentId && selectedAgent) {
+    const agentInfo = agentData?.agent || selectedAgent;
+    const dataSource = agentData?.data_source;
+    const engagementType = agentInfo.engagement_type || selectedAgent.engagement_type;
+
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
-        <div className="max-w-2xl mx-auto pt-12">
-          <div className="text-center mb-10">
-            <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-primary/10 mb-4">
-              <ShieldAlert className="h-8 w-8 text-primary" />
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+        <div className="max-w-7xl mx-auto p-6 space-y-6">
+          {/* Back button + header */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-muted-foreground hover:text-foreground mb-2 -ml-2"
+                onClick={() => setSelectedAgentId(null)}
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to Dashboard
+              </Button>
+              <div className="flex items-center gap-3 flex-wrap">
+                <h1 className="text-2xl font-bold text-foreground leading-tight">
+                  {agentInfo.name || selectedAgent.name}
+                </h1>
+                <EngagementBadge type={engagementType} />
+                {dataSource && (
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-[10px] uppercase tracking-wider font-semibold border",
+                      dataSource === "domain_api"
+                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                        : "bg-amber-50 text-amber-700 border-amber-200"
+                    )}
+                  >
+                    {dataSource === "domain_api" ? "Live" : "Simulation"}
+                  </Badge>
+                )}
+              </div>
+              {(agentInfo.agency || selectedAgent.current_agency_name) && (
+                <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1.5">
+                  <Building2 className="h-3.5 w-3.5" />
+                  {agentInfo.agency || selectedAgent.current_agency_name}
+                </p>
+              )}
             </div>
-            <h1 className="text-4xl font-bold text-foreground mb-2">Client Retention</h1>
-            <p className="text-muted-foreground text-lg">
-              Select an agent to monitor retention risks and coverage alerts
-            </p>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                queryClient.invalidateQueries({ queryKey: ["domain-monitor", selectedAgentId] })
+              }
+              disabled={agentDataFetching}
+              className="gap-1.5"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", agentDataFetching && "animate-spin")} />
+              Refresh
+            </Button>
           </div>
 
-          <Card className="p-8 shadow-lg border-0 bg-white">
-            <AgentSearch onSelect={setSelectedAgent} />
-          </Card>
+          {/* Exclusive banner */}
+          {engagementType === "exclusive" && !agentDataLoading && (
+            <div className="rounded-lg border border-red-300 bg-red-50 p-4 flex items-start gap-3">
+              <ShieldAlert className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-red-800 text-sm">Exclusive Agent</p>
+                <p className="text-xs text-red-700 mt-1">
+                  All coverage gaps are flagged as <strong>critical retention risks</strong>. This agent expects full coverage on every listing.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Loading */}
+          {agentDataLoading && (
+            <div className="flex items-center justify-center py-24">
+              <div className="text-center space-y-3">
+                <Loader2 className="h-10 w-10 animate-spin text-muted-foreground mx-auto" />
+                <p className="text-sm text-muted-foreground">Scanning listings and retention risks...</p>
+              </div>
+            </div>
+          )}
+
+          {/* Agent stats strip */}
+          {!agentDataLoading && agentData && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <StatCard
+                  label="Active Alerts"
+                  value={drillDownActiveAlerts.length}
+                  icon={ShieldAlert}
+                  iconBg={drillDownActiveAlerts.length > 0 ? "bg-red-100" : "bg-emerald-100"}
+                  iconColor={drillDownActiveAlerts.length > 0 ? "text-red-600" : "text-emerald-600"}
+                  valueColor={drillDownActiveAlerts.length > 0 ? "text-red-600" : "text-emerald-600"}
+                />
+                <StatCard
+                  label="Coverage"
+                  value={`${agentData.stats?.coverage_pct ?? 0}%`}
+                  icon={Shield}
+                  iconBg="bg-blue-100"
+                  iconColor="text-blue-600"
+                  valueColor="text-foreground"
+                />
+                <StatCard
+                  label="Total Listings"
+                  value={agentData.all_listings?.length ?? 0}
+                  icon={Building2}
+                  iconBg="bg-slate-100"
+                  iconColor="text-slate-500"
+                />
+              </div>
+
+              <AlertsTable
+                alerts={drillDownAlerts}
+                onAction={handleAlertAction}
+                isPending={alertMutation.isPending}
+              />
+            </>
+          )}
         </div>
       </div>
     );
   }
 
-  /* ---------------------------------------------------------------- */
-  /*  Phase 2: Retention Dashboard                                    */
-  /* ---------------------------------------------------------------- */
-  const coveragePct = stats.coverage_pct ?? 0;
+  /* ================================================================ */
+  /*  RENDER: DASHBOARD MODE                                           */
+  /* ================================================================ */
 
-  const alertCountColor = {
+  const riskColor = (level) => ({
     critical: "text-red-600",
     high: "text-orange-600",
     medium: "text-amber-600",
     low: "text-slate-500",
-  }[worstRisk] || "text-slate-500";
+  }[level] || "text-slate-500");
 
-  const alertCountBg = {
+  const riskBg = (level) => ({
     critical: "bg-red-100",
     high: "bg-orange-100",
     medium: "bg-amber-100",
     low: "bg-slate-100",
-  }[worstRisk] || "bg-slate-100";
-
-  const alertIconColor = {
-    critical: "text-red-600",
-    high: "text-orange-600",
-    medium: "text-amber-600",
-    low: "text-slate-400",
-  }[worstRisk] || "text-slate-400";
+  }[level] || "bg-slate-100");
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       <div className="max-w-7xl mx-auto p-6 space-y-6">
 
-        {/* -------------------------------------------------------- */}
-        {/*  Header                                                   */}
-        {/* -------------------------------------------------------- */}
+        {/* ---------------------------------------------------------- */}
+        {/*  Header                                                     */}
+        {/* ---------------------------------------------------------- */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <h1 className="text-2xl font-bold text-foreground leading-tight">
-                {agent.name || selectedAgent.name}
-              </h1>
-              <EngagementBadge type={engagementType} />
-              {dataSource && (
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "text-[10px] uppercase tracking-wider font-semibold border",
-                    dataSource === "domain_api"
-                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                      : "bg-amber-50 text-amber-700 border-amber-200"
-                  )}
-                >
-                  {dataSource === "domain_api" ? "Live" : "Simulation"}
-                </Badge>
-              )}
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                <Shield className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-foreground leading-tight">
+                  Client Retention
+                </h1>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Monitor customer engagement and coverage gaps across all agents
+                </p>
+              </div>
             </div>
-            {(agent.agency || selectedAgent.current_agency_name) && (
-              <p className="text-sm text-muted-foreground mt-1">
-                {agent.agency || selectedAgent.current_agency_name}
-              </p>
-            )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {lastSweptDate && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <Clock className="h-3 w-3" />
+                Last swept: {relativeTime(lastSweptDate)}
+              </span>
+            )}
             <Button
-              variant="outline"
+              variant="default"
               size="sm"
-              onClick={() => refetch()}
-              disabled={isFetching}
               className="gap-1.5"
+              onClick={() => sweepMutation.mutate()}
+              disabled={sweepMutation.isPending}
             >
-              <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
-              Refresh
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setSelectedAgent(null);
-                setActiveView("alerts");
-              }}
-            >
-              Change Agent
+              {sweepMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Run Sweep
             </Button>
           </div>
         </div>
 
-        {/* -------------------------------------------------------- */}
-        {/*  Exclusive agent warning banner                           */}
-        {/* -------------------------------------------------------- */}
-        {engagementType === "exclusive" && !isLoading && (
-          <div className="rounded-lg border border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800 p-4 flex items-start gap-3">
-            <ShieldAlert className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold text-red-800 dark:text-red-300 text-sm">Exclusive Agent</p>
-              <p className="text-xs text-red-700 dark:text-red-400 mt-1">
-                All coverage gaps are flagged as <strong>critical retention risks</strong>. This agent expects full coverage on every listing.
-              </p>
-            </div>
-          </div>
-        )}
+        {/* ---------------------------------------------------------- */}
+        {/*  Summary Stats Strip                                        */}
+        {/* ---------------------------------------------------------- */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <StatCard
+            label="Monitored Agents"
+            value={totals.monitoredAgents}
+            icon={Users}
+            iconBg="bg-blue-100"
+            iconColor="text-blue-600"
+          />
+          <StatCard
+            label="Active Alerts"
+            value={totals.activeAlerts}
+            icon={ShieldAlert}
+            iconBg={totals.activeAlerts > 0 ? riskBg("high") : "bg-emerald-100"}
+            iconColor={totals.activeAlerts > 0 ? "text-orange-600" : "text-emerald-600"}
+            valueColor={totals.activeAlerts > 0 ? "text-orange-600" : "text-emerald-600"}
+          />
+          <StatCard
+            label="Critical"
+            value={totals.critical}
+            icon={AlertTriangle}
+            iconBg={totals.critical > 0 ? "bg-red-100" : "bg-slate-100"}
+            iconColor={totals.critical > 0 ? "text-red-600" : "text-slate-400"}
+            valueColor={totals.critical > 0 ? "text-red-600" : "text-slate-500"}
+          />
+          <StatCard
+            label="Investigating"
+            value={totals.investigating}
+            icon={Eye}
+            iconBg={totals.investigating > 0 ? "bg-amber-100" : "bg-slate-100"}
+            iconColor={totals.investigating > 0 ? "text-amber-600" : "text-slate-400"}
+            valueColor={totals.investigating > 0 ? "text-amber-600" : "text-slate-500"}
+          />
+        </div>
 
-        {/* -------------------------------------------------------- */}
-        {/*  Simulation warning banner                                */}
-        {/* -------------------------------------------------------- */}
-        {dataSource === "simulation" && !isLoading && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-4 flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold text-amber-800 dark:text-amber-300 text-sm">Simulated Data</p>
-              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                This agent does not have a Domain Agent ID configured, so all listings shown are <strong>sample data</strong> for demonstration purposes.
-                To show real listings, edit the agent record and set their Domain Agent ID.
-              </p>
-            </div>
-          </div>
-        )}
+        {/* ---------------------------------------------------------- */}
+        {/*  Search                                                     */}
+        {/* ---------------------------------------------------------- */}
+        <div className="relative max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search organisations or agents..."
+            className="w-full pl-10 pr-4 py-2 text-sm rounded-lg border border-border bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-colors"
+          />
+        </div>
 
-        {/* -------------------------------------------------------- */}
-        {/*  Loading state                                            */}
-        {/* -------------------------------------------------------- */}
-        {isLoading && (
+        {/* ---------------------------------------------------------- */}
+        {/*  Loading state                                              */}
+        {/* ---------------------------------------------------------- */}
+        {isLoadingDashboard && (
           <div className="flex items-center justify-center py-24">
             <div className="text-center space-y-3">
               <Loader2 className="h-10 w-10 animate-spin text-muted-foreground mx-auto" />
-              <p className="text-sm text-muted-foreground">Scanning listings and retention risks...</p>
+              <p className="text-sm text-muted-foreground">Loading retention data...</p>
             </div>
           </div>
         )}
 
-        {!isLoading && data && (
-          <>
-            {/* ------------------------------------------------------ */}
-            {/*  Stats Strip                                            */}
-            {/* ------------------------------------------------------ */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* Active Alerts */}
-              <Card className="border-0 shadow-sm">
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Active Alerts</p>
-                      <p className={cn("text-3xl font-bold tabular-nums mt-1", alertCountColor)}>
-                        {activeAlerts.length}
-                      </p>
-                    </div>
-                    <div className={cn("h-11 w-11 rounded-xl flex items-center justify-center", alertCountBg)}>
-                      <ShieldAlert className={cn("h-5 w-5", alertIconColor)} />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Matched */}
-              <Card className="border-0 shadow-sm">
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Matched</p>
-                      <p className="text-3xl font-bold text-emerald-600 tabular-nums mt-1">{stats.matched ?? 0}</p>
-                    </div>
-                    <div className="h-11 w-11 rounded-xl bg-emerald-100 flex items-center justify-center">
-                      <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Coverage */}
-              <Card className="border-0 shadow-sm">
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Coverage</p>
-                      <div className="flex items-baseline gap-1 mt-1">
-                        <span className={cn(
-                          "text-3xl font-bold tabular-nums",
-                          coveragePct >= 75 ? "text-emerald-600" : coveragePct >= 50 ? "text-amber-600" : "text-red-600"
-                        )}>
-                          {coveragePct}
-                        </span>
-                        <span className="text-lg font-semibold text-muted-foreground">%</span>
-                      </div>
-                    </div>
-                    <div className={cn(
-                      "h-11 w-11 rounded-xl flex items-center justify-center",
-                      coveragePct >= 75 ? "bg-emerald-100" : coveragePct >= 50 ? "bg-amber-100" : "bg-red-100"
-                    )}>
-                      <Shield className={cn(
-                        "h-5 w-5",
-                        coveragePct >= 75 ? "text-emerald-600" : coveragePct >= 50 ? "text-amber-600" : "text-red-600"
-                      )} />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* ------------------------------------------------------ */}
-            {/*  View Toggle                                            */}
-            {/* ------------------------------------------------------ */}
-            <div className="flex items-center gap-1 bg-white border shadow-sm rounded-lg p-1 w-fit">
-              <button
-                className={cn(
-                  "px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5",
-                  activeView === "alerts"
-                    ? "bg-slate-900 text-white shadow-sm"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                )}
-                onClick={() => setActiveView("alerts")}
-              >
-                <ShieldAlert className="h-3.5 w-3.5" />
-                Alerts
-                {activeAlerts.length > 0 && (
-                  <span className={cn(
-                    "ml-1 text-[10px] font-bold rounded-full px-1.5 py-0.5 min-w-[20px] text-center leading-none",
-                    activeView === "alerts" ? "bg-white/20 text-white" : "bg-red-100 text-red-700"
-                  )}>
-                    {activeAlerts.length}
-                  </span>
-                )}
-              </button>
-              <button
-                className={cn(
-                  "px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5",
-                  activeView === "listings"
-                    ? "bg-slate-900 text-white shadow-sm"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                )}
-                onClick={() => setActiveView("listings")}
-              >
-                <Home className="h-3.5 w-3.5" />
-                All Listings
-                {allListings.length > 0 && (
-                  <span className={cn(
-                    "ml-1 text-[10px] font-bold rounded-full px-1.5 py-0.5 min-w-[20px] text-center leading-none",
-                    activeView === "listings" ? "bg-white/20 text-white" : "bg-slate-200 text-slate-600"
-                  )}>
-                    {allListings.length}
-                  </span>
-                )}
-              </button>
-            </div>
-
-            {/* ------------------------------------------------------ */}
-            {/*  Alerts View                                            */}
-            {/* ------------------------------------------------------ */}
-            {activeView === "alerts" && (
-              <AlertsTable
-                alerts={activeAlerts}
-                onAction={handleAlertAction}
-                isPending={alertMutation.isPending}
-              />
-            )}
-
-            {/* ------------------------------------------------------ */}
-            {/*  All Listings View                                      */}
-            {/* ------------------------------------------------------ */}
-            {activeView === "listings" && (
-              <Card className="border-0 shadow-sm overflow-hidden">
-                <AllListingsTable
-                  listings={allListings}
-                  matches={matches}
-                  alerts={alerts}
-                  dataSource={dataSource}
-                />
-              </Card>
-            )}
-          </>
-        )}
-
-        {/* No data / error fallback */}
-        {!isLoading && !data && selectedAgent && (
+        {/* ---------------------------------------------------------- */}
+        {/*  Empty state                                                */}
+        {/* ---------------------------------------------------------- */}
+        {!isLoadingDashboard && filteredAgents.length === 0 && (
           <Card className="border-0 shadow-sm">
-            <CardContent className="py-16 text-center">
-              <AlertTriangle className="h-12 w-12 text-amber-300 mx-auto mb-3" />
-              <p className="font-semibold text-foreground">Unable to load retention data</p>
-              <p className="text-sm text-muted-foreground mt-1 mb-4">
-                The monitor did not return data for this agent.
+            <CardContent className="py-20 text-center">
+              <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-slate-100 mb-4">
+                <Users className="h-8 w-8 text-slate-400" />
+              </div>
+              <p className="font-semibold text-foreground text-lg">No monitored agents</p>
+              <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                No agents have a Domain Agent ID configured. Set up agent domain IDs in the Contacts section to begin monitoring retention.
               </p>
-              <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5">
-                <RefreshCw className="h-3.5 w-3.5" /> Try Again
-              </Button>
             </CardContent>
           </Card>
         )}
+
+        {/* ---------------------------------------------------------- */}
+        {/*  No search results                                          */}
+        {/* ---------------------------------------------------------- */}
+        {!isLoadingDashboard && filteredAgents.length > 0 && filteredOrgStats.length === 0 && searchQuery && (
+          <Card className="border-0 shadow-sm">
+            <CardContent className="py-16 text-center">
+              <Search className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="font-semibold text-foreground">No results</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                No organisations or agents match "{searchQuery}"
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ---------------------------------------------------------- */}
+        {/*  Organisation table                                         */}
+        {/* ---------------------------------------------------------- */}
+        {!isLoadingDashboard && filteredOrgStats.length > 0 && (
+          <div className="rounded-lg border border-border bg-white shadow-sm overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-muted/50 border-b border-border text-left">
+                  <th className="px-4 py-3 font-medium text-muted-foreground w-8"></th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground">Organisation</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Agents</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Active Alerts</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Critical</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Coverage</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Worst Risk</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground">Status Summary</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {filteredOrgStats.map((org) => {
+                  const isExpanded = expandedOrgs.has(org.id);
+                  const hasCritical = org.criticalCount > 0;
+                  const engTypes = Array.from(org.engagementTypes);
+
+                  return (
+                    <OrgRowGroup
+                      key={org.id}
+                      org={org}
+                      isExpanded={isExpanded}
+                      hasCritical={hasCritical}
+                      engTypes={engTypes}
+                      onToggle={() => toggleOrg(org.id)}
+                      onSelectAgent={(agentId) => setSelectedAgentId(agentId)}
+                    />
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  Org Row Group — parent row + expandable agent rows                 */
+/* ================================================================== */
+function OrgRowGroup({ org, isExpanded, hasCritical, engTypes, onToggle, onSelectAgent }) {
+  return (
+    <>
+      {/* Organisation row */}
+      <tr
+        className={cn(
+          "hover:bg-muted/30 transition-colors cursor-pointer select-none",
+          hasCritical && "bg-red-50/30"
+        )}
+        onClick={onToggle}
+      >
+        <td className="px-4 py-3 text-center">
+          {isExpanded ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          )}
+        </td>
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <div className="h-8 w-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
+              <Building2 className="h-4 w-4 text-slate-500" />
+            </div>
+            <div>
+              <p className="font-semibold text-foreground">{org.name}</p>
+              {engTypes.length > 0 && (
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  {engTypes.map((t) => (
+                    <EngagementBadge key={t} type={t} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </td>
+        <td className="px-4 py-3 text-center">
+          <span className="tabular-nums font-medium text-foreground">{org.agents.length}</span>
+        </td>
+        <td className="px-4 py-3 text-center">
+          {org.activeCount > 0 ? (
+            <Badge
+              variant="outline"
+              className={cn(
+                "text-xs font-semibold border tabular-nums",
+                hasCritical
+                  ? "bg-red-100 text-red-700 border-red-300"
+                  : "bg-amber-100 text-amber-700 border-amber-300"
+              )}
+            >
+              {org.activeCount}
+            </Badge>
+          ) : (
+            <span className="text-sm text-emerald-600 font-medium">0</span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-center">
+          {org.criticalCount > 0 ? (
+            <Badge variant="outline" className="text-xs font-semibold border bg-red-100 text-red-700 border-red-300 tabular-nums">
+              {org.criticalCount}
+            </Badge>
+          ) : (
+            <span className="text-sm text-muted-foreground">0</span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-center">
+          <CoverageIndicator value={org.coverage} />
+        </td>
+        <td className="px-4 py-3 text-center">
+          <RiskBadge level={org.worstRisk} />
+        </td>
+        <td className="px-4 py-3">
+          <StatusSummary
+            identified={org.identifiedCount}
+            investigating={org.investigatingCount}
+            resolved={org.resolvedCount}
+            redFlag={org.redFlagCount}
+          />
+        </td>
+      </tr>
+
+      {/* Expanded agent rows */}
+      {isExpanded &&
+        org.agents.map((agentStat) => (
+          <tr
+            key={agentStat.agent.id}
+            className="hover:bg-blue-50/40 transition-colors bg-muted/20"
+          >
+            <td className="px-4 py-2.5"></td>
+            <td className="px-4 py-2.5 pl-16">
+              <button
+                className="text-left group"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectAgent(agentStat.agent.id);
+                }}
+              >
+                <span className="font-medium text-foreground group-hover:text-primary group-hover:underline underline-offset-2 transition-colors">
+                  {agentStat.agent.name}
+                </span>
+                {agentStat.agent.email && (
+                  <p className="text-xs text-muted-foreground mt-0.5">{agentStat.agent.email}</p>
+                )}
+              </button>
+            </td>
+            <td className="px-4 py-2.5 text-center">
+              <EngagementBadge type={agentStat.agent.engagement_type} />
+            </td>
+            <td className="px-4 py-2.5 text-center">
+              {agentStat.activeCount > 0 ? (
+                <span className={cn("font-semibold tabular-nums", agentStat.criticalCount > 0 ? "text-red-600" : "text-amber-600")}>
+                  {agentStat.activeCount}
+                </span>
+              ) : (
+                <span className="text-sm text-emerald-600 font-medium">0</span>
+              )}
+            </td>
+            <td className="px-4 py-2.5 text-center">
+              <RiskBadge level={agentStat.worstRisk} />
+            </td>
+            <td className="px-4 py-2.5 text-center">
+              <CoverageIndicator value={agentStat.coverage} />
+            </td>
+            <td className="px-4 py-2.5 text-center">
+              {/* Worst risk is already shown in adjacent column */}
+            </td>
+            <td className="px-4 py-2.5">
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                {agentStat.lastSwept ? relativeTime(agentStat.lastSwept) : "Never"}
+              </span>
+            </td>
+          </tr>
+        ))}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Coverage % indicator                                               */
+/* ------------------------------------------------------------------ */
+function CoverageIndicator({ value }) {
+  const color =
+    value >= 80 ? "text-emerald-600" :
+    value >= 50 ? "text-amber-600" :
+    "text-red-600";
+
+  const barColor =
+    value >= 80 ? "bg-emerald-500" :
+    value >= 50 ? "bg-amber-500" :
+    "bg-red-500";
+
+  return (
+    <div className="flex items-center gap-2 justify-center">
+      <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+        <div
+          className={cn("h-full rounded-full transition-all", barColor)}
+          style={{ width: `${value}%` }}
+        />
+      </div>
+      <span className={cn("text-xs font-semibold tabular-nums", color)}>{value}%</span>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Status summary (mini breakdown)                                    */
+/* ------------------------------------------------------------------ */
+function StatusSummary({ identified, investigating, resolved, redFlag }) {
+  if (identified + investigating + resolved + redFlag === 0) {
+    return <span className="text-xs text-muted-foreground">No alerts</span>;
+  }
+
+  return (
+    <div className="flex items-center gap-3 text-xs">
+      {identified > 0 && (
+        <span className="flex items-center gap-1 text-blue-600">
+          <CircleDot className="h-3 w-3" />
+          <span className="tabular-nums font-medium">{identified}</span>
+          <span className="text-blue-500 hidden lg:inline">new</span>
+        </span>
+      )}
+      {investigating > 0 && (
+        <span className="flex items-center gap-1 text-amber-600">
+          <Eye className="h-3 w-3" />
+          <span className="tabular-nums font-medium">{investigating}</span>
+          <span className="text-amber-500 hidden lg:inline">open</span>
+        </span>
+      )}
+      {resolved > 0 && (
+        <span className="flex items-center gap-1 text-emerald-600">
+          <CheckCircle2 className="h-3 w-3" />
+          <span className="tabular-nums font-medium">{resolved}</span>
+          <span className="text-emerald-500 hidden lg:inline">done</span>
+        </span>
+      )}
+      {redFlag > 0 && (
+        <span className="flex items-center gap-1 text-red-600">
+          <Flag className="h-3 w-3" />
+          <span className="tabular-nums font-medium">{redFlag}</span>
+          <span className="text-red-500 hidden lg:inline">flagged</span>
+        </span>
+      )}
     </div>
   );
 }

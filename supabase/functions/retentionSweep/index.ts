@@ -119,14 +119,15 @@ Deno.serve(async (req) => {
           if (!gapListingIds.has(alert.domain_listing_id)) {
             // Gap resolved — auto-pass if not already concluded
             const concluded = ['passed', 'checked', 'red_flag'].includes(alert.investigation_status);
+            const resolvePayload: Record<string, any> = {
+              is_active: false,
+              investigation_status: concluded ? alert.investigation_status : 'passed',
+              updated_at: new Date().toISOString(),
+            };
+            if (!concluded) resolvePayload.resolved_at = new Date().toISOString();
             await admin
               .from('retention_alerts')
-              .update({
-                is_active: false,
-                investigation_status: concluded ? alert.investigation_status : 'passed',
-                resolved_at: concluded ? undefined : new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              })
+              .update(resolvePayload)
               .eq('id', alert.id);
             totalResolved++;
           }
