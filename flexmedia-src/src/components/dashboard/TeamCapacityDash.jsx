@@ -1111,15 +1111,67 @@ function MemberRow({ member, taskCount }) {
 }
 
 /* ------- Staff Drill-Down Content ------- */
+const DRILL_SORT_OPTIONS = [
+  { value: "category", label: "Category" },
+  { value: "project", label: "Project" },
+  { value: "due_date", label: "Due Date" },
+  { value: "estimated", label: "Est. Effort" },
+  { value: "title", label: "Title" },
+];
+
+function sortDrillTasks(tasks, sortBy, projectMap) {
+  const sorted = [...tasks];
+  switch (sortBy) {
+    case "project":
+      return sorted.sort((a, b) => {
+        const pa = a.project_title || projectMap?.[a.project_id] || "";
+        const pb = b.project_title || projectMap?.[b.project_id] || "";
+        return pa.localeCompare(pb) || (a.title || "").localeCompare(b.title || "");
+      });
+    case "due_date":
+      return sorted.sort((a, b) => {
+        const da = a.due_date || "9999";
+        const db = b.due_date || "9999";
+        return da.localeCompare(db);
+      });
+    case "estimated":
+      return sorted.sort((a, b) => (b.estimated_minutes || 0) - (a.estimated_minutes || 0));
+    case "title":
+      return sorted.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+    default:
+      return sorted;
+  }
+}
+
 function StaffDrillContent({ user, projectMap }) {
+  const [sortBy, setSortBy] = useState("category");
+  const [filterProject, setFilterProject] = useState("all");
+
   const { data: tasks = [], isLoading } = useQuery({
     queryKey: ["drill-staff-tasks", user.user_id],
-    queryFn: () => api.entities.ProjectTask.filter({ assigned_to: user.user_id }, null, 200),
+    queryFn: () => api.entities.ProjectTask.filter({ assigned_to: user.user_id }, null, 500),
     enabled: !!user.user_id,
     staleTime: 60_000,
   });
 
-  const cats = useMemo(() => categorizeTasks(tasks), [tasks]);
+  const activeTasks = useMemo(() => tasks.filter(t => !t.is_deleted), [tasks]);
+  const cats = useMemo(() => categorizeTasks(activeTasks), [activeTasks]);
+
+  // Unique projects for filter dropdown
+  const projectOptions = useMemo(() => {
+    const map = {};
+    for (const t of activeTasks) {
+      const pid = t.project_id || "none";
+      if (!map[pid]) map[pid] = t.project_title || projectMap?.[t.project_id] || "No Project";
+    }
+    return Object.entries(map).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [activeTasks, projectMap]);
+
+  // Apply project filter
+  const filterTasks = useCallback((list) => {
+    if (filterProject === "all") return list;
+    return list.filter(t => (t.project_id || "none") === filterProject);
+  }, [filterProject]);
 
   if (isLoading) {
     return (
@@ -1130,62 +1182,116 @@ function StaffDrillContent({ user, projectMap }) {
     );
   }
 
-  const activeTasks = tasks.filter(t => !t.is_deleted);
+  // Category view (default) — grouped by status category
+  const renderCategoryView = () => (
+    <>
+      {filterTasks(cats.overdue).length > 0 && (
+        <DrillDownSection title="Overdue" count={filterTasks(cats.overdue).length} variant="overdue">
+          {filterTasks(cats.overdue).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+      {filterTasks(cats.dueThisWeek).length > 0 && (
+        <DrillDownSection title="Due This Week" count={filterTasks(cats.dueThisWeek).length}>
+          {filterTasks(cats.dueThisWeek).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+      {filterTasks(cats.future).length > 0 && (
+        <DrillDownSection title="Upcoming" count={filterTasks(cats.future).length}>
+          {filterTasks(cats.future).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+      {filterTasks(cats.completed).length > 0 && (
+        <DrillDownSection title="Completed" count={filterTasks(cats.completed).length}>
+          {filterTasks(cats.completed).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+      {filterTasks(cats.unscheduled).length > 0 && (
+        <DrillDownSection title="Unscheduled" count={filterTasks(cats.unscheduled).length}>
+          {filterTasks(cats.unscheduled).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      )}
+    </>
+  );
+
+  // Sorted flat view (project, due date, effort, title)
+  const renderSortedView = () => {
+    const filtered = filterTasks(activeTasks);
+    const sorted = sortDrillTasks(filtered, sortBy, projectMap);
+
+    if (sortBy === "project") {
+      // Group by project
+      const groups = {};
+      for (const t of sorted) {
+        const key = t.project_id || "none";
+        const name = t.project_title || projectMap?.[t.project_id] || "No Project";
+        if (!groups[key]) groups[key] = { name, tasks: [] };
+        groups[key].tasks.push(t);
+      }
+      return Object.values(groups).map((g) => (
+        <DrillDownSection key={g.name} title={g.name} count={g.tasks.length}>
+          {g.tasks.map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+        </DrillDownSection>
+      ));
+    }
+
+    return (
+      <DrillDownSection title="All Tasks" count={sorted.length}>
+        {sorted.map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
+      </DrillDownSection>
+    );
+  };
+
+  const totalEst = activeTasks.reduce((s, t) => s + (t.estimated_minutes || 0), 0);
 
   return (
-    <div className="space-y-4">
-      {/* Summary line */}
+    <div className="space-y-3">
+      {/* Summary */}
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
         <span>Load: <strong className={textCls(loadColor(user.load_pct ?? 0))}>{pctRound(user.load_pct)}%</strong></span>
         <span>Progress: <strong className={textCls(progressColor(user.progress_pct ?? 0))}>{pctRound(user.progress_pct)}%</strong></span>
         <span>{fhRaw(user.weekly_target_hours)}h target</span>
-        <span>{activeTasks.length} total tasks</span>
+        <span>{activeTasks.length} tasks</span>
+        <span>{(totalEst / 60).toFixed(1)}h estimated</span>
       </div>
 
-      {/* Overdue */}
-      {cats.overdue.length > 0 && (
-        <DrillDownSection title="Overdue" count={cats.overdue.length} variant="overdue">
-          {cats.overdue.map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
-        </DrillDownSection>
-      )}
+      {/* Sort + filter controls */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">Sort:</span>
+        {DRILL_SORT_OPTIONS.map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => setSortBy(opt.value)}
+            className={cn(
+              "px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors",
+              sortBy === opt.value
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/50 text-muted-foreground hover:bg-muted"
+            )}
+          >
+            {opt.label}
+          </button>
+        ))}
+        {projectOptions.length > 1 && (
+          <>
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-semibold ml-2">Project:</span>
+            <select
+              value={filterProject}
+              onChange={e => setFilterProject(e.target.value)}
+              className="text-[10px] bg-muted/50 border border-border/50 rounded px-1.5 py-0.5 max-w-[180px]"
+            >
+              <option value="all">All ({activeTasks.length})</option>
+              {projectOptions.map(([pid, name]) => (
+                <option key={pid} value={pid}>{name}</option>
+              ))}
+            </select>
+          </>
+        )}
+      </div>
 
-      {/* Due this week */}
-      {cats.dueThisWeek.length > 0 && (
-        <DrillDownSection title="Due This Week" count={cats.dueThisWeek.length}>
-          {cats.dueThisWeek.map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
-        </DrillDownSection>
-      )}
-
-      {/* Future */}
-      {cats.future.length > 0 && (
-        <DrillDownSection title="Upcoming" count={cats.future.length}>
-          {cats.future.map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
-        </DrillDownSection>
-      )}
-
-      {/* Completed this week */}
-      {cats.completed.length > 0 && (
-        <DrillDownSection title="Completed" count={cats.completed.length}>
-          {cats.completed.slice(0, 10).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
-          {cats.completed.length > 10 && (
-            <p className="px-3 py-2 text-[10px] text-muted-foreground">
-              + {cats.completed.length - 10} more completed tasks
-            </p>
-          )}
-        </DrillDownSection>
-      )}
-
-      {/* Unscheduled */}
-      {cats.unscheduled.length > 0 && (
-        <DrillDownSection title="Unscheduled Backlog" count={cats.unscheduled.length}>
-          {cats.unscheduled.slice(0, 10).map(t => <DrillDownTaskRow key={t.id} task={t} projectMap={projectMap} />)}
-          {cats.unscheduled.length > 10 && (
-            <p className="px-3 py-2 text-[10px] text-muted-foreground">
-              + {cats.unscheduled.length - 10} more unscheduled tasks
-            </p>
-          )}
-        </DrillDownSection>
-      )}
+      {/* Task list */}
+      <div className="max-h-[60vh] overflow-y-auto space-y-3">
+        {sortBy === "category" ? renderCategoryView() : renderSortedView()}
+      </div>
 
       {activeTasks.length === 0 && (
         <p className="text-center py-8 text-sm text-muted-foreground">No tasks assigned</p>
