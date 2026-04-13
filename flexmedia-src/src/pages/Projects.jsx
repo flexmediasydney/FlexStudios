@@ -482,7 +482,7 @@ export default function Projects() {
   if (loadError && !isLoading && allProjects.length === 0) {
     return (
       <div className="p-8 text-center text-destructive">
-        <p className="font-medium">Failed to load projects.</p>
+        <p className="font-medium">Failed to load projects. Please try again.</p>
         <button
           onClick={() => { refetchProjects(); refetchProducts(); refetchPackages(); refetchClients(); }}
           className="mt-2 text-sm underline hover:no-underline"
@@ -501,7 +501,7 @@ export default function Projects() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2 select-none">
             Projects
             {isLoading && (
               <div className="h-5 w-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" role="status" aria-label="Loading projects" />

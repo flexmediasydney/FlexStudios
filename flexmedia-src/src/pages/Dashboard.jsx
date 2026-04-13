@@ -106,7 +106,7 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2 select-none">
             <LayoutDashboard className="h-7 w-7 text-primary" />
             Dashboard
           </h1>
@@ -120,6 +120,7 @@ export default function Dashboard() {
               size="icon"
               className="h-7 w-7"
               title="Recompute stats now"
+              aria-label="Recompute dashboard stats"
               onClick={async () => {
                 try {
                   // Trigger the actual stats recompute (not just cache re-read)

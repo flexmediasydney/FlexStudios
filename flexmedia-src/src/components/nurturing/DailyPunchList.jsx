@@ -278,7 +278,10 @@ export default function DailyPunchList({ onLogTouchpoint }) {
         <div className="py-8">
           <CheckCircle2 className="h-8 w-8 mx-auto text-green-500/60 mb-3" />
           <p className="text-sm text-muted-foreground">
-            All caught up! No overdue contacts today.
+            All caught up -- no one needs a reach-out today.
+          </p>
+          <p className="text-xs text-muted-foreground/70 mt-1">
+            Check back tomorrow or add agents to your cadence.
           </p>
         </div>
       </div>
@@ -291,7 +294,7 @@ export default function DailyPunchList({ onLogTouchpoint }) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">Today's Reach-Outs</h3>
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5">
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 whitespace-nowrap">
             {punchList.length}
           </Badge>
         </div>
@@ -322,7 +325,7 @@ export default function DailyPunchList({ onLogTouchpoint }) {
                   {item.agentId ? (
                     <Link
                       to={createPageUrl(`AgentDetails?id=${item.agentId}`)}
-                      className="text-xs font-medium truncate hover:underline"
+                      className="text-xs font-medium truncate hover:underline cursor-pointer"
                     >
                       {item.agentName}
                     </Link>
@@ -358,7 +361,7 @@ export default function DailyPunchList({ onLogTouchpoint }) {
               {ChannelIcon && (
                 <Badge
                   variant="outline"
-                  className="text-[9px] px-1.5 py-0 h-5 gap-0.5 shrink-0"
+                  className="text-[9px] px-1.5 py-0 h-5 gap-0.5 shrink-0 whitespace-nowrap"
                 >
                   <ChannelIcon className="h-2.5 w-2.5" aria-hidden="true" />
                   <span className="hidden sm:inline">
@@ -374,6 +377,7 @@ export default function DailyPunchList({ onLogTouchpoint }) {
                   variant="ghost"
                   className="h-6 text-[10px] px-2 gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
                   onClick={() => onLogTouchpoint(item.agentId)}
+                  title="Log a touchpoint for this agent"
                 >
                   <Zap className="h-3 w-3" />
                   Log Touch

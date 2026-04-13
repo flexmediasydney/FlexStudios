@@ -338,7 +338,7 @@ export default function NurturingSequences({ agentId, agentName, onLogTouchpoint
               <Card
                 key={template.id}
                 className={cn(
-                  "border transition-all hover:shadow-md cursor-default",
+                  "border transition-all hover:shadow-md cursor-pointer",
                   template.color
                 )}
               >
@@ -435,12 +435,12 @@ export default function NurturingSequences({ agentId, agentName, onLogTouchpoint
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold">{template.name}</h3>
               {isPaused && (
-                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-amber-300 bg-amber-50 text-amber-700">
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-amber-300 bg-amber-50 text-amber-700 whitespace-nowrap">
                   Paused
                 </Badge>
               )}
               {allComplete && (
-                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-green-300 bg-green-50 text-green-700">
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-green-300 bg-green-50 text-green-700 whitespace-nowrap">
                   Complete
                 </Badge>
               )}
@@ -459,6 +459,7 @@ export default function NurturingSequences({ agentId, agentName, onLogTouchpoint
               variant="ghost"
               className="h-7 text-xs px-2 gap-1"
               onClick={handlePauseResume}
+              title={isPaused ? "Resume all pending steps" : "Pause remaining steps"}
             >
               {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
               {isPaused ? "Resume" : "Pause"}
@@ -470,6 +471,7 @@ export default function NurturingSequences({ agentId, agentName, onLogTouchpoint
             className="h-7 text-xs px-2 gap-1 text-destructive hover:text-destructive"
             onClick={handleRemoveSequence}
             disabled={removing}
+            title="Remove this sequence and delete unfinished steps"
           >
             <Trash2 className="h-3 w-3" />
             {removing ? "Removing..." : "Remove"}
@@ -553,7 +555,7 @@ export default function NurturingSequences({ agentId, agentName, onLogTouchpoint
                     </span>
                     <Badge
                       variant="outline"
-                      className="text-[9px] px-1 py-0 h-4 shrink-0"
+                      className="text-[9px] px-1 py-0 h-4 shrink-0 whitespace-nowrap"
                     >
                       {step.type}
                     </Badge>
@@ -587,6 +589,7 @@ export default function NurturingSequences({ agentId, agentName, onLogTouchpoint
                       size="sm"
                       className="h-6 text-[10px] px-2.5 gap-1"
                       onClick={() => handleCompleteStep(step)}
+                      title="Mark this step as done"
                     >
                       <CheckCircle2 className="h-3 w-3" />
                       Mark Done
@@ -597,6 +600,7 @@ export default function NurturingSequences({ agentId, agentName, onLogTouchpoint
                         variant="outline"
                         className="h-6 text-[10px] px-2.5 gap-1"
                         onClick={() => handleLogStep(step)}
+                        title="Log a full touchpoint with details"
                       >
                         <Zap className="h-3 w-3" />
                         Log Full Touch
@@ -607,6 +611,7 @@ export default function NurturingSequences({ agentId, agentName, onLogTouchpoint
                       variant="ghost"
                       className="h-6 text-[10px] px-2 gap-1 text-muted-foreground"
                       onClick={() => handleSkipStep(step)}
+                      title="Skip this step and move to the next one"
                     >
                       <SkipForward className="h-2.5 w-2.5" />
                       Skip

@@ -316,7 +316,7 @@ export default function QuickLogTouchpoint({
                       )}
                     </span>
                   ) : (
-                    <span className="text-muted-foreground">Search contacts...</span>
+                    <span className="text-muted-foreground">Pick an agent or contact...</span>
                   )}
                   <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 opacity-50" />
                 </Button>
@@ -324,7 +324,7 @@ export default function QuickLogTouchpoint({
               <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
                 <Command shouldFilter={false}>
                   <CommandInput
-                    placeholder="Search agents..."
+                    placeholder="Type a name to search..."
                     value={contactSearch}
                     onValueChange={setContactSearch}
                   />
@@ -389,7 +389,7 @@ export default function QuickLogTouchpoint({
               ref={notesRef}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Quick notes about this interaction..."
+              placeholder="e.g. Discussed pricing for drone package"
               rows={2}
               className="resize-none text-sm"
             />
@@ -405,7 +405,7 @@ export default function QuickLogTouchpoint({
                   type="button"
                   onClick={() => setOutcome(outcome === o.value ? "" : o.value)}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-all flex-1 justify-center",
+                    "flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-all flex-1 justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
                     outcome === o.value
                       ? "border-primary bg-primary/5 text-foreground font-medium"
                       : "border-border text-muted-foreground hover:bg-muted/50"
@@ -428,7 +428,7 @@ export default function QuickLogTouchpoint({
                   type="button"
                   onClick={() => setSentiment(sentiment === s.value ? "" : s.value)}
                   className={cn(
-                    "flex items-center gap-1.5 rounded-md border px-4 py-1.5 text-xs transition-all flex-1 justify-center",
+                    "flex items-center gap-1.5 rounded-md border px-4 py-1.5 text-xs transition-all flex-1 justify-center cursor-pointer focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
                     sentiment === s.value
                       ? "border-primary bg-primary/5 text-foreground font-medium"
                       : "border-border text-muted-foreground hover:bg-muted/50"
@@ -470,7 +470,7 @@ export default function QuickLogTouchpoint({
                   <Input
                     value={followUpNotes}
                     onChange={(e) => setFollowUpNotes(e.target.value)}
-                    placeholder="Follow-up notes..."
+                    placeholder="e.g. Send updated pricing sheet"
                     className="h-8 text-xs"
                   />
                 </div>
@@ -538,7 +538,7 @@ export default function QuickLogTouchpoint({
                       type="button"
                       onClick={() => setGiftDelivery(giftDelivery === m ? "" : m)}
                       className={cn(
-                        "rounded-md border px-2.5 py-1 text-[10px] transition-all flex-1",
+                        "rounded-md border px-2.5 py-1 text-[10px] transition-all flex-1 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
                         giftDelivery === m
                           ? "border-pink-400 bg-pink-100 text-pink-700 font-medium"
                           : "border-border text-muted-foreground hover:bg-muted/50"
@@ -555,7 +555,7 @@ export default function QuickLogTouchpoint({
 
         {/* ── Footer ── */}
         <DialogFooter className="gap-2 sm:gap-0">
-          <p className="text-[10px] text-muted-foreground mr-auto hidden sm:block">
+          <p className="text-[10px] text-muted-foreground/70 mr-auto hidden sm:block">
             {"\u2318"}+Enter to save
           </p>
           <Button variant="outline" size="sm" onClick={onClose} disabled={saving}>

@@ -194,7 +194,7 @@ export default function Prospecting() {
                 </Button>
               )}
               <div>
-                <h1 className="text-lg font-semibold flex items-center gap-2">
+                <h1 className="text-lg font-semibold flex items-center gap-2 select-none">
                   <Users className="h-5 w-5 text-primary" />
                   {drillDownState ? `${drillDownState} Pipeline` : 'Prospecting'}
                 </h1>
@@ -247,12 +247,12 @@ export default function Prospecting() {
 
         {/* View Toggle */}
         <div className="flex gap-3 mb-4">
-          <div className="flex gap-2 bg-card p-1 rounded-lg w-fit">
+          <div className="flex gap-2 bg-card p-1 rounded-xl w-fit shadow-sm">
             <Button
               variant={viewMode === 'kanban' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setViewMode('kanban')}
-              className="gap-2"
+              className="gap-2 transition-colors"
             >
               <Grid className="h-4 w-4" />
               Kanban
@@ -261,19 +261,19 @@ export default function Prospecting() {
               variant={viewMode === 'list' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setViewMode('list')}
-              className="gap-2"
+              className="gap-2 transition-colors"
             >
               <List className="h-4 w-4" />
               List
             </Button>
           </div>
 
-          <div className="flex gap-2 bg-card p-1 rounded-lg w-fit">
+          <div className="flex gap-2 bg-card p-1 rounded-xl w-fit shadow-sm">
             <Button
               variant={entityFilter === 'agent' ? 'default' : 'ghost'}
               size="sm"
               onClick={() => setEntityFilter('agent')}
-              className="gap-1.5"
+              className="gap-1.5 transition-colors"
             >
               People Only
               <Badge variant="secondary" className="h-4 min-w-4 px-1 text-[9px] font-bold">{enrichedAgents.length}</Badge>
@@ -347,7 +347,7 @@ export default function Prospecting() {
               {searchTerm ? `No results for "${searchTerm}"` : 'No people or organisations yet'}
             </p>
             <p className="text-xs mt-1 text-muted-foreground/70">
-              {searchTerm ? 'Try a different search term' : 'Add your first contact to get started'}
+              {searchTerm ? 'Try adjusting your search term or clearing the filter.' : 'Add your first person or organisation to start building your pipeline.'}
             </p>
             {searchTerm ? (
               <Button variant="outline" size="sm" onClick={() => setSearchTerm('')} className="mt-3">

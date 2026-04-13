@@ -231,7 +231,9 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
           variant="outline"
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="h-8 gap-1.5 text-xs"
+          className="h-8 gap-1.5 text-xs transition-colors duration-150"
+          title="Upload a file to this record"
+          aria-label="Upload file"
         >
           {uploading ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -262,7 +264,7 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search files..."
+              placeholder="Filter by file name..."
               className="pl-8 h-8 text-xs"
             />
             {searchQuery && (
@@ -288,9 +290,9 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
             <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-3">
               <FileText className="h-5 w-5 text-muted-foreground" />
             </div>
-            <p className="text-sm font-medium text-foreground mb-1">No files yet</p>
+            <p className="text-sm font-medium text-foreground mb-1">No files uploaded</p>
             <p className="text-xs text-muted-foreground mb-4">
-              Upload files to keep everything organized.
+              Drag and drop files here, or click the button below to upload documents, images, and more.
             </p>
             <Button
               size="sm"
@@ -309,7 +311,7 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
         ) : (
           <div>
             {/* Table header */}
-            <div className="grid grid-cols-[1fr_80px_120px_80px_40px] gap-2 px-4 py-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b bg-muted/30">
+            <div className="grid grid-cols-[1fr_80px_120px_80px_40px] gap-2 px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b bg-muted/30 select-none">
               <span>Name</span>
               <span>Size</span>
               <span>Uploaded by</span>
@@ -362,7 +364,7 @@ export default function ContactFiles({ entityType, entityId, entityLabel }) {
                   <div className="flex justify-end">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <button className="p-1 rounded hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button className="p-1 rounded hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity duration-150" title="File actions" aria-label="File actions">
                           <MoreVertical className="h-4 w-4 text-muted-foreground" />
                         </button>
                       </DropdownMenuTrigger>

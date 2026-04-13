@@ -324,7 +324,8 @@ export default function HierarchyTableView({
                 <tr>
                   <td colSpan={activeCols.length + 2} className="text-center py-16 text-muted-foreground">
                     <User className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm">No contacts match your filters</p>
+                    <p className="text-sm font-medium">No contacts match your filters</p>
+                    <p className="text-xs mt-1">Try adjusting the filters or search criteria above.</p>
                   </td>
                 </tr>
               ) : (
@@ -600,7 +601,7 @@ const ContactRow = React.memo(function ContactRow({
                 <FolderOpen className="h-3.5 w-3.5 mr-2" />Projects
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => onDelete("agent", agent)} className="text-destructive" disabled={!canEdit}>
+              <DropdownMenuItem onClick={() => onDelete("agent", agent)} className="text-destructive focus:text-destructive focus:bg-red-50 dark:focus:bg-red-950/20" disabled={!canEdit}>
                 <Trash2 className="h-3.5 w-3.5 mr-2" />Delete
               </DropdownMenuItem>
             </DropdownMenuContent>

@@ -258,7 +258,7 @@ export default function PulseSignalQuickAdd({ open, onClose, agents = [], agenci
             <Label htmlFor="signal-desc" className="text-xs font-medium">Description</Label>
             <Textarea
               id="signal-desc"
-              placeholder="Optional details..."
+              placeholder="e.g. Annual awards dinner at Doltone House, 200+ agents expected"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
@@ -284,7 +284,7 @@ export default function PulseSignalQuickAdd({ open, onClose, agents = [], agenci
                 id="signal-source"
                 value={sourceType}
                 onChange={(e) => setSourceType(e.target.value)}
-                className="flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {SOURCE_TYPES.map(({ key, label }) => (
                   <option key={key} value={key}>{label}</option>
@@ -357,7 +357,7 @@ export default function PulseSignalQuickAdd({ open, onClose, agents = [], agenci
                   <button
                     key={c.id}
                     type="button"
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left transition-colors"
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent text-left transition-colors cursor-pointer focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                     onClick={() => addContact(c)}
                   >
                     {c.type === "agent" ? (
@@ -366,7 +366,7 @@ export default function PulseSignalQuickAdd({ open, onClose, agents = [], agenci
                       <Building2 className="h-3 w-3 text-muted-foreground flex-shrink-0" />
                     )}
                     <span className="truncate">{c.name}</span>
-                    <Badge variant="outline" className="text-[9px] px-1 py-0 ml-auto">
+                    <Badge variant="outline" className="text-[9px] px-1 py-0 ml-auto whitespace-nowrap">
                       {c.type === "agent" ? "Person" : "Org"}
                     </Badge>
                   </button>
@@ -375,15 +375,15 @@ export default function PulseSignalQuickAdd({ open, onClose, agents = [], agenci
             )}
 
             {contactSearch.trim() && contactResults.length === 0 && (
-              <p className="text-[11px] text-muted-foreground px-1">No matching contacts</p>
+              <p className="text-[11px] text-muted-foreground/70 px-1">No contacts match that search -- try a different name</p>
             )}
           </div>
         </div>
 
         <DialogFooter>
           <div className="flex items-center justify-between w-full">
-            <span className="text-[10px] text-muted-foreground hidden sm:inline">
-              {navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to save
+            <span className="text-[10px] text-muted-foreground/70 hidden sm:inline">
+              {navigator.platform?.includes("Mac") ? "\u2318" : "Ctrl"}+Enter to save
             </span>
             <div className="flex gap-2 ml-auto">
               <Button variant="outline" size="sm" onClick={onClose} disabled={saving}>

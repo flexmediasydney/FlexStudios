@@ -130,16 +130,16 @@ export default function PulseSignalCard({
           <div className="flex-1 min-w-0">
             {/* Top row: badges */}
             <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-              <Badge variant="secondary" className={cn("text-[10px] font-medium px-1.5 py-0", levelCfg.color)}>
+              <Badge variant="secondary" className={cn("text-[10px] font-medium px-1.5 py-0 whitespace-nowrap", levelCfg.color)}>
                 {levelCfg.label}
               </Badge>
-              <Badge variant="secondary" className="text-[10px] font-medium px-1.5 py-0">
+              <Badge variant="secondary" className="text-[10px] font-medium px-1.5 py-0 whitespace-nowrap">
                 {categoryCfg.label}
               </Badge>
-              <Badge variant="secondary" className={cn("text-[10px] font-medium px-1.5 py-0", statusCfg.color)}>
+              <Badge variant="secondary" className={cn("text-[10px] font-medium px-1.5 py-0 whitespace-nowrap", statusCfg.color)}>
                 {statusCfg.label}
               </Badge>
-              <Badge variant="outline" className="text-[10px] font-normal px-1.5 py-0 gap-0.5">
+              <Badge variant="outline" className="text-[10px] font-normal px-1.5 py-0 gap-0.5 whitespace-nowrap">
                 <SourceIcon className="h-2.5 w-2.5" />
                 {sourceCfg.label}
               </Badge>
@@ -192,7 +192,7 @@ export default function PulseSignalCard({
             )}
 
             {/* Footer: created by + relative time */}
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground/70">
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
               {signal.created_by_name && <span>{signal.created_by_name}</span>}
               {signal.created_by_name && relativeTime && <span>-</span>}
               {relativeTime && <span>{relativeTime}</span>}
@@ -206,6 +206,7 @@ export default function PulseSignalCard({
                 size="sm"
                 className="gap-1 h-7 text-xs"
                 onClick={() => onAction?.(signal)}
+                title="Take action on this signal"
               >
                 <Zap className="h-3 w-3" />
                 Action This
@@ -214,7 +215,7 @@ export default function PulseSignalCard({
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="More actions">
                   <MoreHorizontal className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>

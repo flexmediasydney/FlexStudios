@@ -405,7 +405,9 @@ export default function SalesMap() {
                 {searchQuery && (
                   <button
                     onClick={() => setSearchQuery('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 transition-colors"
+                    title="Clear search"
+                    aria-label="Clear search"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -414,7 +416,7 @@ export default function SalesMap() {
 
               {/* Health filter */}
               <div>
-                <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider mb-1.5">Cadence Health</p>
+                <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider mb-1.5 select-none">Cadence Health</p>
                 <div className="flex flex-wrap gap-1">
                   {[
                     { value: 'all', label: 'All', color: 'bg-zinc-100 text-zinc-700' },
@@ -441,7 +443,7 @@ export default function SalesMap() {
 
               {/* Engagement type filter */}
               <div>
-                <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider mb-1.5">Engagement</p>
+                <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider mb-1.5 select-none">Engagement</p>
                 <div className="flex flex-wrap gap-1">
                   {[
                     { value: 'all', label: 'All' },
@@ -474,8 +476,8 @@ export default function SalesMap() {
       </div>
 
       {/* ── Legend (top-right) ────────────────────────────────────── */}
-      <div className="absolute top-3 right-3 z-[1000] bg-white/95 backdrop-blur-sm rounded-lg shadow-lg border border-zinc-200 px-3 py-2">
-        <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider mb-1.5">Health</p>
+      <div className="absolute top-3 right-3 z-[1000] bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-zinc-200 px-3 py-2">
+        <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider mb-1.5 select-none">Health</p>
         <div className="space-y-1">
           {Object.entries(HEALTH_LABELS).map(([key, label]) => (
             <div key={key} className="flex items-center gap-1.5">
@@ -499,7 +501,9 @@ export default function SalesMap() {
           onClick={handleNearMe}
           disabled={locating}
           size="icon"
-          className="h-10 w-10 rounded-full bg-white hover:bg-zinc-50 text-zinc-700 shadow-lg border border-zinc-200"
+          className="h-10 w-10 rounded-full bg-white hover:bg-zinc-50 text-zinc-700 shadow-lg border border-zinc-200 transition-colors"
+          title="Find agencies near me"
+          aria-label="Find agencies near my location"
         >
           {locating
             ? <Loader2 className="h-4 w-4 animate-spin" />
@@ -643,7 +647,7 @@ function AgencyPopup({ agency, lastTouchByAgent, onLogTouch, onViewOrg }) {
           })}
         </div>
       ) : (
-        <p className="text-xs text-zinc-400 italic py-1">No agents at this agency</p>
+        <p className="text-xs text-zinc-400 italic py-1">No agents are currently assigned to this agency.</p>
       )}
 
       {/* Footer: View Org */}

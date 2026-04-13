@@ -412,6 +412,7 @@ export default function WeeklyPlanner({ onLogTouchpoint }) {
             variant="outline"
             className="h-7 w-7 p-0"
             onClick={() => setWeekOffset((w) => w - 1)}
+            title="Previous week"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
@@ -430,6 +431,7 @@ export default function WeeklyPlanner({ onLogTouchpoint }) {
             variant="outline"
             className="h-7 w-7 p-0"
             onClick={() => setWeekOffset((w) => w + 1)}
+            title="Next week"
           >
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
@@ -442,6 +444,7 @@ export default function WeeklyPlanner({ onLogTouchpoint }) {
             className="h-7 text-xs px-2.5 gap-1"
             onClick={handleAutoFill}
             disabled={filling}
+            title="Distribute overdue agents across the week"
           >
             {filling ? (
               <>
@@ -501,8 +504,8 @@ export default function WeeklyPlanner({ onLogTouchpoint }) {
               <div className="flex-1 space-y-1.5">
                 {dayTps.length === 0 && (
                   <div className="flex-1 flex items-center justify-center py-6">
-                    <p className="text-[10px] text-muted-foreground/50 text-center">
-                      No outreach planned
+                    <p className="text-[10px] text-muted-foreground/70 text-center">
+                      Nothing planned -- tap Add below
                     </p>
                   </div>
                 )}
@@ -545,7 +548,7 @@ export default function WeeklyPlanner({ onLogTouchpoint }) {
                               {agency.name}
                             </p>
                           )}
-                          <p className="text-[9px] text-muted-foreground/70 truncate mt-0.5">
+                          <p className="text-[9px] text-muted-foreground truncate mt-0.5">
                             {tp.follow_up_notes || typeName}
                           </p>
                         </div>
@@ -557,6 +560,7 @@ export default function WeeklyPlanner({ onLogTouchpoint }) {
                           size="sm"
                           className="h-5 text-[9px] px-1.5 gap-0.5 flex-1"
                           onClick={() => handleComplete(tp)}
+                          title="Mark this touchpoint as completed"
                         >
                           <CheckCircle2 className="h-2.5 w-2.5" />
                           Done
@@ -567,6 +571,7 @@ export default function WeeklyPlanner({ onLogTouchpoint }) {
                             variant="outline"
                             className="h-5 text-[9px] px-1.5 gap-0.5 flex-1"
                             onClick={() => onLogTouchpoint(tp.agent_id)}
+                            title="Log a full touchpoint with details"
                           >
                             <Zap className="h-2.5 w-2.5" />
                             Log
@@ -584,6 +589,7 @@ export default function WeeklyPlanner({ onLogTouchpoint }) {
                 variant="ghost"
                 className="h-6 text-[10px] px-2 gap-1 w-full mt-1.5 text-muted-foreground hover:text-foreground"
                 onClick={() => handleAddToDay(dateStr)}
+                title="Plan a touchpoint for this day"
               >
                 <Plus className="h-3 w-3" />
                 Add

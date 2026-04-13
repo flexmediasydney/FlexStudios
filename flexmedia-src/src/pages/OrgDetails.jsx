@@ -403,8 +403,9 @@ export default function OrgDetails() {
             <div className="flex gap-2 p-3 border-b">
               <Button
                 size="sm"
-                className="flex-1 gap-1.5 h-8 text-xs font-semibold shadow-sm transition-all duration-200 hover:shadow-md active:scale-95"
-                title="Create new project (Cmd+Shift+P)"
+                className="flex-1 gap-1.5 h-8 text-xs font-semibold shadow-sm transition-all duration-150 hover:shadow-md active:scale-95"
+                title="Create a new project for this organisation"
+                aria-label="New project"
                 onClick={() => navigate(createPageUrl("Projects") + `?agency=${agencyId}`)}>
                 <Plus className="h-3.5 w-3.5" />
                 New Project
@@ -412,8 +413,9 @@ export default function OrgDetails() {
               <Button
                 size="sm"
                 variant="outline"
-                className="flex-1 gap-1.5 h-8 text-xs transition-all duration-200 hover:bg-muted active:scale-95"
-                title="Add a note (Cmd+Shift+N)"
+                className="flex-1 gap-1.5 h-8 text-xs transition-all duration-150 hover:bg-muted active:scale-95"
+                title="Add a note about this organisation"
+                aria-label="Add note"
                 onClick={() => {
                   setActiveTab('notes');
                   // Give tab time to mount before scrolling the composer into view
@@ -439,7 +441,7 @@ export default function OrgDetails() {
               revenueByAgent={showPricing ? revenueByAgent : []}
             />
             <div className="border-t pt-2">
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Analytics</div>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2 select-none">Analytics</div>
               <Org2Dashboard
                 agency={agency}
                 agents={agents}
@@ -543,8 +545,9 @@ export default function OrgDetails() {
                 ) : priceMatrix.length === 0 ? (
                   <Card className="bg-muted/30 border-dashed">
                     <CardContent className="pt-6 pb-6 text-center">
-                      <p className="text-muted-foreground text-sm">No pricing configured for this organisation</p>
-                      <p className="text-xs text-muted-foreground mt-1">Set up pricing in Settings &rarr; Price Matrix</p>
+                      <DollarSign className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
+                      <p className="text-muted-foreground text-sm font-medium">No pricing configured</p>
+                      <p className="text-xs text-muted-foreground mt-1">Set up custom pricing for this organisation in Settings &rarr; Price Matrix.</p>
                     </CardContent>
                   </Card>
                 ) : (

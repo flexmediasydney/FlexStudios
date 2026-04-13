@@ -176,7 +176,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
     if (editing) {
       return (
         <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
-          {label && <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1">{Icon && <Icon className="h-3 w-3" />} {label}</label>}
+          {label && <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide select-none flex items-center gap-1">{Icon && <Icon className="h-3 w-3" />} {label}</label>}
           <select ref={inputRef} value={draft} onChange={e => {
               const val = e.target.value;
               setDraft(val);
@@ -192,7 +192,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
     }
     return (
       <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
-        {label && <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1">{Icon && <Icon className="h-3 w-3" />} {label}</label>}
+        {label && <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide select-none flex items-center gap-1">{Icon && <Icon className="h-3 w-3" />} {label}</label>}
         <div className="flex-1 min-w-0 flex items-start gap-1">
           {viewRender || (
             <span className={cn("text-sm flex-1", displayValue ? "text-foreground" : "text-muted-foreground/40")}>
@@ -213,7 +213,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
   if (type === 'textarea' && editing) {
     return (
       <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
-        <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">{label}</label>
+        <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide select-none">{label}</label>
         <textarea ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save}
           onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
           rows={3} className="flex-1 text-sm border rounded px-2 py-1.5 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none resize-none" />
@@ -737,8 +737,9 @@ export default function TeamDetails() {
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <Button
             size="sm"
-            className="gap-1.5 h-8 text-xs font-semibold shadow-sm"
+            className="gap-1.5 h-8 text-xs font-semibold shadow-sm transition-all duration-150"
             onClick={() => navigate(createPageUrl('Projects') + `?team=${teamId}`)}
+            title="Create a new project for this team"
           >
             <Plus className="h-3.5 w-3.5" />
             New Project
@@ -746,7 +747,8 @@ export default function TeamDetails() {
           <Button
             size="sm"
             variant="outline"
-            className="gap-1.5 h-8 text-xs"
+            className="gap-1.5 h-8 text-xs transition-all duration-150"
+            title="Add a note about this team"
             onClick={() => {
               handleTabChange('notes');
               setTimeout(() => {
@@ -808,7 +810,7 @@ export default function TeamDetails() {
                 {/* Quick stats inline */}
                 {(projects.length > 0 || members.length > 0) && (
                   <div className="flex items-start gap-2 py-1 px-3">
-                    <span className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">Stats</span>
+                    <span className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide select-none">Stats</span>
                     <div className="flex flex-wrap gap-1.5">
                       <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
                         {members.length} members
@@ -831,7 +833,7 @@ export default function TeamDetails() {
             <div className="border-b border-border/50">
               <div className="flex items-center gap-2 px-4 py-2.5">
                 <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-xs font-semibold uppercase tracking-wide flex-1">Members</span>
+                <span className="text-xs font-semibold uppercase tracking-wide flex-1 select-none">Members</span>
                 {members.length > 0 && (
                   <span className="bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                     {members.length}
@@ -840,8 +842,9 @@ export default function TeamDetails() {
                 {isManagerOrAbove && (
                   <button
                     onClick={() => { setShowAddMemberPicker(true); setAddMemberSearch(''); }}
-                    className="ml-1 flex items-center gap-0.5 text-[10px] text-primary hover:text-primary/80 font-semibold transition-colors"
+                    className="ml-1 flex items-center gap-0.5 text-[10px] text-primary hover:text-primary/80 font-semibold transition-colors duration-150"
                     title="Add member to team"
+                    aria-label="Add member to team"
                   >
                     <UserPlus className="h-3 w-3" />
                   </button>
@@ -849,7 +852,7 @@ export default function TeamDetails() {
               </div>
               <div className="px-4 pb-4 animate-in fade-in duration-200">
                 {members.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No members assigned</p>
+                  <p className="text-xs text-muted-foreground py-2">No members assigned yet. Use the + button above to add people from this agency.</p>
                 ) : (
                   <div className="space-y-2">
                     {members.slice(0, 10).map(member => (
@@ -928,7 +931,7 @@ export default function TeamDetails() {
                 {/* Analytics */}
                 {projects.length > 0 && (
                 <div className="border-t pt-2">
-                <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Analytics</div>
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2 select-none">Analytics</div>
                 <SharedDashboard
                  projects={projects}
                  revisions={revisions}
@@ -944,7 +947,9 @@ export default function TeamDetails() {
                   <button
                     onClick={() => setShowDeleteConfirm(true)}
                     disabled={!canEdit}
-                    className="text-xs text-destructive hover:text-destructive/80 hover:underline transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="text-xs text-destructive/60 hover:text-destructive hover:bg-red-50 dark:hover:bg-red-950/20 px-2 py-1 -mx-2 rounded transition-colors duration-150 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Permanently delete this team"
+                    aria-label="Delete team"
                   >
                     <Trash2 className="h-3 w-3" />
                     Delete Team

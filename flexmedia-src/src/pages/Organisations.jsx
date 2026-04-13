@@ -282,7 +282,7 @@ export default function Organisations() {
     <div className="flex flex-col h-screen overflow-hidden bg-background">
       <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
         <div className="flex items-center gap-6">
-          <h1 className="text-lg font-semibold flex items-center gap-2">
+          <h1 className="text-lg font-semibold flex items-center gap-2 select-none">
             <Building2 className="h-5 w-5 text-primary" />
             Organisations
           </h1>
@@ -303,7 +303,7 @@ export default function Organisations() {
       <div className="flex items-center gap-3 px-6 py-3 border-b shrink-0 bg-muted/20">
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input placeholder="Search organisations..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-7 text-xs pr-7" />
+          <Input placeholder="Search by name, email, suburb, or phone..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-7 text-xs pr-7" />
           {search && (
             <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded-full hover:bg-muted transition-colors" aria-label="Clear search" title="Clear search">
               <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
@@ -351,7 +351,7 @@ export default function Organisations() {
         {view === 'table' ? (
           <EntityDataTable columns={columns} data={filtered} loading={loading}
             onRowClick={row => navigate(createPageUrl('OrgDetails') + '?id=' + row.id)}
-            emptyMessage={search ? 'No organisations match your search. Try a different term.' : 'No organisations yet. Add your first organisation to get started.'} pageSize={100}
+            emptyMessage={search ? `No organisations match "${search}". Try a broader search term.` : 'No organisations yet. Click "Add Organisation" above to create your first one.'} pageSize={100}
             selectable
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}

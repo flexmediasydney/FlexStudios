@@ -293,7 +293,7 @@ export default function People() {
     <div className="flex flex-col h-screen overflow-hidden bg-background">
       <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
         <div className="flex items-center gap-6">
-          <h1 className="text-lg font-semibold flex items-center gap-2">
+          <h1 className="text-lg font-semibold flex items-center gap-2 select-none">
             <Users className="h-5 w-5 text-primary" />
             People
           </h1>
@@ -340,7 +340,7 @@ export default function People() {
       <div className="flex items-center gap-3 px-6 py-3 border-b shrink-0 bg-muted/20">
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input placeholder="Search people, org, team..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-7 text-xs pr-16" />
+          <Input placeholder="Search by name, email, org, or tag..." value={search} onChange={e => setSearch(e.target.value)} className="pl-8 h-7 text-xs pr-16" />
           {search && (
             <>
               <span className="absolute right-8 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 font-medium tabular-nums">{search.length}</span>

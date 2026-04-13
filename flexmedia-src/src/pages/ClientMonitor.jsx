@@ -156,7 +156,7 @@ function AlertActionPopover({ alert, onAction, isPending }) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+        <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="Alert actions" aria-label="Alert actions">
           <MoreHorizontal className="h-4 w-4" />
         </Button>
       </PopoverTrigger>
@@ -275,7 +275,7 @@ function AlertsTable({ alerts, onAction, isPending }) {
           <Shield className="h-12 w-12 text-emerald-400 mx-auto mb-3" />
           <p className="font-semibold text-foreground">No active alerts</p>
           <p className="text-sm text-muted-foreground mt-1">
-            All coverage gaps have been resolved or investigated
+            All coverage gaps have been resolved or investigated. You're in good shape.
           </p>
         </CardContent>
       </Card>
@@ -283,18 +283,18 @@ function AlertsTable({ alerts, onAction, isPending }) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-border">
+    <div className="overflow-x-auto rounded-xl border border-border">
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-muted/50 border-b border-border text-left">
-            <th className="px-4 py-3 font-medium text-muted-foreground">Address</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Price</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Listed</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center">Risk</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center">Status</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center">Seen</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Investigator</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground text-center w-[52px]">Actions</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground select-none">Address</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground select-none">Price</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground select-none">Listed</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground text-center select-none">Risk</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground text-center select-none">Status</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground text-center select-none">Seen</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground select-none">Investigator</th>
+            <th className="px-4 py-3 font-medium text-muted-foreground text-center w-[52px] select-none">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -361,7 +361,7 @@ function StatCard({ label, value, icon: Icon, iconBg, iconColor, valueColor }) {
       <CardContent className="p-5">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</p>
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider select-none">{label}</p>
             <p className={cn("text-3xl font-bold tabular-nums mt-1", valueColor || "text-foreground")}>
               {value}
             </p>
@@ -863,7 +863,7 @@ export default function ClientMonitor() {
                 <Shield className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-foreground leading-tight">
+                <h1 className="text-2xl font-bold text-foreground leading-tight select-none">
                   Client Retention
                 </h1>
                 <p className="text-sm text-muted-foreground mt-0.5">
@@ -969,9 +969,9 @@ export default function ClientMonitor() {
               <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-slate-100 mb-4">
                 <Users className="h-8 w-8 text-slate-400" />
               </div>
-              <p className="font-semibold text-foreground text-lg">No monitored agents</p>
+              <p className="font-semibold text-foreground text-lg">No monitored agents yet</p>
               <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
-                No agents have a Domain Agent ID configured. Set up agent domain IDs in the Contacts section to begin monitoring retention.
+                No agents have a Domain Agent ID configured yet. Set up agent domain IDs in the Contacts section to begin monitoring retention.
               </p>
             </CardContent>
           </Card>
@@ -984,9 +984,9 @@ export default function ClientMonitor() {
           <Card className="border-0 shadow-sm">
             <CardContent className="py-16 text-center">
               <Search className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-              <p className="font-semibold text-foreground">No results</p>
+              <p className="font-semibold text-foreground">No results found</p>
               <p className="text-sm text-muted-foreground mt-1">
-                No organisations or agents match "{searchQuery}"
+                No organisations or agents match your search. Try a different term.
               </p>
             </CardContent>
           </Card>
@@ -996,18 +996,18 @@ export default function ClientMonitor() {
         {/*  Organisation table                                         */}
         {/* ---------------------------------------------------------- */}
         {!isLoadingDashboard && filteredOrgStats.length > 0 && (
-          <div className="rounded-lg border border-border bg-white shadow-sm overflow-hidden">
+          <div className="rounded-xl border border-border bg-white shadow-sm overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-muted/50 border-b border-border text-left">
-                  <th className="px-4 py-3 font-medium text-muted-foreground w-8"></th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground">Organisation</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Agents</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Active Alerts</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Critical</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Coverage</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground text-center">Worst Risk</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground">Status Summary</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground w-8 select-none"></th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground select-none">Organisation</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center select-none">Agents</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center select-none">Active Alerts</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center select-none">Critical</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center select-none">Coverage</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground text-center select-none">Worst Risk</th>
+                  <th className="px-4 py-3 font-medium text-muted-foreground select-none">Status Summary</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">

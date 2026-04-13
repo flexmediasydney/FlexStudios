@@ -764,7 +764,7 @@ export default function SalesCommand() {
             <Crosshair className="h-4.5 w-4.5 text-primary" />
           </div>
           <div>
-            <h1 className="text-base font-bold leading-tight">Sales Command</h1>
+            <h1 className="text-base font-bold leading-tight select-none">Sales Command</h1>
             <p className="text-[11px] text-muted-foreground">Nurturing & pipeline at a glance</p>
           </div>
         </div>
@@ -775,6 +775,8 @@ export default function SalesCommand() {
             className="h-8 w-8 p-0"
             onClick={handleRefresh}
             disabled={refreshing}
+            title="Refresh data"
+            aria-label="Refresh data"
           >
             <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
           </Button>
@@ -801,7 +803,7 @@ export default function SalesCommand() {
             <div className="rounded-xl border bg-card p-4 shadow-sm">
               <div className="flex items-center gap-2 mb-2">
                 <Users className="h-4 w-4 text-muted-foreground" />
-                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Monitored</span>
+                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider select-none">Monitored</span>
               </div>
               <p className="text-2xl font-bold">{kpis.monitored}</p>
               <p className="text-[11px] text-muted-foreground">active + prospecting</p>
@@ -811,7 +813,7 @@ export default function SalesCommand() {
             <div className={cn("rounded-xl border p-4 shadow-sm", kpis.hasCriticalAlert ? "bg-red-50/60 border-red-200" : "bg-card")}>
               <div className="flex items-center gap-2 mb-2">
                 <AlertTriangle className={cn("h-4 w-4", kpis.hasCriticalAlert ? "text-red-500" : "text-muted-foreground")} />
-                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Alerts</span>
+                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider select-none">Alerts</span>
               </div>
               <p className={cn("text-2xl font-bold", kpis.activeAlerts > 0 && "text-red-600")}>{kpis.activeAlerts}</p>
               <p className="text-[11px] text-muted-foreground">active retention</p>
@@ -821,7 +823,7 @@ export default function SalesCommand() {
             <div className="rounded-xl border bg-blue-50/40 border-blue-100 p-4 shadow-sm">
               <div className="flex items-center gap-2 mb-2">
                 <Target className="h-4 w-4 text-blue-500" />
-                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Pipeline</span>
+                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider select-none">Pipeline</span>
               </div>
               <p className="text-2xl font-bold text-blue-700">{kpis.inPipeline}</p>
               <p className="text-[11px] text-muted-foreground">prospecting</p>
@@ -831,7 +833,7 @@ export default function SalesCommand() {
             <div className={cn("rounded-xl border p-4 shadow-sm", warmthBg(kpis.avgWarmth))}>
               <div className="flex items-center gap-2 mb-2">
                 <Activity className="h-4 w-4 text-muted-foreground" />
-                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Avg Warmth</span>
+                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider select-none">Avg Warmth</span>
               </div>
               <p className={cn("text-2xl font-bold", warmthColor(kpis.avgWarmth))}>{kpis.avgWarmth}</p>
               <p className="text-[11px] text-muted-foreground">across monitored</p>
@@ -841,7 +843,7 @@ export default function SalesCommand() {
             <div className={cn("rounded-xl border p-4 shadow-sm", kpis.atRisk > 0 ? "bg-red-50/60 border-red-200" : "bg-card")}>
               <div className="flex items-center gap-2 mb-2">
                 <ShieldAlert className={cn("h-4 w-4", kpis.atRisk > 0 ? "text-red-500" : "text-muted-foreground")} />
-                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">At Risk</span>
+                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider select-none">At Risk</span>
               </div>
               <p className={cn("text-2xl font-bold", kpis.atRisk > 0 && "text-red-600")}>{kpis.atRisk}</p>
               <p className="text-[11px] text-muted-foreground">need attention</p>
@@ -983,8 +985,10 @@ export default function SalesCommand() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                          className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground transition-colors"
                           onClick={() => dismissInsight(insight.id)}
+                          title="Dismiss this insight"
+                          aria-label="Dismiss insight"
                         >
                           <X className="h-3 w-3" />
                         </Button>
@@ -1007,7 +1011,7 @@ export default function SalesCommand() {
               {recentActivity.length === 0 ? (
                 <div className="py-6 text-center">
                   <Phone className="h-6 w-6 mx-auto text-muted-foreground/40 mb-2" />
-                  <p className="text-xs text-muted-foreground">No touchpoints recorded yet. Start logging your interactions.</p>
+                  <p className="text-xs text-muted-foreground">No touchpoints recorded yet. Log your first interaction to see activity here.</p>
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -1060,7 +1064,7 @@ export default function SalesCommand() {
               {actionableSignals.length === 0 ? (
                 <div className="py-6 text-center">
                   <Rss className="h-6 w-6 mx-auto text-muted-foreground/40 mb-2" />
-                  <p className="text-xs text-muted-foreground">No signals yet. Capture industry intel from the Industry Pulse page.</p>
+                  <p className="text-xs text-muted-foreground">No actionable signals yet. Head to Industry Pulse to capture your first piece of intel.</p>
                 </div>
               ) : (
                 <div className="space-y-1.5">
@@ -1322,7 +1326,7 @@ export default function SalesCommand() {
             {pipelineAgents.length === 0 ? (
               <div className="py-8 text-center">
                 <Users className="h-8 w-8 mx-auto text-muted-foreground/40 mb-2" />
-                <p className="text-sm text-muted-foreground">No contacts in your pipeline yet. Start by adding prospects from the People page.</p>
+                <p className="text-sm text-muted-foreground">No contacts in your pipeline yet. Add your first prospect from the People page to see them here.</p>
               </div>
             ) : (
               <>
@@ -1334,12 +1338,12 @@ export default function SalesCommand() {
                         <th className="pb-2 pr-3"><SortHeader label="Warmth" field="warmth_score" tableSort={tableSort} setTableSort={setTableSort} /></th>
                         <th className="pb-2 pr-3"><SortHeader label="Cadence" field="cadence_urgency" tableSort={tableSort} setTableSort={setTableSort} /></th>
                         <th className="pb-2 pr-3"><SortHeader label="Last Touch" field="last_touch" tableSort={tableSort} setTableSort={setTableSort} /></th>
-                        <th className="pb-2 pr-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap">Next Due</th>
+                        <th className="pb-2 pr-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap select-none">Next Due</th>
                         <th className="pb-2 pr-3"><SortHeader label="Touches" field="touchpoint_count" tableSort={tableSort} setTableSort={setTableSort} /></th>
                         <th className="pb-2 pr-3"><SortHeader label="Stage" field="relationship_state" tableSort={tableSort} setTableSort={setTableSort} /></th>
                         <th className="pb-2 pr-3"><SortHeader label="Value" field="value_potential" tableSort={tableSort} setTableSort={setTableSort} /></th>
-                        <th className="pb-2 pr-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap">Engagement</th>
-                        <th className="pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Actions</th>
+                        <th className="pb-2 pr-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap select-none">Engagement</th>
+                        <th className="pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground select-none">Actions</th>
                       </tr>
                     </thead>
                     <tbody>

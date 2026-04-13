@@ -209,7 +209,7 @@ export default function TouchpointTimeline({ entityType, entityId, entityLabel, 
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold">Touchpoint Timeline</h3>
           {onLogTouchpoint && (
-            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={onLogTouchpoint}>
+            <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={onLogTouchpoint} title="Log Touchpoint (⌘⇧L)">
               <Plus className="h-3 w-3" /> Log Touchpoint
             </Button>
           )}
@@ -217,10 +217,10 @@ export default function TouchpointTimeline({ entityType, entityId, entityLabel, 
         <div className="py-8">
           <Clock className="h-8 w-8 mx-auto text-muted-foreground/40 mb-3" />
           <p className="text-sm text-muted-foreground">
-            No touchpoints recorded yet.
+            No touchpoints yet -- start building the relationship.
           </p>
           <p className="text-xs text-muted-foreground/70 mt-1">
-            Start logging interactions to build the timeline.
+            Log your first call, email, or drop-in to see it here.
           </p>
         </div>
       </div>
@@ -285,7 +285,7 @@ export default function TouchpointTimeline({ entityType, entityId, entityLabel, 
                       planned ? "border-t border-dashed border-gray-300" : "bg-gray-300"
                     )} />
                     {gap && (
-                      <span className="text-[9px] text-muted-foreground/60 mt-0.5 whitespace-nowrap">
+                      <span className="text-[9px] text-muted-foreground/70 mt-0.5 whitespace-nowrap">
                         {gap}
                       </span>
                     )}
@@ -359,7 +359,7 @@ export default function TouchpointTimeline({ entityType, entityId, entityLabel, 
                   <div className="flex items-center gap-1.5">
                     <span className="font-medium truncate">{getTypeName(tp)}</span>
                     {planned && (
-                      <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                      <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 whitespace-nowrap">
                         Planned
                       </Badge>
                     )}
@@ -436,7 +436,7 @@ function TouchpointPopoverContent({ tp, typeName }) {
       </div>
 
       {tp.logged_by && (
-        <p className="text-[9px] text-muted-foreground/60 pt-1">
+        <p className="text-[9px] text-muted-foreground/70 pt-1">
           Logged by {tp.logged_by}
         </p>
       )}

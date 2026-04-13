@@ -134,7 +134,7 @@ export default function IndustryPulse() {
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-lg font-semibold flex items-center gap-2">
+            <h1 className="text-lg font-semibold flex items-center gap-2 select-none">
               <Rss className="h-5 w-5 text-primary" />
               Industry Pulse
             </h1>
@@ -151,7 +151,7 @@ export default function IndustryPulse() {
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-3 mb-4">
           {/* Level pills */}
-          <div className="flex gap-1 bg-card p-1 rounded-lg">
+          <div className="flex gap-1 bg-card p-1 rounded-lg shadow-sm">
             {LEVEL_FILTERS.map(({ key, label, icon: Icon }) => (
               <Button
                 key={key}
@@ -173,7 +173,7 @@ export default function IndustryPulse() {
           </div>
 
           {/* Status pills */}
-          <div className="flex gap-1 bg-card p-1 rounded-lg">
+          <div className="flex gap-1 bg-card p-1 rounded-lg shadow-sm">
             {STATUS_FILTERS.map(({ key, label }) => (
               <Button
                 key={key}
@@ -222,17 +222,17 @@ export default function IndustryPulse() {
           </div>
         ) : (
           /* Empty state */
-          <div className="flex flex-col items-center justify-center py-20 text-center">
+          <div className="flex flex-col items-center justify-center py-20 text-center select-none">
             <div className="w-16 h-16 rounded-2xl bg-primary/5 flex items-center justify-center mb-5">
               <Rss className="h-8 w-8 text-primary/40" />
             </div>
             <h2 className="text-lg font-semibold mb-1">
-              {signals.length === 0 ? "No signals yet" : "No matching signals"}
+              {signals.length === 0 ? "No signals captured yet" : "No matching signals found"}
             </h2>
             <p className="text-sm text-muted-foreground max-w-sm">
               {signals.length === 0
-                ? "Start tracking industry events, agent movements, and market signals to stay ahead."
-                : "Try adjusting your filters or search to find what you're looking for."}
+                ? "Start tracking industry events, agent movements, and market signals to stay ahead of the competition."
+                : "Try adjusting your filters or broadening your search to find what you're looking for."}
             </p>
             {signals.length === 0 ? (
               <Button size="sm" className="mt-4 gap-1.5" onClick={() => setShowQuickAdd(true)}>

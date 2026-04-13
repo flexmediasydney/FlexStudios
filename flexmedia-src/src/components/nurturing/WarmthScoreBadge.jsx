@@ -56,7 +56,7 @@ export default function WarmthScoreBadge({ score, trend, size = "md" }) {
         <TooltipTrigger asChild>
           <div
             className={cn(
-              "inline-flex items-center justify-center rounded-full font-semibold leading-none select-none shrink-0",
+              "inline-flex items-center justify-center rounded-full font-semibold leading-none select-none shrink-0 cursor-default whitespace-nowrap",
               tier.bg,
               tier.text,
               SIZE_CLASSES[size]

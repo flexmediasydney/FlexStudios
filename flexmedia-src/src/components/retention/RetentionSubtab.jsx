@@ -158,7 +158,7 @@ export default function RetentionSubtab({ entityType, entityId, entityLabel }) {
   return (
     <div className="h-full overflow-y-auto">
       {/* Summary stats */}
-      <div className="flex items-center gap-4 px-4 py-3 border-b bg-muted/30 flex-wrap">
+      <div className="flex items-center gap-4 px-4 py-3 border-b bg-muted/30 flex-wrap select-none">
         <div className="flex items-center gap-1.5">
           <Shield className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="text-xs text-muted-foreground">Total</span>
@@ -215,14 +215,14 @@ export default function RetentionSubtab({ entityType, entityId, entityLabel }) {
       {displayAlerts.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
           <p className="text-sm text-muted-foreground">
-            {activeView === "active" ? "No active alerts — all current gaps are resolved." : "No historical records yet."}
+            {activeView === "active" ? "All clear. No active retention alerts for this record." : "No historical records yet. Resolved alerts will appear here."}
           </p>
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="border-b bg-muted/20">
+              <tr className="border-b bg-muted/20 select-none">
                 <th className="text-left px-3 py-2 font-medium text-muted-foreground">Address</th>
                 <th className="text-left px-3 py-2 font-medium text-muted-foreground">Price</th>
                 {entityType === "agency" && <th className="text-left px-3 py-2 font-medium text-muted-foreground">Agent</th>}
@@ -269,7 +269,7 @@ export default function RetentionSubtab({ entityType, entityId, entityLabel }) {
                   <td className="px-3 py-2.5">
                     <Popover>
                       <PopoverTrigger asChild>
-                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0">
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Alert actions" aria-label="Alert actions">
                           <MoreHorizontal className="h-3.5 w-3.5" />
                         </Button>
                       </PopoverTrigger>

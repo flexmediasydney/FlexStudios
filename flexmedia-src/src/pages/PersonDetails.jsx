@@ -253,7 +253,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
       </span>
     ) : (
       <span className="text-muted-foreground/40 italic text-xs">
-        {readOnly ? '—' : (placeholder ? `Click to add ${label.toLowerCase()}…` : '—')}
+        {readOnly ? '—' : (placeholder || `Add ${label.toLowerCase()}…`)}
       </span>
     );
 
@@ -300,7 +300,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
       )}
       onClick={!readOnly && !editing ? () => setEditing(true) : undefined}
     >
-      <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide leading-relaxed">
+      <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide leading-relaxed">
         {label}
       </label>
       <div className="flex-1 min-w-0 flex items-start gap-1">
@@ -348,11 +348,11 @@ function Section({ title, badge, children, defaultOpen = true }) {
   return (
     <div className="border-b border-border/50">
       <button
-        className="flex items-center gap-1 w-full px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/40 transition-colors"
+        className="flex items-center gap-1 w-full px-3 py-2 text-xs font-semibold text-foreground uppercase tracking-wide hover:bg-muted/40 transition-colors duration-150 select-none"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
       >
-        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !open && "-rotate-90")} />
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-150", !open && "-rotate-90")} />
         {title}
         {badge > 0 && (
           <span className="ml-1 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">
@@ -871,8 +871,9 @@ export default function PersonDetails() {
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <Button
             size="sm"
-            className="gap-1.5 h-8 text-xs font-semibold shadow-sm"
+            className="gap-1.5 h-8 text-xs font-semibold shadow-sm transition-all duration-150"
             onClick={() => navigate(createPageUrl('Projects') + `?agent=${agentId}`)}
+            title="Create a new project for this person"
           >
             <Plus className="h-3.5 w-3.5" />
             New Project
@@ -880,7 +881,8 @@ export default function PersonDetails() {
           <Button
             size="sm"
             variant="outline"
-            className="gap-1.5 h-8 text-xs"
+            className="gap-1.5 h-8 text-xs transition-all duration-150"
+            title="Add a note about this person"
             onClick={() => {
               handleTabChange('notes');
               setTimeout(() => {
@@ -998,7 +1000,7 @@ export default function PersonDetails() {
             {/* Quick stats inline */}
             {(projects.length > 0 || totalRev > 0) && (
               <div className="flex items-start gap-2 py-1 px-3">
-                <span className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">Stats</span>
+                <span className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide select-none">Stats</span>
                 <div className="flex flex-wrap gap-1.5">
                   <span className="text-[11px] bg-muted px-2 py-0.5 rounded-full font-medium">
                     {projects.length} projects
@@ -1037,7 +1039,7 @@ export default function PersonDetails() {
               type="number" placeholder="e.g. 30" />
             {contactHealth && (
               <div className="flex items-start gap-2 py-1 px-3">
-                <span className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">Health</span>
+                <span className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide select-none">Health</span>
                 <span className={cn(
                   "text-[10px] font-medium px-1.5 py-0.5 rounded-full",
                   contactHealth === 'ok'   ? 'bg-green-100 text-green-700' :
@@ -1057,7 +1059,7 @@ export default function PersonDetails() {
               onSave={handleFieldSave} type="select"
               options={VALUE_OPTIONS} />
             <div className="flex items-start gap-2 py-1 px-3">
-              <span className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide">Club Flex</span>
+              <span className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide select-none">Club Flex</span>
               <button
                 onClick={() => handleFieldSave('club_flex', !agent.club_flex)}
                 className={cn(
@@ -1096,7 +1098,7 @@ export default function PersonDetails() {
                   {agent.tags.map((tag, i) => (
                     <span key={i} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
                       {tag}
-                      <button onClick={() => handleRemoveTag(tag)} className="hover:text-destructive transition-colors" title="Remove tag">
+                      <button onClick={() => handleRemoveTag(tag)} className="hover:text-destructive transition-colors duration-150" title={`Remove "${tag}" tag`} aria-label={`Remove ${tag} tag`}>
                         <X className="h-2.5 w-2.5" />
                       </button>
                     </span>
@@ -1171,7 +1173,7 @@ export default function PersonDetails() {
           {/* Analytics */}
           {projects.length > 0 && (
             <div className="border-t pt-2">
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2">Analytics</div>
+              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2 select-none">Analytics</div>
               <SharedDashboard
                 projects={projects}
                 revisions={revisions}
@@ -1187,7 +1189,9 @@ export default function PersonDetails() {
             <button
               onClick={() => setShowDeleteConfirm(true)}
               disabled={!canEdit}
-              className="text-xs text-destructive/60 hover:text-destructive transition-colors flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-xs text-destructive/60 hover:text-destructive hover:bg-red-50 dark:hover:bg-red-950/20 px-2 py-1 -mx-2 rounded transition-colors duration-150 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Permanently delete this contact"
+              aria-label="Delete contact"
             >
               <Trash2 className="h-3 w-3" />
               Delete Contact

@@ -192,13 +192,13 @@ export default function ContactActivityLog({ entityType, entityId, entityLabel, 
         <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
           <Clock className="h-10 w-10 mb-3 opacity-30" />
           <p className="text-sm font-medium">No activity yet</p>
-          <p className="text-xs mt-1">Activity for {entityLabel || 'this record'} will appear here</p>
+          <p className="text-xs mt-1 max-w-xs text-center">Notes, emails, interactions, and changes for {entityLabel || 'this record'} will appear here as they happen.</p>
         </div>
       ) : (
         <div className="space-y-6">
-          {grouped.map(([dateLabel, items]) => (
-            <div key={dateLabel}>
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 sticky top-0 bg-background py-1 z-10">
+          {grouped.map(([dateLabel, items], groupIdx) => (
+            <div key={dateLabel} className={groupIdx > 0 ? 'pt-2 border-t border-border/30' : ''}>
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3 sticky top-0 bg-background py-1 z-10 select-none">
                 {dateLabel}
               </h3>
               <div className="space-y-2">
