@@ -425,6 +425,65 @@ Deno.serve(async (req) => {
         }
       }
 
+    // ── Fix dependencies on ALL tasks with empty depends_on_task_ids ──
+    // Scans every auto-generated task: if its product template defines
+    // depends_on_indices but the task has no depends_on_task_ids, resolve them.
+    {
+      const allTasksNow = await entities.ProjectTask.filter({ project_id, is_deleted: false }, null, 500);
+      const templateIdToTaskId = new Map<string, string>();
+      for (const t of allTasksNow) {
+        if (t.template_id) templateIdToTaskId.set(t.template_id, t.id);
+      }
+
+      // Build a map of template_id → depends_on_indices from all product templates
+      const templateDeps = new Map<string, number[]>();
+      const allProductIds = new Set<string>();
+      for (const t of allTasksNow) {
+        if (!t.template_id || !t.auto_generated) continue;
+        // Parse template_id: "product:<productId>:<tier>:<index>"
+        const parts = t.template_id.split(':');
+        if (parts.length >= 4 && parts[0] === 'product') allProductIds.add(parts[1]);
+      }
+      // Load product templates to get dependency indices
+      for (const prodId of allProductIds) {
+        try {
+          const prod = await entities.Product.get(prodId);
+          const templates = (pricingTier === 'premium' ? prod?.premium_task_templates : prod?.standard_task_templates) || prod?.task_templates || [];
+          const parsed = typeof templates === 'string' ? JSON.parse(templates) : templates;
+          for (let i = 0; i < parsed.length; i++) {
+            const tmpl = parsed[i];
+            const depIndices = (tmpl.depends_on_indices || []).map((n: any) => Math.round(n));
+            if (depIndices.length > 0) {
+              templateDeps.set(`product:${prodId}:${pricingTier}:${i}`, depIndices);
+            }
+          }
+        } catch { /* skip */ }
+      }
+
+      // Fix tasks with empty deps that should have them
+      for (const task of allTasksNow) {
+        if (!task.template_id || !task.auto_generated) continue;
+        if (task.depends_on_task_ids?.length > 0) continue; // already has deps
+        const depIndices = templateDeps.get(task.template_id);
+        if (!depIndices || depIndices.length === 0) continue;
+
+        const parts = task.template_id.split(':');
+        const prodId = parts[1];
+        const depTaskIds: string[] = [];
+        for (const depIdx of depIndices) {
+          const depTemplateId = `product:${prodId}:${pricingTier}:${depIdx}`;
+          const depId = templateIdToTaskId.get(depTemplateId);
+          if (depId && depId !== task.id) depTaskIds.push(depId);
+        }
+        if (depTaskIds.length > 0) {
+          await entities.ProjectTask.update(task.id, {
+            depends_on_task_ids: depTaskIds,
+            is_blocked: true,
+          }).catch((err: any) => console.warn(`Failed to set deps on ${task.title}:`, err?.message));
+        }
+      }
+    }
+
       // Recalculate effort inline
       if (tasksOnlyCreate.length > 0) {
         try {
