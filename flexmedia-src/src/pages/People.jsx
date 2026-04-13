@@ -231,7 +231,7 @@ export default function People() {
       key: 'current_agency_name', label: 'Organisation', sortable: true,
       render: (row) => row.current_agency_name
         ? <span className="text-xs text-muted-foreground">{row.current_agency_name}</span>
-        : <span className="text-muted-foreground/30 text-xs">—</span>,
+        : <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Missing org</span>,
     },
     {
       key: 'current_team_name', label: 'Team', sortable: true, width: '130px',

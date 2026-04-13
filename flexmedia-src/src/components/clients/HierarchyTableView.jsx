@@ -416,28 +416,32 @@ const ContactRow = React.memo(function ContactRow({
             <span className="truncate group-hover/org:underline">{org.name}</span>
           </button>
         ) : (
-          <span className="text-muted-foreground">\u2014</span>
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Missing org</span>
         );
       }
 
       case "email":
-        return (
+        return agent.email ? (
           <InlineEditCell
             value={agent.email}
             onSave={val => onInlineSave(agent.id, "email", val)}
             type="email"
             className="text-xs"
           />
+        ) : (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Missing email</span>
         );
 
       case "phone":
-        return (
+        return agent.phone ? (
           <InlineEditCell
             value={agent.phone}
             onSave={val => onInlineSave(agent.id, "phone", val)}
             type="tel"
             className="text-xs tabular-nums"
           />
+        ) : (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Missing phone</span>
         );
 
       case "last_activity":
