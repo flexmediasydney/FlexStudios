@@ -4,13 +4,14 @@ import AccessBadge from '@/components/auth/AccessBadge';
 import { api } from "@/api/supabaseClient";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, Edit, Trash2, Star, Check } from "lucide-react";
+import { Plus, Edit, Trash2, Star, Check, ChevronDown, ChevronRight, GripVertical, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import DeleteConfirmationDialog from "../common/DeleteConfirmationDialog";
 import { toast } from "sonner";
@@ -20,12 +21,293 @@ const COLORS = [
   "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#6366f1"
 ];
 
-const DEFAULT_FORM = { name: "", slug: "", description: "", color: "#3b82f6", is_active: true, is_default: false, order: 0 };
+const ROLE_OPTIONS = [
+  { value: "none", label: "None" },
+  { value: "project_owner", label: "Project Owner" },
+  { value: "photographer", label: "Photographer" },
+  { value: "videographer", label: "Videographer" },
+  { value: "image_editor", label: "Image Editor" },
+  { value: "video_editor", label: "Video Editor" },
+  { value: "floorplan_editor", label: "Floorplan Editor" },
+  { value: "drone_editor", label: "Drone Editor" },
+];
+
+const TRIGGER_OPTIONS = [
+  { value: "none", label: "None (manual)" },
+  { value: "project_onsite", label: "Project reaches Onsite" },
+  { value: "project_uploaded", label: "Project reaches Uploaded" },
+  { value: "project_submitted", label: "Project reaches Submitted" },
+  { value: "dependencies_cleared", label: "Dependencies completed" },
+];
+
+const TASK_TYPE_OPTIONS = [
+  { value: "back_office", label: "Back Office" },
+  { value: "onsite", label: "Onsite" },
+];
+
+const DEFAULT_TEMPLATE = {
+  title: "",
+  description: "",
+  task_type: "back_office",
+  auto_assign_role: "none",
+  estimated_minutes: 0,
+  depends_on_indices: [],
+  timer_trigger: "none",
+  deadline_type: "custom",
+  deadline_preset: null,
+  deadline_hours_after_trigger: 0,
+};
+
+const DEFAULT_FORM = {
+  name: "",
+  slug: "",
+  description: "",
+  color: "#3b82f6",
+  is_active: true,
+  is_default: false,
+  order: 0,
+  task_templates: [],
+};
 
 function slugify(str) {
   return str.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
 }
 
+// ─── Task Template Card ────────────────────────────────────────────────────────
+function TaskTemplateCard({ template, index, allTemplates, onChange, onRemove }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const handleField = (field, value) => {
+    onChange(index, { ...template, [field]: value });
+  };
+
+  const toggleDependency = (depIdx) => {
+    const current = template.depends_on_indices || [];
+    const next = current.includes(depIdx)
+      ? current.filter(i => i !== depIdx)
+      : [...current, depIdx];
+    handleField("depends_on_indices", next);
+  };
+
+  return (
+    <div className="border rounded-md bg-card text-sm">
+      {/* Compact header row */}
+      <div className="flex items-center gap-2 px-3 py-2">
+        <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 flex-shrink-0 cursor-grab" />
+        <Input
+          value={template.title}
+          onChange={(e) => handleField("title", e.target.value)}
+          placeholder="Task title…"
+          className="h-7 text-xs flex-1 min-w-0"
+        />
+        {/* Role */}
+        <Select value={template.auto_assign_role} onValueChange={(v) => handleField("auto_assign_role", v)}>
+          <SelectTrigger className="h-7 text-xs w-[130px] flex-shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ROLE_OPTIONS.map(o => (
+              <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {/* Trigger */}
+        <Select value={template.timer_trigger} onValueChange={(v) => handleField("timer_trigger", v)}>
+          <SelectTrigger className="h-7 text-xs w-[160px] flex-shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {TRIGGER_OPTIONS.map(o => (
+              <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {/* Est minutes */}
+        <Input
+          type="number"
+          min={0}
+          value={template.estimated_minutes || ""}
+          onChange={(e) => handleField("estimated_minutes", parseInt(e.target.value) || 0)}
+          placeholder="min"
+          className="h-7 text-xs w-16 flex-shrink-0"
+          title="Estimated minutes"
+        />
+        {/* Expand / delete */}
+        <button
+          type="button"
+          onClick={() => setExpanded(v => !v)}
+          className="text-muted-foreground hover:text-foreground flex-shrink-0"
+          title="More options"
+        >
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => onRemove(index)}
+          className="text-destructive/60 hover:text-destructive flex-shrink-0"
+          title="Remove template"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Expanded detail row */}
+      {expanded && (
+        <div className="px-3 pb-3 pt-1 border-t space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            {/* Task type */}
+            <div>
+              <Label className="text-xs text-muted-foreground">Task Type</Label>
+              <Select value={template.task_type} onValueChange={(v) => handleField("task_type", v)}>
+                <SelectTrigger className="h-7 text-xs mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TASK_TYPE_OPTIONS.map(o => (
+                    <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {/* Deadline hours after trigger */}
+            <div>
+              <Label className="text-xs text-muted-foreground">Deadline (hrs after trigger)</Label>
+              <Input
+                type="number"
+                min={0}
+                value={template.deadline_hours_after_trigger || ""}
+                onChange={(e) => handleField("deadline_hours_after_trigger", parseInt(e.target.value) || 0)}
+                placeholder="0"
+                className="h-7 text-xs mt-1"
+              />
+            </div>
+          </div>
+          {/* Description */}
+          <div>
+            <Label className="text-xs text-muted-foreground">Description</Label>
+            <Textarea
+              value={template.description || ""}
+              onChange={(e) => handleField("description", e.target.value)}
+              placeholder="Optional details…"
+              rows={2}
+              className="mt-1 resize-none text-xs"
+            />
+          </div>
+          {/* Dependencies */}
+          {allTemplates.length > 1 && (
+            <div>
+              <Label className="text-xs text-muted-foreground">Depends on (must complete first)</Label>
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                {allTemplates.map((t, i) => {
+                  if (i === index) return null;
+                  const checked = (template.depends_on_indices || []).includes(i);
+                  return (
+                    <label key={i} className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleDependency(i)}
+                        className="h-3 w-3 rounded"
+                      />
+                      <span className={checked ? "font-medium" : "text-muted-foreground"}>
+                        {t.title || `Task ${i + 1}`}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Task Templates Section ────────────────────────────────────────────────────
+function TaskTemplatesSection({ templates, onChange }) {
+  const [open, setOpen] = useState(true);
+
+  const handleAdd = () => {
+    onChange([...templates, { ...DEFAULT_TEMPLATE }]);
+  };
+
+  const handleChange = (index, updated) => {
+    const next = templates.map((t, i) => (i === index ? updated : t));
+    onChange(next);
+  };
+
+  const handleRemove = (index) => {
+    // Also remove this index from other templates' depends_on_indices
+    const next = templates
+      .filter((_, i) => i !== index)
+      .map(t => ({
+        ...t,
+        depends_on_indices: (t.depends_on_indices || [])
+          .filter(dep => dep !== index)
+          .map(dep => (dep > index ? dep - 1 : dep)),
+      }));
+    onChange(next);
+  };
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      {/* Section header */}
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-3 py-2.5 bg-muted/30 hover:bg-muted/50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {open ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+          <span className="text-sm font-medium">Task Templates</span>
+          {templates.length > 0 && (
+            <Badge variant="secondary" className="text-xs px-1.5 py-0 h-5">
+              {templates.length}
+            </Badge>
+          )}
+        </div>
+        {/* Add button — stop propagation so it doesn't toggle collapse */}
+        <div onClick={(e) => e.stopPropagation()}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleAdd}
+            className="h-6 px-2 text-xs gap-1"
+          >
+            <Plus className="h-3 w-3" />
+            Add Task
+          </Button>
+        </div>
+      </button>
+
+      {/* Template list */}
+      {open && (
+        <div className="p-3 space-y-2">
+          {templates.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-3">
+              No task templates yet. Tasks will be created manually for each project.
+            </p>
+          ) : (
+            templates.map((t, i) => (
+              <TaskTemplateCard
+                key={i}
+                template={t}
+                index={i}
+                allTemplates={templates}
+                onChange={handleChange}
+                onRemove={handleRemove}
+              />
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Component ────────────────────────────────────────────────────────────
 export default function ProjectTypesManagement() {
   const { canEdit, canView } = useEntityAccess('project_types');
   const [showDialog, setShowDialog] = useState(false);
@@ -78,7 +360,10 @@ export default function ProjectTypesManagement() {
 
   const handleOpen = (type = null) => {
     setEditingType(type);
-    setFormData(type ? { ...type } : DEFAULT_FORM);
+    setFormData(type
+      ? { ...DEFAULT_FORM, ...type, task_templates: type.task_templates || [] }
+      : { ...DEFAULT_FORM }
+    );
     setAutoSlug(!type);
     setShowDialog(true);
   };
@@ -104,6 +389,9 @@ export default function ProjectTypesManagement() {
     // Check duplicate name
     const duplicate = types.find(t => t.id !== editingType?.id && t.name?.toLowerCase().trim() === formData.name.toLowerCase().trim());
     if (duplicate) { toast.error(`A project type named "${duplicate.name}" already exists`); return; }
+    // Validate templates have titles
+    const untitled = formData.task_templates.findIndex(t => !t.title?.trim());
+    if (untitled !== -1) { toast.error(`Task ${untitled + 1} is missing a title`); return; }
     saveMutation.mutate({ ...formData, name: formData.name.trim() });
   };
 
@@ -149,6 +437,11 @@ export default function ProjectTypesManagement() {
                   {!type.is_active && (
                     <Badge variant="secondary" className="text-xs">Inactive</Badge>
                   )}
+                  {type.task_templates?.length > 0 && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      {type.task_templates.length} task{type.task_templates.length !== 1 ? "s" : ""}
+                    </Badge>
+                  )}
                 </div>
                 {type.description && <p className="text-xs text-muted-foreground mt-0.5 truncate">{type.description}</p>}
                 {type.slug && <p className="text-xs text-muted-foreground/60 font-mono">{type.slug}</p>}
@@ -186,7 +479,7 @@ export default function ProjectTypesManagement() {
 
       {/* Create/Edit Dialog */}
       <Dialog open={showDialog} onOpenChange={handleClose}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingType ? "Edit Project Type" : "New Project Type"}</DialogTitle>
           </DialogHeader>
@@ -251,6 +544,13 @@ export default function ProjectTypesManagement() {
                 <Label>Default type</Label>
               </div>
             </div>
+
+            {/* ── Task Templates ── */}
+            <TaskTemplatesSection
+              templates={formData.task_templates || []}
+              onChange={(updated) => setFormData(prev => ({ ...prev, task_templates: updated }))}
+            />
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
               <Button type="submit" disabled={saveMutation.isPending}>
