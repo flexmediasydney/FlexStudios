@@ -718,9 +718,58 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                     return next;
                   });
                   // Race condition fix: use Promise.allSettled to handle partial failures gracefully
-                  const results = await Promise.allSettled(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: new Date().toISOString() })));
+                  const now = new Date().toISOString();
+                  const results = await Promise.allSettled(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: now })));
                   const succeeded = results.filter(r => r.status === 'fulfilled').length;
                   const failed = results.filter(r => r.status === 'rejected').length;
+
+                  // Auto-log effort for tasks with estimates but no manual time logs
+                  for (const task of incomplete) {
+                    const estMinutes = task.estimated_minutes || 0;
+                    if (estMinutes > 0) {
+                      try {
+                        const existingLogs = await api.entities.TaskTimeLog.filter({ task_id: task.id }, null, 1);
+                        if (existingLogs.length === 0) {
+                          const endTime = new Date(Date.now() + estMinutes * 60 * 1000).toISOString();
+                          await api.entities.TaskTimeLog.create({
+                            task_id: task.id,
+                            project_id: projectId,
+                            user_id: task.assigned_to || user?.id,
+                            user_name: task.assigned_to_name || user?.full_name || 'System',
+                            user_email: user?.email || '',
+                            role: task.auto_assign_role || 'none',
+                            status: 'completed',
+                            is_active: false,
+                            is_manual: false,
+                            log_source: 'auto_completion',
+                            start_time: now,
+                            end_time: endTime,
+                            total_seconds: estMinutes * 60,
+                            team_id: task.assigned_to_team_id || null,
+                            team_name: task.assigned_to_team_name || null,
+                          });
+                        }
+                      } catch (err) {
+                        console.warn('Bulk auto effort log failed (non-fatal):', err?.message);
+                      }
+                    }
+                    // Write feed event per task
+                    writeFeedEvent({
+                      eventType: 'task_completed',
+                      category: 'task',
+                      severity: 'info',
+                      actorId: user?.id || null,
+                      actorName: user?.full_name || user?.email || null,
+                      title: `Task completed: "${task.title}"`,
+                      projectId: projectId,
+                      projectName: project?.title || project?.property_address,
+                      projectAddress: project?.property_address,
+                      projectStage: project?.status,
+                      entityType: 'task',
+                      entityId: task.id,
+                    }).catch(() => {});
+                  }
+
                   // Clear optimistic state now that real data is arriving
                   setOptimisticCompletions(prev => {
                     const next = { ...prev };
