@@ -810,8 +810,16 @@ export default function PersonDetails() {
 
           {/* Summary section */}
           <Section title="Summary" defaultOpen>
-            <InlineField label="Title" value={agent.title} field="title" onSave={handleFieldSave}
-              placeholder="Add job title..." />
+            <InlineField label="Position" value={agent.title} field="title" onSave={handleFieldSave}
+              type="select"
+              options={[
+                { value: 'Partner', label: 'Partner' },
+                { value: 'Senior', label: 'Senior' },
+                { value: 'Junior', label: 'Junior' },
+                { value: 'Admin', label: 'Admin' },
+                { value: 'Payroll', label: 'Payroll' },
+                { value: 'Marketing', label: 'Marketing' },
+              ]} />
             <InlineField label="Email" value={agent.email} field="email" onSave={handleFieldSave}
               placeholder="Add email..."
               actionHref={agent.email ? `mailto:${agent.email}` : null}

@@ -271,14 +271,21 @@ export default function AgentForm({ agent, open, onClose, preselectedAgencyId, p
             <FieldError error={errors.name} />
           </div>
           <div>
-            <Label htmlFor="agent-title">Title / Role</Label>
-            <Input
+            <Label htmlFor="agent-title">Position</Label>
+            <select
               id="agent-title"
-              value={formData.title}
-              onChange={(e) => handleChange("title", e.target.value)}
-              maxLength={LIMITS.title}
-              placeholder="e.g., Senior Sales Agent"
-            />
+              value={formData.title || ''}
+              onChange={(e) => handleChange("title", e.target.value || null)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <option value="">-- Select Position --</option>
+              <option value="Partner">Partner</option>
+              <option value="Senior">Senior</option>
+              <option value="Junior">Junior</option>
+              <option value="Admin">Admin</option>
+              <option value="Payroll">Payroll</option>
+              <option value="Marketing">Marketing</option>
+            </select>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
