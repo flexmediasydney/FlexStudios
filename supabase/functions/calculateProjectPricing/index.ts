@@ -37,7 +37,7 @@ Deno.serve(async (req) => {
     const user = await getUserFromReq(req);
 
     // Role guard (only for user-context calls; service-role calls are already authorized)
-    if (user && !['master_admin', 'employee'].includes(user.role)) {
+    if (user && !['master_admin', 'admin', 'manager', 'employee'].includes(user.role)) {
       return errorResponse('Forbidden: insufficient role', 403);
     }
 

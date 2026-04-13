@@ -30,7 +30,7 @@ Deno.serve(async (req) => {
       if (!serviceKey || !authHeader.includes(serviceKey)) {
         return errorResponse('Authentication required', 401);
       }
-    } else if (!['master_admin', 'employee'].includes(user.role)) {
+    } else if (!['master_admin', 'admin', 'manager', 'employee'].includes(user.role)) {
       return errorResponse('Forbidden: insufficient permissions', 403);
     }
 

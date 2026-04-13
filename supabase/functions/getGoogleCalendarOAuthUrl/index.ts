@@ -11,7 +11,7 @@ Deno.serve(async (req) => {
       return errorResponse('Unauthorized', 401);
     }
 
-    if (!['master_admin', 'employee'].includes(user.role)) {
+    if (!['master_admin', 'admin', 'manager', 'employee'].includes(user.role)) {
       return errorResponse('Forbidden: insufficient permissions', 403);
     }
 

@@ -27,7 +27,7 @@ Deno.serve(async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
     const user = await getUserFromReq(req);
-    if (user && !['master_admin', 'employee'].includes(user.role)) {
+    if (user && !['master_admin', 'admin', 'manager', 'employee'].includes(user.role)) {
       return errorResponse('Forbidden: insufficient permissions', 403);
     }
 

@@ -23,13 +23,13 @@ Deno.serve(async (req) => {
 
     // Per-endpoint permission checks
     const rules: Record<string, string[]> = {
-      'products': ['master_admin', 'employee'],
-      'packages': ['master_admin', 'employee'],
-      'price_matrix': ['master_admin', 'employee'],
+      'products': ['master_admin', 'admin', 'manager', 'employee'],
+      'packages': ['master_admin', 'admin', 'manager', 'employee'],
+      'price_matrix': ['master_admin', 'admin', 'manager', 'employee'],
       'users': ['master_admin'],
       'teams': ['master_admin'],
       'organization': ['master_admin'],
-      'integrations': ['master_admin', 'employee'],
+      'integrations': ['master_admin', 'admin', 'manager', 'employee'],
     };
 
     if (rules[endpoint] && !rules[endpoint].includes(user.role)) {
