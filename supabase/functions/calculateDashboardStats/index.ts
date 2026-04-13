@@ -362,10 +362,13 @@ function computeUtilization(timeLogs: any[], tasks: any[], users: any[], employe
     const logged = userLoggedThisWeek.get(uid) || 0;
     const dueThisWeek = userDueThisWeek.get(uid) || 0;
     const overdue = userOverdue.get(uid) || 0;
-    const committed = dueThisWeek + overdue;
     const target = Number(user.weekly_target_hours) || 40;
     const unscheduled = userUnscheduled.get(uid) || 0;
     const future = userFuture.get(uid) || 0;
+    // Committed = scheduled (due this week + overdue) + unscheduled active work.
+    // Unscheduled tasks are work that CAN be done now but has no specific deadline —
+    // they still represent real workload and must count toward utilisation.
+    const committed = dueThisWeek + overdue + unscheduled;
 
     const loadPct = safePct(committed, target);
     const progressPct = safePct(logged, committed);
