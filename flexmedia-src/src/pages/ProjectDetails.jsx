@@ -966,13 +966,13 @@ export default function ProjectDetails() {
   if (isLoading) {
     return (
       <div className="p-4 lg:p-8 space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-8 w-48 animate-pulse" />
+        <Skeleton className="h-12 w-full animate-pulse" />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
-            <Skeleton className="h-48 w-full" />
+            <Skeleton className="h-48 w-full animate-pulse" />
           </div>
-          <Skeleton className="h-48 w-full" />
+          <Skeleton className="h-48 w-full animate-pulse" />
         </div>
       </div>
     );
@@ -1155,7 +1155,7 @@ export default function ProjectDetails() {
               project.payment_status === "paid"
                 ? "bg-green-500 text-white border-green-600 hover:bg-green-600"
                 : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!memoizedCanEdit || updatePaymentMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
+            } ${!memoizedCanEdit || updatePaymentMutation.isPending ? "opacity-60 cursor-not-allowed grayscale-[30%]" : "hover:shadow-md"}`}
             title={memoizedCanEdit ? `Click to mark ${project.payment_status === "paid" ? "unpaid" : "paid"}` : "You don't have permission to edit"}
             aria-label={`Payment status: ${project.payment_status}. Click to toggle.`}
           >
@@ -1174,7 +1174,7 @@ export default function ProjectDetails() {
               project.outcome === "won"
                 ? "bg-green-600 text-white border-green-700 hover:bg-green-700"
                 : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!memoizedCanEdit || updateOutcomeMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
+            } ${!memoizedCanEdit || updateOutcomeMutation.isPending ? "opacity-60 cursor-not-allowed grayscale-[30%]" : "hover:shadow-md"}`}
             title={
               !memoizedCanEdit ? "You don't have permission to edit" :
               project.outcome === "won" ? "Currently Won — click to revert to Open" :
@@ -1196,7 +1196,7 @@ export default function ProjectDetails() {
               project.outcome === "lost"
                 ? "bg-red-600 text-white border-red-700 hover:bg-red-700"
                 : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!memoizedCanEdit || updateOutcomeMutation.isPending ? "opacity-50 cursor-not-allowed" : "hover:shadow-md"}`}
+            } ${!memoizedCanEdit || updateOutcomeMutation.isPending ? "opacity-60 cursor-not-allowed grayscale-[30%]" : "hover:shadow-md"}`}
             title={
               !memoizedCanEdit ? "You don't have permission to edit" :
               project.outcome === "lost" ? "Currently Lost — click to revert to Open" :

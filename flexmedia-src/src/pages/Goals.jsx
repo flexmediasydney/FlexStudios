@@ -135,7 +135,7 @@ function GoalsListSkeleton() {
   return (
     <div className="space-y-3 mt-4">
       {Array.from({ length: 6 }).map((_, i) => (
-        <Skeleton key={i} className="h-16 w-full rounded-xl" />
+        <Skeleton key={i} className="h-16 w-full rounded-xl animate-pulse" />
       ))}
     </div>
   );
@@ -249,7 +249,7 @@ function GoalListRow({ goal, tasksByGoal, users, childCounts }) {
   const childCount = childCounts[goal.id] || 0;
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-card hover:bg-accent/40 transition-colors group">
+    <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-card hover:bg-accent/40 transition-colors group cursor-pointer">
       {/* Status */}
       <div className="shrink-0 w-28 hidden sm:flex">
         <GoalStatusBadge status={goal.status} />
@@ -430,7 +430,7 @@ function RoadmapQuarterGroup({ quarter, goals, tasksByGoal, users }) {
 
       {/* Goals grid */}
       {!collapsed && (
-        <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 transition-all duration-200">
           {goals.map((goal) => (
             <GoalCard
               key={goal.id}
@@ -817,8 +817,10 @@ export default function Goals() {
               <button
                 key={id}
                 onClick={() => setViewModePersisted(id)}
+                title={`Switch to ${label} view`}
+                aria-label={`${label} view`}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all cursor-pointer",
                   viewMode === id
                     ? "bg-background shadow text-foreground"
                     : "text-muted-foreground hover:text-foreground"
@@ -842,20 +844,20 @@ export default function Goals() {
 
       {/* ── Stats strip ── */}
       <div className="grid grid-cols-3 gap-3">
-        <Card className="border shadow-sm">
-          <CardContent className="py-3 px-4">
+        <Card className="border shadow-sm" aria-label="Total goals count">
+          <CardContent className="p-4">
             <p className="text-xs text-muted-foreground font-medium">Total Goals</p>
             <p className="text-2xl font-bold mt-0.5">{stats.total}</p>
           </CardContent>
         </Card>
-        <Card className="border shadow-sm">
-          <CardContent className="py-3 px-4">
+        <Card className="border shadow-sm" aria-label="Active goals count">
+          <CardContent className="p-4">
             <p className="text-xs text-muted-foreground font-medium">Active</p>
             <p className="text-2xl font-bold mt-0.5 text-blue-600">{stats.active}</p>
           </CardContent>
         </Card>
-        <Card className="border shadow-sm">
-          <CardContent className="py-3 px-4">
+        <Card className="border shadow-sm" aria-label="Completed goals this quarter">
+          <CardContent className="p-4">
             <p className="text-xs text-muted-foreground font-medium truncate">Completed {stats.currentQ}</p>
             <p className="text-2xl font-bold mt-0.5 text-emerald-600">{stats.completedThisQ}</p>
           </CardContent>
@@ -877,7 +879,9 @@ export default function Goals() {
             {searchInput && (
               <button
                 onClick={() => handleSearchChange("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors duration-150"
+                title="Clear search"
+                aria-label="Clear search"
               >
                 <X className="h-3.5 w-3.5" />
               </button>

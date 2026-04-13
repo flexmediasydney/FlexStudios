@@ -491,12 +491,12 @@ export default function ProjectPricingTable({
         <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-sm text-destructive">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
           <span>{error}</span>
-          <button onClick={() => setError(null)} className="ml-auto font-semibold underline">Dismiss</button>
+          <button onClick={() => setError(null)} className="ml-auto font-semibold underline cursor-pointer" title="Dismiss error" aria-label="Dismiss error">Dismiss</button>
         </div>
       )}
 
       <Card className="border-l-4 border-l-primary">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4">
           <div className="flex items-center gap-2">
             <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
               <DollarSign className="h-5 w-5 text-primary" />
@@ -512,6 +512,8 @@ export default function ProjectPricingTable({
                 variant="outline"
                 size="sm"
                 onClick={() => setShowAddDialog(true)}
+                title="Add products or packages"
+                aria-label="Add products or packages"
               >
                 <Plus className="h-4 w-4 mr-1" /> Add
               </Button>
@@ -579,6 +581,8 @@ export default function ProjectPricingTable({
                               onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
                               disabled={currentPage === 0}
                               className="h-7 w-7 p-0"
+                              title="Previous page"
+                              aria-label="Previous page"
                             >
                               <ChevronLeft className="h-3 w-3" />
                             </Button>
@@ -588,6 +592,8 @@ export default function ProjectPricingTable({
                               onClick={() => setCurrentPage(p => Math.min(totalPages - 1, p + 1))}
                               disabled={currentPage === totalPages - 1}
                               className="h-7 w-7 p-0"
+                              title="Next page"
+                              aria-label="Next page"
                             >
                               <ChevronRight className="h-3 w-3" />
                             </Button>

@@ -794,7 +794,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
               </Button>
             )}
             <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="h-8 w-32 text-xs">
+              <SelectTrigger className="h-8 w-32 text-xs" title="Sort tasks by workflow order or urgency" aria-label="Sort tasks">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -833,7 +833,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       )}
 
       {canEdit && (
-        <Button variant="outline" size="sm" className="w-full" onClick={() => setShowAddDialog(true)}>
+        <Button variant="outline" size="sm" className="w-full" onClick={() => setShowAddDialog(true)} title="Add a new task to this project" aria-label="Add task">
           <Plus className="h-4 w-4 mr-1" /> Add Task
         </Button>
       )}

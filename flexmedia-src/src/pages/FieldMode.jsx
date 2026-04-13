@@ -211,6 +211,8 @@ function FieldModeInner({ user }) {
               size="icon"
               className="text-white hover:bg-white/10 h-10 w-10"
               onClick={goBackToShoots}
+              title="Back to shoots"
+              aria-label="Back to shoots"
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
@@ -272,7 +274,7 @@ function FieldModeInner({ user }) {
       </main>
 
       {/* Bottom Tab Bar */}
-      <nav className="bg-background border-t border-border shrink-0 safe-area-bottom">
+      <nav className="bg-background border-t border-border shrink-0 safe-area-bottom" aria-label="Field mode navigation">
         <div className="flex">
           {TABS.map((tab) => {
             const Icon = tab.icon;
@@ -281,8 +283,10 @@ function FieldModeInner({ user }) {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                aria-label={tab.label}
+                aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "flex-1 flex flex-col items-center gap-0.5 py-2 px-1 min-h-[52px] transition-colors",
+                  "flex-1 flex flex-col items-center gap-0.5 py-2 px-1 min-h-[52px] transition-colors cursor-pointer",
                   isActive
                     ? "text-blue-600 dark:text-blue-400"
                     : "text-muted-foreground hover:text-foreground"
@@ -314,7 +318,7 @@ function ShootsTab({ todayShoots, upcomingShoots, loading, onSelectProject, onRe
     <div className="p-4 pb-2 space-y-6">
       {/* Refresh */}
       <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={onRefresh} className="gap-1.5 text-xs">
+        <Button variant="outline" size="sm" onClick={onRefresh} className="gap-1.5 text-xs" title="Refresh shoot list" aria-label="Refresh shoot list">
           <RefreshCw className="h-3.5 w-3.5" />
           Refresh
         </Button>
@@ -365,7 +369,7 @@ function ShootsTab({ todayShoots, upcomingShoots, loading, onSelectProject, onRe
 function ShootCard({ project, onTap, showDate }) {
   return (
     <Card
-      className="cursor-pointer active:scale-[0.98] transition-transform"
+      className="cursor-pointer active:scale-[0.98] transition-all duration-200 shadow-sm hover:shadow-md"
       onClick={() => onTap(project)}
     >
       <CardContent className="p-4">

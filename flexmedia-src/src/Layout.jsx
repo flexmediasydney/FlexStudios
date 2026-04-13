@@ -506,7 +506,7 @@ function LayoutContent({ currentPageName, children }) {
              )}
              <TopSearchBar />
              <div className="flex items-center gap-1.5">
-               <span className="text-[10px] text-muted-foreground/50 font-medium hidden xl:inline">Quick: <kbd className="bg-muted/50 px-1.5 py-0.5 rounded text-[9px] border border-border/40">{navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl+'}K</kbd></span>
+               <span className="text-[10px] text-muted-foreground/50 font-medium hidden xl:inline">Search: <kbd className="bg-muted/50 px-1.5 py-0.5 rounded text-[9px] border border-border/40">{navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl+'}K</kbd> Log: <kbd className="bg-muted/50 px-1.5 py-0.5 rounded text-[9px] border border-border/40">{navigator.platform?.includes('Mac') ? '⌘⇧' : 'Ctrl+Shift+'}L</kbd></span>
                <Button
                  variant="ghost"
                  size="icon"

@@ -232,7 +232,7 @@ function KanbanFilterBar({ filters, onFiltersChange, projects }) {
 
   return (
     <div className="flex items-center gap-2 flex-wrap mb-3">
-      <Filter className="h-4 w-4 text-muted-foreground" />
+      <Filter className="h-4 w-4 text-muted-foreground" aria-hidden="true" title="Filters" />
 
       {/* Photographer filter */}
       {photographers.length > 0 && (
@@ -301,6 +301,8 @@ function KanbanFilterBar({ filters, onFiltersChange, projects }) {
           size="sm"
           className="h-8 text-xs gap-1"
           onClick={() => onFiltersChange({ photographer: "", projectType: "", dateFrom: "", dateTo: "" })}
+          title="Clear all filters"
+          aria-label="Clear all filters"
         >
           <X className="h-3 w-3" />
           Clear
@@ -339,7 +341,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks, showPricing })
         return (
           <div
             key={column.id}
-            className={`${column.color} rounded-lg p-4 space-y-3 border border-border/30 hover:shadow-md transition-shadow cursor-default`}
+            className={`${column.color} rounded-lg p-4 space-y-3 border border-border/30 hover:shadow-md transition-all duration-200 shadow-sm`}
           >
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-sm truncate">{column.label}</h3>
@@ -651,6 +653,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
             size="sm"
             className="gap-1.5 h-8 text-xs"
             onClick={() => setViewModePersisted('full')}
+            title="Full kanban board view"
+            aria-label="Board view"
           >
             <Columns3 className="h-3.5 w-3.5" />
             Board
@@ -660,6 +664,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
             size="sm"
             className="gap-1.5 h-8 text-xs"
             onClick={() => setViewModePersisted('collapsed')}
+            title="Collapsed overview with metrics"
+            aria-label="Overview"
           >
             <LayoutList className="h-3.5 w-3.5" />
             Overview
