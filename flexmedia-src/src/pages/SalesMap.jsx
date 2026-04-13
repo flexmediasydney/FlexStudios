@@ -183,7 +183,7 @@ export default function SalesMap() {
   const agentsByAgency = useMemo(() => {
     const m = {};
     agents.forEach(a => {
-      const aid = a.agency_id;
+      const aid = a.current_agency_id;
       if (aid) {
         if (!m[aid]) m[aid] = [];
         m[aid].push(a);

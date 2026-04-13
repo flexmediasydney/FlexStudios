@@ -160,7 +160,7 @@ export default function DailyPunchList({ onLogTouchpoint }) {
       const daysSince = daysSinceNow(lastDate);
       const recentTypeIds = agentTps.slice(0, 3).map(t => t.touchpoint_type_name || t.touchpoint_type_id);
       const suggestedChannel = suggestNextChannel(recentTypeIds);
-      const agencyName = agent.agency_id ? agencyMap[agent.agency_id]?.name : null;
+      const agencyName = agent.current_agency_id ? agencyMap[agent.current_agency_id]?.name : null;
 
       const row = {
         type: "agent",
@@ -213,7 +213,7 @@ export default function DailyPunchList({ onLogTouchpoint }) {
       const agent = agents.find(a => a.id === tp.agent_id);
       if (!agent) return;
       agentIds.add(agent.id);
-      const agencyName = agent.agency_id ? agencyMap[agent.agency_id]?.name : null;
+      const agencyName = agent.current_agency_id ? agencyMap[agent.current_agency_id]?.name : null;
       items.push({
         type: "planned",
         priority: "planned",
@@ -242,7 +242,7 @@ export default function DailyPunchList({ onLogTouchpoint }) {
         agent,
         agentId: sig.agent_id,
         agentName: agent?.name || sig.entity_label || "Unknown",
-        agencyName: agent?.agency_id ? agencyMap[agent.agency_id]?.name : null,
+        agencyName: agent?.agency_id ? agencyMap[agent.current_agency_id]?.name : null,
         warmthScore: agent?.warmth_score ?? 0,
         warmthTrend: agent?.warmth_trend,
         daysSince: null,

@@ -406,7 +406,7 @@ export default function SalesCommand() {
     // Group overdue agents by suburb (via their agency address)
     const suburbGroups = {};
     overdueAgents.forEach(agent => {
-      const agency = agent.agency_id ? agencyMap[agent.agency_id] : null;
+      const agency = agent.current_agency_id ? agencyMap[agent.current_agency_id] : null;
       if (!agency?.address) return;
       const suburb = parseSuburb(agency.address);
       if (!suburb) return;
@@ -692,7 +692,7 @@ export default function SalesCommand() {
     if (tableSearch) {
       const q = tableSearch.toLowerCase();
       list = list.filter(a => {
-        const agencyName = a.agency_id ? agencyMap[a.agency_id]?.name : "";
+        const agencyName = a.current_agency_id ? agencyMap[a.current_agency_id]?.name : "";
         return (a.name || "").toLowerCase().includes(q)
           || (agencyName || "").toLowerCase().includes(q)
           || (a.relationship_state || "").toLowerCase().includes(q);
@@ -703,7 +703,7 @@ export default function SalesCommand() {
     list = list.map(a => ({
       ...a,
       cadence_urgency: URGENCY_MAP[a.cadence_health] || 0,
-      _agencyName: a.agency_id ? agencyMap[a.agency_id]?.name : "",
+      _agencyName: a.current_agency_id ? agencyMap[a.current_agency_id]?.name : "",
     }));
     // Sort
     const { field, dir } = tableSort;
@@ -1192,9 +1192,9 @@ export default function SalesCommand() {
                         >
                           {a.name || "Unknown"}
                         </Link>
-                        {a._agencyName || (a.agency_id && agencyMap[a.agency_id]?.name) ? (
+                        {a._agencyName || (a.current_agency_id && agencyMap[a.current_agency_id]?.name) ? (
                           <span className="text-[10px] text-muted-foreground truncate">
-                            {a._agencyName || agencyMap[a.agency_id]?.name}
+                            {a._agencyName || agencyMap[a.current_agency_id]?.name}
                           </span>
                         ) : null}
                       </div>
@@ -1344,7 +1344,7 @@ export default function SalesCommand() {
                     </thead>
                     <tbody>
                       {visibleAgents.map(a => {
-                        const agencyName = a._agencyName || (a.agency_id ? agencyMap[a.agency_id]?.name : "");
+                        const agencyName = a._agencyName || (a.current_agency_id ? agencyMap[a.current_agency_id]?.name : "");
                         const cadenceCfg = CADENCE_BADGE[a.cadence_health] || { label: a.cadence_health || "--", cls: "bg-muted text-muted-foreground border-border" };
                         const valueCfg = VALUE_BADGE[a.value_potential] || VALUE_BADGE.Low;
                         // Compute next due
@@ -1523,7 +1523,7 @@ function FollowUpGroup({ label, items, isOverdue, onComplete, onSnooze, agencyMa
       <div className="space-y-1">
         {items.map(tp => {
           const agent = tp.agent;
-          const agencyName = agent?.agency_id ? agencyMap[agent.agency_id]?.name : "";
+          const agencyName = agent?.agency_id ? agencyMap[agent.current_agency_id]?.name : "";
           const tpType = tp.tpType;
           const IconComp = tpType?.icon_name ? (ICON_MAP[tpType.icon_name] || CalendarClock) : CalendarClock;
           const daysLabel = tp.daysUntil < 0
