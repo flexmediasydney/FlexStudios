@@ -158,7 +158,7 @@ export default function DailyPunchList({ onLogTouchpoint }) {
       const lastTp = agentTps[0];
       const lastDate = lastTp?.logged_at || lastTp?.created_date || agent.last_contacted_at;
       const daysSince = daysSinceNow(lastDate);
-      const recentTypeIds = agentTps.slice(0, 3).map(t => t.touchpoint_type_icon || t.touchpoint_type_id);
+      const recentTypeIds = agentTps.slice(0, 3).map(t => t.touchpoint_type_name || t.touchpoint_type_id);
       const suggestedChannel = suggestNextChannel(recentTypeIds);
       const agencyName = agent.agency_id ? agencyMap[agent.agency_id]?.name : null;
 

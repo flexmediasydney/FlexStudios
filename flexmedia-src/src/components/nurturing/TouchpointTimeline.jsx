@@ -33,6 +33,9 @@ import {
   BarChart3,
   Hash,
   CalendarDays,
+  Facebook,
+  Instagram,
+  Linkedin,
 } from "lucide-react";
 
 const ICON_MAP = {
@@ -52,6 +55,9 @@ const ICON_MAP = {
   Presentation,
   MapPin,
   PhoneCall,
+  Facebook,
+  Instagram,
+  Linkedin,
 };
 
 const OUTCOME_COLORS = {
@@ -167,7 +173,7 @@ export default function TouchpointTimeline({ entityType, entityId, entityLabel, 
 
   function getTypeIcon(tp) {
     const tpType = typeMap[tp.touchpoint_type_id];
-    const iconName = tpType?.icon;
+    const iconName = tpType?.icon_name;
     const Icon = iconName && ICON_MAP[iconName] ? ICON_MAP[iconName] : Phone;
     return Icon;
   }

@@ -168,7 +168,7 @@ export default function QuickLogTouchpoint({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  });
+  }, [open, selectedTypeId, selectedAgentId]);
 
   // ── Save ──
   const handleSave = async () => {
