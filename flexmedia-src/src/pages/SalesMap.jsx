@@ -276,7 +276,7 @@ export default function SalesMap() {
         setGeocodeResult({ ok: false, message: 'No un-geocoded agencies with addresses found.' });
         return;
       }
-      const result = await api.functions.invoke('geocodeAgencies', { agencyIds: ungeocodedIds });
+      const result = await api.functions.invoke('geocodeAgencies', { agency_ids: ungeocodedIds });
       setGeocodeResult({
         ok: true,
         message: `Geocoded ${result?.geocoded ?? 0} of ${result?.total ?? ungeocodedIds.length} agencies.`,
