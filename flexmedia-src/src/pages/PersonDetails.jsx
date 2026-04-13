@@ -54,6 +54,12 @@ const PROSPECT_STATUSES = ['New Lead', 'Researching', 'Attempted Contact', 'Disc
 const SOURCES = ['Referral', 'LinkedIn', 'Web Search', 'Event', 'Manual Import', 'Networking'];
 
 // ── Inline editable field (Pipedrive side-by-side layout) ──────────────────────
+const INTEGRITY_FIELDS = {
+  current_agency_id: 'Missing org',
+  email: 'Missing email',
+  phone: 'Missing phone',
+};
+
 function InlineField({ label, value, field, onSave, type = 'text', options, placeholder, icon: Icon, readOnly, actionHref, actionIcon: ActionIcon, actionLabel }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || '');
@@ -141,7 +147,10 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
               "text-sm flex-1",
               displayValue ? "text-foreground" : "text-muted-foreground/40"
             )}>
-              {displayValue || '\u2014'}
+              {displayValue || (INTEGRITY_FIELDS[field]
+                ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{INTEGRITY_FIELDS[field]}</span>
+                : '\u2014'
+              )}
             </span>
             {actionHref && ActionIcon && displayValue && (
               <a
