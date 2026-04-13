@@ -161,10 +161,21 @@ export default function EmailInboxMain() {
   } = useColumnManager();
 
   // Real-time subscriptions for data
-  const { data: emailAccounts = [], loading: accountsLoading } = useEntitySubscriptionWithFilter(
+  // Load ALL active accounts — filter client-side so users see their own + team inboxes
+  const { data: allEmailAccounts = [], loading: accountsLoading } = useEntitySubscriptionWithFilter(
     'EmailAccount',
-    { is_active: true, assigned_to_user_id: user?.id }
+    { is_active: true }
   );
+  // Show: own accounts + team accounts (where team_id matches user's team) + all for owner
+  const emailAccounts = useMemo(() => {
+    if (!user) return [];
+    if (user.role === 'master_admin') return allEmailAccounts; // Owner sees all
+    return allEmailAccounts.filter(a =>
+      a.assigned_to_user_id === user.id || // Own accounts
+      (a.team_id && a.team_id === user.internal_team_id) || // Team accounts
+      (!a.assigned_to_user_id && !a.team_id) // Unassigned shared accounts
+    );
+  }, [allEmailAccounts, user]);
 
   const { data: labelData = [], loading: labelsLoading } = useEntitySubscriptionWithFilter(
     'EmailLabel',

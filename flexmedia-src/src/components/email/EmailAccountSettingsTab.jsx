@@ -57,14 +57,14 @@ export default function EmailAccountSettingsTab() {
   const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
 
-  // FIX 1: scoped to current user
+  // Owner sees ALL accounts; others see only their own
+  const isOwner = user?.role === 'master_admin';
   const { data: emailAccounts = [], isLoading: accountsLoading } = useQuery({
-    queryKey: ["email-accounts", user?.id],
+    queryKey: ["email-accounts", user?.id, isOwner ? "all" : "own"],
     queryFn: () =>
-      api.entities.EmailAccount.filter({
-        is_active: true,
-        assigned_to_user_id: user?.id,
-      }),
+      isOwner
+        ? api.entities.EmailAccount.filter({ is_active: true })
+        : api.entities.EmailAccount.filter({ is_active: true, assigned_to_user_id: user?.id }),
     enabled: !!user?.id,
   });
 

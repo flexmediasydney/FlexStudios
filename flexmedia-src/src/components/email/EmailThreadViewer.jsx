@@ -114,8 +114,12 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     // Verify user owns this account (critical security check)
     if (!user || !account) return;
     
-    if (account.assigned_to_user_id !== user.id) {
-      toast.error("Unauthorized: You do not own this email account");
+    // Allow access if: own account, team account, or owner role
+    const canAccess = account.assigned_to_user_id === user.id ||
+      user.role === 'master_admin' ||
+      (account.team_id && account.team_id === user.internal_team_id);
+    if (!canAccess) {
+      toast.error("Unauthorized: You do not have access to this email account");
       onBack();
       return;
     }
