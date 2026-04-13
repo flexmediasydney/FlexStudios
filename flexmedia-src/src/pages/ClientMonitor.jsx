@@ -147,13 +147,16 @@ function MediaIcons({ listing }) {
 /* ------------------------------------------------------------------ */
 /*  Gap Listing Card                                                  */
 /* ------------------------------------------------------------------ */
-function GapCard({ listing }) {
+function GapCard({ listing, isSimulated }) {
   return (
-    <Card className="overflow-hidden border-l-4 border-l-amber-400 hover:shadow-md transition-shadow">
+    <Card className={cn("overflow-hidden border-l-4 hover:shadow-md transition-shadow", isSimulated ? "border-l-amber-300 opacity-75" : "border-l-amber-400")}>
       <CardContent className="p-5 space-y-3">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 flex items-center gap-2">
             <p className="font-semibold text-foreground truncate">{listing.address}</p>
+            {isSimulated && (
+              <Badge variant="outline" className="text-[9px] uppercase tracking-wider font-bold bg-amber-100 text-amber-600 border-amber-300 shrink-0">Sample</Badge>
+            )}
             {listing.headline && (
               <p className="text-sm text-muted-foreground line-clamp-1 mt-0.5">{listing.headline}</p>
             )}
@@ -195,10 +198,10 @@ function GapCard({ listing }) {
 /* ------------------------------------------------------------------ */
 /*  Matched Listing Card                                              */
 /* ------------------------------------------------------------------ */
-function MatchedCard({ match }) {
+function MatchedCard({ match, isSimulated }) {
   const { listing, project } = match;
   return (
-    <Card className="overflow-hidden border-l-4 border-l-emerald-400 hover:shadow-md transition-shadow">
+    <Card className={cn("overflow-hidden border-l-4 hover:shadow-md transition-shadow", isSimulated ? "border-l-emerald-300 opacity-75" : "border-l-emerald-400")}>
       <CardContent className="p-0">
         <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border">
           {/* Domain listing side */}
@@ -207,6 +210,9 @@ function MatchedCard({ match }) {
               <Badge variant="outline" className="text-[10px] uppercase tracking-wider bg-blue-50 text-blue-700 border-blue-200">
                 Domain
               </Badge>
+              {isSimulated && (
+                <Badge variant="outline" className="text-[9px] uppercase tracking-wider font-bold bg-amber-100 text-amber-600 border-amber-300">Sample</Badge>
+              )}
               <ListingStatusBadge status={listing.status} />
             </div>
             <p className="font-semibold text-foreground text-sm">{listing.address}</p>
@@ -291,7 +297,12 @@ function AllListingsTable({ listings, matches }) {
             const isMatched = matchedIds.has(l.domain_listing_id);
             return (
               <tr key={l.domain_listing_id || i} className="hover:bg-muted/30 transition-colors">
-                <td className="px-4 py-3 font-medium text-foreground max-w-[280px] truncate">{l.address}</td>
+                <td className="px-4 py-3 font-medium text-foreground max-w-[280px] truncate">
+                  {l.address}
+                  {dataSource === "simulation" && (
+                    <Badge variant="outline" className="ml-2 text-[8px] uppercase tracking-wider font-bold bg-amber-100 text-amber-600 border-amber-300">Sample</Badge>
+                  )}
+                </td>
                 <td className="px-4 py-3"><ListingStatusBadge status={l.status} /></td>
                 <td className="px-4 py-3 text-foreground whitespace-nowrap">{l.display_price || "--"}</td>
                 <td className="px-4 py-3 text-center tabular-nums">{l.bedrooms ?? "--"}</td>
@@ -453,6 +464,22 @@ export default function ClientMonitor() {
         </div>
 
         {/* -------------------------------------------------------- */}
+        {/*  Simulation warning banner                                */}
+        {/* -------------------------------------------------------- */}
+        {dataSource === "simulation" && !isLoading && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-4 flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-amber-800 dark:text-amber-300 text-sm">Simulated Data</p>
+              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                This agent does not have a Domain Agent ID configured, so all listings shown are <strong>sample data</strong> for demonstration purposes.
+                To show real listings, edit the agent record and set their Domain Agent ID.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* -------------------------------------------------------- */}
         {/*  Loading state                                            */}
         {/* -------------------------------------------------------- */}
         {isLoading && (
@@ -588,7 +615,7 @@ export default function ClientMonitor() {
                 ) : (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {gaps.map((g, i) => (
-                      <GapCard key={g.listing?.domain_listing_id || i} listing={g.listing || g} />
+                      <GapCard key={g.listing?.domain_listing_id || i} listing={g.listing || g} isSimulated={dataSource === "simulation"} />
                     ))}
                   </div>
                 )}
@@ -609,7 +636,7 @@ export default function ClientMonitor() {
                 ) : (
                   <div className="grid grid-cols-1 gap-4">
                     {matches.map((m, i) => (
-                      <MatchedCard key={m.listing?.domain_listing_id || i} match={m} />
+                      <MatchedCard key={m.listing?.domain_listing_id || i} match={m} isSimulated={dataSource === "simulation"} />
                     ))}
                   </div>
                 )}
