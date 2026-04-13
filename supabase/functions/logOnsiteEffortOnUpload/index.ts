@@ -169,6 +169,7 @@ Deno.serve(async (req) => {
             paused_duration: 0,
             is_active: false,
             status: 'completed',
+            log_source: 'auto_onsite',
           });
           console.log(`Created time log for ${role}: ${taskSeconds}s`);
         } else {

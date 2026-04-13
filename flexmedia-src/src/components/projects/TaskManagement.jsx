@@ -550,6 +550,38 @@ export default function TaskManagement({ projectId, project, canEdit }) {
       );
 
       if (!wasCompleted) {
+        // Auto-log effort if task has estimated time but NO manual time logs.
+        // Creates a completed time log equal to the full estimated duration.
+        const estMinutes = task.estimated_minutes || 0;
+        if (estMinutes > 0) {
+          try {
+            const existingLogs = await api.entities.TaskTimeLog.filter({ task_id: task.id }, null, 1);
+            if (existingLogs.length === 0) {
+              const now = new Date().toISOString();
+              const endTime = new Date(Date.now() + estMinutes * 60 * 1000).toISOString();
+              await api.entities.TaskTimeLog.create({
+                task_id: task.id,
+                project_id: projectId,
+                user_id: task.assigned_to || user?.id,
+                user_name: task.assigned_to_name || user?.full_name || 'System',
+                user_email: user?.email || '',
+                role: task.auto_assign_role || 'none',
+                status: 'completed',
+                is_active: false,
+                is_manual: false,
+                log_source: 'auto_completion',
+                start_time: now,
+                end_time: endTime,
+                total_seconds: estMinutes * 60,
+                team_id: task.assigned_to_team_id || null,
+                team_name: task.assigned_to_team_name || null,
+              });
+            }
+          } catch (err) {
+            console.warn('Auto effort log failed (non-fatal):', err?.message);
+          }
+        }
+
         // task is now being marked complete (was false, now true)
         writeFeedEvent({
           eventType: 'task_completed',
