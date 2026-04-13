@@ -182,7 +182,7 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
               setDraft(val);
               setEditing(false);
               if (val !== (value || '')) onSave(field, val);
-            }} onBlur={save} onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
+            }} onBlur={() => setEditing(false)} onKeyDown={e => { if (e.key === 'Escape') cancel(); }}
             className="flex-1 text-sm border rounded px-2 py-1 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
             <option value="">-- Select --</option>
             {options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
@@ -546,14 +546,14 @@ export default function TeamDetails() {
         try {
           const teamAgents = members.filter(a => a.current_team_id === team.id);
           await Promise.all(teamAgents.map(a =>
-            api.entities.Agent.update(a.id, { current_team_name: value || '' }).catch(() => {})
+            api.entities.Agent.update(a.id, { current_team_name: value || null }).catch(() => {})
           ));
           refetchEntityList('Agent');
         } catch { /* non-fatal propagation */ }
         try {
           const allUsers = await api.entities.User.filter({ internal_team_id: team.id }, null, 200);
           await Promise.all(allUsers.map(u =>
-            api.entities.User.update(u.id, { internal_team_name: value || '' }).catch(() => {})
+            api.entities.User.update(u.id, { internal_team_name: value || null }).catch(() => {})
           ));
         } catch { /* non-fatal propagation */ }
       }

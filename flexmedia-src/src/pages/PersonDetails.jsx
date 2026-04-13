@@ -67,6 +67,7 @@ const INTEGRITY_FIELDS = {
 function SelectCombobox({ value, options, onSave, field, placeholder, prefixIcon: PrefixIcon, onCancel }) {
   const [open, setOpen] = useState(true);
   const [search, setSearch] = useState('');
+  const committedRef = useRef(false);
 
   const normalise = (o) => typeof o === 'string' ? { value: o, label: o } : o;
   const normOptions = options.map(normalise);
@@ -78,14 +79,17 @@ function SelectCombobox({ value, options, onSave, field, placeholder, prefixIcon
   const displayValue = normOptions.find(o => o.value === value)?.label ?? value;
 
   const commit = (val) => {
+    committedRef.current = true;
     setOpen(false);
-    if (val !== (value || '')) onSave(field, val);
+    onSave(field, val);
+    // Close editing state in parent after save fires
+    onCancel();
   };
 
   // When popover closes without a selection, call onCancel so parent resets editing state
   const handleOpenChange = (next) => {
     setOpen(next);
-    if (!next) onCancel();
+    if (!next && !committedRef.current) onCancel();
   };
 
   return (
@@ -111,7 +115,7 @@ function SelectCombobox({ value, options, onSave, field, placeholder, prefixIcon
         align="start"
         sideOffset={4}
         className="w-[220px] p-0 shadow-lg"
-        onKeyDown={e => { if (e.key === 'Escape') { setOpen(false); onCancel(); } }}
+        onKeyDown={e => { if (e.key === 'Escape') { setOpen(false); /* handleOpenChange will call onCancel */ } }}
       >
         <Command shouldFilter={false}>
           <CommandInput
@@ -604,16 +608,19 @@ export default function PersonDetails() {
     if (!agent) return;
     try {
       const oldValue = agent[field];
-      const payload = { [field]: value || null };
+      // Convert sentinel values to null for UUID FK columns
+      const cleanValue = value === '__none__' ? null : (value || null);
+      const payload = { [field]: cleanValue };
       if (field === 'current_agency_id') {
         const ag = allAgencies.find(a => a.id === value);
-        payload.current_agency_name = ag?.name || '';
-        payload.current_team_id = '';
-        payload.current_team_name = '';
+        payload.current_agency_name = ag?.name || null;
+        // Clear team when agency changes (UUID FK must be null, not empty string)
+        payload.current_team_id = null;
+        payload.current_team_name = null;
       }
       if (field === 'current_team_id') {
-        const tm = allTeams.find(t => t.id === value);
-        payload.current_team_name = tm?.name || '';
+        const tm = allTeams.find(t => t.id === cleanValue);
+        payload.current_team_name = tm?.name || null;
       }
       await api.entities.Agent.update(agent.id, payload);
       updateEntityInCache('Agent', agent.id, payload);
@@ -624,7 +631,7 @@ export default function PersonDetails() {
         entity_id: agent.id,
         entity_name: agent.name,
         action: 'update',
-        changed_fields: [{ field, old_value: oldValue || '', new_value: value || '' }],
+        changed_fields: [{ field, old_value: oldValue || '', new_value: cleanValue || '' }],
         user_name: user?.full_name || '',
         user_email: user?.email || '',
       }).catch(() => {});
@@ -966,7 +973,7 @@ export default function PersonDetails() {
               options={allAgencies.map(a => ({ value: a.id, label: a.name }))} />
             <InlineField label="Team" value={agent.current_team_id} field="current_team_id"
               onSave={handleFieldSave} type="select"
-              options={[{ value: '', label: 'No team' }, ...availableTeams.map(t => ({ value: t.id, label: t.name }))]} />
+              options={[{ value: '__none__', label: 'No team' }, ...availableTeams.map(t => ({ value: t.id, label: t.name }))]} />
             <InlineField label="State" value={agent.relationship_state} field="relationship_state"
               onSave={handleFieldSave} type="select" options={RELATIONSHIP_STATES} />
 

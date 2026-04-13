@@ -220,13 +220,13 @@ export default function OrgDetails() {
     try {
       await api.entities.Agent.update(agent.id, {
         current_agency_id: agencyId,
-        current_agency_name: agency?.name || "",
+        current_agency_name: agency?.name || null,
         current_team_id: null,
         current_team_name: null,
       });
       updateEntityInCache('Agent', agent.id, {
         current_agency_id: agencyId,
-        current_agency_name: agency?.name || "",
+        current_agency_name: agency?.name || null,
         current_team_id: null,
         current_team_name: null,
       });
