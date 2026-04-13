@@ -48,6 +48,7 @@ import GlobalNotificationBar, { NotificationBell } from "@/components/notificati
 import NotificationToast from "@/components/notifications/NotificationToast";
 import { ActiveTimersProvider } from "@/components/utilization/ActiveTimersContext";
 import CalendarConnectBanner from "@/components/calendar/CalendarConnectBanner";
+import QuickLogTouchpoint from "@/components/nurturing/QuickLogTouchpoint";
 import { Eye, XCircle } from "lucide-react";
 
 // ── Simulation Banner ─────────────────────────────────────────────────────
@@ -153,6 +154,7 @@ function LayoutContentWrapper({ currentPageName, children }) {
 function LayoutContent({ currentPageName, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [quickLogOpen, setQuickLogOpen] = useState(false);
   const { data: user } = useCurrentUser();
   
   // ── Live badge counts for nav ──────────────────────────────────────────
@@ -207,6 +209,11 @@ function LayoutContent({ currentPageName, children }) {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setSearchOpen(v => !v);
+      }
+      // Ctrl/Cmd+Shift+L: Quick log touchpoint
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "L") {
+        e.preventDefault();
+        setQuickLogOpen(v => !v);
       }
       // Esc closes sidebar on mobile, or search dialog
       if (e.key === "Escape") {
@@ -477,6 +484,8 @@ function LayoutContent({ currentPageName, children }) {
       <SimulationBanner />
       <GlobalNotificationBar />
       <NotificationToast />
+      {/* Global Quick Log Touchpoint (Ctrl+Shift+L) */}
+      <QuickLogTouchpoint open={quickLogOpen} onClose={() => setQuickLogOpen(false)} />
       {/* Skip to content link for keyboard navigation */}
       <a
         href="#main-content"
