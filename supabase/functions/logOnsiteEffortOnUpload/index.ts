@@ -154,13 +154,27 @@ Deno.serve(async (req) => {
         : shootStart;
 
       // Create time log FIRST — if this fails, task stays unlocked for retry
-      if (staffId && taskSeconds > 0) {
+      if (taskSeconds > 0) {
         const existingLogs = await entities.TaskTimeLog.filter({ task_id: task.id }, null, 10);
         if (existingLogs.length === 0) {
+          // Resolve a valid user_id: prefer task assignee, then project photographer, then project owner, then any admin
+          let logUserId = staffType !== 'team' ? staffId : null;
+          if (!logUserId) logUserId = project.photographer_id || project.project_owner_id || null;
+          // Validate the user exists before writing
+          if (logUserId) {
+            const userCheck = await admin.from('users').select('id').eq('id', logUserId).maybeSingle();
+            if (!userCheck?.data) logUserId = null;
+          }
+          // Last resort: find any admin user
+          if (!logUserId) {
+            const { data: admins } = await admin.from('users').select('id').in('role', ['master_admin', 'admin']).limit(1);
+            logUserId = admins?.[0]?.id || null;
+          }
+
           await entities.TaskTimeLog.create({
             task_id: task.id,
             project_id,
-            user_id: staffType !== 'team' ? staffId : (project.project_owner_id || staffId),
+            user_id: logUserId,
             user_name: staffName || '',
             role,
             start_time: shootStart,

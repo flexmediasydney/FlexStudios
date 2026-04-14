@@ -333,6 +333,19 @@ Deno.serve(async (req) => {
       old_stage: oldStatus,
     }).catch(() => {});
 
+    // Auto-complete onsite effort tasks when project reaches uploaded or beyond
+    const STAGE_ORDER_LOG = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','submitted','in_progress','in_production','ready_for_partial','in_revision','delivered'];
+    const newIdx = STAGE_ORDER_LOG.indexOf(newStatus);
+    const uploadedIdx = STAGE_ORDER_LOG.indexOf('uploaded');
+    if (newIdx >= uploadedIdx) {
+      invokeFunction('logOnsiteEffortOnUpload', {
+        project_id: project.id,
+        old_status: oldStatus,
+      }).catch((err: any) => {
+        console.warn('logOnsiteEffortOnUpload fire-and-forget failed:', err?.message);
+      });
+    }
+
     // Update Agent + Agency denormalised stats when project closes
     if (project.agent_id && (newStatus === 'delivered' || project.outcome === 'won')) {
       try {
