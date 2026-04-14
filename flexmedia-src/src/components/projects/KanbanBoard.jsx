@@ -587,7 +587,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
   const [pendingDrag, setPendingDrag] = useState(null);
   const [draggingId, setDraggingId] = useState(null);
 
-  const onDragEnd = (result) => {
+  const onDragEnd = async (result) => {
     setDraggingId(null);
     if (!result.destination) return;
     // Entity access guard: block drag if user cannot edit projects (entity matrix)
@@ -619,6 +619,23 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
     if (project.status === 'delivered') {
       toast.error('Delivered projects cannot be moved. Use the Reopen flow from the project detail page.');
       return;
+    }
+
+    // Hard rule: cannot advance past onsite until at least 1 calendar event has ended
+    const POST_ONSITE = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
+    if (POST_ONSITE.includes(newStatus)) {
+      try {
+        const calEvents = await api.entities.CalendarEvent.filter({ project_id: projectId });
+        const hasEndedEvent = (calEvents || []).some(ev =>
+          ev.end_time && new Date(ev.end_time).getTime() < Date.now()
+        );
+        if (!hasEndedEvent) {
+          toast.error('This project cannot advance past Onsite until at least one calendar event has ended (shoot must have occurred).', { duration: 5000 });
+          return;
+        }
+      } catch (err) {
+        console.warn('Calendar event pre-check failed, backend will enforce:', err?.message);
+      }
     }
 
     if (newIdx < currentIdx) {

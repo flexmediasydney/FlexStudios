@@ -112,6 +112,29 @@ Deno.serve(async (req) => {
       return errorResponse(`Invalid stage: ${newStatus}`, 400);
     }
 
+    // ─── Hard rule: cannot advance past "onsite" until at least 1 calendar event has ended ───
+    const POST_ONSITE_STAGES = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
+    if (POST_ONSITE_STAGES.includes(newStatus)) {
+      try {
+        const calendarEvents = await entities.CalendarEvent.filter({ project_id: project.id }, null, 100);
+        const nowMs = Date.now();
+        const hasEndedEvent = (calendarEvents || []).some((ev: any) => {
+          if (!ev.end_time) return false;
+          return new Date(ev.end_time).getTime() < nowMs;
+        });
+        if (!hasEndedEvent) {
+          console.warn(`Stage gate blocked: ${project.id} cannot move to ${newStatus} — no calendar event has ended yet`);
+          return jsonResponse({
+            blocked: true,
+            message: 'This project cannot advance past Onsite until at least one calendar event has ended. The shoot must have occurred before post-production stages can begin.',
+          }, 400);
+        }
+      } catch (calErr: any) {
+        // Non-fatal: log but allow the transition if calendar query fails
+        console.error('Calendar event check failed (allowing transition):', calErr?.message);
+      }
+    }
+
     const existingVisitsForNew = freshTimers.filter((t: any) => t.stage === newStatus);
     const visitNumber = existingVisitsForNew.length + 1;
 
