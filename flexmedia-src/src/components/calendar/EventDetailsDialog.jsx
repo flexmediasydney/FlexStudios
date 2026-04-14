@@ -663,7 +663,16 @@ export default function EventDetailsDialog({
                   </Button>
                 )}
               </div>
-              <Select value={formData.project_id || "none"} onValueChange={v => set("project_id", v === "none" ? "" : v)}>
+              <Select value={formData.project_id || "none"} onValueChange={v => {
+                const pid = v === "none" ? "" : v;
+                set("project_id", pid);
+                // Auto-detect person + org from project
+                if (pid) {
+                  const proj = projects.find(p => p.id === pid);
+                  if (proj?.agent_id) set("agent_id", proj.agent_id);
+                  if (proj?.agency_id) set("agency_id", proj.agency_id);
+                }
+              }}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select project (optional)" />
                 </SelectTrigger>
@@ -708,21 +717,7 @@ export default function EventDetailsDialog({
               </Select>
             </div>
 
-            {/* Owner */}
-            <div>
-              <Label>Owner</Label>
-              <Select value={formData.owner_user_id || "none"} onValueChange={v => set("owner_user_id", v === "none" ? "" : v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Assign to user (optional)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Unassigned</SelectItem>
-                  {users.map(u => (
-                    <SelectItem key={u.id} value={u.id}>{u.full_name || u.email}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {/* Owner field removed */}
           </div>
 
           {/* Email linking — shown when emails are available for the linked project/person */}
@@ -755,41 +750,10 @@ export default function EventDetailsDialog({
               )}
             </div>
           )}
-          {/* Recurrence with end date */}
-          <div>
-            <Label>Repeat</Label>
-            <Select value={formData.recurrence} onValueChange={v => set("recurrence", v)}>
-              <SelectTrigger>
-                <SelectValue placeholder="No repeat" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No repeat</SelectItem>
-                <SelectItem value="daily">Daily</SelectItem>
-                <SelectItem value="weekly">Weekly</SelectItem>
-                <SelectItem value="monthly">Monthly</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground mt-1">Set a recurrence end date to prevent infinite repeats</p>
-          </div>
+          {/* Repeat field removed */}
           </fieldset>
 
-          {/* Outcome note — always editable even for Tonomo/Google events */}
-          {(event?.id || formData.is_done) && (
-            <div>
-              <Label htmlFor="outcome_note" className="flex items-center justify-between">
-                <span>Outcome / Result</span>
-                <span className="text-xs text-muted-foreground font-normal tabular-nums">{formData.outcome_note.length} / 500</span>
-              </Label>
-              <Textarea
-                id="outcome_note"
-                value={formData.outcome_note}
-                onChange={e => set("outcome_note", e.target.value)}
-                placeholder="What was the result of this activity?"
-                rows={2}
-                maxLength={500}
-              />
-            </div>
-          )}
+          {/* Outcome/Result field removed */}
 
           <DialogFooter className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex gap-2">

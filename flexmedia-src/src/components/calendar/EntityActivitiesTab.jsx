@@ -216,9 +216,7 @@ function ActivityRow({ event, onClick, onMarkDone, done }) {
         {event.description && (
           <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{event.description}</p>
         )}
-        {done && event.outcome_note && (
-          <p className="text-xs text-green-700 mt-1 line-clamp-1">✓ {event.outcome_note}</p>
-        )}
+        {/* outcome_note display removed */}
       </div>
 
       {!done && (
