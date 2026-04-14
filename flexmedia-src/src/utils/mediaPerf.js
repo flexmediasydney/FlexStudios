@@ -189,24 +189,42 @@ export function decodeImage(url) {
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
-const _pending = new Set();
+// Map of cacheKey → Promise<string|null> for in-flight dedup
+// When multiple components request the same file simultaneously,
+// they all await the SAME promise instead of getting null or firing duplicate fetches.
+const _inflight = new Map();
 
 /**
  * Fetch a media file through the edge function proxy.
+ * Deduplicates concurrent requests — if the same file is already being fetched,
+ * returns the existing promise instead of firing a duplicate.
+ *
  * @param {LRUBlobCache} cache - The blob cache to use
  * @param {string} filePath - Full Dropbox path
  * @param {'thumb'|'proxy'|'stream_url'} mode - Fetch mode
- * @param {number} retries - Retry count for 503 (token refreshed)
+ * @param {number} retries - Retry count for 503/429 errors
  * @returns {Promise<string|null>} Blob URL or null
  */
-export async function fetchMediaProxy(cache, filePath, mode = 'thumb', retries = 1) {
+export function fetchMediaProxy(cache, filePath, mode = 'thumb', retries = 2) {
   const cacheKey = `${mode}::${filePath}`;
-  if (cache.has(cacheKey)) return cache.get(cacheKey);
-  if (_pending.has(cacheKey)) return null;
-  _pending.add(cacheKey);
 
+  // Layer 1: Already cached blob URL
+  if (cache.has(cacheKey)) return Promise.resolve(cache.get(cacheKey));
+
+  // Layer 2: Already in-flight — return the SAME promise (critical dedup fix)
+  if (_inflight.has(cacheKey)) return _inflight.get(cacheKey);
+
+  // Layer 3: Start new fetch
+  const promise = _doFetch(cache, cacheKey, filePath, mode, retries);
+  _inflight.set(cacheKey, promise);
+  // Clean up in-flight map when done (success or failure)
+  promise.finally(() => _inflight.delete(cacheKey));
+  return promise;
+}
+
+async function _doFetch(cache, cacheKey, filePath, mode, retries) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 20000);
+  const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
       method: 'POST',
@@ -215,15 +233,23 @@ export async function fetchMediaProxy(cache, filePath, mode = 'thumb', retries =
       signal: controller.signal,
     });
 
-    // 503 = token was refreshed, retry once
-    if (res.status === 503 && retries > 0) {
-      _pending.delete(cacheKey);
-      return fetchMediaProxy(cache, filePath, mode, retries - 1);
+    // 503 = token refreshed, 429 = rate limited → retry with backoff
+    if ((res.status === 503 || res.status === 429) && retries > 0) {
+      const delay = res.status === 429 ? 2000 : 500; // longer backoff for rate limits
+      await new Promise(r => setTimeout(r, delay * (3 - retries))); // escalating delay
+      return _doFetch(cache, cacheKey, filePath, mode, retries - 1);
+    }
+
+    // 500/502/504 → retry once
+    if (res.status >= 500 && retries > 0) {
+      await new Promise(r => setTimeout(r, 1000));
+      return _doFetch(cache, cacheKey, filePath, mode, retries - 1);
     }
 
     if (!res.ok) return null;
     const blob = await res.blob();
-    if (!blob.type?.startsWith('image/') && blob.size < 500) return null;
+    // Reject tiny error responses but not tiny valid images (lowered threshold)
+    if (!blob.type?.startsWith('image/') && blob.size < 200) return null;
     const url = URL.createObjectURL(blob);
     cache.set(cacheKey, url);
 
@@ -240,6 +266,5 @@ export async function fetchMediaProxy(cache, filePath, mode = 'thumb', retries =
     return null;
   } finally {
     clearTimeout(timeoutId);
-    _pending.delete(cacheKey);
   }
 }

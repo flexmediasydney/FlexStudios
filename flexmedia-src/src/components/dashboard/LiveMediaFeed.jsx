@@ -26,40 +26,11 @@ import { cn } from "@/lib/utils";
 import { formatDistanceToNow, differenceInDays, format } from "date-fns";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
 import TagManager from "@/components/favorites/TagManager";
-import { SHARED_THUMB_CACHE, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
+import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-// ---- Image proxy with concurrency limiter + LRU blob cache ----
-// PERF: Uses shared singleton from mediaPerf (500-entry LRU)
-const blobCache = SHARED_THUMB_CACHE;
-const pending = new Set();
-
-// PERF: Uses global concurrency limiter + img.decode() before caching
-async function fetchProxyImage(filePath, mode = 'thumb') {
-  const cacheKey = `${mode}::${filePath}`;
-  if (blobCache.has(cacheKey)) return blobCache.get(cacheKey);
-  if (pending.has(cacheKey)) return null;
-  pending.add(cacheKey);
-  try {
-    const url = await enqueueFetch(async () => {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-        body: JSON.stringify({ action: mode, file_path: filePath }),
-      });
-      if (!res.ok) return null;
-      const blob = await res.blob();
-      if (blob.size < 500) return null;
-      const blobUrl = URL.createObjectURL(blob);
-      if (mode === 'thumb') await decodeImage(blobUrl);
-      return blobUrl;
-    });
-    if (url) blobCache.set(cacheKey, url);
-    return url;
-  } catch { return null; }
-  finally { pending.delete(cacheKey); }
+// ---- Image proxy: delegates to shared fetchMediaProxy with proper dedup ----
+function fetchProxyImage(filePath, mode = 'thumb') {
+  return enqueueFetch(() => fetchMediaProxy(SHARED_THUMB_CACHE, filePath, mode));
 }
 
 // ---- Constants ----

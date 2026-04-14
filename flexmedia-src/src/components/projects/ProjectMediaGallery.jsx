@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import { api } from "@/api/supabaseClient";
 import { useQuery } from "@tanstack/react-query";
-import { SHARED_THUMB_CACHE, enqueueFetch, decodeImage } from "@/utils/mediaPerf";
+import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,18 +20,9 @@ import FavoriteButton from "@/components/favorites/FavoriteButton";
 import TagManager from "@/components/favorites/TagManager";
 import { useFavorites } from "@/components/favorites/useFavorites";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // ─── Image proxy with concurrent loading + progress tracking ────────
-// PERF: Uses shared singleton from mediaPerf (500-entry LRU)
-const blobCache = SHARED_THUMB_CACHE;
-const pending = new Set();
-
-/** Canonical cache key */
-function cacheKey(filePath, mode = 'thumb') {
-  return `${mode}::${filePath}`;
-}
+// Delegates to shared fetchMediaProxy for dedup + retry, wraps with progress tracking
 
 /** Build proxy path from base + file, safely handling undefined file.path */
 function buildProxyPath(basePath, file) {
@@ -47,33 +38,11 @@ function notifyProgress() { _progressListeners.forEach(fn => fn({ loaded: _loade
 function subscribeProgress(fn) { _progressListeners.add(fn); return () => _progressListeners.delete(fn); }
 function resetProgress() { _loadedCount = 0; _totalQueued = 0; notifyProgress(); }
 
-// PERF: fetchProxyImage now routes through global concurrency limiter + img.decode()
+// Routes through shared fetchMediaProxy (proper dedup + retry + backoff)
 async function fetchProxyImage(filePath, mode = 'thumb') {
-  const key = cacheKey(filePath, mode);
-  if (blobCache.has(key)) return blobCache.get(key);
-  if (pending.has(key)) return null;
-  pending.add(key);
-  try {
-    const url = await enqueueFetch(async () => {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON}` },
-        body: JSON.stringify({ action: mode, file_path: filePath }),
-      });
-      if (!res.ok) return null;
-      const blob = await res.blob();
-      if (blob.size < 500) return null;
-      const blobUrl = URL.createObjectURL(blob);
-      // PERF: decode image off main thread before caching to avoid jank
-      if (mode === 'thumb') await decodeImage(blobUrl);
-      return blobUrl;
-    });
-    if (url) blobCache.set(key, url);
-    // Only count thumbnail fetches toward progress (lightbox full-res fetches shouldn't inflate the count)
-    if (mode === 'thumb') { _loadedCount++; notifyProgress(); }
-    return url;
-  } catch { return null; }
-  finally { pending.delete(key); }
+  const url = await enqueueFetch(() => fetchMediaProxy(SHARED_THUMB_CACHE, filePath, mode));
+  if (url && mode === 'thumb') { _loadedCount++; notifyProgress(); }
+  return url;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
