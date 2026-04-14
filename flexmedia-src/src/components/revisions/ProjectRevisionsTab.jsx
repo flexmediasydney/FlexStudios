@@ -7,7 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, ChevronRight, Trash2, DollarSign, Pencil, Paperclip } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Plus, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, ChevronRight, Trash2, DollarSign, Pencil, Paperclip, Lock, Circle } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { fmtDate } from "@/components/utils/dateUtils";
@@ -56,6 +58,12 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
    const [revertConfirmStep, setRevertConfirmStep] = useState(0);
    const [pricingImpact, setPricingImpact] = useState(revision.pricing_impact || {});
    const [revisionTasksLocal, setRevisionTasksLocal] = useState([]);
+   const [showAddTask, setShowAddTask] = useState(false);
+   const [addingTask, setAddingTask] = useState(false);
+   const [newTaskTitle, setNewTaskTitle] = useState("");
+   const [newTaskAssignRole, setNewTaskAssignRole] = useState("");
+   const [newTaskDueDate, setNewTaskDueDate] = useState("");
+   const [optimisticCompletions, setOptimisticCompletions] = useState({});
 
   // Close status dropdown on click outside
   useEffect(() => {
@@ -269,9 +277,92 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
     setRevertConfirmStep(0);
   };
 
+  // --- Inline task helpers ---
+  const PROJECT_ROLES = [
+    { value: "project_owner", label: "Project Owner", idField: "project_owner_id", nameField: "project_owner_name" },
+    { value: "photographer", label: "Photographer", idField: "onsite_staff_1_id", nameField: "onsite_staff_1_name" },
+    { value: "videographer", label: "Videographer", idField: "onsite_staff_2_id", nameField: "onsite_staff_2_name" },
+    { value: "image_editor", label: "Image Editor", idField: "image_editor_id", nameField: "image_editor_name" },
+    { value: "video_editor", label: "Video Editor", idField: "video_editor_id", nameField: "video_editor_name" },
+    { value: "floorplan_editor", label: "Floorplan Editor", idField: "floorplan_editor_id", nameField: "floorplan_editor_name" },
+    { value: "drone_editor", label: "Drone Editor", idField: "drone_editor_id", nameField: "drone_editor_name" },
+  ];
+
+  const getTaskWithOptimistic = (task) => {
+    const opt = optimisticCompletions[task.id];
+    return opt ? { ...task, is_completed: opt.is_completed, completed_at: opt.completed_at } : task;
+  };
+
+  const handleToggleTask = async (task) => {
+    if (task.is_blocked || task.is_locked) return;
+    const wasCompleted = task.is_completed;
+    const newCompleted = !wasCompleted;
+    const newCompletedAt = newCompleted ? new Date().toISOString() : null;
+    setOptimisticCompletions(prev => ({ ...prev, [task.id]: { is_completed: newCompleted, completed_at: newCompletedAt } }));
+    try {
+      await api.entities.ProjectTask.update(task.id, {
+        is_completed: newCompleted,
+        completed_at: newCompletedAt,
+      });
+      refetchEntityList("ProjectTask");
+    } catch (e) {
+      setOptimisticCompletions(prev => { const n = { ...prev }; delete n[task.id]; return n; });
+      toast.error("Failed to update task");
+    }
+  };
+
+  const handleAddTask = async () => {
+    if (!newTaskTitle.trim() || addingTask) return;
+    setAddingTask(true);
+    try {
+      const taskData = {
+        title: `[Revision #${revision.revision_number}] ${newTaskTitle.trim()}`,
+        project_id: project.id,
+        task_type: "back_office",
+        due_date: newTaskDueDate || revision.due_date || null,
+        is_completed: false,
+        is_deleted: false,
+      };
+      if (newTaskAssignRole) {
+        const role = PROJECT_ROLES.find(r => r.value === newTaskAssignRole);
+        if (role && project[role.idField]) {
+          taskData.assigned_to = project[role.idField];
+          taskData.assigned_to_name = project[role.nameField] || "";
+        }
+      }
+      await api.entities.ProjectTask.create(taskData);
+      refetchEntityList("ProjectTask");
+      setNewTaskTitle("");
+      setNewTaskAssignRole("");
+      setNewTaskDueDate("");
+      setShowAddTask(false);
+      toast.success("Task added");
+    } catch (e) {
+      toast.error(e.message || "Failed to add task");
+    } finally {
+      setAddingTask(false);
+    }
+  };
+
+  const getDaysOverdue = (dueDate) => {
+    if (!dueDate) return 0;
+    const now = new Date();
+    const due = new Date(dueDate);
+    const diff = Math.floor((now - due) / (1000 * 60 * 60 * 24));
+    return diff > 0 ? diff : 0;
+  };
+
+  const formatEffort = (minutes) => {
+    if (!minutes || minutes <= 0) return null;
+    if (minutes < 60) return `${minutes}m`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  };
+
   // Get kind-specific styling for card border
-  const kindBorderStyle = revision.request_kind === 'change_request' 
-    ? 'border-2 border-purple-400' 
+  const kindBorderStyle = revision.request_kind === 'change_request'
+    ? 'border-2 border-purple-400'
     : 'border-2 border-red-400';
 
   return (
@@ -457,41 +548,152 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
             </div>
           )}
 
-          {/* Revision Tasks — read-only summary; manage in Tasks tab */}
-          {nonDeletedTasks.length > 0 && (
+          {/* Inline Task Manager */}
           <div>
-            <p className="text-xs font-medium text-muted-foreground mb-2">
-              Tasks ({nonDeletedTasks.filter(t => t.is_completed).length}/{nonDeletedTasks.length} done) · manage in Tasks tab
-            </p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                Tasks ({nonDeletedTasks.filter(t => getTaskWithOptimistic(t).is_completed).length}/{nonDeletedTasks.length} completed)
+              </p>
+              {canEdit && !['cancelled', 'delivered'].includes(revision.status) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-xs px-2 gap-1"
+                  onClick={() => setShowAddTask(s => !s)}
+                >
+                  <Plus className="h-3 w-3" /> Add
+                </Button>
+              )}
+            </div>
+
+            {/* Add Task Form */}
+            {showAddTask && (
+              <div className="mb-3 p-3 rounded-lg border bg-muted/30 space-y-2">
+                <Input
+                  placeholder="Task title..."
+                  value={newTaskTitle}
+                  onChange={e => setNewTaskTitle(e.target.value)}
+                  className="h-8 text-sm"
+                  onKeyDown={e => { if (e.key === 'Enter') handleAddTask(); }}
+                  autoFocus
+                />
+                <div className="flex items-center gap-2">
+                  <Select value={newTaskAssignRole} onValueChange={setNewTaskAssignRole}>
+                    <SelectTrigger className="h-7 text-xs flex-1">
+                      <SelectValue placeholder="Assign to role..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Unassigned</SelectItem>
+                      {PROJECT_ROLES.filter(r => project?.[r.idField]).map(r => (
+                        <SelectItem key={r.value} value={r.value}>
+                          {r.label}{project[r.nameField] ? ` (${project[r.nameField]})` : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    type="date"
+                    value={newTaskDueDate}
+                    onChange={e => setNewTaskDueDate(e.target.value)}
+                    className="h-7 text-xs w-36"
+                    placeholder="Due date"
+                  />
+                </div>
+                <div className="flex items-center gap-2 justify-end">
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setShowAddTask(false); setNewTaskTitle(""); setNewTaskAssignRole(""); setNewTaskDueDate(""); }}>
+                    Cancel
+                  </Button>
+                  <Button size="sm" className="h-7 text-xs" disabled={!newTaskTitle.trim() || addingTask} onClick={handleAddTask}>
+                    {addingTask ? "Adding..." : "Add Task"}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Task List */}
+            {nonDeletedTasks.length > 0 && (
               <div className="space-y-1">
-                {nonDeletedTasks.map(task => {
+                {nonDeletedTasks.map(rawTask => {
+                  const task = getTaskWithOptimistic(rawTask);
                   const cleanTitle = task.title.replace(/^\[Revision #\d+\]\s*/, "");
                   const assignee = task.assigned_to_team_name || task.assigned_to_name;
+                  const daysOverdue = !task.is_completed ? getDaysOverdue(task.due_date) : 0;
+                  const isBlocked = task.is_blocked || task.is_locked;
+                  const estEffort = formatEffort(task.estimated_minutes);
+                  const actEffort = formatEffort(task.total_effort_logged);
+
                   return (
                     <div key={task.id} className={cn(
                       "flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm group",
-                      task.is_completed ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800" : task.is_blocked ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800" : "bg-background border-border"
-                    )} title={cleanTitle}>
-                      {task.is_completed
-                        ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
-                        : task.is_blocked 
-                          ? <AlertCircle className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" title="Blocked - complete dependencies first" />
-                          : <Clock className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
-                      <span className={cn("flex-1 min-w-0 truncate group-hover:whitespace-normal group-hover:break-words", task.is_completed && "line-through text-muted-foreground")}>
+                      task.is_completed
+                        ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800"
+                        : isBlocked
+                          ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800"
+                          : "bg-background border-border"
+                    )}>
+                      {/* Checkbox / Status Icon */}
+                      {isBlocked ? (
+                        <Lock className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" title="Blocked - complete dependencies first" />
+                      ) : (
+                        <Checkbox
+                          checked={task.is_completed}
+                          onCheckedChange={() => handleToggleTask(rawTask)}
+                          className={cn(
+                            "h-4 w-4 flex-shrink-0 rounded-sm",
+                            task.is_completed && "data-[state=checked]:bg-green-600 data-[state=checked]:border-green-600"
+                          )}
+                        />
+                      )}
+
+                      {/* Title */}
+                      <span className={cn(
+                        "flex-1 min-w-0 truncate group-hover:whitespace-normal group-hover:break-words",
+                        task.is_completed && "line-through text-muted-foreground"
+                      )}>
                         {cleanTitle}
                       </span>
-                      {task.is_blocked && (
-                        <span className="text-xs text-amber-600 font-medium flex-shrink-0">blocked</span>
+
+                      {/* Effort display */}
+                      {(estEffort || actEffort) && (
+                        <span className="text-[10px] text-muted-foreground flex-shrink-0 tabular-nums" title={`Est: ${estEffort || '-'} / Actual: ${actEffort || '-'}`}>
+                          {actEffort || '0m'}/{estEffort || '-'}
+                        </span>
                       )}
+
+                      {/* Blocked badge */}
+                      {isBlocked && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 border-amber-300 flex-shrink-0">
+                          blocked
+                        </Badge>
+                      )}
+
+                      {/* Due date / overdue badge */}
+                      {task.due_date && !task.is_completed && (
+                        daysOverdue > 0 ? (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-red-100 text-red-700 border-red-300 flex-shrink-0">
+                            {daysOverdue}d overdue
+                          </Badge>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                            {fmtDate(task.due_date, 'd MMM')}
+                          </span>
+                        )
+                      )}
+
+                      {/* Assignee */}
                       {assignee && (
-                        <span className="text-xs text-muted-foreground flex-shrink-0 truncate">{assignee}</span>
+                        <span className="text-[10px] text-muted-foreground flex-shrink-0 truncate max-w-[80px]">{assignee}</span>
                       )}
                     </div>
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+
+            {nonDeletedTasks.length === 0 && !showAddTask && (
+              <p className="text-xs text-muted-foreground italic">No tasks for this revision</p>
+            )}
+          </div>
         </div>
       )}
 
