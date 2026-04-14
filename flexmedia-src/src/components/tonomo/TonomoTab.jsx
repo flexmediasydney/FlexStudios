@@ -138,17 +138,20 @@ export default function TonomoTab({ project }) {
       }
 
       // Log decision with user attribution
-      api.auth.me().then(u => {
-        api.entities.ProjectActivity.create({
+      try {
+        const u = await api.auth.me();
+        await api.entities.ProjectActivity.create({
           project_id: project.id,
           action: 'booking_decision',
           activity_type: 'manual_approval',
           description: `Booking manually approved by ${u?.full_name || 'admin'}. Status → ${newStatus}.`,
           user_id: u?.id,
           user_name: u?.full_name || u?.email,
-        }).catch(() => {});
+        });
         refetchEntityList("ProjectActivity");
-      }).catch(() => {});
+      } catch (logErr) {
+        console.warn('Failed to log approval decision:', logErr?.message);
+      }
 
       queryClient.invalidateQueries({ queryKey: ['pendingReviewProjects'] });
       queryClient.invalidateQueries({ queryKey: ['tonomoQueueStats'] });
@@ -230,17 +233,20 @@ export default function TonomoTab({ project }) {
                       pending_review_reason: (project.pending_review_reason || '') + ' [Flagged by admin]',
                     });
                     // Log flag decision with user attribution
-                    api.auth.me().then(u => {
-                      api.entities.ProjectActivity.create({
+                    try {
+                      const u = await api.auth.me();
+                      await api.entities.ProjectActivity.create({
                         project_id: project.id,
                         action: 'booking_decision',
                         activity_type: 'flagged',
                         description: `Booking flagged as urgent by ${u?.full_name || 'admin'}.`,
                         user_id: u?.id,
                         user_name: u?.full_name || u?.email,
-                      }).catch(() => {});
+                      });
                       refetchEntityList("ProjectActivity");
-                    }).catch(() => {});
+                    } catch (logErr) {
+                      console.warn('Failed to log flag decision:', logErr?.message);
+                    }
                     queryClient.invalidateQueries({ queryKey: ['project', project.id] });
                     refetchEntityList("Project");
                     toast.success('Issue flagged — marked as urgent');
