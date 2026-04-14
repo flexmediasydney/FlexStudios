@@ -173,23 +173,40 @@ export default function RevisionTemplatesManagement() {
                         </div>
                       </div>
 
-                      {isExpanded && (tpl.task_templates?.length || 0) > 0 && (
+                      {isExpanded && (
                         <div className="border-t bg-muted/20 p-3">
-                          <p className="text-xs font-semibold text-muted-foreground mb-2">Tasks in this template:</p>
-                          <div className="space-y-1.5">
-                            {tpl.task_templates.map((task, i) => (
-                              <div key={i} className="flex items-center gap-2 text-xs">
-                                <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center font-medium flex-shrink-0">{i + 1}</span>
-                                <span className="flex-1 truncate font-medium">{task.title}</span>
-                                {task.auto_assign_role !== "none" && (
-                                  <Badge variant="outline" className="text-xs">{task.auto_assign_role?.replace(/_/g, " ")}</Badge>
-                                )}
-                                {task.estimated_minutes > 0 && (
-                                  <span className="text-muted-foreground">{task.estimated_minutes}m</span>
-                                )}
-                              </div>
-                            ))}
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-semibold text-muted-foreground">Task Templates ({tpl.task_templates?.length || 0})</p>
+                            <Button variant="outline" size="sm" className="h-6 text-[11px] gap-1" onClick={e => { e.stopPropagation(); handleOpen(tpl); }}>
+                              <Edit className="h-3 w-3" /> Edit Tasks
+                            </Button>
                           </div>
+                          {(tpl.task_templates?.length || 0) === 0 ? (
+                            <p className="text-xs text-muted-foreground italic py-2">No task templates defined. <button className="underline hover:text-primary" onClick={e => { e.stopPropagation(); handleOpen(tpl); }}>Add tasks</button></p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {tpl.task_templates.map((task, i) => (
+                                <div key={i} className="flex items-center gap-2 text-xs bg-background/60 rounded-md px-2.5 py-1.5 border">
+                                  <span className="w-5 h-5 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold flex-shrink-0 text-[10px]">{i + 1}</span>
+                                  <span className="flex-1 min-w-0 truncate font-medium" title={task.title}>{task.title}</span>
+                                  {task.auto_assign_role && task.auto_assign_role !== "none" && (
+                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 whitespace-nowrap">{task.auto_assign_role.replace(/_/g, " ")}</Badge>
+                                  )}
+                                  {task.estimated_minutes > 0 && (
+                                    <span className="text-[10px] text-muted-foreground whitespace-nowrap tabular-nums">{task.estimated_minutes}m</span>
+                                  )}
+                                  {task.timer_trigger && task.timer_trigger !== "none" && (
+                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-blue-50 text-blue-600 border-blue-200 whitespace-nowrap">{task.timer_trigger.replace(/_/g, " ")}</Badge>
+                                  )}
+                                  {task.depends_on_indices?.length > 0 && (
+                                    <span className="text-[10px] text-muted-foreground whitespace-nowrap" title={`Depends on step ${task.depends_on_indices.map(d => d+1).join(', ')}`}>
+                                      → #{task.depends_on_indices.map(d => d+1).join(',')}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
