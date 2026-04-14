@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Link2, X, Check, RefreshCw, Clock, ChevronDown } from "lucide-react";
+import { Loader2, Link2, X, Check, CheckCircle2, RefreshCw, Clock, ChevronDown } from "lucide-react";
 import { utcToSydneyInput, sydneyInputToUtc, fixTimestamp, fmtTimestampCustom, APP_TZ } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import { ACTIVITY_TYPE_LIST, getActivityType, getEventSource, isEventEditable, canMarkDone, getEventExternalUrl, EVENT_SOURCE_CONFIG } from "./activityConfig";
@@ -641,7 +641,12 @@ export default function EventDetailsDialog({
             />
           </div>
 
-          {/* Linkages */}
+          {/* Linkages section moved outside fieldset — see below */}
+          {false && <div className="hidden">Link to</div>}
+          </fieldset>
+
+          {/* Linkages — always editable, even on non-editable events */}
+          {event?.id && (
           <div className="border rounded-lg p-3 space-y-3">
             <p className="text-sm font-medium text-muted-foreground">Link to</p>
 
@@ -718,7 +723,29 @@ export default function EventDetailsDialog({
             </div>
 
             {/* Owner field removed */}
+
+            {/* Save links button */}
+            <Button
+              type="button"
+              size="sm"
+              className="w-full h-8 text-xs"
+              onClick={async () => {
+                try {
+                  await api.entities.CalendarEvent.update(event.id, {
+                    project_id: formData.project_id || null,
+                    agent_id: formData.agent_id || null,
+                    agency_id: formData.agency_id || null,
+                  });
+                  queryClient.invalidateQueries({ queryKey: ['calendar-events-team'] });
+                  toast.success('Links saved');
+                } catch { toast.error('Failed to save links'); }
+              }}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+              Save Links
+            </Button>
           </div>
+          )}
 
           {/* Email linking — shown when emails are available for the linked project/person */}
           {emails.length > 0 && (
@@ -751,7 +778,6 @@ export default function EventDetailsDialog({
             </div>
           )}
           {/* Repeat field removed */}
-          </fieldset>
 
           {/* Outcome/Result field removed */}
 
