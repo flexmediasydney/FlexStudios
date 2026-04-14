@@ -264,13 +264,19 @@ export default function SettingsTonomoMappings() {
     };
   }, [mappings, activeType, products, packages, users, agents, bookingFlows, projectTypeMappings]);
 
+  // After any mapping change, recheck project gaps in the background
+  const recheckGaps = useCallback(() => {
+    api.functions.invoke('recheckMappingGaps', {}).catch(() => {});
+  }, []);
+
   const handleLink = useCallback((mapping, entityId, entityLabel, extraData = {}) => {
     saveMutation.mutate({
       id: mapping.id,
       data: { flexmedia_entity_id: entityId, flexmedia_label: entityLabel, is_confirmed: true, auto_suggested: false, confidence: "high", ...extraData }
     });
+    recheckGaps();
     toast.success("Mapping linked successfully");
-  }, [saveMutation]);
+  }, [saveMutation, recheckGaps]);
 
   const handleUnlink = useCallback((mapping) => {
     saveMutation.mutate({
@@ -285,8 +291,9 @@ export default function SettingsTonomoMappings() {
       id: mapping.id,
       data: { is_confirmed: true, auto_suggested: false }
     });
+    recheckGaps();
     toast.success("Mapping confirmed");
-  }, [saveMutation]);
+  }, [saveMutation, recheckGaps]);
 
   const currentTypeConfig = TYPE_CONFIG[activeType];
   const TypeIcon = currentTypeConfig?.icon || Wrench;
