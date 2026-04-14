@@ -18,6 +18,7 @@ import {
   Search,
   UserCheck,
   ChevronRight,
+  ChevronLeft,
   Sun,
   Moon,
   Monitor,
@@ -155,6 +156,12 @@ function LayoutContent({ currentPageName, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [quickLogOpen, setQuickLogOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true');
+  const toggleCollapsed = () => setCollapsed(prev => {
+    const next = !prev;
+    localStorage.setItem('sidebar-collapsed', String(next));
+    return next;
+  });
   const { data: user } = useCurrentUser();
   
   // ── Live badge counts for nav ──────────────────────────────────────────
@@ -375,7 +382,8 @@ function LayoutContent({ currentPageName, children }) {
             to={createPageUrl(item.href)}
             onClick={() => setSidebarOpen(false)}
             className={cn(
-              "group flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-[0.98] flex-1",
+              "group flex items-center gap-2.5 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-[0.98] flex-1",
+              collapsed ? "relative justify-center px-1.5 py-1.5" : "px-3 py-1.5",
               isActive
                 ? "bg-primary/10 text-primary font-semibold ring-1 ring-primary/20"
                 : isChildActive
@@ -393,14 +401,18 @@ function LayoutContent({ currentPageName, children }) {
                 isActive ? "drop-shadow-sm" : "group-hover:scale-110"
               )} />
             )}
-            <span className="truncate flex-1">{item.name}</span>
-            {item.badge > 0 && (
+            {!collapsed && <span className="truncate flex-1">{item.name}</span>}
+            {!collapsed && item.badge > 0 && (
               <span className="ml-auto flex items-center justify-center text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 tabular-nums bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400">
                 {item.badge > 99 ? '99+' : item.badge}
               </span>
             )}
+            {/* Collapsed badge dot indicator */}
+            {collapsed && item.badge > 0 && (
+              <span className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-red-500" />
+            )}
           </Link>
-          {hasChildren && (
+          {hasChildren && !collapsed && (
             <button
               onClick={(e) => { e.stopPropagation(); toggleParent(item.name); }}
               className={cn(
@@ -420,7 +432,7 @@ function LayoutContent({ currentPageName, children }) {
             </button>
           )}
         </div>
-        {hasChildren && isParentExpanded && (
+        {hasChildren && isParentExpanded && !collapsed && (
           <div className="ml-4 pl-2 mt-0.5 space-y-0.5 border-l border-border/50">
             {item.children.map(child => (
               <NavLink key={child.name} item={child} isChild />
@@ -434,6 +446,19 @@ function LayoutContent({ currentPageName, children }) {
   const NavSection = ({ section }) => {
     const isExpanded = expandedSections[section.id];
     const hasItems = section.items && section.items.length > 0;
+
+    // When collapsed, show a thin separator line instead of section headers,
+    // and always show items (no expand/collapse for sections in icon mode)
+    if (collapsed) {
+      return (
+        <div key={section.id} className="space-y-0.5">
+          <div className="mx-2 my-1 border-t border-border/30" title={section.label} />
+          {hasItems && section.items.map(item => (
+            <NavLink key={item.name} item={item} />
+          ))}
+        </div>
+      );
+    }
 
     return (
       <div key={section.id} className="space-y-1">
@@ -462,7 +487,7 @@ function LayoutContent({ currentPageName, children }) {
             </p>
           </div>
         )}
-        
+
         {hasItems && isExpanded && (
           <div className={cn(
             "space-y-0.5 ml-1 pl-2 border-l border-border/50 overflow-hidden transition-all duration-200",
@@ -495,27 +520,27 @@ function LayoutContent({ currentPageName, children }) {
       </a>
       <div className="min-h-screen bg-background">
         {/* Desktop Top Bar with Search */}
-         <header className={cn("hidden lg:block fixed left-64 right-0 h-16 bg-card border-b z-40 px-6 shadow-xs backdrop-blur-sm bg-card/97", isSimulating ? "top-9" : "top-0")}>
-           <div className="h-full flex items-center justify-between gap-4">
+         <header className={cn("hidden lg:block fixed right-0 h-12 bg-card border-b z-40 px-4 shadow-xs backdrop-blur-sm bg-card/97 transition-all duration-200", collapsed ? "left-14" : "left-56", isSimulating ? "top-9" : "top-0")}>
+           <div className="h-full flex items-center justify-between gap-3">
              {canGoBack && (
-               <button onClick={() => window.history.back()} className="text-muted-foreground hover:text-foreground transition-colors p-2 hover:bg-muted/50 rounded-lg" title="Go back" aria-label="Go back to previous page">
-                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+               <button onClick={() => window.history.back()} className="text-muted-foreground hover:text-foreground transition-colors p-1.5 hover:bg-muted/50 rounded-lg" title="Go back" aria-label="Go back to previous page">
+                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                  </svg>
                </button>
              )}
              <TopSearchBar />
              <div className="flex items-center gap-1.5">
-               <span className="text-[10px] text-muted-foreground/50 font-medium hidden xl:inline">Search: <kbd className="bg-muted/50 px-1.5 py-0.5 rounded text-[9px] border border-border/40">{navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl+'}K</kbd> Log: <kbd className="bg-muted/50 px-1.5 py-0.5 rounded text-[9px] border border-border/40">{navigator.platform?.includes('Mac') ? '⌘⇧' : 'Ctrl+Shift+'}L</kbd></span>
+               <span className="text-[9px] text-muted-foreground/50 font-medium hidden xl:inline">Search: <kbd className="bg-muted/50 px-1 py-0.5 rounded text-[9px] border border-border/40">{navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl+'}K</kbd> Log: <kbd className="bg-muted/50 px-1 py-0.5 rounded text-[9px] border border-border/40">{navigator.platform?.includes('Mac') ? '⌘⇧' : 'Ctrl+Shift+'}L</kbd></span>
                <Button
                  variant="ghost"
                  size="icon"
                  onClick={() => setSearchOpen(true)}
                  title="Global search (Ctrl+K)"
-                 className="flex-shrink-0 hover:bg-muted/50 transition-colors duration-200 h-9 w-9"
+                 className="flex-shrink-0 hover:bg-muted/50 transition-colors duration-200 h-8 w-8"
                  aria-label="Global search"
                >
-                 <Search className="h-4 w-4" />
+                 <Search className="h-3.5 w-3.5" />
                </Button>
                <NotificationBell />
              </div>
@@ -566,27 +591,32 @@ function LayoutContent({ currentPageName, children }) {
       <aside
         aria-label="Main navigation"
         className={cn(
-        "fixed left-0 h-full w-[280px] max-w-[85vw] lg:w-64 bg-card border-r z-50 transform transition-transform duration-300 ease-out lg:translate-x-0 shadow-xl lg:shadow-none will-change-transform",
+        "fixed left-0 h-full bg-card border-r z-50 transform transition-all duration-200 ease-out lg:translate-x-0 shadow-xl lg:shadow-none will-change-transform",
+        // Mobile: always full-width overlay; Desktop: collapsed = w-14, expanded = w-56
+        "w-[280px] max-w-[85vw]",
+        collapsed ? "lg:w-14" : "lg:w-56",
             isSimulating ? "top-9" : "top-0",
         sidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="flex flex-col h-full backdrop-blur-sm bg-card/95">
           {/* Logo */}
-          <div className="h-16 flex items-center justify-between px-3 border-b bg-gradient-to-b from-primary/5 to-transparent">
+          <div className={cn("h-12 flex items-center justify-between border-b bg-gradient-to-b from-primary/5 to-transparent", collapsed ? "px-1.5" : "px-3")}>
             <Link
               to={createPageUrl("Dashboard")}
               onClick={() => setSidebarOpen(false)}
-              className="flex items-center gap-2.5 hover:opacity-85 transition-all active:scale-95 focus:outline-none focus:ring-2 focus:ring-primary rounded-lg px-1.5 py-1"
+              className={cn("flex items-center hover:opacity-85 transition-all active:scale-95 focus:outline-none focus:ring-2 focus:ring-primary rounded-lg py-1", collapsed ? "justify-center px-0.5" : "gap-2.5 px-1.5")}
               title="Dashboard (Home)"
               aria-label="Flex Studios home"
            >
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-md">
+              <div className={cn("rounded-lg bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-md", collapsed ? "w-8 h-8" : "w-8 h-8")}>
                 <Camera className="h-4 w-4 text-primary-foreground" />
               </div>
-              <div className="min-w-0 hidden sm:block">
-                <span className="font-bold text-sm leading-tight block">Flex</span>
-                <span className="text-[10px] text-muted-foreground font-semibold block">CRM</span>
-              </div>
+              {!collapsed && (
+                <div className="min-w-0 hidden sm:block">
+                  <span className="font-bold text-sm leading-tight block">Flex</span>
+                  <span className="text-[10px] text-muted-foreground font-semibold block">CRM</span>
+                </div>
+              )}
             </Link>
             <Button
               variant="ghost"
@@ -601,15 +631,15 @@ function LayoutContent({ currentPageName, children }) {
           </div>
 
           {/* Navigation */}
-          <nav aria-label="Sidebar navigation" className="flex-1 p-3 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent">
+          <nav aria-label="Sidebar navigation" className={cn("flex-1 space-y-1 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent", collapsed ? "p-1" : "p-3")}>
             {navigationSections.map(section => (
               <NavSection key={section.id} section={section} />
             ))}
           </nav>
 
           {/* Footer */}
-          <div className="p-3 border-t border-border/40 space-y-1.5">
-            {user && (
+          <div className={cn("border-t border-border/40 space-y-1.5", collapsed ? "p-1" : "p-3")}>
+            {user && !collapsed && (
               <div className="px-2.5 py-2 rounded-lg bg-muted/50 border border-border/40 shadow-xs">
                 <div className="flex items-center gap-2 mb-1">
                   <div className="w-6 h-6 rounded-full bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center flex-shrink-0">
@@ -622,33 +652,69 @@ function LayoutContent({ currentPageName, children }) {
                 </Badge>
               </div>
             )}
-            <ThemeToggle />
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground hover:bg-destructive/10 transition-all duration-200 h-9 px-2 text-xs"
-              onClick={async () => {
-                if (confirm("Sign out?")) {
-                  try {
-                    await api.auth.logout('/login');
-                  } catch {
-                    // Fallback: redirect even if signOut call fails
-                    window.location.href = '/login';
+            {user && collapsed && (
+              <div className="flex justify-center py-1" title={`${user.full_name} (${roleLabels[user.role]})`}>
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center">
+                  <span className="text-xs font-bold text-primary">{user.full_name?.charAt(0).toUpperCase() || '?'}</span>
+                </div>
+              </div>
+            )}
+            {!collapsed && <ThemeToggle />}
+            {collapsed ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="w-full h-8 text-muted-foreground hover:text-foreground hover:bg-destructive/10 transition-all duration-200"
+                onClick={async () => {
+                  if (confirm("Sign out?")) {
+                    try {
+                      await api.auth.logout('/login');
+                    } catch {
+                      window.location.href = '/login';
+                    }
                   }
-                }
-              }}
-              title="Sign out"
-              aria-label="Sign out of your account"
+                }}
+                title="Sign out"
+                aria-label="Sign out of your account"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start gap-2 text-muted-foreground hover:text-foreground hover:bg-destructive/10 transition-all duration-200 h-9 px-2 text-xs"
+                onClick={async () => {
+                  if (confirm("Sign out?")) {
+                    try {
+                      await api.auth.logout('/login');
+                    } catch {
+                      window.location.href = '/login';
+                    }
+                  }
+                }}
+                title="Sign out"
+                aria-label="Sign out of your account"
+              >
+                <LogOut className="h-3.5 w-3.5 flex-shrink-0" />
+                <span>Sign Out</span>
+              </Button>
+            )}
+            {/* Collapse/Expand toggle — desktop only */}
+            <button
+              onClick={toggleCollapsed}
+              className="hidden lg:flex w-full items-center justify-center h-8 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-muted/50 transition-all duration-200"
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
-              <LogOut className="h-3.5 w-3.5 flex-shrink-0" />
-              <span>Sign Out</span>
-            </Button>
+              {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            </button>
           </div>
         </div>
       </aside>
 
         {/* Main Content */}
-        <main id="main-content" role="main" className={cn("lg:ml-64 min-h-screen", isSimulating ? "pt-[calc(3.5rem+36px)] lg:pt-[calc(4rem+36px)]" : "pt-14 lg:pt-16")} style={{ scrollbarGutter: 'stable' }}>
+        <main id="main-content" role="main" className={cn("min-h-screen transition-all duration-200", collapsed ? "lg:ml-14" : "lg:ml-56", isSimulating ? "pt-[calc(3.5rem+36px)] lg:pt-[calc(3rem+36px)]" : "pt-14 lg:pt-12")} style={{ scrollbarGutter: 'stable' }}>
           <CalendarConnectBanner />
           {children}
         </main>

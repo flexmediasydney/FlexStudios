@@ -77,6 +77,7 @@
   html {
     scroll-behavior: smooth;
     text-rendering: optimizeLegibility;
+    font-size: 13px;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -270,6 +271,15 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* ── Pipedrive-style utilities ──────────────────────────────────────────────── */
+
+/* Subtle card shadows (replace visible borders with soft shadow) */
+@layer utilities {
+  .card-pipedrive {
+    @apply border-0 shadow-[0_1px_3px_rgba(0,0,0,0.08)] rounded-lg;
   }
 }
 

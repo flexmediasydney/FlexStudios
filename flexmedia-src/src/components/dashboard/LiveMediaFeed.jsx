@@ -1011,9 +1011,11 @@ export default function LiveMediaFeed() {
         while (queue.length > 0) {
           const project = queue.shift();
           try {
+            const useForce = forceRefreshRef.current;
             const res = await api.functions.invoke("getDeliveryMediaFeed", {
               share_url: project.tonomo_deliverable_link,
               base_path: project.tonomo_deliverable_path || undefined,
+              ...(useForce && { force_refresh: true }),
             });
             const data = res?.data || res;
             if (data?.error) {
@@ -1055,6 +1057,7 @@ export default function LiveMediaFeed() {
 
       await Promise.all(workers);
       setScanProgress(null);
+      forceRefreshRef.current = false; // Reset force flag after scan
       return results;
     },
     enabled: eligibleProjects.length > 0,
@@ -1163,6 +1166,7 @@ export default function LiveMediaFeed() {
     return () => observer.disconnect();
   }, [paginatedItems]);
 
+  const forceRefreshRef = useRef(false);
   const handleRefresh = useCallback(() => {
     // PERF: use LRU cache's prefix eviction instead of manual iteration
     eligibleProjects.forEach(p => {
@@ -1172,6 +1176,7 @@ export default function LiveMediaFeed() {
       }
     });
     setNewFilesCount(0);
+    forceRefreshRef.current = true; // Tell next fetch to bypass server cache
     refetch();
   }, [refetch, eligibleProjects]);
 

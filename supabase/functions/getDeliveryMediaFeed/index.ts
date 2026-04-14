@@ -844,8 +844,9 @@ Deno.serve(async (req) => {
 
     const listingCacheKey = `listing::${share_url || path}`;
 
-    // 1. Check media_cache for a non-expired listing
-    const cachedListing = await getCacheEntry(listingCacheKey);
+    // 1. Check media_cache for a non-expired listing (skip if force_refresh)
+    const forceRefresh = body.force_refresh === true;
+    const cachedListing = forceRefresh ? null : await getCacheEntry(listingCacheKey);
     if (cachedListing?.data) {
       const cachedData = cachedListing.data as Record<string, unknown>;
       cachedData.cached = true;
