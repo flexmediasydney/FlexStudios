@@ -629,7 +629,7 @@ function BookingHistoryTab() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm leading-snug">
                         {project ? (
-                          <Link to={createPageUrl("ProjectDetails", { id: item.projectId })} className="font-medium hover:underline">
+                          <Link to={createPageUrl("ProjectDetails") + `?id=${item.projectId}`} className="font-medium hover:underline">
                             {project.title || project.property_address || 'Unknown Project'}
                           </Link>
                         ) : (

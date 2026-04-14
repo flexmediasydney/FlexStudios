@@ -647,7 +647,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
                         ) : (
                           <Checkbox
                             checked={task.is_completed}
-                            onCheckedChange={(e) => { e?.stopPropagation?.(); handleToggleTask(rawTask); }}
+                            onCheckedChange={() => handleToggleTask(rawTask)}
                             onClick={(e) => e.stopPropagation()}
                             className={cn(
                               "h-4 w-4 flex-shrink-0 rounded-sm",
