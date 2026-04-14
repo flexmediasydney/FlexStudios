@@ -22,12 +22,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   ListChecks, Search, CheckCircle2, Circle, Timer, ShieldAlert, Lock,
   AlertTriangle, X, Clock, Users, ChevronDown, ChevronUp, ChevronRight,
-  Activity, TrendingUp, List as ListIcon, Columns3, GripVertical
+  Activity, TrendingUp, List as ListIcon, Columns3, GripVertical,
+  User, Building2, Package, Box, Briefcase, Filter, Tag, FolderKanban
 } from "lucide-react";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -327,6 +330,76 @@ function SwimLane({ laneKey, laneIndex, tasksByStatus, isCollapsed, onToggleColl
   );
 }
 
+// ── FilterDropdown (Popover multi-select) ───────────────────────────────────
+
+function FilterDropdown({ label, icon: Icon, items, selected, onToggle, onClear }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() => {
+    if (!search) return items;
+    const q = search.toLowerCase();
+    return items.filter(i => (i.name || "").toLowerCase().includes(q));
+  }, [items, search]);
+  const count = selected.size;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className={cn(
+          "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors whitespace-nowrap",
+          count > 0
+            ? "bg-primary/10 text-primary border-primary/30 hover:bg-primary/20"
+            : "bg-background text-muted-foreground border-border hover:bg-muted"
+        )}>
+          {Icon && <Icon className="h-3 w-3" />}
+          {label}
+          {count > 0 && <Badge className="h-4 min-w-[16px] px-1 text-[9px] bg-primary text-primary-foreground border-0 rounded-full">{count}</Badge>}
+          <ChevronDown className="h-3 w-3 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-0" align="start" sideOffset={4}>
+        {items.length > 6 && (
+          <div className="p-2 border-b">
+            <Input
+              placeholder={`Search ${label.toLowerCase()}...`}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="h-7 text-xs"
+            />
+          </div>
+        )}
+        <ScrollArea className="max-h-56">
+          <div className="p-1.5 space-y-0.5">
+            {filtered.length === 0 && <div className="text-xs text-muted-foreground/50 text-center py-4">No matches</div>}
+            {filtered.map(item => (
+              <label
+                key={item.id}
+                className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 cursor-pointer transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(item.id)}
+                  onChange={() => onToggle(item.id)}
+                  className="rounded border-muted-foreground/30 text-primary focus:ring-primary h-3.5 w-3.5"
+                />
+                <span className="text-xs truncate flex-1">{String(item.name || "—")}</span>
+                {item.count != null && <span className="text-[10px] text-muted-foreground tabular-nums">{item.count}</span>}
+              </label>
+            ))}
+          </div>
+        </ScrollArea>
+        {count > 0 && (
+          <div className="border-t p-1.5">
+            <button className="text-[10px] text-muted-foreground hover:text-foreground w-full text-center py-1" onClick={() => { onClear(); }}>
+              Clear {label}
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ── Main Component ───────────────────────────────────────────────────────────
 
 export default function Tasks() {
@@ -336,13 +409,18 @@ export default function Tasks() {
   const { data: timeLogs = [] } = useEntityList("TaskTimeLog", "-created_at");
   const { data: products = [] } = useEntityList("Product", "name");
   const { data: packages = [] } = useEntityList("Package", "name");
+  const { data: allUsers = [] } = useEntityList("User", "full_name");
+  const { data: allTeams = [] } = useEntityList("Team", "name");
+  const { data: agencies = [] } = useEntityList("Agency", "name");
+  const { data: organisations = [] } = useEntityList("Organisation", "name");
   const { data: user } = useCurrentUser();
   const { activeTimers = [] } = useActiveTimers();
 
-  // State — shared
+  // State — filters (multi-select)
+  const emptyFilters = { status: new Set(), people: new Set(), teams: new Set(), projects: new Set(), products: new Set(), packages: new Set(), roles: new Set(), sources: new Set(), orgs: new Set(), projectTypes: new Set() };
+  const [filters, setFilters] = useState(emptyFilters);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
   const [quickFilter, setQuickFilter] = useState("");
   const searchTimer = useRef(null);
 
@@ -393,6 +471,29 @@ export default function Tasks() {
   const productMap = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
   const packageMap = useMemo(() => new Map(packages.map(p => [p.id, p])), [packages]);
   const timerSet = useMemo(() => new Set((activeTimers || []).filter(t => t.is_active && t.status === "running").map(t => t.task_id)), [activeTimers]);
+  const orgByAgency = useMemo(() => {
+    const m = {};
+    agencies.forEach(a => { if (a.organisation_id) m[a.id] = a.organisation_id; });
+    return m;
+  }, [agencies]);
+
+  // Filter helpers
+  const toggleFilter = useCallback((key, id) => {
+    setFilters(prev => {
+      const next = { ...prev, [key]: new Set(prev[key]) };
+      next[key].has(id) ? next[key].delete(id) : next[key].add(id);
+      return next;
+    });
+  }, []);
+  const clearFilter = useCallback((key) => {
+    setFilters(prev => ({ ...prev, [key]: new Set() }));
+  }, []);
+  const clearAllFilters = useCallback(() => {
+    setFilters(emptyFilters);
+    setQuickFilter("");
+    setSearchQuery("");
+    setSearchInput("");
+  }, []);
 
   // Effort by task
   const effortByTask = useMemo(() => {
@@ -443,14 +544,31 @@ export default function Tasks() {
     return { total, completed, completedToday, overdue, timers, pct, effortToday };
   }, [visibleTasks, timeLogs]);
 
-  // Filtered tasks (shared by both views)
+  // Filtered tasks (shared by both views) — multi-filter
   const filteredTasks = useMemo(() => {
     return visibleTasks.filter(t => {
-      if (statusFilter !== "all" && t._status !== statusFilter) return false;
+      // Multi-select filters
+      if (filters.status.size > 0 && !filters.status.has(t._status)) return false;
+      if (filters.people.size > 0 && !filters.people.has(t.assigned_to)) return false;
+      if (filters.teams.size > 0 && !filters.teams.has(t.assigned_to_team_id)) return false;
+      if (filters.projects.size > 0 && !filters.projects.has(t.project_id)) return false;
+      if (filters.products.size > 0 && !filters.products.has(t.product_id)) return false;
+      if (filters.packages.size > 0 && !filters.packages.has(t.package_id)) return false;
+      if (filters.roles.size > 0 && !filters.roles.has(t.auto_assign_role || "none")) return false;
+      if (filters.sources.size > 0 && !filters.sources.has(t._source.key)) return false;
+      if (filters.orgs.size > 0) {
+        const agencyId = t._project?.agency_id;
+        if (!agencyId || !filters.orgs.has(orgByAgency[agencyId])) return false;
+      }
+      if (filters.projectTypes.size > 0) {
+        if (!filters.projectTypes.has(t._project?.project_type_name)) return false;
+      }
+      // Quick filters
       if (quickFilter === "overdue" && !t._overdue) return false;
       if (quickFilter === "blocked" && !t.is_blocked) return false;
       if (quickFilter === "timers" && !t._hasTimer) return false;
       if (quickFilter === "my_tasks" && t.assigned_to !== user?.id) return false;
+      // Search
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const matches = (t.title || "").toLowerCase().includes(q) ||
@@ -460,7 +578,89 @@ export default function Tasks() {
       }
       return true;
     });
-  }, [visibleTasks, statusFilter, quickFilter, searchQuery, user]);
+  }, [visibleTasks, filters, quickFilter, searchQuery, user, orgByAgency]);
+
+  // Filter option items (derived from visible tasks for live counts)
+  const filterItems = useMemo(() => {
+    // Status counts
+    const statusCounts = {};
+    visibleTasks.forEach(t => { statusCounts[t._status] = (statusCounts[t._status] || 0) + 1; });
+    const statusItems = KANBAN_STATUSES.map(s => ({ id: s.id, name: s.label, count: statusCounts[s.id] || 0 }));
+
+    // People (unique assignees)
+    const peopleSet = new Map();
+    visibleTasks.forEach(t => {
+      if (t.assigned_to && t.assigned_to_name) peopleSet.set(t.assigned_to, t.assigned_to_name);
+    });
+    const peopleItems = [...peopleSet.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Teams
+    const teamSet = new Map();
+    visibleTasks.forEach(t => {
+      if (t.assigned_to_team_id && t.assigned_to_team_name) teamSet.set(t.assigned_to_team_id, t.assigned_to_team_name);
+    });
+    const teamItems = [...teamSet.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Projects (active ones that have tasks)
+    const projSet = new Map();
+    visibleTasks.forEach(t => {
+      if (t.project_id && t._project) projSet.set(t.project_id, t._project.property_address || t._project.title || "—");
+    });
+    const projectItems = [...projSet.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Roles
+    const roleCounts = {};
+    visibleTasks.forEach(t => { const r = t.auto_assign_role || "none"; roleCounts[r] = (roleCounts[r] || 0) + 1; });
+    const roleItems = Object.entries(ROLE_LABELS).map(([id, name]) => ({ id, name, count: roleCounts[id] || 0 })).filter(r => r.count > 0);
+
+    // Sources
+    const srcCounts = {};
+    visibleTasks.forEach(t => { srcCounts[t._source.key] = (srcCounts[t._source.key] || 0) + 1; });
+    const sourceItems = Object.entries(srcCounts).map(([id, count]) => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1), count }));
+
+    // Products
+    const prodSet = new Map();
+    visibleTasks.forEach(t => {
+      if (t.product_id) { const p = productMap.get(t.product_id); if (p) prodSet.set(t.product_id, p.name); }
+    });
+    const productItems = [...prodSet.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Packages
+    const pkgSet = new Map();
+    visibleTasks.forEach(t => {
+      if (t.package_id) { const p = packageMap.get(t.package_id); if (p) pkgSet.set(t.package_id, p.name); }
+    });
+    const packageItems = [...pkgSet.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Organisations (via project → agency → org)
+    const orgSet = new Map();
+    visibleTasks.forEach(t => {
+      const agencyId = t._project?.agency_id;
+      if (agencyId) {
+        const orgId = orgByAgency[agencyId];
+        if (orgId) {
+          const org = organisations.find(o => o.id === orgId);
+          if (org) orgSet.set(orgId, org.name);
+        }
+      }
+    });
+    const orgItems = [...orgSet.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Project types
+    const ptSet = new Map();
+    visibleTasks.forEach(t => {
+      const pt = t._project?.project_type_name;
+      if (pt) ptSet.set(pt, pt);
+    });
+    const projectTypeItems = [...ptSet.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+
+    return { statusItems, peopleItems, teamItems, projectItems, roleItems, sourceItems, productItems, packageItems, orgItems, projectTypeItems };
+  }, [visibleTasks, productMap, packageMap, orgByAgency, organisations]);
+
+  // Active filter count
+  const totalFilterCount = useMemo(() => {
+    return Object.values(filters).reduce((sum, s) => sum + s.size, 0);
+  }, [filters]);
 
   // ── Kanban: sort + group ────────────────────────────────────────────────
 
@@ -742,7 +942,7 @@ export default function Tasks() {
     { key: "my_tasks", label: "My Tasks", count: user ? visibleTasks.filter(t => t.assigned_to === user.id).length : 0, icon: Users },
   ];
 
-  const hasFilters = searchQuery || statusFilter !== "all" || quickFilter;
+  const hasFilters = searchQuery || totalFilterCount > 0 || quickFilter;
 
   const SortHeader = ({ col, label }) => (
     <button
@@ -781,15 +981,6 @@ export default function Tasks() {
               </button>
             )}
           </div>
-
-          {/* Status filter — native select */}
-          <select className="h-8 px-2 text-xs border rounded-md bg-background" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-            <option value="all">All Status</option>
-            <option value="not_started">Not Started</option>
-            <option value="in_progress">In Progress</option>
-            <option value="completed">Completed</option>
-            <option value="blocked">Blocked</option>
-          </select>
 
           {/* View toggle */}
           <div className="flex items-center border rounded-md overflow-hidden">
@@ -843,8 +1034,63 @@ export default function Tasks() {
         <StatCard label="Effort Today" value={fmtDuration(stats.effortToday)} icon={Activity} />
       </div>
 
-      {/* Quick filter pills */}
+      {/* Filter bar — multi-select dropdowns */}
       <div className="flex items-center gap-1.5 flex-wrap">
+        <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <FilterDropdown label="Status" icon={CheckCircle2} items={filterItems.statusItems} selected={filters.status} onToggle={(id) => toggleFilter("status", id)} onClear={() => clearFilter("status")} />
+        <FilterDropdown label="People" icon={User} items={filterItems.peopleItems} selected={filters.people} onToggle={(id) => toggleFilter("people", id)} onClear={() => clearFilter("people")} />
+        <FilterDropdown label="Teams" icon={Users} items={filterItems.teamItems} selected={filters.teams} onToggle={(id) => toggleFilter("teams", id)} onClear={() => clearFilter("teams")} />
+        <FilterDropdown label="Project" icon={Building2} items={filterItems.projectItems} selected={filters.projects} onToggle={(id) => toggleFilter("projects", id)} onClear={() => clearFilter("projects")} />
+        <FilterDropdown label="Role" icon={Briefcase} items={filterItems.roleItems} selected={filters.roles} onToggle={(id) => toggleFilter("roles", id)} onClear={() => clearFilter("roles")} />
+        <FilterDropdown label="Source" icon={Tag} items={filterItems.sourceItems} selected={filters.sources} onToggle={(id) => toggleFilter("sources", id)} onClear={() => clearFilter("sources")} />
+        {filterItems.productItems.length > 0 && (
+          <FilterDropdown label="Product" icon={Package} items={filterItems.productItems} selected={filters.products} onToggle={(id) => toggleFilter("products", id)} onClear={() => clearFilter("products")} />
+        )}
+        {filterItems.packageItems.length > 0 && (
+          <FilterDropdown label="Package" icon={Box} items={filterItems.packageItems} selected={filters.packages} onToggle={(id) => toggleFilter("packages", id)} onClear={() => clearFilter("packages")} />
+        )}
+        {filterItems.orgItems.length > 0 && (
+          <FilterDropdown label="Organisation" icon={Building2} items={filterItems.orgItems} selected={filters.orgs} onToggle={(id) => toggleFilter("orgs", id)} onClear={() => clearFilter("orgs")} />
+        )}
+        {filterItems.projectTypeItems.length > 0 && (
+          <FilterDropdown label="Type" icon={FolderKanban} items={filterItems.projectTypeItems} selected={filters.projectTypes} onToggle={(id) => toggleFilter("projectTypes", id)} onClear={() => clearFilter("projectTypes")} />
+        )}
+        {totalFilterCount > 0 && (
+          <button className="text-xs text-muted-foreground hover:text-foreground underline ml-1" onClick={clearAllFilters}>
+            Clear all ({totalFilterCount})
+          </button>
+        )}
+      </div>
+
+      {/* Active filter chips + Quick filter pills */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {/* Active filter chips */}
+        {[...filters.status].map(id => {
+          const item = filterItems.statusItems.find(s => s.id === id);
+          return item && <button key={`s-${id}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-primary/10 text-primary border border-primary/20" onClick={() => toggleFilter("status", id)}><X className="h-2.5 w-2.5" />{item.name}</button>;
+        })}
+        {[...filters.people].map(id => {
+          const item = filterItems.peopleItems.find(s => s.id === id);
+          return item && <button key={`p-${id}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/30 dark:text-blue-400 dark:border-blue-800" onClick={() => toggleFilter("people", id)}><X className="h-2.5 w-2.5" />{item.name}</button>;
+        })}
+        {[...filters.teams].map(id => {
+          const item = filterItems.teamItems.find(s => s.id === id);
+          return item && <button key={`t-${id}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/30 dark:text-purple-400 dark:border-purple-800" onClick={() => toggleFilter("teams", id)}><X className="h-2.5 w-2.5" />{item.name}</button>;
+        })}
+        {[...filters.projects].map(id => {
+          const item = filterItems.projectItems.find(s => s.id === id);
+          return item && <button key={`pj-${id}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800" onClick={() => toggleFilter("projects", id)}><X className="h-2.5 w-2.5" />{item.name}</button>;
+        })}
+        {[...filters.roles].map(id => {
+          const item = filterItems.roleItems.find(s => s.id === id);
+          return item && <button key={`r-${id}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800" onClick={() => toggleFilter("roles", id)}><X className="h-2.5 w-2.5" />{item.name}</button>;
+        })}
+        {[...filters.sources].map(id => <button key={`src-${id}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-700 border border-gray-200 dark:bg-gray-800/30 dark:text-gray-400 dark:border-gray-700" onClick={() => toggleFilter("sources", id)}><X className="h-2.5 w-2.5" />{id}</button>)}
+
+        {/* Separator when both chips and pills exist */}
+        {totalFilterCount > 0 && <span className="text-muted-foreground/30 mx-1">|</span>}
+
+        {/* Quick filter pills */}
         {pills.map(p => (
           <button
             key={p.key}
@@ -860,10 +1106,7 @@ export default function Tasks() {
           </button>
         ))}
         {hasFilters && (
-          <button
-            className="text-xs text-muted-foreground hover:text-foreground underline ml-1"
-            onClick={() => { setSearchQuery(""); setSearchInput(""); setStatusFilter("all"); setQuickFilter(""); }}
-          >
+          <button className="text-xs text-muted-foreground hover:text-foreground underline ml-1" onClick={clearAllFilters}>
             Clear filters
           </button>
         )}
@@ -887,7 +1130,7 @@ export default function Tasks() {
                   {hasFilters ? "No tasks match your filters" : "No tasks yet"}
                 </p>
                 {hasFilters && (
-                  <button className="text-xs text-primary mt-2 hover:underline" onClick={() => { setSearchQuery(""); setSearchInput(""); setStatusFilter("all"); setQuickFilter(""); }}>
+                  <button className="text-xs text-primary mt-2 hover:underline" onClick={() => { clearAllFilters(); }}>
                     Clear all filters
                   </button>
                 )}
@@ -957,7 +1200,7 @@ export default function Tasks() {
                   {hasFilters ? "No tasks match your filters" : "No tasks yet"}
                 </p>
                 {hasFilters && (
-                  <button className="text-xs text-primary mt-2 hover:underline" onClick={() => { setSearchQuery(""); setSearchInput(""); setStatusFilter("all"); setQuickFilter(""); }}>
+                  <button className="text-xs text-primary mt-2 hover:underline" onClick={() => { clearAllFilters(); }}>
                     Clear all filters
                   </button>
                 )}
