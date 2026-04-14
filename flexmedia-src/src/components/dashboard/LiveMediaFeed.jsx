@@ -28,6 +28,8 @@ import FavoriteButton from "@/components/favorites/FavoriteButton";
 import TagManager from "@/components/favorites/TagManager";
 import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
 
+const blobCache = SHARED_THUMB_CACHE;
+
 // ---- Image proxy: delegates to shared fetchMediaProxy with proper dedup ----
 function fetchProxyImage(filePath, mode = 'thumb') {
   return enqueueFetch(() => fetchMediaProxy(SHARED_THUMB_CACHE, filePath, mode));

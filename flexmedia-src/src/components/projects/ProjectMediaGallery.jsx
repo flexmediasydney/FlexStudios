@@ -23,6 +23,7 @@ import { useFavorites } from "@/components/favorites/useFavorites";
 
 // ─── Image proxy with concurrent loading + progress tracking ────────
 // Delegates to shared fetchMediaProxy for dedup + retry, wraps with progress tracking
+const blobCache = SHARED_THUMB_CACHE;
 
 /** Build proxy path from base + file, safely handling undefined file.path */
 function buildProxyPath(basePath, file) {
