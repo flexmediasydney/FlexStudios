@@ -13,6 +13,7 @@ import { api } from "@/api/supabaseClient";
 import { createPageUrl } from "@/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import TaskEffortBadge from "@/components/projects/TaskEffortBadge";
+import { CountdownTimer, getCountdownState } from "@/components/projects/TaskManagement";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,7 +33,7 @@ import {
 
 /* ═══════════════════════════ Constants & Helpers ═══════════════════════════ */
 
-const STATUS_ORDER = ["blocked", "not_started", "in_progress", "completed"];
+const STATUS_ORDER = ["not_started", "in_progress", "completed", "blocked"];
 
 const STATUS_CONFIG = {
   blocked:     { label: "Blocked",     color: "bg-red-500",   textColor: "text-red-700",   bgLight: "bg-red-50",   icon: ShieldAlert,  borderColor: "border-red-300" },
@@ -52,20 +53,28 @@ const ROLE_LABELS = {
   drone_editor: "Drone Editor",
 };
 
-function getTaskSource(task) {
+function getTaskSource(task, productMap, packageMap) {
   const tid = task.template_id;
-  if (tid?.startsWith("product:"))      return { type: "product",  label: "Product",  color: "bg-blue-100 text-blue-700" };
-  if (tid?.startsWith("package:"))      return { type: "package",  label: "Package",  color: "bg-purple-100 text-purple-700" };
-  if (tid?.startsWith("project_type:")) return { type: "project",  label: "Project",  color: "bg-amber-100 text-amber-700" };
-  if (tid?.startsWith("onsite:"))       return { type: "onsite",   label: "Onsite",   color: "bg-green-100 text-green-700" };
+  if (tid?.startsWith("product:")) {
+    const prodId = task.product_id || tid.split(":")[1];
+    const prod = productMap?.get(prodId);
+    return { type: "product", label: prod?.name || "Product", color: "bg-blue-100 text-blue-700" };
+  }
+  if (tid?.startsWith("package:")) {
+    const pkgId = task.package_id || tid.split(":")[1];
+    const pkg = packageMap?.get(pkgId);
+    return { type: "package", label: pkg?.name || "Package", color: "bg-purple-100 text-purple-700" };
+  }
+  if (tid?.startsWith("project_type:")) return { type: "project", label: "Project Level", color: "bg-amber-100 text-amber-700" };
+  if (tid?.startsWith("onsite:"))       return { type: "onsite",  label: "Onsite",        color: "bg-green-100 text-green-700" };
   if (/^\[Revision #\d+\]/.test(task.title || "")) return { type: "revision", label: "Request", color: "bg-rose-100 text-rose-700" };
   return { type: "manual", label: "Manual", color: "bg-gray-100 text-gray-600" };
 }
 
-function getTaskStatus(task, timerSet, effortMap) {
+function getTaskStatus(task, timerSet) {
   if (task.is_completed) return "completed";
   if (task.is_blocked) return "blocked";
-  if (timerSet.has(task.id) || (effortMap[task.id] > 0)) return "in_progress";
+  if (timerSet.has(task.id)) return "in_progress";
   return "not_started";
 }
 
@@ -144,6 +153,7 @@ export default function Tasks() {
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
   const { data: timeLogs = [] } = useEntityList("TaskTimeLog", "-created_at");
   const { data: products = [] } = useEntityList("Product", "name");
+  const { data: packages = [] } = useEntityList("Package", "name");
   const { data: user } = useCurrentUser();
   const { activeTimers = [] } = useActiveTimers();
 
@@ -181,6 +191,8 @@ export default function Tasks() {
 
   // ──── Computed ────
   const projectMap = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
+  const productMap = useMemo(() => new Map(products.map(p => [p.id, p])), [products]);
+  const packageMap = useMemo(() => new Map(packages.map(p => [p.id, p])), [packages]);
   const activeTimerTaskIds = useMemo(
     () => new Set((activeTimers || []).filter(t => t.is_active && t.status === "running").map(t => t.task_id)),
     [activeTimers]
@@ -200,13 +212,13 @@ export default function Tasks() {
       .filter(t => !t.is_deleted && !t.is_archived)
       .map(t => ({
         ...t,
-        _status: getTaskStatus(t, activeTimerTaskIds, effortByTask),
-        _source: getTaskSource(t),
+        _status: getTaskStatus(t, activeTimerTaskIds),
+        _source: getTaskSource(t, productMap, packageMap),
         _project: projectMap.get(t.project_id),
         _effortSeconds: effortByTask[t.id] || 0,
         _hasTimer: activeTimerTaskIds.has(t.id),
       }));
-  }, [allTasks, activeTimerTaskIds, effortByTask, projectMap]);
+  }, [allTasks, activeTimerTaskIds, effortByTask, projectMap, productMap, packageMap]);
 
   // ──── Stats ────
   const stats = useMemo(() => {
@@ -249,7 +261,7 @@ export default function Tasks() {
 
   const uniqueRoles = useMemo(() => {
     const s = new Set();
-    enrichedTasks.forEach(t => { if (t.role) s.add(t.role); });
+    enrichedTasks.forEach(t => { if (t.auto_assign_role) s.add(t.auto_assign_role); });
     return [...s].sort();
   }, [enrichedTasks]);
 
@@ -279,7 +291,7 @@ export default function Tasks() {
       if (assigneeFilter && assigneeFilter !== '__all__' && t.assigned_to !== assigneeFilter) return false;
 
       // Role
-      if (roleFilter && roleFilter !== '__all__' && t.role !== roleFilter) return false;
+      if (roleFilter && roleFilter !== '__all__' && t.auto_assign_role !== roleFilter) return false;
 
       // Quick filter pills
       if (quickFilter === "overdue") {
@@ -323,7 +335,7 @@ export default function Tasks() {
           cmp = (a.assigned_to_name || "").localeCompare(b.assigned_to_name || "");
           break;
         case "role":
-          cmp = (a.role || "").localeCompare(b.role || "");
+          cmp = (a.auto_assign_role || "").localeCompare(b.auto_assign_role || "");
           break;
         case "source":
           cmp = (a._source.type || "").localeCompare(b._source.type || "");
@@ -363,8 +375,8 @@ export default function Tasks() {
           label = t.assigned_to_name || "Unassigned";
           break;
         case "role":
-          key = t.role || "none";
-          label = ROLE_LABELS[t.role] || ROLE_LABELS.none;
+          key = t.auto_assign_role || "none";
+          label = ROLE_LABELS[t.auto_assign_role] || ROLE_LABELS.none;
           break;
         case "source":
           key = t._source.type;
@@ -393,6 +405,8 @@ export default function Tasks() {
 
   // ──── Actions ────
   const toggleComplete = useCallback(async (task) => {
+    if (task.is_locked) { toast.info("This task is locked and cannot be toggled"); return; }
+    if (task.is_blocked) { toast.info("Complete dependency tasks first"); return; }
     const wasCompleted = task.is_completed;
     try {
       await api.entities.ProjectTask.update(task.id, {
@@ -408,25 +422,30 @@ export default function Tasks() {
 
   const bulkMarkComplete = useCallback(async () => {
     const ids = [...selectedIds];
-    const toComplete = enrichedTasks.filter(t => ids.includes(t.id) && !t.is_completed);
-    if (toComplete.length === 0) {
-      toast.info("All selected tasks are already completed");
+    const eligible = enrichedTasks.filter(t => ids.includes(t.id) && !t.is_completed && !t.is_locked && !t.is_blocked);
+    const skipped = enrichedTasks.filter(t => ids.includes(t.id) && !t.is_completed && (t.is_locked || t.is_blocked));
+    if (eligible.length === 0) {
+      toast.info(skipped.length > 0 ? "All eligible tasks are locked or blocked" : "All selected tasks are already completed");
       setSelectedIds(new Set());
       return;
     }
-    try {
-      await Promise.all(toComplete.map(t =>
-        api.entities.ProjectTask.update(t.id, {
-          is_completed: true,
-          completed_at: new Date().toISOString(),
-        })
-      ));
-      refetchEntityList("ProjectTask");
-      toast.success(`${toComplete.length} task${toComplete.length > 1 ? "s" : ""} completed`);
-      setSelectedIds(new Set());
-    } catch {
-      toast.error("Failed to complete some tasks");
+    const results = await Promise.allSettled(eligible.map(t =>
+      api.entities.ProjectTask.update(t.id, {
+        is_completed: true,
+        completed_at: new Date().toISOString(),
+      })
+    ));
+    const successes = results.filter(r => r.status === "fulfilled").length;
+    const failures = results.filter(r => r.status === "rejected").length;
+    refetchEntityList("ProjectTask");
+    if (failures > 0) {
+      toast.warning(`${successes} completed, ${failures} failed`);
+    } else {
+      const msg = [`${successes} task${successes > 1 ? "s" : ""} completed`];
+      if (skipped.length > 0) msg.push(`${skipped.length} skipped (locked/blocked)`);
+      toast.success(msg.join(". "));
     }
+    setSelectedIds(new Set());
   }, [selectedIds, enrichedTasks]);
 
   const handleDragEnd = useCallback(async (result) => {
@@ -437,6 +456,10 @@ export default function Tasks() {
     if (!task) return;
 
     const newStatus = destination.droppableId;
+
+    // Prevent dragging locked or blocked tasks to completed
+    if (task.is_locked) { toast.info("This task is locked and cannot be moved"); return; }
+    if (task.is_blocked && newStatus === "completed") { toast.info("Complete dependency tasks first"); return; }
 
     // Only handle complete/uncomplete transitions
     if (newStatus === "completed" && !task.is_completed) {
@@ -909,22 +932,34 @@ function TaskKanbanCard({ task, onToggle }) {
   const dueToday = !t.is_completed && isDueToday(t.due_date);
 
   return (
-    <Card className="rounded-lg border shadow-sm p-3 cursor-grab hover:shadow-md transition-shadow bg-background">
+    <Card className={cn(
+      "rounded-lg border shadow-sm p-3 cursor-grab hover:shadow-md transition-shadow bg-background",
+      overdue && "border-l-4 border-l-red-500"
+    )}>
       <div className="space-y-2">
         {/* Row 1: checkbox + title */}
         <div className="flex items-start gap-2">
-          <Checkbox
-            checked={t.is_completed}
-            onCheckedChange={() => onToggle(t)}
-            className="mt-0.5 h-4 w-4"
-            onClick={e => e.stopPropagation()}
-          />
+          {t.is_locked ? (
+            <Lock className="mt-0.5 h-4 w-4 text-muted-foreground shrink-0" title="This task is locked" />
+          ) : (
+            <Checkbox
+              checked={t.is_completed}
+              onCheckedChange={() => onToggle(t)}
+              className="mt-0.5 h-4 w-4"
+              disabled={t.is_blocked}
+              title={t.is_blocked ? "Complete dependencies first" : undefined}
+              onClick={e => e.stopPropagation()}
+            />
+          )}
           <span className={cn(
             "text-sm font-medium leading-snug line-clamp-1 flex-1",
             t.is_completed && "line-through text-muted-foreground"
           )}>
             {t.title}
           </span>
+          {overdue && (
+            <Badge className="text-[9px] px-1 py-0 bg-red-600 text-white shrink-0">OVERDUE</Badge>
+          )}
           {t._hasTimer && (
             <span className="relative flex h-2.5 w-2.5 shrink-0 mt-1">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
@@ -959,16 +994,11 @@ function TaskKanbanCard({ task, onToggle }) {
             </span>
           )}
 
-          {t.due_date && (
-            <span className={cn(
-              "text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap",
-              overdue ? "bg-red-100 text-red-700" :
-              dueToday ? "bg-amber-100 text-amber-700" :
-              "text-muted-foreground"
-            )}>
-              {fmtDate(t.due_date)}
-            </span>
-          )}
+          {t.due_date ? (
+            <CountdownTimer dueDate={t.due_date} compact thresholds={{ warn: 4, danger: 1 }} />
+          ) : t.is_blocked ? (
+            <span className="text-xs text-amber-600">Awaiting dependencies</span>
+          ) : null}
         </div>
 
         {/* Row 4: effort bar */}
@@ -1056,7 +1086,8 @@ function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
   return (
     <tr className={cn(
       "border-b hover:bg-muted/30 transition-colors",
-      selected && "bg-primary/5"
+      selected && "bg-primary/5",
+      overdue && "bg-red-50/50"
     )}>
       {/* Select */}
       <td className="w-10 px-3 py-2">
@@ -1070,12 +1101,20 @@ function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
       {/* Status checkbox */}
       <td className="w-10 px-2 py-2">
         <div className="flex items-center gap-1">
-          <Checkbox
-            checked={t.is_completed}
-            onCheckedChange={() => toggleComplete(t)}
-            className="h-4 w-4"
-          />
-          {t.is_blocked && <Lock className="h-3 w-3 text-red-500" />}
+          {t.is_locked ? (
+            <Lock className="h-4 w-4 text-muted-foreground" title="This task is locked" />
+          ) : (
+            <Checkbox
+              checked={t.is_completed}
+              onCheckedChange={() => toggleComplete(t)}
+              className="h-4 w-4"
+              disabled={t.is_blocked}
+              title={t.is_blocked ? "Complete dependencies first" : undefined}
+            />
+          )}
+          {t.is_blocked && !t.is_locked && (
+            <Lock className="h-3 w-3 text-red-500" title="This task is blocked until dependency tasks are completed" />
+          )}
         </div>
       </td>
 
@@ -1124,8 +1163,8 @@ function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
 
       {/* Role */}
       <td className="px-2 py-2 hidden xl:table-cell">
-        {t.role && t.role !== "none" ? (
-          <Badge variant="outline" className="text-[10px] font-medium">{ROLE_LABELS[t.role] || t.role}</Badge>
+        {t.auto_assign_role && t.auto_assign_role !== "none" ? (
+          <Badge variant="outline" className="text-[10px] font-medium">{ROLE_LABELS[t.auto_assign_role] || t.auto_assign_role}</Badge>
         ) : (
           <span className="text-xs text-muted-foreground/50">--</span>
         )}
@@ -1141,15 +1180,9 @@ function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
       {/* Due date */}
       <td className="px-2 py-2">
         {t.due_date ? (
-          <span className={cn(
-            "text-xs font-medium whitespace-nowrap",
-            overdue ? "text-red-600 font-semibold" :
-            dueToday ? "text-amber-600 font-semibold" :
-            "text-muted-foreground"
-          )}>
-            {overdue && <AlertTriangle className="h-3 w-3 inline mr-0.5 -mt-0.5" />}
-            {fmtDate(t.due_date)}
-          </span>
+          <CountdownTimer dueDate={t.due_date} compact thresholds={{ warn: 4, danger: 1 }} />
+        ) : t.is_blocked ? (
+          <Badge variant="outline" className="text-[10px] text-red-600 border-red-200">Blocked</Badge>
         ) : (
           <span className="text-xs text-muted-foreground/50">--</span>
         )}
