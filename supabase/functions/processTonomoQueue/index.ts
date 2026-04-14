@@ -131,23 +131,19 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── Appointment-first processing order ────────────────────────────
-    // Appointment-level actions (scheduled, rescheduled) are the authority
-    // for shoot dates & calendar events.  They MUST process before
-    // order-level actions (booking_created_or_changed, changed) so that
-    // stale order-level timestamps never overwrite fresh appointment data.
-    const APPOINTMENT_ACTIONS = new Set(['scheduled', 'rescheduled']);
-    const actionPriority = (action: string) => APPOINTMENT_ACTIONS.has(action) ? 0 : 1;
-
+    // ── FIFO processing order ──────────────────────────────────────────
+    // Process events strictly in chronological order (created_at).
+    // Safety comes from handler-level guards, NOT from reordering:
+    //   • handleOrderUpdate does NOT write shoot_date/shoot_time
+    //   • handleChanged / handleRescheduled backfill appointment IDs
+    //   • handleScheduled creates projects; rescheduled/changed update them
+    // Appointment-first sorting was removed because it promotes rescheduled
+    // BEFORE the project-creating BCC event, causing orphan skips.
     const toProcess: any[] = [];
     for (const [, items] of Object.entries(byOrder)) {
-      // Sort: appointment-level first, then by created_at within each tier
-      const sorted = items.sort((a: any, b: any) => {
-        const priA = actionPriority(a.action);
-        const priB = actionPriority(b.action);
-        if (priA !== priB) return priA - priB;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      });
+      const sorted = items.sort((a: any, b: any) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
       const seen = new Map();
       const toSupersede: string[] = [];
       for (const item of sorted) {
