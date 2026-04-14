@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
     // 2. Find all projects with non-empty mapping gaps
     const { data: projects = [] } = await admin
       .from('projects')
-      .select('id, mapping_gaps, products_mapping_gaps')
+      .select('id, mapping_gaps, products_mapping_gaps, status, tonomo_order_id')
       .or('mapping_gaps.neq.[]::jsonb,products_mapping_gaps.neq.[]::jsonb')
       .not('mapping_gaps', 'is', null);
 
@@ -78,6 +78,39 @@ Deno.serve(async (req) => {
           })
           .eq('id', project.id);
         cleared++;
+
+        // If project is pending_review and has a tonomo order, replay the latest
+        // webhook to re-resolve products with the now-complete mappings
+        if (project.status === 'pending_review' && project.tonomo_order_id) {
+          try {
+            const { data: queueEntries } = await admin
+              .from('tonomo_processing_queue')
+              .select('id')
+              .eq('order_id', project.tonomo_order_id)
+              .eq('status', 'completed')
+              .order('created_at', { ascending: false })
+              .limit(1);
+
+            if (queueEntries?.[0]) {
+              await admin
+                .from('tonomo_processing_queue')
+                .update({ status: 'pending', retry_count: 0, error_message: null, result_summary: null, processed_at: null })
+                .eq('id', queueEntries[0].id);
+
+              // Trigger queue processor to pick up the replayed entry
+              fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/processTonomoQueue`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+                },
+                body: '{}',
+              }).catch(() => {});
+            }
+          } catch (replayErr) {
+            console.warn(`Failed to replay webhook for project ${project.id}:`, replayErr);
+          }
+        }
       }
 
       if (remainingGaps.length > 0 || remainingProductGaps.length > 0) {
