@@ -150,7 +150,7 @@ const taskAnimations = `
 
 /* ═══════════════════════════ Component ═══════════════════════════ */
 
-export default function Tasks() {
+function TasksInner() {
   // ──── Data Loading ────
   const { data: allTasks = [], loading: tasksLoading } = useEntityList("ProjectTask", "order", 5000);
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
@@ -1398,4 +1398,22 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
     </tr>
   );
 });
-// force rebuild 1776174625
+// Wrapper to catch and log the actual error
+class TasksErrorCatcher extends React.Component {
+  constructor(props) { super(props); this.state = { error: null, info: null }; }
+  componentDidCatch(error, info) {
+    console.error('[Tasks] FULL ERROR:', error?.message, error?.stack);
+    console.error('[Tasks] Component stack:', info?.componentStack);
+    this.setState({ error, info });
+  }
+  render() {
+    if (this.state.error) {
+      return React.createElement('div', { style: { padding: 40, color: 'red', fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 13 } },
+        'Tasks Error:\n' + this.state.error?.message + '\n\nStack:\n' + (this.state.error?.stack || '').slice(0, 1000) +
+        '\n\nComponent:\n' + (this.state.info?.componentStack || '').slice(0, 500)
+      );
+    }
+    return React.createElement(TasksInner);
+  }
+}
+export default TasksErrorCatcher;
