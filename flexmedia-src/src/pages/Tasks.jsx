@@ -37,7 +37,7 @@ import {
 const STATUS_ORDER = ["not_started", "in_progress", "completed", "blocked"];
 
 const STATUS_CONFIG = {
-  blocked:     { label: "Blocked",     color: "bg-red-500",   textColor: "text-red-700",   bgLight: "bg-red-50 dark:bg-red-950/30",   icon: ShieldAlert,  borderColor: "border-red-300 dark:border-red-800" },
+  blocked:     { label: "Blocked",     color: "bg-amber-500",  textColor: "text-amber-700",  bgLight: "bg-amber-50 dark:bg-amber-950/30",  icon: ShieldAlert,  borderColor: "border-amber-300 dark:border-amber-800" },
   not_started: { label: "Not Started", color: "bg-gray-400",  textColor: "text-gray-700",  bgLight: "bg-gray-50 dark:bg-gray-900/30",  icon: Circle,       borderColor: "border-gray-300 dark:border-gray-700" },
   in_progress: { label: "In Progress", color: "bg-blue-500",  textColor: "text-blue-700",  bgLight: "bg-blue-50 dark:bg-blue-950/30",  icon: Timer,        borderColor: "border-blue-300 dark:border-blue-800" },
   completed:   { label: "Completed",   color: "bg-green-500", textColor: "text-green-700", bgLight: "bg-green-50 dark:bg-green-950/30", icon: CheckCircle2, borderColor: "border-green-300 dark:border-green-800" },
@@ -161,17 +161,24 @@ export default function Tasks() {
   // ──── Permission ────
   const canEdit = user && ['master_admin', 'admin', 'manager', 'employee'].includes(user.role);
 
+  // ──── Real-time subscription (Fix #1) ────
+  useEffect(() => {
+    const unsub = api.entities.ProjectTask.subscribe(() => refetchEntityList("ProjectTask"));
+    return typeof unsub === 'function' ? () => unsub() : undefined;
+  }, []);
+
   // ──── State ────
   const [expandedTaskId, setExpandedTaskId] = useState(null);
   const [viewMode, setViewMode] = useState(() => localStorage.getItem("tasks-view") || "list");
-  const [groupBy, setGroupBy] = useState("none");
+  const [groupBy, setGroupBy] = useState(() => localStorage.getItem("tasks-group-by") || "none");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const searchTimerRef = useRef(null);
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [sourceFilter, setSourceFilter] = useState("");
-  const [assigneeFilter, setAssigneeFilter] = useState("");
-  const [roleFilter, setRoleFilter] = useState("");
+  const togglingRef = useRef(false);
+  const [statusFilter, setStatusFilter] = useState(() => localStorage.getItem("tasks-status-filter") || "all");
+  const [sourceFilter, setSourceFilter] = useState(() => localStorage.getItem("tasks-source-filter") || "");
+  const [assigneeFilter, setAssigneeFilter] = useState(() => localStorage.getItem("tasks-assignee-filter") || "");
+  const [roleFilter, setRoleFilter] = useState(() => localStorage.getItem("tasks-role-filter") || "");
   const [quickFilter, setQuickFilter] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [sortCol, setSortCol] = useState("due");
@@ -187,6 +194,13 @@ export default function Tasks() {
   }, []);
   useEffect(() => () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); }, []);
   useEffect(() => { if (searchQuery === "") setSearchInput(""); }, [searchQuery]);
+
+  // Persist filters to localStorage (Fix #5)
+  useEffect(() => { localStorage.setItem("tasks-status-filter", statusFilter); }, [statusFilter]);
+  useEffect(() => { localStorage.setItem("tasks-source-filter", sourceFilter); }, [sourceFilter]);
+  useEffect(() => { localStorage.setItem("tasks-assignee-filter", assigneeFilter); }, [assigneeFilter]);
+  useEffect(() => { localStorage.setItem("tasks-role-filter", roleFilter); }, [roleFilter]);
+  useEffect(() => { localStorage.setItem("tasks-group-by", groupBy); }, [groupBy]);
 
   // Persist view mode
   const setViewModePersisted = useCallback((mode) => {
@@ -224,6 +238,9 @@ export default function Tasks() {
         _hasTimer: activeTimerTaskIds.has(t.id),
       }));
   }, [allTasks, activeTimerTaskIds, effortByTask, projectMap, productMap, packageMap]);
+
+  // O(1) task lookup map for drag-and-drop (Fix #8)
+  const taskMap = useMemo(() => new Map(enrichedTasks.map(t => [t.id, t])), [enrichedTasks]);
 
   // ──── Contractor visibility filter ────
   const visibleTasks = useMemo(() => {
@@ -406,6 +423,17 @@ export default function Tasks() {
     return [...groups.values()];
   }, [sortedTasks, groupBy]);
 
+  // Collapse all groups except the first by default (Fix #10)
+  const prevGroupByRef = useRef(groupBy);
+  useEffect(() => {
+    if (groupedTasks && groupedTasks.length > 1 && prevGroupByRef.current !== groupBy) {
+      const allKeys = groupedTasks.map(g => g.key);
+      // Collapse all except first
+      setCollapsedGroups(new Set(allKeys.slice(1)));
+    }
+    prevGroupByRef.current = groupBy;
+  }, [groupBy, groupedTasks]);
+
   // ──── Kanban columns ────
   const kanbanColumns = useMemo(() => {
     const cols = {};
@@ -421,8 +449,15 @@ export default function Tasks() {
     if (!canEdit) { toast.error("You do not have permission to edit tasks"); return; }
     if (task.is_locked) { toast.info("This task is locked and cannot be toggled"); return; }
     if (task.is_blocked) { toast.info("Complete dependency tasks first"); return; }
+    // Double-submit prevention (Fix #11)
+    if (togglingRef.current) return;
+    togglingRef.current = true;
     const wasCompleted = task.is_completed;
     try {
+      // Onsite task warning (Fix #15)
+      if (task.task_type === 'onsite' && !wasCompleted) {
+        toast.info('Onsite tasks are normally auto-completed when photos are uploaded');
+      }
       await api.entities.ProjectTask.update(task.id, {
         is_completed: !wasCompleted,
         ...(wasCompleted ? { completed_at: null } : { completed_at: new Date().toISOString() }),
@@ -440,6 +475,8 @@ export default function Tasks() {
       }).catch(() => {});
     } catch {
       toast.error("Failed to update task");
+    } finally {
+      togglingRef.current = false;
     }
   }, [canEdit, user]);
 
@@ -477,7 +514,7 @@ export default function Tasks() {
     const { draggableId, destination, source } = result;
     if (!destination || destination.droppableId === source.droppableId) return;
 
-    const task = visibleTasks.find(t => t.id === draggableId);
+    const task = taskMap.get(draggableId);
     if (!task) return;
 
     const newStatus = destination.droppableId;
@@ -497,14 +534,14 @@ export default function Tasks() {
       try {
         await api.entities.ProjectTask.update(task.id, { is_blocked: true });
         refetchEntityList("ProjectTask");
-      } catch { /* silent */ }
+      } catch (err) { toast.error("Failed to update task"); }
     } else if (newStatus !== "blocked" && task.is_blocked) {
       try {
         await api.entities.ProjectTask.update(task.id, { is_blocked: false });
         refetchEntityList("ProjectTask");
-      } catch { /* silent */ }
+      } catch (err) { toast.error("Failed to update task"); }
     }
-  }, [visibleTasks, toggleComplete, canEdit]);
+  }, [taskMap, toggleComplete, canEdit]);
 
   const toggleSort = useCallback((col) => {
     setSortCol(prev => {
@@ -550,6 +587,13 @@ export default function Tasks() {
     setAssigneeFilter("");
     setRoleFilter("");
     setQuickFilter("");
+    // Clear persisted filters too
+    try {
+      localStorage.removeItem("tasks-status-filter");
+      localStorage.removeItem("tasks-source-filter");
+      localStorage.removeItem("tasks-assignee-filter");
+      localStorage.removeItem("tasks-role-filter");
+    } catch {}
   }, []);
 
   const hasActiveFilters = searchQuery || statusFilter !== "all" || sourceFilter || assigneeFilter || roleFilter || quickFilter;
@@ -679,6 +723,14 @@ export default function Tasks() {
         <StatCard label="Effort Today" value={fmtDuration(stats.effortToday)} icon={Activity} color="text-violet-600" />
       </div>
 
+      {/* ════════ 5000 Task Limit Warning (Fix #2) ════════ */}
+      {allTasks.length >= 5000 && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400 text-xs">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>Showing first 5,000 tasks. Some tasks may not be visible.</span>
+        </div>
+      )}
+
       {/* ════════ Quick Filter Pills ════════ */}
       <div className="flex flex-wrap items-center gap-1.5">
         <Filter className="h-3.5 w-3.5 text-muted-foreground mr-0.5" />
@@ -772,30 +824,35 @@ export default function Tasks() {
         </div>
       </div>
 
-      {/* ════════ Empty State ════════ */}
+      {/* ════════ Empty State (Fix #7, #13 — Card pattern) ════════ */}
       {filteredTasks.length === 0 && !tasksLoading && (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <ListChecks className="h-10 w-10 text-muted-foreground/40 mb-3" />
-          {visibleTasks.length === 0 ? (
-            <>
-              <p className="text-sm font-medium text-muted-foreground">No tasks yet</p>
-              <p className="text-xs text-muted-foreground/70 mt-1">Tasks will appear here as projects are created and synced.</p>
-            </>
-          ) : (
-            <>
-              <p className="text-sm font-medium text-muted-foreground">No tasks match your filters</p>
-              <Button variant="outline" size="sm" className="mt-3" onClick={clearFilters}>
-                Clear Filters
-              </Button>
-            </>
-          )}
-        </div>
+        <Card className="border-dashed border-2">
+          <CardContent className="py-16 text-center">
+            <div className="flex flex-col items-center justify-center">
+              <ListChecks className="h-10 w-10 text-muted-foreground/40 mb-3" />
+              {visibleTasks.length === 0 ? (
+                <>
+                  <p className="text-sm font-medium text-muted-foreground">No tasks yet</p>
+                  <p className="text-xs text-muted-foreground/70 mt-1">Tasks will appear here as projects are created and synced.</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-muted-foreground">No tasks match your filters</p>
+                  <Button variant="outline" size="sm" className="mt-3" onClick={clearFilters}>
+                    Clear Filters
+                  </Button>
+                </>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
-      {/* ════════ Kanban View ════════ */}
+      {/* ════════ Kanban View (Fix #6 — mobile horizontal scroll) ════════ */}
       {viewMode === "kanban" && filteredTasks.length > 0 && (
         <DragDropContext onDragEnd={handleDragEnd}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 sm:overflow-x-visible">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 min-w-[800px] sm:min-w-0">
             {STATUS_ORDER.map(statusKey => {
               const cfg = STATUS_CONFIG[statusKey];
               const tasks = kanbanColumns[statusKey] || [];
@@ -838,7 +895,7 @@ export default function Tasks() {
                                 )}
                                 style={{ ...prov.draggableProps.style, animationDelay: `${Math.min(index, 10) * 20}ms` }}
                               >
-                                <TaskKanbanCard task={task} onToggle={toggleComplete} />
+                                <TaskKanbanCard task={task} onToggle={toggleComplete} user={user} />
                               </div>
                             )}
                           </Draggable>
@@ -848,14 +905,20 @@ export default function Tasks() {
                           <p className="text-xs text-muted-foreground/50 text-center py-6">No tasks</p>
                         )}
                         {hasMore && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full text-xs text-muted-foreground"
-                            onClick={() => setKanbanLimits(prev => ({ ...prev, [statusKey]: (prev[statusKey] || 100) + 100 }))}
-                          >
-                            Show {tasks.length - limit} more
-                          </Button>
+                          limit < 500 ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-full text-xs text-muted-foreground"
+                              onClick={() => setKanbanLimits(prev => ({ ...prev, [statusKey]: Math.min((prev[statusKey] || 100) + 100, 500) }))}
+                            >
+                              Show {Math.min(tasks.length - limit, 100)} more
+                            </Button>
+                          ) : (
+                            <p className="text-xs text-muted-foreground/60 text-center py-2">
+                              Open project to see all {tasks.length} tasks
+                            </p>
+                          )
                         )}
                       </div>
                     )}
@@ -863,6 +926,7 @@ export default function Tasks() {
                 </div>
               );
             })}
+          </div>
           </div>
         </DragDropContext>
       )}
@@ -968,7 +1032,7 @@ function StatCard({ label, value, icon: Icon, color, highlight = false, pulse = 
 
 /* ═══════════════════════════ Kanban Card ═══════════════════════════ */
 
-const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle }) {
+const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle, user }) {
   const t = task;
   const overdue = !t.is_completed && t.due_date && isOverdue(t.due_date);
   const dueToday = !t.is_completed && isDueToday(t.due_date);
@@ -979,10 +1043,12 @@ const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle }) {
       overdue && "border-l-4 border-l-red-500"
     )}>
       <div className="space-y-2">
-        {/* Row 1: checkbox + title */}
+        {/* Row 1: checkbox + title (Fix #4 — lock icon distinction) */}
         <div className="flex items-start gap-2">
           {t.is_locked ? (
-            <Lock className="mt-0.5 h-4 w-4 text-muted-foreground shrink-0" title="This task is locked" />
+            <Lock className="mt-0.5 h-4 w-4 text-red-500 shrink-0" title="Locked — auto-completed onsite task" />
+          ) : t.is_blocked ? (
+            <Lock className="mt-0.5 h-4 w-4 text-amber-500 shrink-0" title="Blocked by dependencies" />
           ) : (
             <Checkbox
               checked={t.is_completed}
@@ -1021,11 +1087,11 @@ const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle }) {
           </Link>
         )}
 
-        {/* Row 3: badges & meta */}
+        {/* Row 3: badges & meta (Fix #14 — Badge component for source) */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className={cn("text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap", t._source.color)}>
+          <Badge variant="outline" className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap", t._source.color)}>
             {t._source.label}
-          </span>
+          </Badge>
 
           {(() => {
             const assigneeName = t.assigned_to_name || t.assigned_to_team_name;
@@ -1053,8 +1119,8 @@ const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle }) {
           ) : null}
         </div>
 
-        {/* Row 4: effort bar */}
-        {(t.estimated_minutes > 0 || t._effortSeconds > 0) && (
+        {/* Row 4: effort bar (Fix #17 — hidden for contractors) */}
+        {user?.role !== 'contractor' && (t.estimated_minutes > 0 || t._effortSeconds > 0) && (
           <TaskEffortBadge
             estimatedMinutes={t.estimated_minutes || 0}
             actualSeconds={t._effortSeconds}
@@ -1121,6 +1187,7 @@ function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleCo
                 toggleComplete={toggleComplete}
                 expanded={expandedTaskId === t.id}
                 onToggleExpand={() => setExpandedTaskId(expandedTaskId === t.id ? null : t.id)}
+                user={user}
               />
               {expandedTaskId === t.id && (
                 <tr><td colSpan={10} className="p-0 border-t-0">
@@ -1150,7 +1217,7 @@ function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleCo
 
 /* ═══════════════════════════ Task Row ═══════════════════════════ */
 
-const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, toggleComplete, expanded, onToggleExpand }) {
+const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, toggleComplete, expanded, onToggleExpand, user }) {
   const t = task;
   const cfg = STATUS_CONFIG[t._status];
   const overdue = !t.is_completed && t.due_date && isOverdue(t.due_date);
@@ -1175,27 +1242,26 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
         />
       </td>
 
-      {/* Status checkbox */}
+      {/* Status checkbox (Fix #4 — lock icon distinction) */}
       <td className="w-10 px-2 py-2" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-1">
           {t.is_locked ? (
-            <Lock className="h-4 w-4 text-muted-foreground" title="This task is locked" />
+            <Lock className="h-4 w-4 text-red-500" title="Locked — auto-completed onsite task" />
+          ) : t.is_blocked ? (
+            <>
+              <Lock className="h-4 w-4 text-amber-500" title="Blocked by dependencies" />
+            </>
           ) : (
             <Checkbox
               checked={t.is_completed}
               onCheckedChange={() => toggleComplete(t)}
               className="h-4 w-4"
-              disabled={t.is_blocked}
-              title={t.is_blocked ? "Complete dependencies first" : undefined}
             />
-          )}
-          {t.is_blocked && !t.is_locked && (
-            <Lock className="h-3 w-3 text-red-500" title="This task is blocked until dependency tasks are completed" />
           )}
         </div>
       </td>
 
-      {/* Task title + source inline */}
+      {/* Task title + source inline (Fix #14 — Badge component) */}
       <td className="px-2 py-2 max-w-[300px]">
         <div className="flex items-center gap-1.5">
           <span className={cn(
@@ -1204,21 +1270,26 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
           )}>
             {t.title}
           </span>
-          <span className={cn("text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap shrink-0", t._source.color)}>
+          <Badge variant="outline" className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap shrink-0", t._source.color)}>
             {t._source.label}
-          </span>
+          </Badge>
         </div>
       </td>
 
-      {/* Project */}
+      {/* Project (Fix #3 — shoot_date subtitle) */}
       <td className="px-2 py-2 hidden lg:table-cell max-w-[200px]" onClick={e => e.stopPropagation()}>
         {t._project?.property_address ? (
-          <Link
-            to={createPageUrl("ProjectDetails") + `?id=${t.project_id}&tab=tasks`}
-            className="text-xs text-muted-foreground hover:text-foreground truncate block transition-colors"
-          >
-            {t._project.property_address}
-          </Link>
+          <div>
+            <Link
+              to={createPageUrl("ProjectDetails") + `?id=${t.project_id}&tab=tasks`}
+              className="text-xs text-muted-foreground hover:text-foreground truncate block transition-colors"
+            >
+              {t._project.property_address}
+            </Link>
+            {t._project?.shoot_date && (
+              <span className="text-[10px] text-muted-foreground">Shoot: {fmtDate(t._project.shoot_date)}</span>
+            )}
+          </div>
         ) : (
           <span className="text-xs text-muted-foreground/50">--</span>
         )}
@@ -1254,31 +1325,35 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
         )}
       </td>
 
-      {/* Source */}
+      {/* Source (Fix #14 — Badge component) */}
       <td className="px-2 py-2 hidden xl:table-cell">
-        <span className={cn("text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap", t._source.color)}>
+        <Badge variant="outline" className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap", t._source.color)}>
           {t._source.label}
-        </span>
+        </Badge>
       </td>
 
-      {/* Due date */}
+      {/* Due date (Fix #12 — amber for blocked) */}
       <td className="px-2 py-2">
         {t.due_date ? (
           <CountdownTimer dueDate={t.due_date} compact thresholds={{ warn: 4, danger: 1 }} />
         ) : t.is_blocked ? (
-          <Badge variant="outline" className="text-[10px] text-red-600 border-red-200">Blocked</Badge>
+          <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-200 dark:text-amber-400 dark:border-amber-800">Blocked</Badge>
         ) : (
           <span className="text-xs text-muted-foreground/50">--</span>
         )}
       </td>
 
-      {/* Effort */}
+      {/* Effort (Fix #17 — hidden for contractors) */}
       <td className="px-2 py-2 hidden md:table-cell">
-        <TaskEffortBadge
-          estimatedMinutes={t.estimated_minutes || 0}
-          actualSeconds={t._effortSeconds}
-          compact
-        />
+        {user?.role !== 'contractor' ? (
+          <TaskEffortBadge
+            estimatedMinutes={t.estimated_minutes || 0}
+            actualSeconds={t._effortSeconds}
+            compact
+          />
+        ) : (
+          <span className="text-xs text-muted-foreground/30">--</span>
+        )}
       </td>
 
       {/* Timer */}
