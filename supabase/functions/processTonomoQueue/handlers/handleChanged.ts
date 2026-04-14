@@ -96,7 +96,7 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
   }
 
   // Update address if changed in Tonomo
-  const changedAddress = p.address?.formatted_address || p.location || p.order?.property_address?.formatted_address;
+  const changedAddress = p.address?.formatted_address || p.property_address?.formatted_address || p.location || p.order?.property_address?.formatted_address;
   if (changedAddress && !overriddenFields.includes('property_address')) {
     if (changedAddress !== project.property_address) {
       updates.property_address = changedAddress;

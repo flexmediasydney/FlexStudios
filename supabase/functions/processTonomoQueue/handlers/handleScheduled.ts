@@ -26,9 +26,9 @@ import {
 export async function handleScheduled(entities: any, orderId: string, p: any, originAction = 'scheduled') {
   const eventId = p.id;
   const orderName = p.order?.orderName || p.orderName || 'Unknown order';
-  const address = p.address?.formatted_address || p.location || p.order?.property_address?.formatted_address || '';
-  const addressLat = p.address?.lat || p.address?.latitude || null;
-  const addressLng = p.address?.lng || p.address?.longitude || null;
+  const address = p.address?.formatted_address || p.property_address?.formatted_address || p.location || p.order?.property_address?.formatted_address || '';
+  const addressLat = p.address?.lat || p.address?.latitude || p.property_address?.lat || p.property_address?.latitude || null;
+  const addressLng = p.address?.lng || p.address?.longitude || p.property_address?.lng || p.property_address?.longitude || null;
   const photographers = p.photographers || [];
   const agent = p.order?.listingAgents?.[0] || p.listingAgents?.[0] || null;
   const rawStartTime = p.when?.start_time;

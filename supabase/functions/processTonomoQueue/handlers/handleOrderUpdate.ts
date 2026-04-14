@@ -71,7 +71,7 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
 
     // STRICT: Only create if the payload looks like a genuine new booking
     const orderName = p.order?.orderName || p.orderName || null;
-    const address = p.address?.formatted_address || p.location || p.order?.property_address?.formatted_address || null;
+    const address = p.address?.formatted_address || p.property_address?.formatted_address || p.location || p.order?.property_address?.formatted_address || null;
     const hasServices = (p.order?.services_a_la_cart || p.services_a_la_cart || p.order?.services || p.services || []).length > 0;
     const hasBookingFlow = !!(p.order?.bookingFlow || p.bookingFlow);
     const hasAppointment = !!(p.when?.start_time);
@@ -260,7 +260,7 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
         const endTime = p.when?.end_time
           ? new Date(p.when.end_time * 1000).toISOString()
           : new Date(startDt.getTime() + 90 * 60 * 1000).toISOString(); // default 90min
-        const address = p.address?.formatted_address || project.property_address || '';
+        const address = p.address?.formatted_address || p.property_address?.formatted_address || project.property_address || '';
         await entities.CalendarEvent.create({
           title: project.title || address || `Order ${orderId}`,
           description: `Tonomo appointment for order ${orderId}`,
