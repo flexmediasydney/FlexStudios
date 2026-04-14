@@ -14,25 +14,27 @@ import { createPageUrl } from "@/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import TaskEffortBadge from "@/components/projects/TaskEffortBadge";
 import TaskDetailPanel from "@/components/projects/TaskDetailPanel";
-import { CountdownTimer, getCountdownState } from "@/components/projects/TaskManagement";
+import { CountdownTimer } from "@/components/projects/TaskManagement";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Skeleton } from "@/components/ui/skeleton";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   ListChecks, Search, LayoutGrid, List, ChevronDown, ChevronUp, ChevronRight,
   CheckCircle2, Circle, Timer, ShieldAlert, Lock, AlertTriangle,
-  Filter, X, Clock, Users, Briefcase, Package, Layers, Wrench, Zap,
-  BarChart3, TrendingUp, Activity
+  Filter, X, Clock, Users, Package, Layers, Wrench,
+  TrendingUp, Activity
 } from "lucide-react";
 
 /* ═══════════════════════════ Constants & Helpers ═══════════════════════════ */
+
+/** colSpan must match column count in thead */
+const TABLE_COL_COUNT = 10;
 
 const STATUS_ORDER = ["not_started", "in_progress", "completed", "blocked"];
 
@@ -163,8 +165,10 @@ export default function Tasks() {
 
   // ──── Real-time subscription (Fix #1) ────
   useEffect(() => {
-    const unsub = api.entities.ProjectTask.subscribe(() => refetchEntityList("ProjectTask"));
-    return typeof unsub === 'function' ? () => unsub() : undefined;
+    try {
+      const unsub = api.entities.ProjectTask.subscribe(() => refetchEntityList("ProjectTask"));
+      return typeof unsub === 'function' ? () => unsub() : undefined;
+    } catch { return undefined; }
   }, []);
 
   // ──── State ────
@@ -174,7 +178,7 @@ export default function Tasks() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const searchTimerRef = useRef(null);
-  const togglingRef = useRef(false);
+  const togglingRef = useRef(new Set());
   const [statusFilter, setStatusFilter] = useState(() => localStorage.getItem("tasks-status-filter") || "all");
   const [sourceFilter, setSourceFilter] = useState(() => localStorage.getItem("tasks-source-filter") || "");
   const [assigneeFilter, setAssigneeFilter] = useState(() => localStorage.getItem("tasks-assignee-filter") || "");
@@ -228,7 +232,7 @@ export default function Tasks() {
 
   const enrichedTasks = useMemo(() => {
     return allTasks
-      .filter(t => !t.is_deleted && !t.is_archived)
+      .filter(t => !t.is_deleted && !t.is_archived && (!t.project_id || projectMap.get(t.project_id)?.status !== 'cancelled'))
       .map(t => ({
         ...t,
         _status: getTaskStatus(t, activeTimerTaskIds),
@@ -332,7 +336,7 @@ export default function Tasks() {
       }
       if (quickFilter === "my_tasks") {
         if (!user) return false;
-        if (t.assigned_to !== user.id && t.assigned_to !== user.email) return false;
+        if (t.assigned_to !== user.id && t.assigned_to !== user.email && t.assigned_to_team_id !== user?.internal_team_id) return false;
       }
       if (quickFilter === "blocked") {
         if (!t.is_blocked) return false;
@@ -409,7 +413,7 @@ export default function Tasks() {
           label = ROLE_LABELS[t.auto_assign_role] || ROLE_LABELS.none;
           break;
         case "source":
-          key = t._source.type;
+          key = `${t._source.type}:${t._source.label}`;
           label = t._source.label;
           break;
         default:
@@ -423,16 +427,18 @@ export default function Tasks() {
     return [...groups.values()];
   }, [sortedTasks, groupBy]);
 
-  // Collapse all groups except the first by default (Fix #10)
+  // Reset kanban limits on filter change
+  useEffect(() => setKanbanLimits({}), [statusFilter, sourceFilter, assigneeFilter, roleFilter, searchQuery, quickFilter]);
+
+  // Collapse all groups except the first by default — also reset on filter change
   const prevGroupByRef = useRef(groupBy);
   useEffect(() => {
-    if (groupedTasks && groupedTasks.length > 1 && prevGroupByRef.current !== groupBy) {
+    if (groupedTasks && groupedTasks.length > 1) {
       const allKeys = groupedTasks.map(g => g.key);
-      // Collapse all except first
       setCollapsedGroups(new Set(allKeys.slice(1)));
     }
     prevGroupByRef.current = groupBy;
-  }, [groupBy, groupedTasks]);
+  }, [groupBy, groupedTasks, statusFilter, sourceFilter, assigneeFilter, roleFilter, searchQuery, quickFilter]);
 
   // ──── Kanban columns ────
   const kanbanColumns = useMemo(() => {
@@ -447,14 +453,14 @@ export default function Tasks() {
   // ──── Actions ────
   const toggleComplete = useCallback(async (task) => {
     if (!canEdit) { toast.error("You do not have permission to edit tasks"); return; }
-    if (task.is_locked) { toast.info("This task is locked and cannot be toggled"); return; }
-    if (task.is_blocked) { toast.info("Complete dependency tasks first"); return; }
-    // Double-submit prevention (Fix #11)
-    if (togglingRef.current) return;
-    togglingRef.current = true;
+    if (task.is_locked) { toast.info(`"${task.title}" is locked and cannot be toggled`); return; }
+    if (task.is_blocked) { toast.info(`"${task.title}" is blocked — complete dependency tasks first`); return; }
+    // Double-submit prevention — per-task Set
+    if (togglingRef.current.has(task.id)) return;
+    togglingRef.current.add(task.id);
     const wasCompleted = task.is_completed;
     try {
-      // Onsite task warning (Fix #15)
+      // Onsite task warning
       if (task.task_type === 'onsite' && !wasCompleted) {
         toast.info('Onsite tasks are normally auto-completed when photos are uploaded');
       }
@@ -464,9 +470,14 @@ export default function Tasks() {
       });
       refetchEntityList("ProjectTask");
       toast.success(wasCompleted ? "Task reopened" : "Task completed");
+      // Deadline sync
+      if (task.project_id) {
+        api.functions.invoke('calculateProjectTaskDeadlines', { project_id: task.project_id, trigger_event: 'task_toggle' }).catch(() => {});
+      }
       // Audit trail
       api.entities.ProjectActivity.create({
         project_id: task.project_id,
+        project_title: task._project?.title || task._project?.property_address || '',
         action: 'task_completed',
         activity_type: 'status_change',
         description: `Task "${task.title}" ${wasCompleted ? 'reopened' : 'completed'} from Tasks page`,
@@ -476,7 +487,7 @@ export default function Tasks() {
     } catch {
       toast.error("Failed to update task");
     } finally {
-      togglingRef.current = false;
+      togglingRef.current.delete(task.id);
     }
   }, [canEdit, user]);
 
@@ -499,6 +510,11 @@ export default function Tasks() {
     const successes = results.filter(r => r.status === "fulfilled").length;
     const failures = results.filter(r => r.status === "rejected").length;
     refetchEntityList("ProjectTask");
+    // Deadline sync for affected projects
+    const uniqueProjectIds = [...new Set(eligible.map(t => t.project_id).filter(Boolean))];
+    uniqueProjectIds.forEach(pid => {
+      api.functions.invoke('calculateProjectTaskDeadlines', { project_id: pid, trigger_event: 'task_toggle' }).catch(() => {});
+    });
     if (failures > 0) {
       toast.warning(`${successes} completed, ${failures} failed`);
     } else {
@@ -601,24 +617,24 @@ export default function Tasks() {
   // ──── Loading State ────
   if (tasksLoading) {
     return (
-      <div className="px-3 pt-2 pb-3 sm:px-4 lg:px-6 space-y-4">
+      <div className="px-3 pt-2 pb-3 sm:px-4 sm:pt-2 sm:pb-4 lg:px-6 space-y-4" role="status" aria-busy="true">
         <style>{taskAnimations}</style>
         <div className="flex items-center gap-2">
-          <Skeleton className="h-6 w-24" />
-          <Skeleton className="h-8 w-64" />
+          <div className="h-6 w-24 rounded bg-muted animate-pulse" />
+          <div className="h-8 w-64 rounded bg-muted animate-pulse" />
           <div className="ml-auto flex gap-2">
-            <Skeleton className="h-8 w-20" />
-            <Skeleton className="h-8 w-20" />
+            <div className="h-8 w-20 rounded bg-muted animate-pulse" />
+            <div className="h-8 w-20 rounded bg-muted animate-pulse" />
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 rounded-xl" />
+            <div key={i} className="h-20 rounded-xl bg-muted animate-pulse" />
           ))}
         </div>
         <div className="space-y-2">
           {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 rounded-lg" />
+            <div key={i} className="h-12 rounded-lg bg-muted animate-pulse" />
           ))}
         </div>
       </div>
@@ -629,7 +645,7 @@ export default function Tasks() {
   const quickFilterCounts = useMemo(() => ({
     overdue:   stats.overdue,
     due_today: visibleTasks.filter(t => t._status !== "completed" && isDueToday(t.due_date)).length,
-    my_tasks:  user ? visibleTasks.filter(t => t.assigned_to === user.id || t.assigned_to === user.email).length : 0,
+    my_tasks:  user ? visibleTasks.filter(t => t.assigned_to === user.id || t.assigned_to === user.email || t.assigned_to_team_id === user?.internal_team_id).length : 0,
     blocked:   visibleTasks.filter(t => t.is_blocked).length,
     timers:    stats.activeTimers,
     requests:  visibleTasks.filter(t => t._source.type === "revision").length,
@@ -645,14 +661,14 @@ export default function Tasks() {
   ];
 
   return (
-    <div className="px-3 pt-2 pb-3 sm:px-4 lg:px-6 space-y-3">
+    <div className="px-3 pt-2 pb-3 sm:px-4 sm:pt-2 sm:pb-4 lg:px-6 space-y-2">
       <style>{taskAnimations}</style>
 
       {/* ════════ Header Row ════════ */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1.5">
-          <ListChecks className="h-4.5 w-4.5 text-primary" />
-          <h1 className="text-lg font-semibold tracking-tight">Tasks</h1>
+          <ListChecks className="h-5 w-5 text-primary" />
+          <h1 className="text-xl font-bold tracking-tight">Tasks</h1>
           <Badge variant="secondary" className="text-[10px] font-semibold ml-1">{filteredTasks.length}</Badge>
         </div>
 
@@ -667,6 +683,7 @@ export default function Tasks() {
           />
           {searchInput && (
             <button
+              aria-label="Clear search"
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               onClick={() => { setSearchQuery(""); setSearchInput(""); }}
             >
@@ -678,7 +695,7 @@ export default function Tasks() {
         <div className="ml-auto flex items-center gap-2">
           {/* Group By */}
           <Select value={groupBy} onValueChange={setGroupBy}>
-            <SelectTrigger className="h-8 w-[130px] text-xs">
+            <SelectTrigger className="h-7 w-[130px] text-xs" aria-label="Group by">
               <Layers className="h-3 w-3 mr-1" />
               <SelectValue placeholder="Group by" />
             </SelectTrigger>
@@ -692,18 +709,22 @@ export default function Tasks() {
           </Select>
 
           {/* View Toggle */}
-          <Tabs value={viewMode} onValueChange={setViewModePersisted}>
-            <TabsList className="h-8 p-0.5">
-              <TabsTrigger value="kanban" className="h-7 px-2.5 text-xs gap-1">
-                <LayoutGrid className="h-3.5 w-3.5" />
-                Kanban
-              </TabsTrigger>
-              <TabsTrigger value="list" className="h-7 px-2.5 text-xs gap-1">
-                <List className="h-3.5 w-3.5" />
-                List
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div className="flex items-center h-7 rounded-md bg-muted p-0.5">
+            <button
+              onClick={() => setViewModePersisted("kanban")}
+              className={cn("h-6 px-2.5 text-xs rounded-sm inline-flex items-center gap-1 transition-colors", viewMode === "kanban" ? "bg-background shadow-sm font-medium" : "text-muted-foreground hover:text-foreground")}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Kanban
+            </button>
+            <button
+              onClick={() => setViewModePersisted("list")}
+              className={cn("h-6 px-2.5 text-xs rounded-sm inline-flex items-center gap-1 transition-colors", viewMode === "list" ? "bg-background shadow-sm font-medium" : "text-muted-foreground hover:text-foreground")}
+            >
+              <List className="h-3.5 w-3.5" />
+              List
+            </button>
+          </div>
         </div>
       </div>
 
@@ -737,6 +758,7 @@ export default function Tasks() {
         {quickFilters.map(qf => (
           <button
             key={qf.key}
+            aria-label={qf.label}
             onClick={() => setQuickFilter(prev => prev === qf.key ? "" : qf.key)}
             className={cn(
               "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all",
@@ -761,7 +783,7 @@ export default function Tasks() {
         {/* Filter dropdowns */}
         <div className="flex items-center gap-1.5 ml-2">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-7 w-[110px] text-[11px]">
+            <SelectTrigger className="h-7 w-[110px] text-[11px]" aria-label="Filter by status">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
@@ -774,7 +796,7 @@ export default function Tasks() {
 
           {uniqueAssignees.length > 0 && (
             <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
-              <SelectTrigger className="h-7 w-[120px] text-[11px]">
+              <SelectTrigger className="h-7 w-[120px] text-[11px]" aria-label="Filter by assignee">
                 <SelectValue placeholder="Assignee" />
               </SelectTrigger>
               <SelectContent>
@@ -788,7 +810,7 @@ export default function Tasks() {
 
           {uniqueRoles.length > 0 && (
             <Select value={roleFilter} onValueChange={setRoleFilter}>
-              <SelectTrigger className="h-7 w-[120px] text-[11px]">
+              <SelectTrigger className="h-7 w-[120px] text-[11px]" aria-label="Filter by role">
                 <SelectValue placeholder="Role" />
               </SelectTrigger>
               <SelectContent>
@@ -801,7 +823,7 @@ export default function Tasks() {
           )}
 
           <Select value={sourceFilter} onValueChange={setSourceFilter}>
-            <SelectTrigger className="h-7 w-[100px] text-[11px]">
+            <SelectTrigger className="h-7 w-[100px] text-[11px]" aria-label="Filter by source">
               <SelectValue placeholder="Source" />
             </SelectTrigger>
             <SelectContent>
@@ -848,8 +870,9 @@ export default function Tasks() {
         </Card>
       )}
 
-      {/* ════════ Kanban View (Fix #6 — mobile horizontal scroll) ════════ */}
+      {/* ════════ Kanban View ════════ */}
       {viewMode === "kanban" && filteredTasks.length > 0 && (
+        <ErrorBoundary fallbackLabel="Kanban">
         <DragDropContext onDragEnd={handleDragEnd}>
           <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 sm:overflow-x-visible">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 min-w-[800px] sm:min-w-0">
@@ -929,10 +952,12 @@ export default function Tasks() {
           </div>
           </div>
         </DragDropContext>
+        </ErrorBoundary>
       )}
 
       {/* ════════ List View ════════ */}
       {viewMode === "list" && filteredTasks.length > 0 && (
+        <ErrorBoundary fallbackLabel="Task List">
         <div className="border rounded-lg overflow-hidden bg-background">
           {groupBy !== "none" && groupedTasks ? (
             // Grouped list
@@ -946,6 +971,8 @@ export default function Tasks() {
                   <div key={group.key}>
                     <button
                       onClick={() => toggleGroup(group.key)}
+                      aria-expanded={!collapsed}
+                      aria-label={group.label}
                       className="w-full flex items-center gap-2 px-3 py-2 bg-muted/40 border-b hover:bg-muted/60 transition-colors text-left"
                     >
                       {collapsed ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
@@ -993,6 +1020,7 @@ export default function Tasks() {
             />
           )}
         </div>
+        </ErrorBoundary>
       )}
 
       {/* ════════ Bulk Actions Bar ════════ */}
@@ -1039,16 +1067,16 @@ const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle, user
 
   return (
     <Card className={cn(
-      "rounded-lg border shadow-sm p-3 cursor-grab hover:shadow-md transition-shadow bg-background",
+      "rounded-lg border shadow-sm p-3 cursor-grab hover:shadow-lg transition-all duration-200 bg-background",
       overdue && "border-l-4 border-l-red-500"
     )}>
       <div className="space-y-2">
-        {/* Row 1: checkbox + title (Fix #4 — lock icon distinction) */}
+        {/* Row 1: checkbox + title */}
         <div className="flex items-start gap-2">
           {t.is_locked ? (
             <Lock className="mt-0.5 h-4 w-4 text-red-500 shrink-0" title="Locked — auto-completed onsite task" />
           ) : t.is_blocked ? (
-            <Lock className="mt-0.5 h-4 w-4 text-amber-500 shrink-0" title="Blocked by dependencies" />
+            <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-500 shrink-0" title="Blocked by dependencies" />
           ) : (
             <Checkbox
               checked={t.is_completed}
@@ -1069,7 +1097,7 @@ const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle, user
             <Badge className="text-[9px] px-1 py-0 bg-red-600 text-white shrink-0">OVERDUE</Badge>
           )}
           {t._hasTimer && (
-            <span className="relative flex h-2.5 w-2.5 shrink-0 mt-1">
+            <span className="relative flex h-2.5 w-2.5 shrink-0 mt-1" title="Active timer running">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
             </span>
@@ -1089,7 +1117,7 @@ const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle, user
 
         {/* Row 3: badges & meta (Fix #14 — Badge component for source) */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <Badge variant="outline" className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap", t._source.color)}>
+          <Badge className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap border-0", t._source.color)}>
             {t._source.label}
           </Badge>
 
@@ -1156,22 +1184,22 @@ function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleCo
         {showHeader && (
           <thead>
             <tr className="border-b bg-muted/30 dark:bg-muted/10">
-              <th className="w-10 px-3 py-2">
+              <th scope="col" className="w-10 px-3 py-2">
                 <Checkbox
                   checked={allSelected}
                   onCheckedChange={toggleSelectAll}
                   className="h-3.5 w-3.5"
                 />
               </th>
-              <th className="w-10 px-2 py-2"><SortHeader col="status" label="Status" /></th>
-              <th className="px-2 py-2 text-left"><SortHeader col="title" label="Task" /></th>
-              <th className="px-2 py-2 text-left hidden lg:table-cell"><SortHeader col="project" label="Project" /></th>
-              <th className="px-2 py-2 text-left hidden md:table-cell"><SortHeader col="assignee" label="Assigned" /></th>
-              <th className="px-2 py-2 text-left hidden xl:table-cell"><SortHeader col="role" label="Role" /></th>
-              <th className="px-2 py-2 text-left hidden xl:table-cell"><SortHeader col="source" label="Source" /></th>
-              <th className="px-2 py-2 text-left"><SortHeader col="due" label="Due" /></th>
-              <th className="px-2 py-2 text-left hidden md:table-cell"><SortHeader col="effort" label="Effort" /></th>
-              <th className="w-10 px-2 py-2 text-center hidden sm:table-cell">
+              <th scope="col" className="w-10 px-2 py-2"><SortHeader col="status" label="Status" /></th>
+              <th scope="col" className="px-2 py-2 text-left"><SortHeader col="title" label="Task" /></th>
+              <th scope="col" className="px-2 py-2 text-left hidden lg:table-cell"><SortHeader col="project" label="Project" /></th>
+              <th scope="col" className="px-2 py-2 text-left hidden md:table-cell"><SortHeader col="assignee" label="Assigned" /></th>
+              <th scope="col" className="px-2 py-2 text-left hidden xl:table-cell"><SortHeader col="role" label="Role" /></th>
+              <th scope="col" className="px-2 py-2 text-left hidden xl:table-cell"><SortHeader col="source" label="Source" /></th>
+              <th scope="col" className="px-2 py-2 text-left"><SortHeader col="due" label="Due" /></th>
+              <th scope="col" className="px-2 py-2 text-left hidden md:table-cell"><SortHeader col="effort" label="Effort" /></th>
+              <th scope="col" className="w-10 px-2 py-2 text-center hidden sm:table-cell">
                 <Timer className="h-3 w-3 text-muted-foreground mx-auto" />
               </th>
             </tr>
@@ -1190,7 +1218,7 @@ function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleCo
                 user={user}
               />
               {expandedTaskId === t.id && (
-                <tr><td colSpan={10} className="p-0 border-t-0">
+                <tr><td colSpan={TABLE_COL_COUNT} className="p-0 border-t-0">
                   <TaskDetailPanel
                     task={t}
                     canEdit={canEdit}
@@ -1242,15 +1270,13 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
         />
       </td>
 
-      {/* Status checkbox (Fix #4 — lock icon distinction) */}
+      {/* Status checkbox */}
       <td className="w-10 px-2 py-2" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-1">
           {t.is_locked ? (
             <Lock className="h-4 w-4 text-red-500" title="Locked — auto-completed onsite task" />
           ) : t.is_blocked ? (
-            <>
-              <Lock className="h-4 w-4 text-amber-500" title="Blocked by dependencies" />
-            </>
+            <ShieldAlert className="h-4 w-4 text-amber-500" title="Blocked by dependencies" />
           ) : (
             <Checkbox
               checked={t.is_completed}
@@ -1270,7 +1296,7 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
           )}>
             {t.title}
           </span>
-          <Badge variant="outline" className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap shrink-0", t._source.color)}>
+          <Badge className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap shrink-0 border-0", t._source.color)}>
             {t._source.label}
           </Badge>
         </div>
@@ -1325,9 +1351,9 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
         )}
       </td>
 
-      {/* Source (Fix #14 — Badge component) */}
+      {/* Source */}
       <td className="px-2 py-2 hidden xl:table-cell">
-        <Badge variant="outline" className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap", t._source.color)}>
+        <Badge className={cn("text-[10px] font-semibold px-1.5 py-0.5 whitespace-nowrap border-0", t._source.color)}>
           {t._source.label}
         </Badge>
       </td>
@@ -1359,7 +1385,7 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
       {/* Timer */}
       <td className="w-10 px-2 py-2 text-center hidden sm:table-cell">
         {t._hasTimer ? (
-          <span className="relative flex h-2.5 w-2.5 mx-auto">
+          <span className="relative flex h-2.5 w-2.5 mx-auto" title="Active timer running">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
           </span>
