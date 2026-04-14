@@ -173,13 +173,24 @@ function TasksInner() {
 
   // ──── State ────
   const [expandedTaskId, setExpandedTaskId] = useState(null);
-  const [viewMode, setViewMode] = useState(() => localStorage.getItem("tasks-view") || "list");
-  const [groupBy, setGroupBy] = useState(() => localStorage.getItem("tasks-group-by") || "none");
+  const [viewMode, setViewMode] = useState(() => {
+    const saved = localStorage.getItem("tasks-view");
+    return saved === "kanban" || saved === "list" ? saved : "list";
+  });
+  const [groupBy, setGroupBy] = useState(() => {
+    const saved = localStorage.getItem("tasks-group-by");
+    const valid = ["none", "project", "assignee", "role", "source"];
+    return saved && valid.includes(saved) ? saved : "none";
+  });
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const searchTimerRef = useRef(null);
   const togglingRef = useRef(new Set());
-  const [statusFilter, setStatusFilter] = useState(() => localStorage.getItem("tasks-status-filter") || "all");
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const saved = localStorage.getItem("tasks-status-filter");
+    const valid = ["all", "not_started", "in_progress", "blocked", "completed"];
+    return saved && valid.includes(saved) ? saved : "all";
+  });
   const [sourceFilter, setSourceFilter] = useState(() => localStorage.getItem("tasks-source-filter") || "__all__");
   const [assigneeFilter, setAssigneeFilter] = useState(() => localStorage.getItem("tasks-assignee-filter") || "__all__");
   const [roleFilter, setRoleFilter] = useState(() => localStorage.getItem("tasks-role-filter") || "__all__");
