@@ -365,7 +365,7 @@ function LayoutContent({ currentPageName, children }) {
     }));
   };
 
-  const toggleParent = (name) => setExpandedParents(prev => ({ ...prev, [name]: !prev[name] }));
+  const toggleParent = (name, forceOpen) => setExpandedParents(prev => ({ ...prev, [name]: forceOpen === true ? true : !prev[name] }));
 
   const NavLink = ({ item, isChild }) => {
     const isActive = currentPageName === item.href;
@@ -380,7 +380,16 @@ function LayoutContent({ currentPageName, children }) {
         <div className="flex items-center">
           <Link
             to={createPageUrl(item.href)}
-            onClick={() => setSidebarOpen(false)}
+            onClick={() => {
+              setSidebarOpen(false);
+              // If collapsed and item has children, expand sidebar so children are visible
+              if (collapsed && hasChildren) {
+                const next = false;
+                setCollapsed(next);
+                localStorage.setItem('sidebar-collapsed', String(next));
+                toggleParent(item.name, true);
+              }
+            }}
             className={cn(
               "group flex items-center gap-2.5 rounded-md text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 active:scale-[0.98] flex-1",
               collapsed ? "relative justify-center px-1.5 py-1.5" : "px-3 py-1.5",
@@ -394,13 +403,15 @@ function LayoutContent({ currentPageName, children }) {
             title={item.name}
             aria-current={isActive ? "page" : undefined}
           >
-            {item.icon && (
+            {item.icon ? (
               <item.icon className={cn(
                 "h-4 w-4 flex-shrink-0 transition-all duration-150",
                 isChild && "h-3.5 w-3.5",
                 isActive ? "drop-shadow-sm" : "group-hover:scale-110"
               )} />
-            )}
+            ) : collapsed ? (
+              <span className="text-[10px] font-bold uppercase leading-none">{item.name?.charAt(0) || '·'}</span>
+            ) : null}
             {!collapsed && <span className="truncate flex-1">{item.name}</span>}
             {!collapsed && item.badge > 0 && (
               <span className="ml-auto flex items-center justify-center text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 tabular-nums bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400">
