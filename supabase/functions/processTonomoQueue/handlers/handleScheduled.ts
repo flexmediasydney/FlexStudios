@@ -82,9 +82,13 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     return { summary: `Skipped — orderId ${orderId} is an event ID, not an order ID`, skipped: true };
   }
 
+  // GUARD: Only track as appointment if eventId is a real appointment ID, not an order ID.
+  // When booking_created_or_changed triggers handleScheduled, p.id is the ORDER ID which
+  // looks like the appointment ID but isn't. Real appointment IDs come from scheduled/changed events.
+  const isRealAppointmentId = eventId && eventId !== orderId;
   const { isNew: isNewAppointment, updatedIds: allAppointmentIds } = trackAppointment(
     existing?.tonomo_appointment_ids,
-    eventId
+    isRealAppointmentId ? eventId : null
   );
   // Only flag as additional appointment when the project ALREADY EXISTS and already has appointments
   // For brand new projects, isNewAppointment is always true (empty array → new ID), which is NOT additional
@@ -133,8 +137,9 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     ...(addressLat && { geocoded_at: new Date().toISOString() }),
     source: 'tonomo',
     tonomo_order_id: orderId,
-    tonomo_event_id: eventId,
-    tonomo_google_event_id: eventId,
+    // Only write appointment-specific IDs when the eventId is a real appointment (not an order ID)
+    ...(isRealAppointmentId && { tonomo_event_id: eventId }),
+    ...(isRealAppointmentId && { tonomo_google_event_id: eventId }),
     tonomo_appointment_ids: JSON.stringify(allAppointmentIds),
     tonomo_raw_services: JSON.stringify(services),
     tonomo_service_tiers: JSON.stringify(tiers),

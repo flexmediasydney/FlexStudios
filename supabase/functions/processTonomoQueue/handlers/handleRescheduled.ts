@@ -31,6 +31,18 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
   const updates: Record<string, any> = {};
   const previousShootDate = project.shoot_date;
 
+  // Backfill tonomo_appointment_ids and tonomo_event_id if missing
+  if (eventId && eventId !== orderId) {
+    const existingAppts = safeJsonParse(project.tonomo_appointment_ids, [] as string[]);
+    if (!existingAppts.includes(eventId)) {
+      updates.tonomo_appointment_ids = JSON.stringify([...existingAppts, eventId]);
+    }
+    if (!project.tonomo_event_id) {
+      updates.tonomo_event_id = eventId;
+      updates.tonomo_google_event_id = eventId;
+    }
+  }
+
   if (startTime && !overriddenFields.includes('shoot_date')) {
     const rescheduleDt = new Date(startTime);
     updates.shoot_date = rescheduleDt.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });

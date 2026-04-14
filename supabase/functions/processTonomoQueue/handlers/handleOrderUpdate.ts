@@ -115,21 +115,25 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
   const updates: Record<string, any> = {};
   const reviewReasons: string[] = [];
 
+  // Payment-only webhooks carry no service data — skip service processing to avoid
+  // blanking out the project's services with an empty array.
   const servicesA = p.services_a_la_cart || p.order?.services_a_la_cart || [];
   const servicesB = p.services || p.order?.services || [];
   const services = [...new Set([...servicesA, ...servicesB])].filter(Boolean);
   const tiers = (p.order?.service_custom_tiers || p.service_custom_tiers || []).map((t: any) => ({ name: t.serviceName, selected: t.selected?.name }));
 
-  if (!overriddenFields.includes('tonomo_raw_services')) {
-    if (ACTIVE_STAGES.includes(project.status) && services.length > 0) {
-      const prev = safeJsonParse(project.tonomo_raw_services, [] as string[]);
-      const added = services.filter((s: string) => !prev.includes(s));
-      const removed = prev.filter((s: string) => !services.includes(s));
-      if (added.length > 0 || removed.length > 0) reviewReasons.push(`Services changed during active production${added.length ? ` — added: ${added.join(', ')}` : ''}${removed.length ? ` — removed: ${removed.join(', ')}` : ''} — please confirm billing`);
+  if (!paymentOnly && services.length > 0) {
+    if (!overriddenFields.includes('tonomo_raw_services')) {
+      if (ACTIVE_STAGES.includes(project.status)) {
+        const prev = safeJsonParse(project.tonomo_raw_services, [] as string[]);
+        const added = services.filter((s: string) => !prev.includes(s));
+        const removed = prev.filter((s: string) => !services.includes(s));
+        if (added.length > 0 || removed.length > 0) reviewReasons.push(`Services changed during active production${added.length ? ` — added: ${added.join(', ')}` : ''}${removed.length ? ` — removed: ${removed.join(', ')}` : ''} — please confirm billing`);
+      }
+      updates.tonomo_raw_services = JSON.stringify(services);
     }
-    updates.tonomo_raw_services = JSON.stringify(services);
+    if (!overriddenFields.includes('tonomo_service_tiers')) updates.tonomo_service_tiers = JSON.stringify(tiers);
   }
-  if (!overriddenFields.includes('tonomo_service_tiers')) updates.tonomo_service_tiers = JSON.stringify(tiers);
 
   const orderDeliverablePath = p.deliverable_path || p.order?.deliverable_path;
   if (orderDeliverablePath && !overriddenFields.includes('tonomo_deliverable_path')) {

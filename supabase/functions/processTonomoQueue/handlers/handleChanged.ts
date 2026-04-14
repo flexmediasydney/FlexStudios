@@ -119,6 +119,20 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     updates.tonomo_raw_services = JSON.stringify(services);
   }
 
+  // Backfill tonomo_appointment_ids and tonomo_event_id if missing
+  // handleChanged receives the real appointment event ID in p.id
+  const appointmentId = p.id;
+  if (appointmentId && appointmentId !== orderId) {
+    const existingAppts = safeJsonParse(project.tonomo_appointment_ids, [] as string[]);
+    if (!existingAppts.includes(appointmentId)) {
+      updates.tonomo_appointment_ids = JSON.stringify([...existingAppts, appointmentId]);
+    }
+    if (!project.tonomo_event_id) {
+      updates.tonomo_event_id = appointmentId;
+      updates.tonomo_google_event_id = appointmentId;
+    }
+  }
+
   // Update project shoot_date/shoot_time when appointment time changes
   const changedStartTime = p.when?.start_time ? p.when.start_time * 1000 : null;
   if (changedStartTime && !overriddenFields.includes('shoot_date')) {
