@@ -615,9 +615,14 @@ function TonomoOrderBrief({ project }) {
 }
 
 function AutoProductsCard({ project }) {
+  const { data: allProducts = [] } = useEntityList("Product");
+  const { data: allPackages = [] } = useEntityList("Package");
   const autoApplied = project.products_auto_applied === true;
   const needsRecalc = project.products_needs_recalc === true;
-  
+
+  const productMap = useMemo(() => new Map(allProducts.map(p => [p.id, p])), [allProducts]);
+  const packageMap = useMemo(() => new Map(allPackages.map(p => [p.id, p])), [allPackages]);
+
   const mappingGaps = useMemo(() => {
     try {
       const parsed = JSON.parse(project.products_mapping_gaps || '[]');
@@ -644,10 +649,10 @@ function AutoProductsCard({ project }) {
             <p className="text-green-700 font-semibold">✅ Products auto-applied from confirmed mappings</p>
             <div className="mt-2 space-y-1">
               {products.map((p, i) => (
-                <p key={i} className="text-xs">• {p.product_name} × {p.quantity}</p>
+                <p key={i} className="text-xs">• {p.product_name || productMap.get(p.product_id)?.name || 'Unknown product'} × {p.quantity}</p>
               ))}
               {packages.map((pkg, i) => (
-                <p key={i} className="text-xs">• {pkg.package_name} (package)</p>
+                <p key={i} className="text-xs">• {pkg.package_name || packageMap.get(pkg.package_id)?.name || 'Unknown package'} (package)</p>
               ))}
             </div>
             {needsRecalc && (
