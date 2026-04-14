@@ -25,15 +25,7 @@ export default function TonomoTab({ project }) {
   const [isApproving, setIsApproving] = useState(false);
   const { visible: showPricing } = usePriceGate();
 
-  // Sync subTab when project.status changes from outside (e.g. approved via Dashboard).
-  // If the Review Panel tab is active but project is no longer pending_review,
-  // the TabsTrigger is removed from the DOM — Radix renders a blank tab area.
-  // Switching to 'brief' prevents that.
-  useEffect(() => {
-    if (project.status !== 'pending_review' && subTab === 'review') {
-      setSubTab('brief');
-    }
-  }, [project.status]);
+  // Review panel is now always visible — no need to auto-switch away
 
   const { data: auditLogs = [] } = useQuery({
     queryKey: ['tonomoAudit', project.tonomo_order_id],
@@ -170,7 +162,7 @@ export default function TonomoTab({ project }) {
     <div>
       <Tabs value={subTab} onValueChange={setSubTab}>
         <TabsList>
-          {project.status === 'pending_review' && <TabsTrigger value="review">Review Panel</TabsTrigger>}
+          <TabsTrigger value="review">Review Panel</TabsTrigger>
           <TabsTrigger value="brief">Order Brief</TabsTrigger>
           <TabsTrigger value="timeline">
             Timeline
@@ -182,8 +174,9 @@ export default function TonomoTab({ project }) {
           <TabsTrigger value="payload">Raw Payload</TabsTrigger>
         </TabsList>
 
-        {project.status === 'pending_review' && (
-          <TabsContent value="review" className="mt-4">
+        <TabsContent value="review" className="mt-4">
+          {project.status === 'pending_review' ? (
+            <>
             {/* Review type context */}
             <ReviewBanner reviewType={project.pending_review_type} />
 
@@ -312,8 +305,11 @@ export default function TonomoTab({ project }) {
               </Card>
             </div>
             <AutoProductsCard project={project} />
-          </TabsContent>
-        )}
+            </>
+          ) : (
+            <ReviewHistoryPanel project={project} />
+          )}
+        </TabsContent>
 
         <TabsContent value="brief" className="mt-4">
           <TonomoOrderBrief project={project} />
@@ -427,6 +423,70 @@ function DetailRow({ label, value }) {
   return (
     <div>
       <span className="text-muted-foreground">{label}:</span> <span className="font-medium">{value}</span>
+    </div>
+  );
+}
+
+function ReviewHistoryPanel({ project }) {
+  const { data: activities = [] } = useEntityList("ProjectActivity", "-created_at", 50, a => a.project_id === project.id);
+  const approvalAct = activities.find(a => a.activity_type === 'manual_approval');
+  const flagAct = activities.find(a => a.activity_type === 'flagged');
+  const isAutoApproved = project.auto_approved;
+
+  const fmtTs = (ts) => {
+    if (!ts) return '';
+    try { return new Date(ts).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+    catch { return ''; }
+  };
+
+  return (
+    <div className="space-y-3">
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <h4 className="text-sm font-semibold">Review Decision</h4>
+
+          {isAutoApproved && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs">
+              <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+              <div>
+                <p className="font-medium text-emerald-800">Auto-approved by system</p>
+              </div>
+            </div>
+          )}
+
+          {approvalAct && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-blue-50 border border-blue-200 text-xs">
+              <CheckCircle className="h-4 w-4 text-blue-600 shrink-0" />
+              <div>
+                <p className="font-medium text-blue-800">Manually approved by {approvalAct.user_name || 'admin'}</p>
+                {approvalAct.created_at && <p className="text-blue-600 mt-0.5">{fmtTs(approvalAct.created_at)}</p>}
+              </div>
+            </div>
+          )}
+
+          {flagAct && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs">
+              <AlertCircle className="h-4 w-4 text-red-600 shrink-0" />
+              <div>
+                <p className="font-medium text-red-800">Flagged as urgent by {flagAct.user_name || 'admin'}</p>
+                {flagAct.created_at && <p className="text-red-600 mt-0.5">{fmtTs(flagAct.created_at)}</p>}
+              </div>
+            </div>
+          )}
+
+          {!isAutoApproved && !approvalAct && !flagAct && (
+            <p className="text-xs text-muted-foreground italic">No review decision logged yet for this booking.</p>
+          )}
+
+          {project.pending_review_reason && (
+            <div className="text-xs text-muted-foreground">
+              <span className="font-medium">Review notes: </span>{project.pending_review_reason}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <AutoProductsCard project={project} />
     </div>
   );
 }
