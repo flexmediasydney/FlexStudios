@@ -88,7 +88,6 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
           updates.agent_name = agentRecord.name || null;
           if (agentRecord.current_agency_id) {
             updates.agency_id = agentRecord.current_agency_id;
-            updates.agency_name = agentRecord.current_agency_name || null;
           }
         }
       } catch { /* non-fatal */ }
