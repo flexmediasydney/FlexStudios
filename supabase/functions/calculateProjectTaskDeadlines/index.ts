@@ -109,14 +109,32 @@ function getTriggerTime(triggerType: string, project: any) {
   // Try specific timestamp first, then last_status_change, then fallback to now.
   // Many projects have null timestamps (created before tracking was added),
   // but if the trigger condition IS met, the task should not stay blocked.
+  let time: string;
   switch (triggerType) {
     case 'project_onsite':
-      return project?.shooting_started_at || project?.last_status_change || new Date().toISOString();
+      time = project?.shooting_started_at || project?.last_status_change || new Date().toISOString();
+      break;
     case 'project_uploaded':
     case 'project_submitted':
-      return project?.last_status_change || new Date().toISOString();
+      time = project?.last_status_change || new Date().toISOString();
+      break;
     default: return null;
   }
+
+  // Clamp: trigger time should never be earlier than the shoot date.
+  // This prevents deadlines from landing in the past when the webhook
+  // processes a project before the actual shoot happens.
+  if (project?.shoot_date) {
+    const shootTime = project.shoot_time || '09:00';
+    const dateOnly = String(project.shoot_date).slice(0, 10);
+    const timeStr = /^\d{1,2}:\d{2}$/.test(shootTime) ? shootTime : '09:00';
+    const shootDt = new Date(`${dateOnly}T${timeStr}:00+11:00`); // Sydney time
+    if (!isNaN(shootDt.getTime()) && new Date(time) < shootDt) {
+      time = shootDt.toISOString();
+    }
+  }
+
+  return time;
 }
 
 function hasCyclicDependency(task: any, allTasks: any[], visited = new Set(), stack = new Set()): boolean {
