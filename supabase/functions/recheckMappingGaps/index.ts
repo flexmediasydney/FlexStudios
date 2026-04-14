@@ -79,10 +79,15 @@ Deno.serve(async (req) => {
           .eq('id', project.id);
         cleared++;
 
-        // If project is pending_review and has a tonomo order, replay the latest
-        // webhook to re-resolve products with the now-complete mappings
+        // If project is pending_review and has a tonomo order, clear manual overrides
+        // and replay the latest webhook to re-resolve products with updated mappings
         if (project.status === 'pending_review' && project.tonomo_order_id) {
           try {
+            // Clear manual overrides so Tonomo can update products/packages
+            await admin
+              .from('projects')
+              .update({ manually_overridden_fields: '[]' })
+              .eq('id', project.id);
             const { data: queueEntries } = await admin
               .from('tonomo_processing_queue')
               .select('id')
