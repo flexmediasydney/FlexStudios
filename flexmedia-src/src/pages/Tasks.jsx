@@ -13,6 +13,7 @@ import { api } from "@/api/supabaseClient";
 import { createPageUrl } from "@/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import TaskEffortBadge from "@/components/projects/TaskEffortBadge";
+import TaskDetailPanel from "@/components/projects/TaskDetailPanel";
 import { CountdownTimer, getCountdownState } from "@/components/projects/TaskManagement";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -36,10 +37,10 @@ import {
 const STATUS_ORDER = ["not_started", "in_progress", "completed", "blocked"];
 
 const STATUS_CONFIG = {
-  blocked:     { label: "Blocked",     color: "bg-red-500",   textColor: "text-red-700",   bgLight: "bg-red-50",   icon: ShieldAlert,  borderColor: "border-red-300" },
-  not_started: { label: "Not Started", color: "bg-gray-400",  textColor: "text-gray-700",  bgLight: "bg-gray-50",  icon: Circle,       borderColor: "border-gray-300" },
-  in_progress: { label: "In Progress", color: "bg-blue-500",  textColor: "text-blue-700",  bgLight: "bg-blue-50",  icon: Timer,        borderColor: "border-blue-300" },
-  completed:   { label: "Completed",   color: "bg-green-500", textColor: "text-green-700", bgLight: "bg-green-50", icon: CheckCircle2, borderColor: "border-green-300" },
+  blocked:     { label: "Blocked",     color: "bg-red-500",   textColor: "text-red-700",   bgLight: "bg-red-50 dark:bg-red-950/30",   icon: ShieldAlert,  borderColor: "border-red-300 dark:border-red-800" },
+  not_started: { label: "Not Started", color: "bg-gray-400",  textColor: "text-gray-700",  bgLight: "bg-gray-50 dark:bg-gray-900/30",  icon: Circle,       borderColor: "border-gray-300 dark:border-gray-700" },
+  in_progress: { label: "In Progress", color: "bg-blue-500",  textColor: "text-blue-700",  bgLight: "bg-blue-50 dark:bg-blue-950/30",  icon: Timer,        borderColor: "border-blue-300 dark:border-blue-800" },
+  completed:   { label: "Completed",   color: "bg-green-500", textColor: "text-green-700", bgLight: "bg-green-50 dark:bg-green-950/30", icon: CheckCircle2, borderColor: "border-green-300 dark:border-green-800" },
 };
 
 const ROLE_LABELS = {
@@ -58,17 +59,17 @@ function getTaskSource(task, productMap, packageMap) {
   if (tid?.startsWith("product:")) {
     const prodId = task.product_id || tid.split(":")[1];
     const prod = productMap?.get(prodId);
-    return { type: "product", label: prod?.name || "Product", color: "bg-blue-100 text-blue-700" };
+    return { type: "product", label: prod?.name || "Product", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" };
   }
   if (tid?.startsWith("package:")) {
     const pkgId = task.package_id || tid.split(":")[1];
     const pkg = packageMap?.get(pkgId);
-    return { type: "package", label: pkg?.name || "Package", color: "bg-purple-100 text-purple-700" };
+    return { type: "package", label: pkg?.name || "Package", color: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" };
   }
-  if (tid?.startsWith("project_type:")) return { type: "project", label: "Project Level", color: "bg-amber-100 text-amber-700" };
-  if (tid?.startsWith("onsite:"))       return { type: "onsite",  label: "Onsite",        color: "bg-green-100 text-green-700" };
-  if (/^\[Revision #\d+\]/.test(task.title || "")) return { type: "revision", label: "Request", color: "bg-rose-100 text-rose-700" };
-  return { type: "manual", label: "Manual", color: "bg-gray-100 text-gray-600" };
+  if (tid?.startsWith("project_type:")) return { type: "project", label: "Project Level", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" };
+  if (tid?.startsWith("onsite:"))       return { type: "onsite",  label: "Onsite",        color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" };
+  if (/^\[Revision #\d+\]/.test(task.title || "")) return { type: "revision", label: "Request", color: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400" };
+  return { type: "manual", label: "Manual", color: "bg-gray-100 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400" };
 }
 
 function getTaskStatus(task, timerSet) {
@@ -157,7 +158,11 @@ export default function Tasks() {
   const { data: user } = useCurrentUser();
   const { activeTimers = [] } = useActiveTimers();
 
+  // ──── Permission ────
+  const canEdit = user && ['master_admin', 'admin', 'manager', 'employee'].includes(user.role);
+
   // ──── State ────
+  const [expandedTaskId, setExpandedTaskId] = useState(null);
   const [viewMode, setViewMode] = useState(() => localStorage.getItem("tasks-view") || "list");
   const [groupBy, setGroupBy] = useState("none");
   const [searchQuery, setSearchQuery] = useState("");
@@ -220,15 +225,23 @@ export default function Tasks() {
       }));
   }, [allTasks, activeTimerTaskIds, effortByTask, projectMap, productMap, packageMap]);
 
+  // ──── Contractor visibility filter ────
+  const visibleTasks = useMemo(() => {
+    if (user?.role === 'contractor') {
+      return enrichedTasks.filter(t => t.assigned_to === user.id);
+    }
+    return enrichedTasks;
+  }, [enrichedTasks, user]);
+
   // ──── Stats ────
   const stats = useMemo(() => {
     const today = todayStr();
-    const activeTasks = enrichedTasks.filter(t => t._status !== "completed");
-    const completedToday = enrichedTasks.filter(t => t.is_completed && t.completed_at?.slice(0, 10) === today);
+    const activeTasks = visibleTasks.filter(t => t._status !== "completed");
+    const completedToday = visibleTasks.filter(t => t.is_completed && t.completed_at?.slice(0, 10) === today);
     const overdue = activeTasks.filter(t => t.due_date && isOverdue(t.due_date));
-    const timerCount = enrichedTasks.filter(t => t._hasTimer).length;
-    const totalActive = enrichedTasks.length;
-    const totalCompleted = enrichedTasks.filter(t => t._status === "completed").length;
+    const timerCount = visibleTasks.filter(t => t._hasTimer).length;
+    const totalActive = visibleTasks.length;
+    const totalCompleted = visibleTasks.filter(t => t._status === "completed").length;
     const pct = totalActive > 0 ? Math.round((totalCompleted / totalActive) * 100) : 0;
 
     // Effort today: sum time logs with created_at today
@@ -248,29 +261,29 @@ export default function Tasks() {
       completionPct: pct,
       effortToday,
     };
-  }, [enrichedTasks, timeLogs]);
+  }, [visibleTasks, timeLogs]);
 
   // ──── Unique values for filter dropdowns ────
   const uniqueAssignees = useMemo(() => {
     const map = new Map();
-    enrichedTasks.forEach(t => {
+    visibleTasks.forEach(t => {
       if (t.assigned_to_name) map.set(t.assigned_to_name, t.assigned_to);
     });
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [enrichedTasks]);
+  }, [visibleTasks]);
 
   const uniqueRoles = useMemo(() => {
     const s = new Set();
-    enrichedTasks.forEach(t => { if (t.auto_assign_role) s.add(t.auto_assign_role); });
+    visibleTasks.forEach(t => { if (t.auto_assign_role) s.add(t.auto_assign_role); });
     return [...s].sort();
-  }, [enrichedTasks]);
+  }, [visibleTasks]);
 
   // ──── Filtering ────
   const filteredTasks = useMemo(() => {
     const today = todayStr();
     const sq = searchQuery.toLowerCase();
 
-    return enrichedTasks.filter(t => {
+    return visibleTasks.filter(t => {
       // Search
       if (sq) {
         const match =
@@ -316,7 +329,7 @@ export default function Tasks() {
 
       return true;
     });
-  }, [enrichedTasks, searchQuery, statusFilter, sourceFilter, assigneeFilter, roleFilter, quickFilter, user]);
+  }, [visibleTasks, searchQuery, statusFilter, sourceFilter, assigneeFilter, roleFilter, quickFilter, user]);
 
   // ──── Sorting (list view) ────
   const sortedTasks = useMemo(() => {
@@ -405,6 +418,7 @@ export default function Tasks() {
 
   // ──── Actions ────
   const toggleComplete = useCallback(async (task) => {
+    if (!canEdit) { toast.error("You do not have permission to edit tasks"); return; }
     if (task.is_locked) { toast.info("This task is locked and cannot be toggled"); return; }
     if (task.is_blocked) { toast.info("Complete dependency tasks first"); return; }
     const wasCompleted = task.is_completed;
@@ -415,15 +429,25 @@ export default function Tasks() {
       });
       refetchEntityList("ProjectTask");
       toast.success(wasCompleted ? "Task reopened" : "Task completed");
+      // Audit trail
+      api.entities.ProjectActivity.create({
+        project_id: task.project_id,
+        action: 'task_completed',
+        activity_type: 'status_change',
+        description: `Task "${task.title}" ${wasCompleted ? 'reopened' : 'completed'} from Tasks page`,
+        user_id: user?.id,
+        user_name: user?.full_name || user?.email,
+      }).catch(() => {});
     } catch {
       toast.error("Failed to update task");
     }
-  }, []);
+  }, [canEdit, user]);
 
   const bulkMarkComplete = useCallback(async () => {
+    if (!canEdit) { toast.error("You do not have permission to edit tasks"); return; }
     const ids = [...selectedIds];
-    const eligible = enrichedTasks.filter(t => ids.includes(t.id) && !t.is_completed && !t.is_locked && !t.is_blocked);
-    const skipped = enrichedTasks.filter(t => ids.includes(t.id) && !t.is_completed && (t.is_locked || t.is_blocked));
+    const eligible = visibleTasks.filter(t => ids.includes(t.id) && !t.is_completed && !t.is_locked && !t.is_blocked);
+    const skipped = visibleTasks.filter(t => ids.includes(t.id) && !t.is_completed && (t.is_locked || t.is_blocked));
     if (eligible.length === 0) {
       toast.info(skipped.length > 0 ? "All eligible tasks are locked or blocked" : "All selected tasks are already completed");
       setSelectedIds(new Set());
@@ -446,13 +470,14 @@ export default function Tasks() {
       toast.success(msg.join(". "));
     }
     setSelectedIds(new Set());
-  }, [selectedIds, enrichedTasks]);
+  }, [selectedIds, visibleTasks, canEdit]);
 
   const handleDragEnd = useCallback(async (result) => {
+    if (!canEdit) { toast.error("You do not have permission to edit tasks"); return; }
     const { draggableId, destination, source } = result;
     if (!destination || destination.droppableId === source.droppableId) return;
 
-    const task = enrichedTasks.find(t => t.id === draggableId);
+    const task = visibleTasks.find(t => t.id === draggableId);
     if (!task) return;
 
     const newStatus = destination.droppableId;
@@ -479,7 +504,7 @@ export default function Tasks() {
         refetchEntityList("ProjectTask");
       } catch { /* silent */ }
     }
-  }, [enrichedTasks, toggleComplete]);
+  }, [visibleTasks, toggleComplete, canEdit]);
 
   const toggleSort = useCallback((col) => {
     setSortCol(prev => {
@@ -556,14 +581,23 @@ export default function Tasks() {
     );
   }
 
-  // ──── Quick filter pill definition ────
+  // ──── Quick filter pill counts (memoized) ────
+  const quickFilterCounts = useMemo(() => ({
+    overdue:   stats.overdue,
+    due_today: visibleTasks.filter(t => t._status !== "completed" && isDueToday(t.due_date)).length,
+    my_tasks:  user ? visibleTasks.filter(t => t.assigned_to === user.id || t.assigned_to === user.email).length : 0,
+    blocked:   visibleTasks.filter(t => t.is_blocked).length,
+    timers:    stats.activeTimers,
+    requests:  visibleTasks.filter(t => t._source.type === "revision").length,
+  }), [visibleTasks, stats, user]);
+
   const quickFilters = [
-    { key: "overdue",   label: "Overdue",       icon: AlertTriangle, count: stats.overdue },
-    { key: "due_today", label: "Due Today",      icon: Clock,         count: enrichedTasks.filter(t => t._status !== "completed" && isDueToday(t.due_date)).length },
-    { key: "my_tasks",  label: "My Tasks",       icon: Users,         count: user ? enrichedTasks.filter(t => t.assigned_to === user.id || t.assigned_to === user.email).length : 0 },
-    { key: "blocked",   label: "Blocked",        icon: ShieldAlert,   count: enrichedTasks.filter(t => t.is_blocked).length },
-    { key: "timers",    label: "Active Timers",  icon: Timer,         count: stats.activeTimers },
-    { key: "requests",  label: "Requests Only",  icon: Wrench,        count: enrichedTasks.filter(t => t._source.type === "revision").length },
+    { key: "overdue",   label: "Overdue",       icon: AlertTriangle, count: quickFilterCounts.overdue },
+    { key: "due_today", label: "Due Today",      icon: Clock,         count: quickFilterCounts.due_today },
+    { key: "my_tasks",  label: "My Tasks",       icon: Users,         count: quickFilterCounts.my_tasks },
+    { key: "blocked",   label: "Blocked",        icon: ShieldAlert,   count: quickFilterCounts.blocked },
+    { key: "timers",    label: "Active Timers",  icon: Timer,         count: quickFilterCounts.timers },
+    { key: "requests",  label: "Requests Only",  icon: Wrench,        count: quickFilterCounts.requests },
   ];
 
   return (
@@ -742,7 +776,7 @@ export default function Tasks() {
       {filteredTasks.length === 0 && !tasksLoading && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <ListChecks className="h-10 w-10 text-muted-foreground/40 mb-3" />
-          {enrichedTasks.length === 0 ? (
+          {visibleTasks.length === 0 ? (
             <>
               <p className="text-sm font-medium text-muted-foreground">No tasks yet</p>
               <p className="text-xs text-muted-foreground/70 mt-1">Tasks will appear here as projects are created and synced.</p>
@@ -866,6 +900,10 @@ export default function Tasks() {
                         sortDir={sortDir}
                         toggleSort={toggleSort}
                         showHeader={false}
+                        expandedTaskId={expandedTaskId}
+                        setExpandedTaskId={setExpandedTaskId}
+                        canEdit={canEdit}
+                        user={user}
                       />
                     )}
                   </div>
@@ -884,6 +922,10 @@ export default function Tasks() {
               sortDir={sortDir}
               toggleSort={toggleSort}
               showHeader={true}
+              expandedTaskId={expandedTaskId}
+              setExpandedTaskId={setExpandedTaskId}
+              canEdit={canEdit}
+              user={user}
             />
           )}
         </div>
@@ -910,7 +952,7 @@ export default function Tasks() {
 
 function StatCard({ label, value, icon: Icon, color, highlight = false, pulse = false }) {
   return (
-    <Card className={cn("rounded-xl border-0 shadow-sm", highlight && "ring-1 ring-red-200")}>
+    <Card className={cn("rounded-xl border-0 shadow-sm", highlight && "ring-1 ring-red-200 dark:ring-red-800")}>
       <CardContent className="p-3 flex items-center gap-3">
         <div className={cn("p-1.5 rounded-lg bg-muted/60", pulse && "timer-pulse")}>
           <Icon className={cn("h-4 w-4", color)} />
@@ -926,7 +968,7 @@ function StatCard({ label, value, icon: Icon, color, highlight = false, pulse = 
 
 /* ═══════════════════════════ Kanban Card ═══════════════════════════ */
 
-function TaskKanbanCard({ task, onToggle }) {
+const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle }) {
   const t = task;
   const overdue = !t.is_completed && t.due_date && isOverdue(t.due_date);
   const dueToday = !t.is_completed && isDueToday(t.due_date);
@@ -971,7 +1013,7 @@ function TaskKanbanCard({ task, onToggle }) {
         {/* Row 2: project address */}
         {t._project?.property_address && (
           <Link
-            to={createPageUrl("ProjectDetails") + `?id=${t.project_id}`}
+            to={createPageUrl("ProjectDetails") + `?id=${t.project_id}&tab=tasks`}
             className="block text-[11px] text-muted-foreground hover:text-foreground truncate transition-colors"
             onClick={e => e.stopPropagation()}
           >
@@ -985,14 +1027,24 @@ function TaskKanbanCard({ task, onToggle }) {
             {t._source.label}
           </span>
 
-          {t.assigned_to_name && (
-            <span
-              className="flex items-center justify-center h-5 w-5 rounded-full bg-muted text-[10px] font-bold text-muted-foreground shrink-0"
-              title={t.assigned_to_name}
-            >
-              {initial(t.assigned_to_name)}
-            </span>
-          )}
+          {(() => {
+            const assigneeName = t.assigned_to_name || t.assigned_to_team_name;
+            const isTeam = !t.assigned_to_name && !!t.assigned_to_team_name;
+            if (!assigneeName) return null;
+            return isTeam ? (
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0" title={assigneeName}>
+                <Users className="h-3.5 w-3.5" />
+                <span className="truncate max-w-[60px]">{assigneeName}</span>
+              </span>
+            ) : (
+              <span
+                className="flex items-center justify-center h-5 w-5 rounded-full bg-muted text-[10px] font-bold text-muted-foreground shrink-0"
+                title={assigneeName}
+              >
+                {initial(assigneeName)}
+              </span>
+            );
+          })()}
 
           {t.due_date ? (
             <CountdownTimer dueDate={t.due_date} compact thresholds={{ warn: 4, danger: 1 }} />
@@ -1012,11 +1064,11 @@ function TaskKanbanCard({ task, onToggle }) {
       </div>
     </Card>
   );
-}
+});
 
 /* ═══════════════════════════ Task Table ═══════════════════════════ */
 
-function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleComplete, sortCol, sortDir, toggleSort, showHeader }) {
+function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleComplete, sortCol, sortDir, toggleSort, showHeader, expandedTaskId, setExpandedTaskId, canEdit, user }) {
   const allSelected = tasks.length > 0 && tasks.every(t => selectedIds.has(t.id));
 
   const SortHeader = ({ col, label, className: cls }) => {
@@ -1037,7 +1089,7 @@ function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleCo
       <table className="w-full text-sm">
         {showHeader && (
           <thead>
-            <tr className="border-b bg-muted/30">
+            <tr className="border-b bg-muted/30 dark:bg-muted/10">
               <th className="w-10 px-3 py-2">
                 <Checkbox
                   checked={allSelected}
@@ -1061,13 +1113,34 @@ function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleCo
         )}
         <tbody>
           {tasks.map(t => (
-            <TaskRow
-              key={t.id}
-              task={t}
-              selected={selectedIds.has(t.id)}
-              toggleSelect={toggleSelect}
-              toggleComplete={toggleComplete}
-            />
+            <React.Fragment key={t.id}>
+              <TaskRow
+                task={t}
+                selected={selectedIds.has(t.id)}
+                toggleSelect={toggleSelect}
+                toggleComplete={toggleComplete}
+                expanded={expandedTaskId === t.id}
+                onToggleExpand={() => setExpandedTaskId(expandedTaskId === t.id ? null : t.id)}
+              />
+              {expandedTaskId === t.id && (
+                <tr><td colSpan={10} className="p-0 border-t-0">
+                  <TaskDetailPanel
+                    task={t}
+                    canEdit={canEdit}
+                    onEdit={() => {}}
+                    onDelete={() => {}}
+                    onUpdateDeadline={(id, data) => {
+                      api.entities.ProjectTask.update(id, data).then(() => refetchEntityList("ProjectTask"));
+                    }}
+                    thresholds={{ warn: 4, danger: 1 }}
+                    projectId={t.project_id}
+                    project={t._project}
+                    user={user}
+                    onClose={() => setExpandedTaskId(null)}
+                  />
+                </td></tr>
+              )}
+            </React.Fragment>
           ))}
         </tbody>
       </table>
@@ -1077,20 +1150,24 @@ function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleCo
 
 /* ═══════════════════════════ Task Row ═══════════════════════════ */
 
-function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
+const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, toggleComplete, expanded, onToggleExpand }) {
   const t = task;
   const cfg = STATUS_CONFIG[t._status];
   const overdue = !t.is_completed && t.due_date && isOverdue(t.due_date);
   const dueToday = !t.is_completed && isDueToday(t.due_date);
 
   return (
-    <tr className={cn(
-      "border-b hover:bg-muted/30 transition-colors",
-      selected && "bg-primary/5",
-      overdue && "bg-red-50/50"
-    )}>
+    <tr
+      onClick={onToggleExpand}
+      className={cn(
+        "border-b hover:bg-muted/30 transition-colors cursor-pointer",
+        selected && "bg-primary/5",
+        expanded && "bg-accent/30",
+        overdue && "bg-red-50/50 dark:bg-red-950/20"
+      )}
+    >
       {/* Select */}
-      <td className="w-10 px-3 py-2">
+      <td className="w-10 px-3 py-2" onClick={e => e.stopPropagation()}>
         <Checkbox
           checked={selected}
           onCheckedChange={() => toggleSelect(t.id)}
@@ -1099,7 +1176,7 @@ function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
       </td>
 
       {/* Status checkbox */}
-      <td className="w-10 px-2 py-2">
+      <td className="w-10 px-2 py-2" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-1">
           {t.is_locked ? (
             <Lock className="h-4 w-4 text-muted-foreground" title="This task is locked" />
@@ -1134,10 +1211,10 @@ function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
       </td>
 
       {/* Project */}
-      <td className="px-2 py-2 hidden lg:table-cell max-w-[200px]">
+      <td className="px-2 py-2 hidden lg:table-cell max-w-[200px]" onClick={e => e.stopPropagation()}>
         {t._project?.property_address ? (
           <Link
-            to={createPageUrl("ProjectDetails") + `?id=${t.project_id}`}
+            to={createPageUrl("ProjectDetails") + `?id=${t.project_id}&tab=tasks`}
             className="text-xs text-muted-foreground hover:text-foreground truncate block transition-colors"
           >
             {t._project.property_address}
@@ -1149,16 +1226,23 @@ function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
 
       {/* Assigned */}
       <td className="px-2 py-2 hidden md:table-cell">
-        {t.assigned_to_name ? (
-          <div className="flex items-center gap-1.5">
-            <span className="flex items-center justify-center h-5 w-5 rounded-full bg-muted text-[10px] font-bold text-muted-foreground shrink-0">
-              {initial(t.assigned_to_name)}
-            </span>
-            <span className="text-xs truncate max-w-[100px]">{t.assigned_to_name}</span>
-          </div>
-        ) : (
-          <span className="text-xs text-muted-foreground/50">--</span>
-        )}
+        {(() => {
+          const assigneeName = t.assigned_to_name || t.assigned_to_team_name;
+          const isTeam = !t.assigned_to_name && !!t.assigned_to_team_name;
+          if (!assigneeName) return <span className="text-xs text-muted-foreground/50">--</span>;
+          return (
+            <div className="flex items-center gap-1.5">
+              {isTeam ? (
+                <Users className="h-4 w-4 text-muted-foreground shrink-0" />
+              ) : (
+                <span className="flex items-center justify-center h-5 w-5 rounded-full bg-muted text-[10px] font-bold text-muted-foreground shrink-0">
+                  {initial(assigneeName)}
+                </span>
+              )}
+              <span className="text-xs truncate max-w-[100px]">{assigneeName}</span>
+            </div>
+          );
+        })()}
       </td>
 
       {/* Role */}
@@ -1210,4 +1294,4 @@ function TaskRow({ task, selected, toggleSelect, toggleComplete }) {
       </td>
     </tr>
   );
-}
+});
