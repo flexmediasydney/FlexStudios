@@ -180,9 +180,9 @@ export default function Tasks() {
   const searchTimerRef = useRef(null);
   const togglingRef = useRef(new Set());
   const [statusFilter, setStatusFilter] = useState(() => localStorage.getItem("tasks-status-filter") || "all");
-  const [sourceFilter, setSourceFilter] = useState(() => localStorage.getItem("tasks-source-filter") || "");
-  const [assigneeFilter, setAssigneeFilter] = useState(() => localStorage.getItem("tasks-assignee-filter") || "");
-  const [roleFilter, setRoleFilter] = useState(() => localStorage.getItem("tasks-role-filter") || "");
+  const [sourceFilter, setSourceFilter] = useState(() => localStorage.getItem("tasks-source-filter") || "__all__");
+  const [assigneeFilter, setAssigneeFilter] = useState(() => localStorage.getItem("tasks-assignee-filter") || "__all__");
+  const [roleFilter, setRoleFilter] = useState(() => localStorage.getItem("tasks-role-filter") || "__all__");
   const [quickFilter, setQuickFilter] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [sortCol, setSortCol] = useState("due");
