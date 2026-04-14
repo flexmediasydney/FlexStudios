@@ -13,6 +13,8 @@ import { Plus, CheckCircle2, Clock, XCircle, AlertCircle, ChevronDown, ChevronRi
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { fmtDate } from "@/components/utils/dateUtils";
+import TaskDetailPanel from "@/components/projects/TaskDetailPanel";
+import { CountdownTimer } from "@/components/projects/TaskManagement";
 import { cn } from "@/lib/utils";
 import CreateRevisionDialog from "./CreateRevisionDialog";
 import EditRevisionDialog from "./EditRevisionDialog";
@@ -64,6 +66,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
    const [newTaskAssignRole, setNewTaskAssignRole] = useState("");
    const [newTaskDueDate, setNewTaskDueDate] = useState("");
    const [optimisticCompletions, setOptimisticCompletions] = useState({});
+   const [expandedTaskId, setExpandedTaskId] = useState(null);
 
   // Close status dropdown on click outside
   useEffect(() => {
@@ -622,67 +625,99 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
                   const estEffort = formatEffort(task.estimated_minutes);
                   const actEffort = formatEffort(task.total_effort_logged);
 
+                  const isTaskExpanded = expandedTaskId === task.id;
+
                   return (
-                    <div key={task.id} className={cn(
-                      "flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm group",
-                      task.is_completed
-                        ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800"
-                        : isBlocked
-                          ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800"
-                          : "bg-background border-border"
-                    )}>
-                      {/* Checkbox / Status Icon */}
-                      {isBlocked ? (
-                        <Lock className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" title="Blocked - complete dependencies first" />
-                      ) : (
-                        <Checkbox
-                          checked={task.is_completed}
-                          onCheckedChange={() => handleToggleTask(rawTask)}
-                          className={cn(
-                            "h-4 w-4 flex-shrink-0 rounded-sm",
-                            task.is_completed && "data-[state=checked]:bg-green-600 data-[state=checked]:border-green-600"
-                          )}
-                        />
-                      )}
-
-                      {/* Title */}
-                      <span className={cn(
-                        "flex-1 min-w-0 truncate group-hover:whitespace-normal group-hover:break-words",
-                        task.is_completed && "line-through text-muted-foreground"
-                      )}>
-                        {cleanTitle}
-                      </span>
-
-                      {/* Effort display */}
-                      {(estEffort || actEffort) && (
-                        <span className="text-[10px] text-muted-foreground flex-shrink-0 tabular-nums" title={`Est: ${estEffort || '-'} / Actual: ${actEffort || '-'}`}>
-                          {actEffort || '0m'}/{estEffort || '-'}
-                        </span>
-                      )}
-
-                      {/* Blocked badge */}
-                      {isBlocked && (
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 border-amber-300 flex-shrink-0">
-                          blocked
-                        </Badge>
-                      )}
-
-                      {/* Due date / overdue badge */}
-                      {task.due_date && !task.is_completed && (
-                        daysOverdue > 0 ? (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-red-100 text-red-700 border-red-300 flex-shrink-0">
-                            {daysOverdue}d overdue
-                          </Badge>
+                    <div key={task.id} className="space-y-0">
+                      <div
+                        className={cn(
+                          "flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm group cursor-pointer transition-colors",
+                          task.is_completed
+                            ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800 hover:bg-green-100/60"
+                            : isBlocked
+                              ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800 hover:bg-amber-100/60"
+                              : "bg-background border-border hover:bg-muted/40",
+                          isTaskExpanded && "rounded-b-none border-b-0"
+                        )}
+                        onClick={() => setExpandedTaskId(isTaskExpanded ? null : task.id)}
+                      >
+                        {/* Checkbox / Status Icon */}
+                        {isBlocked ? (
+                          <Lock className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" title="Blocked - complete dependencies first" />
                         ) : (
-                          <span className="text-[10px] text-muted-foreground flex-shrink-0">
-                            {fmtDate(task.due_date, 'd MMM')}
-                          </span>
-                        )
-                      )}
+                          <Checkbox
+                            checked={task.is_completed}
+                            onCheckedChange={(e) => { e?.stopPropagation?.(); handleToggleTask(rawTask); }}
+                            onClick={(e) => e.stopPropagation()}
+                            className={cn(
+                              "h-4 w-4 flex-shrink-0 rounded-sm",
+                              task.is_completed && "data-[state=checked]:bg-green-600 data-[state=checked]:border-green-600"
+                            )}
+                          />
+                        )}
 
-                      {/* Assignee */}
-                      {assignee && (
-                        <span className="text-[10px] text-muted-foreground flex-shrink-0 truncate max-w-[80px]">{assignee}</span>
+                        {/* Title */}
+                        <span className={cn(
+                          "flex-1 min-w-0 truncate",
+                          task.is_completed && "line-through text-muted-foreground"
+                        )}>
+                          {cleanTitle}
+                        </span>
+
+                        {/* Effort display */}
+                        {(estEffort || actEffort) && (
+                          <span className="text-[10px] text-muted-foreground flex-shrink-0 tabular-nums" title={`Est: ${estEffort || '-'} / Actual: ${actEffort || '-'}`}>
+                            {actEffort || '0m'}/{estEffort || '-'}
+                          </span>
+                        )}
+
+                        {/* Blocked badge */}
+                        {isBlocked && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 border-amber-300 flex-shrink-0">
+                            blocked
+                          </Badge>
+                        )}
+
+                        {/* Due date / overdue */}
+                        {task.due_date && !task.is_completed && (
+                          daysOverdue > 0 ? (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-red-100 text-red-700 border-red-300 flex-shrink-0">
+                              {daysOverdue}d overdue
+                            </Badge>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                              {fmtDate(task.due_date, 'd MMM')}
+                            </span>
+                          )
+                        )}
+
+                        {/* Assignee */}
+                        {assignee && (
+                          <span className="text-[10px] text-muted-foreground flex-shrink-0 truncate max-w-[80px]">{assignee}</span>
+                        )}
+
+                        {/* Expand arrow */}
+                        <ChevronDown className={cn("h-3 w-3 text-muted-foreground/50 flex-shrink-0 transition-transform", isTaskExpanded && "rotate-180")} />
+                      </div>
+
+                      {/* Expanded: full TaskDetailPanel — identical to Tasks subtab */}
+                      {isTaskExpanded && (
+                        <div className="border border-t-0 rounded-b-lg overflow-hidden">
+                          <TaskDetailPanel
+                            task={rawTask}
+                            canEdit={canEdit}
+                            onEdit={() => {}}
+                            onDelete={() => {}}
+                            onUpdateDeadline={(id, data) => {
+                              api.entities.ProjectTask.update(id, data).then(() => refetchEntityList("ProjectTask")).catch(() => toast.error("Failed to update deadline"));
+                            }}
+                            thresholds={{ warn: 4, danger: 1 }}
+                            projectId={project?.id}
+                            project={project}
+                            user={currentUser}
+                            onClose={() => setExpandedTaskId(null)}
+                          />
+                        </div>
                       )}
                     </div>
                   );
