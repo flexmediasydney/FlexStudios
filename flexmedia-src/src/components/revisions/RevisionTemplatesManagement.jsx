@@ -23,6 +23,12 @@ const REQUEST_KINDS = {
   change_request: { label: "Change Request", color: "bg-rose-100 text-rose-700 border-rose-200" },
 };
 
+const ROLE_LABELS = {
+  none: "No auto-assign", project_owner: "Project Owner", photographer: "Photographer",
+  videographer: "Videographer", image_editor: "Image Editor", video_editor: "Video Editor",
+  floorplan_editor: "Floorplan Editor", drone_editor: "Drone Editor",
+};
+
 export default function RevisionTemplatesManagement() {
   const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
@@ -30,8 +36,10 @@ export default function RevisionTemplatesManagement() {
   const [deletingTemplate, setDeletingTemplate] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedIds, setExpandedIds] = useState({});
+  const [activeKindTab, setActiveKindTab] = useState("revision");
 
   const { data: templates = [], loading } = useEntityList("RevisionTemplate", "revision_type");
+  const { data: requestLevelTemplates = [] } = useEntityList("RequestLevelTaskTemplate");
 
   const saveMutation = useMutation({
     mutationFn: async (data) => {

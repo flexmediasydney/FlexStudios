@@ -466,7 +466,7 @@ Deno.serve(async (req) => {
     // Unblock tasks that depend on any orphaned (now soft-deleted) task
     const orphanedIds = new Set(orphanedTasks.map((t: any) => t.id));
     if (orphanedIds.size > 0) {
-      const dependentTasks = allTasks.filter((t: any) =>
+      const dependentTasks = existingTasks.filter((t: any) =>
         !t.is_deleted && (t.depends_on_task_ids || []).some((depId: string) => orphanedIds.has(depId))
       );
       for (const task of dependentTasks) {
