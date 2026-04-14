@@ -30,6 +30,7 @@ import {
   Sparkles,
   MapPin,
   Crosshair,
+  ListChecks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -264,6 +265,7 @@ function LayoutContent({ currentPageName, children }) {
         collapsible: true,
         items: [
           can("Projects") && { name: "Projects", href: "Projects", icon: Camera },
+          can("Tasks") && { name: "Tasks", href: "Tasks", icon: ListChecks },
           can("Goals") && { name: "Goals", href: "Goals", icon: Target },
           can("TonomoIntegrationDashboard") && {
             name: "Bookings Engine", href: "TonomoIntegrationDashboard", icon: Bot, badge: navBadges.TonomoIntegrationDashboard,
