@@ -25,6 +25,11 @@ import { useFavorites } from "@/components/favorites/useFavorites";
 // Delegates to shared fetchMediaProxy for dedup + retry, wraps with progress tracking
 const blobCache = SHARED_THUMB_CACHE;
 
+/** Canonical cache key */
+function cacheKey(filePath, mode = 'thumb') {
+  return `${mode}::${filePath}`;
+}
+
 /** Build proxy path from base + file, safely handling undefined file.path */
 function buildProxyPath(basePath, file) {
   if (!basePath || !file?.name || !file?.path) return null;
