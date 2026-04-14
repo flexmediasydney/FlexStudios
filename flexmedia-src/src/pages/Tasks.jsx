@@ -273,13 +273,13 @@ export default function Tasks() {
       if (statusFilter !== "all" && t._status !== statusFilter) return false;
 
       // Source
-      if (sourceFilter && t._source.type !== sourceFilter) return false;
+      if (sourceFilter && sourceFilter !== '__all__' && t._source.type !== sourceFilter) return false;
 
       // Assignee
-      if (assigneeFilter && t.assigned_to !== assigneeFilter) return false;
+      if (assigneeFilter && assigneeFilter !== '__all__' && t.assigned_to !== assigneeFilter) return false;
 
       // Role
-      if (roleFilter && t.role !== roleFilter) return false;
+      if (roleFilter && roleFilter !== '__all__' && t.role !== roleFilter) return false;
 
       // Quick filter pills
       if (quickFilter === "overdue") {
@@ -669,7 +669,7 @@ export default function Tasks() {
                 <SelectValue placeholder="Assignee" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Assignees</SelectItem>
+                <SelectItem value="__all__">All Assignees</SelectItem>
                 {uniqueAssignees.map(([name, id]) => (
                   <SelectItem key={id} value={id}>{name}</SelectItem>
                 ))}
@@ -683,7 +683,7 @@ export default function Tasks() {
                 <SelectValue placeholder="Role" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Roles</SelectItem>
+                <SelectItem value="__all__">All Roles</SelectItem>
                 {uniqueRoles.map(r => (
                   <SelectItem key={r} value={r}>{ROLE_LABELS[r] || r}</SelectItem>
                 ))}
@@ -696,7 +696,7 @@ export default function Tasks() {
               <SelectValue placeholder="Source" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Sources</SelectItem>
+              <SelectItem value="__all__">All Sources</SelectItem>
               <SelectItem value="product">Product</SelectItem>
               <SelectItem value="package">Package</SelectItem>
               <SelectItem value="project">Project</SelectItem>
