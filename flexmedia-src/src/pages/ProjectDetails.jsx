@@ -11,7 +11,7 @@ import { createPageUrl } from "@/utils";
 import { 
   ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Users, Phone,
   ExternalLink, Edit, Archive, CheckCircle, Building, Search,
-  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera, AlertTriangle
+  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera, AlertTriangle, CheckCircle2
 } from "lucide-react";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import StagePipeline from "@/components/projects/StagePipeline";
@@ -1316,6 +1316,37 @@ export default function ProjectDetails() {
           allTasksDone={allTasksDone}
           projectTasks={projectTasks}
         /></ErrorBoundary>
+      )}
+
+      {/* Review State Banner */}
+      {project?.status === 'pending_review' && (
+        <div className={cn(
+          "rounded-lg border px-4 py-3 flex items-center gap-3",
+          project.urgent_review
+            ? "bg-red-50 border-red-300 dark:bg-red-950/30 dark:border-red-800"
+            : "bg-amber-50 border-amber-300 dark:bg-amber-950/30 dark:border-amber-800"
+        )}>
+          <AlertCircle className={cn("h-5 w-5 shrink-0", project.urgent_review ? "text-red-600" : "text-amber-600")} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" className={cn("text-[10px] font-bold uppercase border-0", project.urgent_review ? "bg-red-200 text-red-800" : "bg-amber-200 text-amber-800")}>
+                {project.urgent_review ? 'Flagged for Review' : 'Pending Review'}
+              </Badge>
+              {project.pending_review_type && (
+                <Badge variant="outline" className="text-[10px] bg-muted border-0">{project.pending_review_type.replace(/_/g, ' ')}</Badge>
+              )}
+            </div>
+            {project.pending_review_reason && (
+              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{project.pending_review_reason}</p>
+            )}
+          </div>
+        </div>
+      )}
+      {project?.auto_approved && project?.status !== 'pending_review' && (
+        <div className="rounded-lg border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 px-4 py-2 flex items-center gap-2">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+          <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">Auto-approved by system</span>
+        </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">

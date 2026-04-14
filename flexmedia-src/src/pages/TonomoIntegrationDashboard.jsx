@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Bot, CheckCircle, AlertCircle, RefreshCw, Zap, Trash2, RotateCcw, Play, ArrowRight } from "lucide-react";
 import { parseTS, toSydney, relativeTime } from "@/components/tonomo/tonomoUtils";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { useEntityList } from "@/components/hooks/useEntityData";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 
@@ -327,6 +328,7 @@ export default function TonomoIntegrationDashboard() {
            {stats.gaps > 0 && <span className="ml-1.5 text-[10px] bg-amber-500 text-white px-1.5 py-0.5 rounded-full font-bold">{stats.gaps}</span>}
          </TabsTrigger>
          <TabsTrigger value="rulebook" className="data-[state=active]:shadow-sm">Rulebook</TabsTrigger>
+         <TabsTrigger value="history" className="data-[state=active]:shadow-sm">History</TabsTrigger>
        </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-6">
@@ -501,7 +503,149 @@ export default function TonomoIntegrationDashboard() {
         <TabsContent value="rulebook">
           <TonomoRulebook />
         </TabsContent>
+
+        <TabsContent value="history">
+          <BookingHistoryTab />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// ── Booking History Tab ─────────────────────────────────────────────────────
+const ACTION_BADGES = {
+  auto_approved:   { label: 'Auto-Approved', color: 'bg-emerald-100 text-emerald-700' },
+  manual_approval: { label: 'Approved',      color: 'bg-blue-100 text-blue-700' },
+  flagged:         { label: 'Flagged',        color: 'bg-red-100 text-red-700' },
+  created:         { label: 'Created',        color: 'bg-gray-100 text-gray-600' },
+  updated:         { label: 'Updated',        color: 'bg-amber-100 text-amber-700' },
+  skipped:         { label: 'Skipped',        color: 'bg-gray-100 text-gray-500' },
+  failed:          { label: 'Failed',         color: 'bg-red-100 text-red-700' },
+  cancelled:       { label: 'Cancelled',      color: 'bg-red-100 text-red-600' },
+  delivered:       { label: 'Delivered',       color: 'bg-green-100 text-green-700' },
+  scheduled:       { label: 'Scheduled',       color: 'bg-blue-100 text-blue-700' },
+  rescheduled:     { label: 'Rescheduled',     color: 'bg-purple-100 text-purple-700' },
+  changed:         { label: 'Changed',         color: 'bg-amber-100 text-amber-600' },
+};
+
+function BookingHistoryTab() {
+  const { data: auditLogs = [] } = useEntityList("TonomoAuditLog", "-created_at");
+  const { data: activities = [] } = useEntityList("ProjectActivity", "-created_at");
+  const { data: projects = [] } = useEntityList("Project", "-created_at");
+  const [filter, setFilter] = useState('all');
+
+  const projectMap = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
+
+  // Merge audit logs + booking-related activities into unified timeline
+  const timeline = useMemo(() => {
+    const items = [];
+
+    // From tonomo audit logs
+    auditLogs.forEach(log => {
+      items.push({
+        id: `audit-${log.id}`,
+        timestamp: log.created_at,
+        action: log.operation || log.action || 'updated',
+        type: 'audit',
+        projectId: log.entity_id,
+        orderId: log.tonomo_order_id,
+        notes: log.notes || '',
+        user: null,
+      });
+    });
+
+    // From project activities (booking decisions only)
+    activities.forEach(act => {
+      if (!act.tonomo_order_id && !act.tonomo_event_type && act.activity_type !== 'manual_approval' && act.activity_type !== 'flagged' && act.activity_type !== 'auto_approved') return;
+      items.push({
+        id: `act-${act.id}`,
+        timestamp: act.created_at || act.timestamp,
+        action: act.activity_type || act.action || 'updated',
+        type: 'activity',
+        projectId: act.project_id,
+        orderId: act.tonomo_order_id,
+        notes: act.description || '',
+        user: act.user_name || null,
+      });
+    });
+
+    items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    if (filter !== 'all') {
+      return items.filter(i => i.action === filter);
+    }
+    return items;
+  }, [auditLogs, activities, filter]);
+
+  // Group by date
+  const grouped = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const groups = { Today: [], Yesterday: [], 'This Week': [], Earlier: [] };
+    timeline.forEach(item => {
+      const d = (item.timestamp || '').slice(0, 10);
+      if (d === today) groups.Today.push(item);
+      else if (d === yesterday) groups.Yesterday.push(item);
+      else if (new Date(item.timestamp) > new Date(Date.now() - 7 * 86400000)) groups['This Week'].push(item);
+      else groups.Earlier.push(item);
+    });
+    return groups;
+  }, [timeline]);
+
+  return (
+    <div className="space-y-4 mt-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold select-none">Booking Decision History</h3>
+        <Select value={filter} onValueChange={setFilter}>
+          <SelectTrigger className="h-7 w-40 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Actions</SelectItem>
+            <SelectItem value="manual_approval">Approvals</SelectItem>
+            <SelectItem value="flagged">Flagged</SelectItem>
+            <SelectItem value="auto_approved">Auto-Approved</SelectItem>
+            <SelectItem value="created">Created</SelectItem>
+            <SelectItem value="cancelled">Cancelled</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {timeline.length === 0 ? (
+        <Card className="border-dashed"><CardContent className="py-12 text-center text-sm text-muted-foreground">No booking decisions recorded yet.</CardContent></Card>
+      ) : (
+        Object.entries(grouped).map(([label, items]) => items.length > 0 && (
+          <div key={label}>
+            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-2 select-none">{label}</p>
+            <div className="space-y-1.5">
+              {items.slice(0, label === 'Earlier' ? 50 : 100).map(item => {
+                const project = projectMap.get(item.projectId);
+                const badge = ACTION_BADGES[item.action] || ACTION_BADGES.updated;
+                return (
+                  <div key={item.id} className="flex items-start gap-3 px-3 py-2 rounded-lg hover:bg-muted/40 transition-colors text-sm">
+                    <Badge variant="outline" className={`${badge.color} text-[10px] font-semibold whitespace-nowrap mt-0.5 border-0`}>{badge.label}</Badge>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm leading-snug">
+                        {project ? (
+                          <Link to={createPageUrl("ProjectDetails", { id: item.projectId })} className="font-medium hover:underline">
+                            {project.title || project.property_address || 'Unknown Project'}
+                          </Link>
+                        ) : (
+                          <span className="text-muted-foreground">Order {item.orderId?.slice(0, 8) || '???'}</span>
+                        )}
+                        {project?.agent_name && <span className="text-muted-foreground"> — {project.agent_name}</span>}
+                      </p>
+                      {item.notes && <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{item.notes}</p>}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-[11px] text-muted-foreground whitespace-nowrap">{relativeTime(item.timestamp)}</p>
+                      {item.user && <p className="text-[10px] text-muted-foreground/70">{item.user}</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }
