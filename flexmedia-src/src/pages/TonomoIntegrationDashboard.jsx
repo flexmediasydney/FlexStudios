@@ -569,7 +569,11 @@ function BookingHistoryTab() {
       });
     });
 
-    items.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    items.sort((a, b) => {
+      const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return tb - ta;
+    });
 
     if (filter !== 'all') {
       return items.filter(i => i.action === filter);
@@ -636,7 +640,7 @@ function BookingHistoryTab() {
                       {item.notes && <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{item.notes}</p>}
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-[11px] text-muted-foreground whitespace-nowrap">{relativeTime(item.timestamp)}</p>
+                      <p className="text-[11px] text-muted-foreground whitespace-nowrap">{item.timestamp ? relativeTime(new Date(item.timestamp)) : '—'}</p>
                       {item.user && <p className="text-[10px] text-muted-foreground/70">{item.user}</p>}
                     </div>
                   </div>
