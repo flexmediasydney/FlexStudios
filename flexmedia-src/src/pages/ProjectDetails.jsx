@@ -41,6 +41,7 @@ import ProjectValidationBanner from "@/components/projects/ProjectValidationBann
 import ConcurrentEditDetector from "@/components/projects/ConcurrentEditDetector";
 import ProjectEffortCard from "@/components/projects/ProjectEffortCard";
 import ProjectProgressBar from "@/components/projects/ProjectProgressBar";
+import RequestsProgressBar from "@/components/projects/RequestsProgressBar";
 import ProjectHealthIndicator from "@/components/projects/ProjectHealthIndicator";
 import EmailComposeDialog from "@/components/email/EmailComposeDialog";
 import ProjectRevisionsTab from "@/components/revisions/ProjectRevisionsTab";
@@ -1322,6 +1323,9 @@ export default function ProjectDetails() {
         <div className="lg:col-span-2 space-y-4 lg:space-y-6">
           {/* Project Progress Bar */}
           <ErrorBoundary><ProjectProgressBar tasks={projectTasks} /></ErrorBoundary>
+
+          {/* Requests Progress Bar */}
+          <ErrorBoundary><RequestsProgressBar projectId={projectId} /></ErrorBoundary>
 
           {/* Active Timers — live, real-time */}
           <ErrorBoundary><ActiveTimersPanel projectId={projectId} tasks={projectTasks} /></ErrorBoundary>
