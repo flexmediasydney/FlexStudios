@@ -151,6 +151,21 @@ const taskAnimations = `
 /* ═══════════════════════════ Component ═══════════════════════════ */
 
 function TasksInner() {
+  // TEMP: Minimal render to identify #310 crash
+  const { data: allTasks = [], loading: tasksLoading } = useEntityList("ProjectTask", "order", 100);
+
+  if (tasksLoading) return React.createElement('div', null, 'Loading tasks...');
+
+  // Test: render just task titles as strings
+  return React.createElement('div', { style: { padding: 40 } },
+    React.createElement('h1', null, 'Tasks (' + allTasks.filter(t => !t.is_deleted).length + ')'),
+    allTasks.filter(t => !t.is_deleted).slice(0, 10).map(t =>
+      React.createElement('div', { key: t.id }, String(t.title || 'untitled'))
+    )
+  );
+}
+
+function TasksInner_DISABLED() {
   // ──── Data Loading ────
   const { data: allTasks = [], loading: tasksLoading } = useEntityList("ProjectTask", "order", 5000);
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
