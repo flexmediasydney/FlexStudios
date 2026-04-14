@@ -26,7 +26,7 @@ import { fixTimestamp } from "@/components/utils/dateUtils";
 import { useCardFields } from "@/components/projects/useCardFields";
 import { ProjectFieldValue } from "@/components/projects/ProjectCardFields";
 import EntityDataTable from "@/components/common/EntityDataTable";
-import QuickStatsBar from "@/components/common/QuickStatsBar";
+
 import KeyboardShortcutsModal from "@/components/common/KeyboardShortcutsModal";
 
 
@@ -464,13 +464,6 @@ export default function Projects() {
     return cols;
   }, [enabledFields, canSeePricing, products, packages, tasksByProject, timeLogsByProject]);
 
-  // Memoize the tasks passed to QuickStatsBar to avoid O(tasks*projects) on every render
-  const filteredProjectIds = useMemo(() => new Set(filteredProjects.map(p => p.id)), [filteredProjects]);
-  const statsBarTasks = useMemo(() =>
-    allTasks.filter(t => filteredProjectIds.has(t.project_id) && !t.parent_task_id),
-    [allTasks, filteredProjectIds]
-  );
-
   const archivedCount = useMemo(() => allProjects.filter(p => p.is_archived).length, [allProjects]);
 
   // Memoize callbacks (Fix #13)
@@ -494,79 +487,66 @@ export default function Projects() {
   }
 
   return (
-    <div className="p-3 sm:p-6 lg:p-8 space-y-4 sm:space-y-6">
-      {/* Quick Stats */}
-      <QuickStatsBar projects={filteredProjects} tasks={statsBarTasks} />
-
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2 select-none">
+    <div className="px-3 pt-2 pb-3 sm:px-4 sm:pt-2 sm:pb-4 lg:px-6 space-y-2">
+      {/* Header + Search + New Project — single compact row */}
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 shrink-0">
+          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2 select-none">
             Projects
             {isLoading && (
-              <div className="h-5 w-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" role="status" aria-label="Loading projects" />
+              <div className="h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" role="status" aria-label="Loading projects" />
             )}
           </h1>
-          {/* Breadcrumb */}
-          <nav className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5" aria-label="Breadcrumb">
-            <Link to={createPageUrl("Dashboard")} className="hover:text-foreground hover:underline transition-colors focus:ring-1 focus:ring-primary px-1 rounded" title="Back to Dashboard">Dashboard</Link>
-            <span aria-hidden="true">›</span>
-            <span className="text-foreground font-medium">Projects</span>
-          </nav>
-          <p className="text-muted-foreground mt-1">
+          <span className="text-xs text-muted-foreground tabular-nums">
             {isLoading ? (
-              <Skeleton className="inline-block w-24 h-4" />
+              <Skeleton className="inline-block w-16 h-3.5" />
             ) : (
               <>
                 {filteredProjects.length !== allProjects.filter(p => showArchived || !p.is_archived).length
-                  ? `Showing ${filteredProjects.length} of ${allProjects.filter(p => showArchived || !p.is_archived).length} projects`
-                  : `${filteredProjects.length} ${filteredProjects.length === 1 ? 'project' : 'projects'}`}
+                  ? `${filteredProjects.length}/${allProjects.filter(p => showArchived || !p.is_archived).length}`
+                  : `${filteredProjects.length}`}
                 {searchQuery && ` matching "${searchQuery}"`}
-                {(Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all') && !searchQuery && " with active filters"}
+                {(Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all') && !searchQuery && " filtered"}
               </>
             )}
-          </p>
+          </span>
         </div>
-        <div className="flex items-center gap-3">
-            <Button onClick={handleCreateNew} className={cn("gap-2 shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-10", filteredProjects.length === 0 && !searchQuery && Object.keys(filters).length === 0 && "ring-2 ring-primary/30")} title="Create a new project (Ctrl+N)" aria-label="New project button - keyboard shortcut Ctrl+N">
-             <Plus className="h-4 w-4" />
-             <span className="hidden sm:inline">New Project</span>
-             <span className="sm:hidden">New</span>
-             <kbd className="hidden lg:inline-flex ml-1 text-[9px] bg-primary-foreground/20 px-1.5 py-0.5 rounded">⌘N</kbd>
-           </Button>
-         </div>
-      </div>
-
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-        <Input
-          placeholder="Search projects, addresses, clients... (Esc to clear)"
-          value={searchInput}
-          onChange={(e) => handleSearchChange(e.target.value)}
-          className="pl-10 pr-20 h-10 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 transition-all"
-          title="Search by project title, address, or client name (Esc to clear)"
-          autoComplete="off"
-          spellCheck="false"
-          aria-label="Search projects by title, address, or client"
-        />
-        {searchInput && (
-         <>
-           <span className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 font-medium tabular-nums">{searchInput.length}</span>
-           <button
-            onClick={() => { setSearchInput(""); setSearchQuery(""); }}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full p-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
-            title="Clear search (Esc)"
-            aria-label="Clear search"
-           >
-            <X className="h-4 w-4" />
-           </button>
-         </>
-        )}
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <Input
+            placeholder="Search projects, addresses, clients..."
+            value={searchInput}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            className="pl-8 pr-16 h-8 text-sm focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 transition-all"
+            title="Search by project title, address, or client name (Esc to clear)"
+            autoComplete="off"
+            spellCheck="false"
+            aria-label="Search projects by title, address, or client"
+          />
+          {searchInput && (
+           <>
+             <span className="absolute right-10 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/60 font-medium tabular-nums">{searchInput.length}</span>
+             <button
+              onClick={() => { setSearchInput(""); setSearchQuery(""); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full p-1 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+              title="Clear search (Esc)"
+              aria-label="Clear search"
+             >
+              <X className="h-3.5 w-3.5" />
+             </button>
+           </>
+          )}
+        </div>
+        <Button onClick={handleCreateNew} size="sm" className={cn("gap-1.5 shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-8 shrink-0", filteredProjects.length === 0 && !searchQuery && Object.keys(filters).length === 0 && "ring-2 ring-primary/30")} title="Create a new project (Ctrl+N)" aria-label="New project button - keyboard shortcut Ctrl+N">
+          <Plus className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline text-xs">New Project</span>
+          <span className="sm:hidden text-xs">New</span>
+          <kbd className="hidden lg:inline-flex ml-0.5 text-[9px] bg-primary-foreground/20 px-1 py-0.5 rounded">⌘N</kbd>
+        </Button>
       </div>
 
       {/* Filters & Sort */}
-      <div className="space-y-4">
+      <div className="space-y-1.5">
       <ProjectFiltersSort
           products={products}
           packages={packages}
@@ -582,7 +562,7 @@ export default function Projects() {
         />
 
         {/* Date range + Priority filters */}
-        <div className="flex items-center gap-2 flex-wrap overflow-x-auto scrollbar-none pb-1">
+        <div className="flex items-center gap-1.5 flex-wrap overflow-x-auto scrollbar-none">
           {/* Quick date presets */}
           {[
             { label: 'Today', days: 0 },
@@ -622,7 +602,7 @@ export default function Projects() {
                     setShootDateFrom(today); setShootDateTo(end);
                   }
                 }}
-                className={`text-xs px-2.5 py-1.5 rounded-lg border transition-all h-9 focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-none ${
+                className={`text-xs px-2 py-1 rounded-md border transition-all h-7 focus:ring-2 focus:ring-primary focus:ring-offset-1 focus:outline-none ${
                    isActive
                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
                      : 'border-border text-muted-foreground hover:bg-muted hover:border-primary/30'
@@ -638,23 +618,23 @@ export default function Projects() {
            type="date"
            value={shootDateFrom}
            onChange={e => setShootDateFrom(e.target.value)}
-           className="h-10 text-sm border border-border rounded-lg px-3 bg-background focus:ring-2 focus:ring-primary focus:outline-none transition-all"
+           className="h-7 text-xs border border-border rounded-md px-2 bg-background focus:ring-2 focus:ring-primary focus:outline-none transition-all"
            title="Shoot date from"
            aria-label="Shoot date from"
           />
-          <span className="text-xs text-muted-foreground mx-1">–</span>
+          <span className="text-xs text-muted-foreground">–</span>
           <input
            type="date"
            value={shootDateTo}
            onChange={e => setShootDateTo(e.target.value)}
-           className="h-10 text-sm border border-border rounded-lg px-3 bg-background focus:ring-2 focus:ring-primary focus:outline-none transition-all"
+           className="h-7 text-xs border border-border rounded-md px-2 bg-background focus:ring-2 focus:ring-primary focus:outline-none transition-all"
            title="Shoot date to"
            aria-label="Shoot date to"
           />
 
           {/* Priority filter */}
           <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-            <SelectTrigger className="h-10 w-[140px] text-sm focus:ring-2 focus:ring-primary">
+            <SelectTrigger className="h-7 w-[120px] text-xs focus:ring-2 focus:ring-primary">
               <SelectValue placeholder="Priority" />
             </SelectTrigger>
             <SelectContent>
@@ -670,7 +650,7 @@ export default function Projects() {
           {(shootDateFrom || shootDateTo || priorityFilter !== 'all') && (
             <button
               onClick={() => { setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); }}
-              className="text-xs text-muted-foreground hover:text-foreground hover:bg-muted px-2.5 h-9 rounded-lg border border-transparent hover:border-border transition-all"
+              className="text-xs text-muted-foreground hover:text-foreground hover:bg-muted px-2 h-7 rounded-md border border-transparent hover:border-border transition-all"
               title="Clear date and priority filters"
             >
               Clear
@@ -681,7 +661,7 @@ export default function Projects() {
           <Button
             variant={showArchived ? "default" : "outline"}
             size="sm"
-            className="text-xs gap-1.5"
+            className="text-xs gap-1 h-7"
             onClick={() => setShowArchived(v => !v)}
           >
             {showArchived ? "Hide archived" : "Show archived"}
@@ -693,44 +673,44 @@ export default function Projects() {
           </div>
 
       {/* View Controls */}
-       <div className="flex gap-2 justify-between items-center flex-wrap">
-         <div className="flex items-center gap-2">
+       <div className="flex gap-1.5 justify-between items-center flex-wrap">
+         <div className="flex items-center gap-1.5">
            <CardFieldsCustomizerButton onClick={() => setShowFieldCustomizer(true)} title="Customize card fields and columns" />
            {(Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all') && (
-             <Button variant="ghost" size="sm" onClick={() => {setSearchQuery(""); setFilters({}); setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all');}} className="text-xs text-muted-foreground hover:text-foreground h-9 focus:ring-2 focus:ring-primary" title="Clear all active filters">
-               <X className="h-4 w-4 mr-1" />Clear All
+             <Button variant="ghost" size="sm" onClick={() => {setSearchQuery(""); setFilters({}); setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all');}} className="text-xs text-muted-foreground hover:text-foreground h-7 focus:ring-2 focus:ring-primary" title="Clear all active filters">
+               <X className="h-3.5 w-3.5 mr-1" />Clear All
              </Button>
            )}
          </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-1.5 items-center">
           {viewMode === "kanban" && (
             <Button
               variant={fitToScreen ? "default" : "outline"}
               size="sm"
               onClick={() => setFitToScreen(!fitToScreen)}
-              className="hidden sm:flex shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9"
+              className="hidden sm:flex shadow-sm hover:shadow-md transition-all focus:ring-2 focus:ring-primary focus:ring-offset-1 h-7 text-xs"
               title={fitToScreen ? "Fitted to screen - click to disable" : "Click to fit columns to screen width (Shift+F)"}
               aria-label={fitToScreen ? "Disable fit to screen" : "Enable fit to screen - Shift+F"}
             >
-              {fitToScreen ? "📌 Fitted" : "↔ Fit"}
+              {fitToScreen ? "Fitted" : "Fit"}
             </Button>
           )}
           <Tabs value={viewMode} onValueChange={setViewModePersisted}>
-           <TabsList className="bg-muted/60 hover:bg-muted/80 transition-colors duration-200">
-             <TabsTrigger value="kanban" title="Kanban board view (Ctrl+K)" className="gap-1.5 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9" aria-label="Kanban view">
-               <Columns3 className="h-4 w-4" />
-               <span className="hidden lg:inline text-xs">Kanban</span>
-               <kbd className="hidden xl:inline-flex ml-1 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘K</kbd>
+           <TabsList className="bg-muted/60 hover:bg-muted/80 transition-colors duration-200 h-8">
+             <TabsTrigger value="kanban" title="Kanban board view (Ctrl+K)" className="gap-1 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-1 h-7 text-xs px-2" aria-label="Kanban view">
+               <Columns3 className="h-3.5 w-3.5" />
+               <span className="hidden lg:inline">Kanban</span>
+               <kbd className="hidden xl:inline-flex ml-0.5 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘K</kbd>
              </TabsTrigger>
-             <TabsTrigger value="grid" title="Grid card view (Ctrl+G)" className="gap-1.5 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9" aria-label="Grid view">
-               <LayoutGrid className="h-4 w-4" />
-               <span className="hidden lg:inline text-xs">Grid</span>
-               <kbd className="hidden xl:inline-flex ml-1 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘G</kbd>
+             <TabsTrigger value="grid" title="Grid card view (Ctrl+G)" className="gap-1 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-1 h-7 text-xs px-2" aria-label="Grid view">
+               <LayoutGrid className="h-3.5 w-3.5" />
+               <span className="hidden lg:inline">Grid</span>
+               <kbd className="hidden xl:inline-flex ml-0.5 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘G</kbd>
              </TabsTrigger>
-             <TabsTrigger value="list" title="Table list view (Ctrl+L)" className="gap-1.5 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-2 h-9" aria-label="List view">
-               <List className="h-4 w-4" />
-               <span className="hidden lg:inline text-xs">List</span>
-               <kbd className="hidden xl:inline-flex ml-1 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘L</kbd>
+             <TabsTrigger value="list" title="Table list view (Ctrl+L)" className="gap-1 hover:bg-muted/40 transition-colors focus:ring-2 focus:ring-primary focus:ring-offset-1 h-7 text-xs px-2" aria-label="List view">
+               <List className="h-3.5 w-3.5" />
+               <span className="hidden lg:inline">List</span>
+               <kbd className="hidden xl:inline-flex ml-0.5 text-[9px] bg-background/60 px-1 py-0.5 rounded">⌘L</kbd>
              </TabsTrigger>
            </TabsList>
           </Tabs>
@@ -756,9 +736,9 @@ export default function Projects() {
       {/* Kanban + Grid views */}
       {viewMode !== "list" && (
         isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {Array(9).fill(0).map((_, i) => (
-              <Card key={i} className="p-5 space-y-3">
+              <Card key={i} className="p-4 space-y-2">
                 <div className="flex items-center justify-between">
                   <Skeleton className="h-5 w-3/5" />
                   <Skeleton className="h-5 w-16 rounded-full" />
@@ -778,7 +758,7 @@ export default function Projects() {
             ))}
           </div>
         ) : filteredProjects.length === 0 ? (
-          <Card className="p-12 text-center border-2 border-dashed bg-muted/30 shadow-sm">
+          <Card className="p-8 text-center border-2 border-dashed bg-muted/30 shadow-sm">
             <div className="max-w-md mx-auto">
               {searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all' ? (
                 <>
@@ -814,7 +794,7 @@ export default function Projects() {
             </div>
           </Card>
         ) : viewMode === "kanban" ? (
-          <div className="animate-in fade-in duration-300">
+          <div className="animate-in fade-in duration-300" style={{ height: 'calc(100vh - 200px)', minHeight: '400px' }}>
             <ErrorBoundary fallbackLabel="Kanban Board" compact>
               <KanbanBoard
                 projects={filteredProjects}
@@ -828,7 +808,7 @@ export default function Projects() {
             </ErrorBoundary>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-max animate-in fade-in duration-300">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 auto-rows-max animate-in fade-in duration-300">
              {filteredProjects.map(project => {
                const projectTasks = tasksByProject[project.id] || [];
                const projectTimeLogs = timeLogsByProject[project.id] || [];
