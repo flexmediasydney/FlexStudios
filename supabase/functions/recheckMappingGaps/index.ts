@@ -13,15 +13,20 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
 
-    // 1. Load all confirmed service mappings (tonomo_id → flexmedia_label)
+    // 1. Load all confirmed service mappings (tonomo_id + both label variants)
     const { data: mappings = [] } = await admin
       .from('tonomo_mapping_tables')
-      .select('tonomo_id, flexmedia_label, is_confirmed')
+      .select('tonomo_id, tonomo_label, flexmedia_label, is_confirmed')
       .eq('is_confirmed', true)
       .eq('mapping_type', 'service');
 
     const confirmedTonomoIds = new Set(mappings.map((m: any) => m.tonomo_id));
-    const confirmedNames = new Set(mappings.map((m: any) => m.flexmedia_label?.toLowerCase()).filter(Boolean));
+    // Match by BOTH the Tonomo original name AND the FlexMedia label (case-insensitive)
+    const confirmedNames = new Set<string>();
+    for (const m of mappings) {
+      if (m.flexmedia_label) confirmedNames.add(m.flexmedia_label.toLowerCase());
+      if (m.tonomo_label) confirmedNames.add(m.tonomo_label.toLowerCase());
+    }
 
     // 2. Find all projects with non-empty mapping gaps
     const { data: projects = [] } = await admin
