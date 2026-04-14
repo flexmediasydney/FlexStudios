@@ -1325,6 +1325,8 @@ export default function ProjectDetails() {
         const flagActivity = allProjectActivities?.find(a => a.activity_type === 'flagged');
 
         if (project?.status === 'pending_review') {
+          const approveStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
+          const isCancellation = project.pending_review_type === 'cancellation';
           return (
             <div className={cn(
               "rounded-lg border px-4 py-3 flex items-center gap-3",
@@ -1349,6 +1351,70 @@ export default function ProjectDetails() {
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{project.pending_review_reason}</p>
                 )}
               </div>
+              {memoizedCanEdit && (
+                <div className="flex items-center gap-2 shrink-0">
+                  {!project.urgent_review && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs border-red-300 text-red-700 hover:bg-red-100"
+                      onClick={async () => {
+                        try {
+                          await api.entities.Project.update(project.id, {
+                            urgent_review: true,
+                            pending_review_reason: (project.pending_review_reason || '') + ' [Flagged by admin]',
+                          });
+                          const u = await api.auth.me();
+                          await api.entities.ProjectActivity.create({
+                            project_id: project.id, action: 'booking_decision', activity_type: 'flagged',
+                            description: `Booking flagged as urgent by ${u?.full_name || 'admin'}.`,
+                            user_id: u?.id, user_name: u?.full_name || u?.email,
+                          }).catch(() => {});
+                          refetchEntityList("Project");
+                          refetchEntityList("ProjectActivity");
+                          toast.success('Flagged as urgent');
+                        } catch { toast.error('Failed to flag'); }
+                      }}
+                    >
+                      <AlertCircle className="h-3.5 w-3.5 mr-1" />
+                      Flag
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={async () => {
+                      try {
+                        const newStatus = isCancellation ? 'cancelled' : approveStatus;
+                        await api.entities.Project.update(project.id, {
+                          status: newStatus,
+                          pending_review_reason: null,
+                          pending_review_type: null,
+                          urgent_review: false,
+                          auto_approved: false,
+                        });
+                        const u = await api.auth.me();
+                        await api.entities.ProjectActivity.create({
+                          project_id: project.id, action: 'booking_decision', activity_type: 'manual_approval',
+                          description: `Booking manually approved by ${u?.full_name || 'admin'}. Status → ${newStatus}.`,
+                          user_id: u?.id, user_name: u?.full_name || u?.email,
+                        }).catch(() => {});
+                        // Fire role defaults + stage tracking
+                        if (newStatus !== 'cancelled') {
+                          api.functions.invoke('applyProjectRoleDefaults', { project_id: project.id }).catch(() => {});
+                          api.functions.invoke('trackProjectStageChange', { projectId: project.id, old_data: { status: 'pending_review' } }).catch(() => {});
+                        }
+                        refetchEntityList("Project");
+                        refetchEntityList("ProjectActivity");
+                        toast.success(isCancellation ? 'Cancellation confirmed' : 'Booking approved');
+                      } catch { toast.error('Approval failed'); }
+                    }}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                    {isCancellation ? 'Confirm Cancel' : 'Approve'}
+                  </Button>
+                </div>
+              )}
             </div>
           );
         }
