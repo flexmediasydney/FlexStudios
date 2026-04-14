@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
-import { Building2, MapPin, User, Users, Pin, Edit, Trash2, MessageSquare, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { Building2, MapPin, User, Users, Pin, Edit, Trash2, MessageSquare, ChevronDown, ChevronUp, Loader2, Paperclip } from 'lucide-react';
 import { api } from '@/api/supabaseClient';
 import { toast } from 'sonner';
 import ActionMenu from '@/components/common/ActionMenu';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import UnifiedNoteComposer from './UnifiedNoteComposer';
+import AttachmentLightbox from '@/components/common/AttachmentLightbox';
 
 const CONTEXT_ICON = { agency: Building2, project: MapPin, agent: User, team: Users };
 
@@ -81,8 +82,43 @@ function relativeTime(utcStr) {
 // javascript:/data:/vbscript: URIs, base, form, meta, and HTML comments.
 import { sanitizeDisplayHtml as sanitizeDisplay } from '@/utils/sanitizeHtml';
 
+function isImageFile(name) {
+  return /\.(jpg|jpeg|png|gif|webp|svg|bmp|tiff?)$/i.test(name || '');
+}
+
+function AttachmentThumbnails({ attachments, onOpen }) {
+  if (!attachments?.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2.5">
+      {attachments.map((a, i) => {
+        const image = isImageFile(a.file_name);
+        return image ? (
+          <button
+            key={i}
+            onClick={() => onOpen(i)}
+            className="block rounded border border-border/60 overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all cursor-pointer"
+          >
+            <img src={a.file_url} alt={a.file_name} className="h-16 w-auto object-cover" draggable={false} />
+          </button>
+        ) : (
+          <button
+            key={i}
+            onClick={() => onOpen(i)}
+            className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded border border-blue-100 hover:bg-blue-100 transition-colors cursor-pointer"
+          >
+            <Paperclip className="h-3 w-3" />
+            {a.file_name || `File ${i + 1}`}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ReplyBubble({ reply }) {
   const replyAttachments = Array.isArray(reply.attachments) ? reply.attachments : [];
+  const [replyLbOpen, setReplyLbOpen] = useState(false);
+  const [replyLbIdx, setReplyLbIdx] = useState(0);
   return (
     <div className="flex gap-2.5 py-2">
       <AuthorAvatar name={reply.author_name} size="sm" />
@@ -99,22 +135,16 @@ function ReplyBubble({ reply }) {
         ) : (
           <p className="text-xs text-foreground/80 mt-0.5 whitespace-pre-wrap">{reply.content}</p>
         )}
-        {replyAttachments.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
-            {replyAttachments.map((att, i) => {
-              const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(att.file_name || '');
-              return isImage ? (
-                <a key={i} href={att.file_url} target="_blank" rel="noopener noreferrer" className="block">
-                  <img src={att.file_url} alt={att.file_name} className="h-16 w-auto rounded border hover:opacity-80 transition-opacity" />
-                </a>
-              ) : (
-                <a key={i} href={att.file_url} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-muted hover:bg-muted/80 text-foreground border transition-colors">
-                  📎 {att.file_name || `File ${i + 1}`}
-                </a>
-              );
-            })}
-          </div>
+        <AttachmentThumbnails
+          attachments={replyAttachments}
+          onOpen={(i) => { setReplyLbIdx(i); setReplyLbOpen(true); }}
+        />
+        {replyLbOpen && replyAttachments.length > 0 && (
+          <AttachmentLightbox
+            files={replyAttachments}
+            initialIndex={replyLbIdx}
+            onClose={() => setReplyLbOpen(false)}
+          />
         )}
       </div>
     </div>
@@ -128,6 +158,8 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
   const [repliesExpanded, setRepliesExpanded] = useState(true);
   const [pinLoading, setPinLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
 
   const isLegacy = note._isLegacy;
   const canEdit = !isLegacy && (note.author_email === currentUser?.email || isMasterAdmin);
@@ -259,20 +291,16 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
         )}
 
         {/* Attachments */}
-        {note.attachments?.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2.5">
-            {note.attachments.map((a, i) => (
-              <a
-                key={i}
-                href={a.file_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded border border-blue-100 hover:bg-blue-100 transition-colors"
-              >
-                {a.file_name}
-              </a>
-            ))}
-          </div>
+        <AttachmentThumbnails
+          attachments={note.attachments}
+          onOpen={(i) => { setLightboxIndex(i); setLightboxOpen(true); }}
+        />
+        {lightboxOpen && note.attachments?.length > 0 && (
+          <AttachmentLightbox
+            files={note.attachments}
+            initialIndex={lightboxIndex}
+            onClose={() => setLightboxOpen(false)}
+          />
         )}
       </div>
 

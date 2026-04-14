@@ -20,6 +20,7 @@ import CreateRevisionDialog from "./CreateRevisionDialog";
 import EditRevisionDialog from "./EditRevisionDialog";
 import PricingImpactCard from "./PricingImpactCard";
 import { createNotificationsForUsers, writeFeedEvent } from "@/components/notifications/createNotification";
+import AttachmentLightbox from "@/components/common/AttachmentLightbox";
 
 const REVISION_TYPES = {
   images: { label: "Images", icon: "📷", color: "bg-blue-50 border-blue-200 text-blue-700" },
@@ -67,6 +68,8 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
    const [newTaskDueDate, setNewTaskDueDate] = useState("");
    const [optimisticCompletions, setOptimisticCompletions] = useState({});
    const [expandedTaskId, setExpandedTaskId] = useState(null);
+   const [attLightboxOpen, setAttLightboxOpen] = useState(false);
+   const [attLightboxIdx, setAttLightboxIdx] = useState(0);
 
   // Close status dropdown on click outside
   useEffect(() => {
@@ -539,15 +542,36 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
               <p className="text-xs font-medium text-muted-foreground mb-1.5 flex items-center gap-1">
                 <Paperclip className="h-3.5 w-3.5" /> Attachments ({revision.attachments.length})
               </p>
-              <div className="space-y-1">
-                {revision.attachments.map((att, i) => (
-                  <a key={i} href={att.file_url} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg border bg-muted/30 text-xs hover:bg-muted/60 transition-colors">
-                    <Paperclip className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                    <span className="flex-1 truncate">{att.file_name}</span>
-                  </a>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {revision.attachments.map((att, i) => {
+                  const isImage = /\.(jpg|jpeg|png|gif|webp|svg|bmp|tiff?)$/i.test(att.file_name || '');
+                  return isImage ? (
+                    <button
+                      key={i}
+                      onClick={() => { setAttLightboxIdx(i); setAttLightboxOpen(true); }}
+                      className="block rounded-lg border border-border/60 overflow-hidden hover:ring-2 hover:ring-primary/40 transition-all cursor-pointer"
+                    >
+                      <img src={att.file_url} alt={att.file_name} className="h-20 w-auto object-cover" draggable={false} />
+                    </button>
+                  ) : (
+                    <button
+                      key={i}
+                      onClick={() => { setAttLightboxIdx(i); setAttLightboxOpen(true); }}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg border bg-muted/30 text-xs hover:bg-muted/60 transition-colors cursor-pointer"
+                    >
+                      <Paperclip className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      <span className="flex-1 truncate">{att.file_name}</span>
+                    </button>
+                  );
+                })}
               </div>
+              {attLightboxOpen && (
+                <AttachmentLightbox
+                  files={revision.attachments}
+                  initialIndex={attLightboxIdx}
+                  onClose={() => setAttLightboxOpen(false)}
+                />
+              )}
             </div>
           )}
 

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -6,7 +6,9 @@ import { useEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Plus, Edit, Trash2, Search, ChevronRight, ChevronDown } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus, Edit, Trash2, Search, ChevronRight, ChevronDown, ArrowUp, ArrowDown, Save } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import RevisionTemplateFormDialog from "./RevisionTemplateFormDialog";
@@ -36,10 +38,61 @@ export default function RevisionTemplatesManagement() {
   const [deletingTemplate, setDeletingTemplate] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedIds, setExpandedIds] = useState({});
-  const [activeKindTab, setActiveKindTab] = useState("revision");
 
   const { data: templates = [], loading } = useEntityList("RevisionTemplate", "revision_type");
   const { data: requestLevelTemplates = [] } = useEntityList("RequestLevelTaskTemplate");
+
+  // Request-level inline editor state
+  const [rlTasks, setRlTasks] = useState([]);
+  const [rlDirty, setRlDirty] = useState(false);
+
+  // Sync local editor state when data loads or changes (only if not dirty)
+  useEffect(() => {
+    if (requestLevelTemplates.length > 0 && !rlDirty) {
+      setRlTasks(JSON.parse(JSON.stringify(requestLevelTemplates[0].task_templates || [])));
+    }
+  }, [requestLevelTemplates]);
+
+  const rlSaveMutation = useMutation({
+    mutationFn: async (tasks) => {
+      const record = requestLevelTemplates[0];
+      if (!record) throw new Error("No RequestLevelTaskTemplate record found");
+      return api.entities.RequestLevelTaskTemplate.update(record.id, { task_templates: tasks });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['RequestLevelTaskTemplate'] });
+      setRlDirty(false);
+      toast.success("Request-level tasks saved");
+    },
+    onError: (e) => toast.error(e.message || "Failed to save request-level tasks"),
+  });
+
+  const rlAddTask = () => {
+    setRlTasks(prev => [...prev, { title: "", auto_assign_role: "none", estimated_minutes: 0, description: "" }]);
+    setRlDirty(true);
+  };
+  const rlRemoveTask = (index) => {
+    setRlTasks(prev => prev.filter((_, i) => i !== index));
+    setRlDirty(true);
+  };
+  const rlUpdateTask = (index, field, value) => {
+    setRlTasks(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+    setRlDirty(true);
+  };
+  const rlMoveTask = (index, direction) => {
+    setRlTasks(prev => {
+      const next = [...prev];
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= next.length) return prev;
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return next;
+    });
+    setRlDirty(true);
+  };
 
   const saveMutation = useMutation({
     mutationFn: async (data) => {
@@ -105,8 +158,132 @@ export default function RevisionTemplatesManagement() {
             {v.label}
           </button>
         ))}
+        <button
+          onClick={() => setActiveKind("request_level")}
+          className={`px-4 py-2 rounded-lg text-sm font-medium border transition-all ${
+            activeKind === "request_level"
+              ? "bg-teal-100 text-teal-700 border-teal-300"
+              : "border-border text-muted-foreground hover:bg-muted/50"
+          }`}
+        >
+          Request Level
+        </button>
       </div>
 
+      {/* Request Level inline editor */}
+      {activeKind === "request_level" && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold">Request-Level Default Tasks</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                These tasks are automatically added to every revision and change request, regardless of which template is selected.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={rlAddTask}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add Task
+              </Button>
+              <Button
+                size="sm"
+                disabled={!rlDirty || rlSaveMutation.isPending}
+                onClick={() => rlSaveMutation.mutate(rlTasks)}
+              >
+                <Save className="h-3.5 w-3.5 mr-1" />
+                {rlSaveMutation.isPending ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </div>
+
+          {requestLevelTemplates.length === 0 && (
+            <div className="text-center py-12 text-muted-foreground border rounded-lg border-dashed">
+              <p className="font-medium">No request-level template record found</p>
+              <p className="text-sm mt-1">A RequestLevelTaskTemplate row must be seeded in the database.</p>
+            </div>
+          )}
+
+          {requestLevelTemplates.length > 0 && rlTasks.length === 0 && (
+            <div className="text-center py-12 text-muted-foreground border rounded-lg border-dashed">
+              <p className="font-medium">No request-level tasks defined yet</p>
+              <p className="text-sm mt-1">Add tasks that should apply to every revision and change request.</p>
+              <Button className="mt-4" size="sm" onClick={rlAddTask}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add First Task
+              </Button>
+            </div>
+          )}
+
+          {rlTasks.length > 0 && (
+            <div className="space-y-3">
+              {rlTasks.map((task, i) => (
+                <div key={i} className="border rounded-lg p-3 bg-card space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center font-bold flex-shrink-0 text-xs">{i + 1}</span>
+                    <Input
+                      placeholder="Task title *"
+                      value={task.title || ""}
+                      onChange={e => rlUpdateTask(i, "title", e.target.value)}
+                      className="h-8 text-sm flex-1 font-medium"
+                    />
+                    <div className="flex items-center gap-0.5 flex-shrink-0">
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={i === 0} onClick={() => rlMoveTask(i, -1)} title="Move up">
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" disabled={i === rlTasks.length - 1} onClick={() => rlMoveTask(i, 1)} title="Move down">
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => rlRemoveTask(i)} title="Remove task">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs text-muted-foreground block mb-1">Auto-Assign Role</label>
+                      <Select value={task.auto_assign_role || "none"} onValueChange={v => rlUpdateTask(i, "auto_assign_role", v)}>
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(ROLE_LABELS).map(([k, v]) => (
+                            <SelectItem key={k} value={k}>{v}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted-foreground block mb-1">Estimated Minutes</label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={task.estimated_minutes || 0}
+                        onChange={e => rlUpdateTask(i, "estimated_minutes", parseInt(e.target.value, 10) || 0)}
+                        className="h-8 text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1">Description</label>
+                    <Textarea
+                      placeholder="Optional task description..."
+                      value={task.description || ""}
+                      onChange={e => rlUpdateTask(i, "description", e.target.value)}
+                      rows={2}
+                      className="text-sm"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {rlDirty && (
+            <p className="text-xs text-amber-600 font-medium">You have unsaved changes.</p>
+          )}
+        </div>
+      )}
+
+      {/* Existing template list (Revision / Change Request tabs) */}
+      {activeKind !== "request_level" && (<>
       {/* Toolbar */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1 max-w-sm">
@@ -225,6 +402,7 @@ export default function RevisionTemplatesManagement() {
           </div>
         );
       })}
+      </>)}
 
       <RevisionTemplateFormDialog
         open={showDialog}

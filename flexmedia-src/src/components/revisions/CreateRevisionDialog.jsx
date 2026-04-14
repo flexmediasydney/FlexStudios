@@ -48,6 +48,8 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
   const { data: users = [] } = useEntityList("User", null, 500);
   const { data: teams = [] } = useEntityList("InternalTeam", null, 200, { is_active: true });
   const { data: allProducts = [] } = useEntityList("Product", "name", 500);
+  const { data: requestLevelTemplates = [] } = useEntityList("RequestLevelTaskTemplate");
+  const requestLevelTasks = requestLevelTemplates[0]?.task_templates || [];
 
   const filteredTemplates = templates.filter(t => t.revision_type === revisionType && (t.request_kind === requestKind || !t.request_kind));
   const selectedTemplate = filteredTemplates.find(t => t.id === selectedTemplateId);
@@ -188,6 +190,67 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
         }
       }
 
+      // Auto-create request-level tasks (apply to every request)
+      if (requestLevelTasks.length > 0) {
+        for (let i = 0; i < requestLevelTasks.length; i++) {
+          const rlTmpl = requestLevelTasks[i];
+
+          const assignData = {};
+          if (rlTmpl.auto_assign_role && rlTmpl.auto_assign_role !== "none") {
+            const roleFieldMap = {
+              project_owner: { id: "project_owner_id", name: "project_owner_name" },
+              photographer: { id: "onsite_staff_1_id", name: "onsite_staff_1_name" },
+              videographer: { id: "onsite_staff_2_id", name: "onsite_staff_2_name" },
+              image_editor: { id: "image_editor_id", name: "image_editor_name" },
+              video_editor: { id: "video_editor_id", name: "video_editor_name" },
+              floorplan_editor: { id: "floorplan_editor_id", name: "floorplan_editor_name" },
+              drone_editor: { id: "drone_editor_id", name: "drone_editor_name" },
+            };
+            const fields = roleFieldMap[rlTmpl.auto_assign_role];
+            if (fields && project[fields.id]) {
+              assignData.assigned_to = project[fields.id];
+              assignData.assigned_to_name = project[fields.name] || "";
+              assignData.assigned_to_type = "user";
+            }
+          }
+
+          // Calculate task due date, respecting request constraint
+          let rlTaskDueDate = null;
+          if (rlTmpl.deadline_type === 'preset' && rlTmpl.deadline_preset) {
+            const constrainedResult = calculateConstrainedTaskDeadline(rlTmpl, now, data.due_date, APP_TIMEZONE);
+            rlTaskDueDate = constrainedResult.constrained;
+          } else if (rlTmpl.deadline_type === 'custom' && rlTmpl.deadline_hours_after_trigger) {
+            const calculated = new Date(now.getTime() + rlTmpl.deadline_hours_after_trigger * 3600000);
+            if (data.due_date && calculated.getTime() > new Date(data.due_date).getTime()) {
+              rlTaskDueDate = data.due_date;
+            } else {
+              rlTaskDueDate = calculated.toISOString();
+            }
+          }
+
+          const rlTask = await api.entities.ProjectTask.create({
+            project_id: project.id,
+            title: `[Revision #${revNum}] ${rlTmpl.title}`,
+            description: rlTmpl.description || "",
+            task_type: rlTmpl.task_type || "back_office",
+            auto_assign_role: rlTmpl.auto_assign_role || "none",
+            estimated_minutes: rlTmpl.estimated_minutes || 0,
+            timer_trigger: rlTmpl.timer_trigger || "none",
+            deadline_type: rlTmpl.deadline_type || "custom",
+            deadline_preset: rlTmpl.deadline_preset || "",
+            deadline_hours_after_trigger: rlTmpl.deadline_hours_after_trigger || 0,
+            due_date: rlTaskDueDate,
+            depends_on_task_ids: [],
+            is_completed: false,
+            is_blocked: false,
+            auto_generated: true,
+            order: 1000 + taskIndex++,
+            ...assignData,
+          });
+          createdTaskIds.push(rlTask.id);
+        }
+      }
+
       // Create manual tasks
       for (const mt of data.manualTasks) {
         if (!mt.title?.trim()) continue;
@@ -316,10 +379,11 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
       toast.error('Selected template no longer exists. Please choose another.');
       return;
     }
-    // Enforce minimum tasks: at least 1 from template or manually added
+    // Enforce minimum tasks: at least 1 from template, request-level, or manually added
     const hasTemplateTasks = (selectedTemplate?.task_templates?.length ?? 0) > 0;
+    const hasRequestLevelTasks = requestLevelTasks.length > 0;
     const hasManualTasks = manualTasks.some(t => t.title?.trim());
-    if (!hasTemplateTasks && !hasManualTasks) {
+    if (!hasTemplateTasks && !hasRequestLevelTasks && !hasManualTasks) {
       toast.error("Add at least 1 task to the request");
       return;
     }
