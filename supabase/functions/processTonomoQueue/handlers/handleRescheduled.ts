@@ -79,7 +79,7 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
   }
 
   // Capture Tonomo quoted price on reschedule events (same pattern as handleScheduled)
-  const tonomoPrice = p.totalPrice || p.order?.totalPrice || p.order?.invoice_amount || p.invoice_amount || null;
+  const tonomoPrice = p.invoice_amount || p.order?.invoice_amount || p.totalPrice || p.order?.totalPrice || null;
   if (tonomoPrice != null) {
     updates.tonomo_quoted_price = Number(tonomoPrice);
   }

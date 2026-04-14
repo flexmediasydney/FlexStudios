@@ -182,7 +182,7 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
   if (!overriddenFields.includes('tonomo_payment_status')) updates.tonomo_payment_status = p.paymentStatus || project.tonomo_payment_status;
 
   // Capture Tonomo quoted price on order update events (same pattern as handleScheduled)
-  const tonomoPrice = p.totalPrice || p.order?.totalPrice || p.order?.invoice_amount || p.invoice_amount || null;
+  const tonomoPrice = p.invoice_amount || p.order?.invoice_amount || p.totalPrice || p.order?.totalPrice || null;
   if (tonomoPrice != null) {
     updates.tonomo_quoted_price = Number(tonomoPrice);
   }

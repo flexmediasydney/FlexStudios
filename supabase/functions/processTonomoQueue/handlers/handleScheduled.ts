@@ -162,7 +162,8 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   };
 
   // Store Tonomo quoted price for mismatch detection after pricing calc
-  const tonomoPrice = p.totalPrice || p.order?.totalPrice || p.order?.invoice_amount || p.invoice_amount || null;
+  // Prefer invoice_amount (post-discount) over totalPrice (pre-discount)
+  const tonomoPrice = p.invoice_amount || p.order?.invoice_amount || p.totalPrice || p.order?.totalPrice || null;
   if (tonomoPrice != null) {
     const parsed = Number(tonomoPrice);
     if (!isNaN(parsed) && parsed > 0) sharedData.tonomo_quoted_price = parsed;

@@ -276,7 +276,7 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
   if (p.order?.orderStatus) updates.tonomo_order_status = p.order.orderStatus;
 
   // Capture Tonomo quoted price on change events (same pattern as handleScheduled)
-  const tonomoPrice = p.totalPrice || p.order?.totalPrice || p.order?.invoice_amount || p.invoice_amount || null;
+  const tonomoPrice = p.invoice_amount || p.order?.invoice_amount || p.totalPrice || p.order?.totalPrice || null;
   if (tonomoPrice != null) {
     updates.tonomo_quoted_price = Number(tonomoPrice);
   }
