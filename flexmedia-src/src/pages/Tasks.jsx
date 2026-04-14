@@ -599,9 +599,9 @@ export default function Tasks() {
     setSearchQuery("");
     setSearchInput("");
     setStatusFilter("all");
-    setSourceFilter("");
-    setAssigneeFilter("");
-    setRoleFilter("");
+    setSourceFilter("__all__");
+    setAssigneeFilter("__all__");
+    setRoleFilter("__all__");
     setQuickFilter("");
     // Clear persisted filters too
     try {
@@ -612,7 +612,7 @@ export default function Tasks() {
     } catch {}
   }, []);
 
-  const hasActiveFilters = searchQuery || statusFilter !== "all" || sourceFilter || assigneeFilter || roleFilter || quickFilter;
+  const hasActiveFilters = searchQuery || statusFilter !== "all" || (sourceFilter && sourceFilter !== "__all__") || (assigneeFilter && assigneeFilter !== "__all__") || (roleFilter && roleFilter !== "__all__") || quickFilter;
 
   // ──── Loading State ────
   if (tasksLoading) {
