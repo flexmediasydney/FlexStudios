@@ -200,16 +200,18 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
     }
   }
 
-  const startTime = p.when?.start_time ? p.when.start_time * 1000 : null;
-  if (startTime && !overriddenFields.includes('shoot_date')) {
-    updates.shoot_date = new Date(startTime).toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
-    updates.shoot_time = new Date(startTime).toLocaleTimeString('en-AU', {
-      timeZone: 'Australia/Sydney',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
-  }
+  // ──────────────────────────────────────────────────────────────────────
+  // IMPORTANT: This is an ORDER-LEVEL handler. It must NOT write
+  // shoot_date / shoot_time. Those fields are exclusively managed by
+  // APPOINTMENT-LEVEL handlers (handleScheduled, handleRescheduled,
+  // handleChanged) which receive the authoritative appointment timestamp.
+  //
+  // The `p.when.start_time` in a booking_created_or_changed payload is a
+  // stale copy of the original appointment time and does NOT reflect
+  // reschedules.  Writing it here would overwrite correct dates set by
+  // rescheduled/changed handlers that processed moments earlier.
+  // ──────────────────────────────────────────────────────────────────────
+
   if (p.deliverablesLinks?.length > 0) {
     updates.tonomo_delivered_files = JSON.stringify(p.deliverablesLinks);
     if (p.deliverable_link) updates.tonomo_deliverable_link = p.deliverable_link;
@@ -236,44 +238,10 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
     }
   }
 
-  // Sync calendar event time when shoot date changes — or CREATE one if missing
-  if (updates.shoot_date || updates.shoot_time) {
-    try {
-      const calEvents = await entities.CalendarEvent.filter({ project_id: project.id }, null, 50);
-      const tonomoEvent = calEvents.find((ev: any) => ev.event_source === 'tonomo' && !ev.is_done);
-      const dateStr = updates.shoot_date || project.shoot_date;
-      const timeStr = updates.shoot_time || project.shoot_time || '09:00';
-      // Extract date-only (Supabase returns "2026-04-13T00:00:00+00:00")
-      const dateOnly = String(dateStr).slice(0, 10);
-      const month = new Date(dateOnly + 'T00:00:00Z').getUTCMonth();
-      const sydneyOffset = (month >= 9 || month <= 2) ? '+11:00' : '+10:00';
-      const startDt = new Date(`${dateOnly}T${timeStr}:00${sydneyOffset}`);
-
-      if (tonomoEvent) {
-        // Update existing event
-        await entities.CalendarEvent.update(tonomoEvent.id, {
-          start_time: startDt.toISOString(),
-        }).catch(() => {});
-      } else if (dateOnly && dateOnly !== '1970-01-01') {
-        // No calendar event exists — create one (handles case where initial
-        // webhook had no appointment time but a later update adds it)
-        const endTime = p.when?.end_time
-          ? new Date(p.when.end_time * 1000).toISOString()
-          : new Date(startDt.getTime() + 90 * 60 * 1000).toISOString(); // default 90min
-        const address = p.address?.formatted_address || p.property_address?.formatted_address || project.property_address || '';
-        await entities.CalendarEvent.create({
-          title: project.title || address || `Order ${orderId}`,
-          description: `Tonomo appointment for order ${orderId}`,
-          start_time: startDt.toISOString(),
-          end_time: endTime,
-          location: address,
-          project_id: project.id,
-          event_source: 'tonomo',
-          recurrence: 'none',
-        }).catch((err: any) => console.warn('Failed to create calendar event:', err?.message));
-      }
-    } catch { /* non-fatal */ }
-  }
+  // Calendar events are exclusively managed by appointment-level handlers
+  // (handleScheduled, handleRescheduled, handleChanged). This order-level
+  // handler must NOT create or update CalendarEvents to avoid overwriting
+  // authoritative appointment timestamps with stale order-level data.
 
   await writeAudit(entities, {
     action: 'booking_created_or_changed', entity_type: 'Project', entity_id: project.id,

@@ -131,11 +131,23 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── Appointment-first processing order ────────────────────────────
+    // Appointment-level actions (scheduled, rescheduled) are the authority
+    // for shoot dates & calendar events.  They MUST process before
+    // order-level actions (booking_created_or_changed, changed) so that
+    // stale order-level timestamps never overwrite fresh appointment data.
+    const APPOINTMENT_ACTIONS = new Set(['scheduled', 'rescheduled']);
+    const actionPriority = (action: string) => APPOINTMENT_ACTIONS.has(action) ? 0 : 1;
+
     const toProcess: any[] = [];
     for (const [, items] of Object.entries(byOrder)) {
-      const sorted = items.sort((a: any, b: any) =>
-        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      );
+      // Sort: appointment-level first, then by created_at within each tier
+      const sorted = items.sort((a: any, b: any) => {
+        const priA = actionPriority(a.action);
+        const priB = actionPriority(b.action);
+        if (priA !== priB) return priA - priB;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
       const seen = new Map();
       const toSupersede: string[] = [];
       for (const item of sorted) {
