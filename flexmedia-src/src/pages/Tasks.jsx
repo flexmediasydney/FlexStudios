@@ -288,7 +288,9 @@ export default function Tasks() {
   const uniqueAssignees = useMemo(() => {
     const map = new Map();
     visibleTasks.forEach(t => {
-      if (t.assigned_to_name) map.set(t.assigned_to_name, t.assigned_to);
+      const name = t.assigned_to_name || t.assigned_to_team_name;
+      const id = t.assigned_to || t.assigned_to_team_id;
+      if (name && id) map.set(name, String(id));
     });
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [visibleTasks]);
@@ -1141,7 +1143,7 @@ const TaskKanbanCard = React.memo(function TaskKanbanCard({ task, onToggle, user
           })()}
 
           {t.due_date ? (
-            <CountdownTimer dueDate={t.due_date} compact thresholds={{ warn: 4, danger: 1 }} />
+            <CountdownTimer dueDate={t.due_date} compact thresholds={{ yellow_start: 12, yellow_end: 6, red_threshold: 4 }} />
           ) : t.is_blocked ? (
             <span className="text-xs text-amber-600">Awaiting dependencies</span>
           ) : null}
@@ -1227,7 +1229,7 @@ function TaskTable({ tasks, selectedIds, toggleSelect, toggleSelectAll, toggleCo
                     onUpdateDeadline={(id, data) => {
                       api.entities.ProjectTask.update(id, data).then(() => refetchEntityList("ProjectTask"));
                     }}
-                    thresholds={{ warn: 4, danger: 1 }}
+                    thresholds={{ yellow_start: 12, yellow_end: 6, red_threshold: 4 }}
                     projectId={t.project_id}
                     project={t._project}
                     user={user}
@@ -1361,7 +1363,7 @@ const TaskRow = React.memo(function TaskRow({ task, selected, toggleSelect, togg
       {/* Due date (Fix #12 — amber for blocked) */}
       <td className="px-2 py-2">
         {t.due_date ? (
-          <CountdownTimer dueDate={t.due_date} compact thresholds={{ warn: 4, danger: 1 }} />
+          <CountdownTimer dueDate={t.due_date} compact thresholds={{ yellow_start: 12, yellow_end: 6, red_threshold: 4 }} />
         ) : t.is_blocked ? (
           <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-200 dark:text-amber-400 dark:border-amber-800">Blocked</Badge>
         ) : (
