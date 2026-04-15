@@ -170,16 +170,16 @@ def analyze_agent_results(items):
     has_rating = sum(1 for i in items if i.get("rating") or i.get("reviews") or i.get("reviewCount"))
     has_profile_url = sum(1 for i in items if i.get("url") or i.get("profileUrl") or i.get("agentUrl"))
 
-    # Score: weighted by importance to our use case
+    # Score: weighted by importance to FlexStudios prospecting
     score = 0
-    score += (has_name / total) * 20        # Name is essential
-    score += (has_phone / total) * 20       # Phone = actionable
-    score += (has_email / total) * 15       # Email = actionable
-    score += (has_agency / total) * 15      # Agency = context
-    score += (has_listings / total) * 10    # Listings = activity signal
-    score += (has_sold / total) * 10        # Sold = performance
+    score += (has_name / total) * 15        # Name is essential
+    score += (has_phone / total) * 20       # Phone = direct outreach
+    score += (has_email / total) * 20       # Email = direct outreach (equally important)
+    score += (has_agency / total) * 15      # Agency = context for targeting
+    score += (has_listings / total) * 10    # Listings = activity signal (active = worth pursuing)
+    score += (has_sold / total) * 10        # Sold = performance signal
     score += (has_rating / total) * 5       # Rating = quality signal
-    score += (has_profile_url / total) * 5  # URL = reference
+    score += (has_profile_url / total) * 5  # URL = reference link
 
     # Sample first record keys for inspection
     sample_keys = list(items[0].keys())[:20] if items else []
