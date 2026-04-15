@@ -448,6 +448,7 @@ Deno.serve(async (req) => {
     // Batch insert agents — use raw admin client with explicit JSONB handling
     let agentsInserted = 0;
     let agentErrors = 0;
+    const _agentErrorMsgs: string[] = [];
     const BATCH = 50;
 
     // Debug: log first agent and try single insert
@@ -481,7 +482,7 @@ Deno.serve(async (req) => {
       const { error } = await admin.from('pulse_agents').insert(batch);
       if (error) {
         agentErrors++;
-        if (agentErrors <= 3) console.error(`Agent batch ${i/BATCH} error:`, error.message?.substring(0, 300));
+        _agentErrorMsgs.push(error.message?.substring(0, 300) || 'unknown');
       } else {
         agentsInserted += batch.length;
       }
@@ -553,6 +554,7 @@ Deno.serve(async (req) => {
         merged_count: mergedAgents.length,
         agent_errors: agentErrors,
         first_agent_name: mergedAgents[0]?.full_name || 'none',
+        agent_error_msgs: (_agentErrorMsgs || []).slice(0, 3),
       },
       agents_merged: agentsInserted,
       agencies_extracted: agenciesInserted,
