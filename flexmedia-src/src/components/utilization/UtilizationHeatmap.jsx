@@ -4,19 +4,19 @@ import { fmtHoursMins } from '@/components/utilization/utilizationUtils';
 
 // FIX: Heatmap colour bands now align with the status thresholds used in cards/page
 function getColor(percent, hasData) {
-  if (!hasData) return 'bg-gray-100 text-gray-500 border border-dashed border-gray-300';
-  if (percent > 120) return 'bg-orange-100 text-orange-900 border border-orange-200';
-  if (percent >= 80) return 'bg-green-100 text-green-900 border border-green-200';
-  if (percent >= 50) return 'bg-blue-100 text-blue-900 border border-blue-200';
-  return 'bg-slate-100 text-slate-700 border border-slate-200';
+  if (!hasData) return 'bg-gray-100 text-gray-500 border border-dashed border-gray-300 dark:bg-gray-800 dark:text-gray-500 dark:border-gray-600';
+  if (percent > 120) return 'bg-orange-100 text-orange-900 border border-orange-200 dark:bg-orange-950/30 dark:text-orange-400 dark:border-orange-800';
+  if (percent >= 80) return 'bg-green-100 text-green-900 border border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800';
+  if (percent >= 50) return 'bg-blue-100 text-blue-900 border border-blue-200 dark:bg-blue-950/30 dark:text-blue-400 dark:border-blue-800';
+  return 'bg-slate-100 text-slate-700 border border-slate-200 dark:bg-slate-900/40 dark:text-slate-300 dark:border-slate-700';
 }
 
 const LEGEND = [
-  { label: 'No data', color: 'bg-gray-100 border border-dashed border-gray-300' },
-  { label: '<50%', color: 'bg-slate-100 border border-slate-200' },
-  { label: '50–80%', color: 'bg-blue-100 border border-blue-200' },
-  { label: '80–120%', color: 'bg-green-100 border border-green-200' },
-  { label: '>120%', color: 'bg-orange-100 border border-orange-200' },
+  { label: 'No data', color: 'bg-gray-100 border border-dashed border-gray-300 dark:bg-gray-800 dark:border-gray-600' },
+  { label: '<50%', color: 'bg-slate-100 border border-slate-200 dark:bg-slate-900/40 dark:border-slate-700' },
+  { label: '50–80%', color: 'bg-blue-100 border border-blue-200 dark:bg-blue-950/30 dark:border-blue-800' },
+  { label: '80–120%', color: 'bg-green-100 border border-green-200 dark:bg-green-950/30 dark:border-green-800' },
+  { label: '>120%', color: 'bg-orange-100 border border-orange-200 dark:bg-orange-950/30 dark:border-orange-800' },
 ];
 
 export default function UtilizationHeatmap({ utilizations, onEmployeeClick }) {

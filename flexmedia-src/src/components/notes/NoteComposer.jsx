@@ -186,7 +186,7 @@ export default function NoteComposer({
       {attachments.length > 0 && (
         <div className="space-y-1">
           {attachments.map((att, idx) => (
-            <div key={idx} className="flex items-center justify-between p-2 bg-gray-50 rounded text-xs">
+            <div key={idx} className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs">
               <span className="truncate">{att.file_name}</span>
               <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}>
                 <X className="h-3 w-3" />

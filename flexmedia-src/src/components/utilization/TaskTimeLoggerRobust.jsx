@@ -667,7 +667,7 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
 
   if (isLoading) {
     return (
-      <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+      <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-800/30 border border-gray-200 dark:border-gray-700 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
         <Clock className="h-4 w-4 animate-spin" />
         Loading timer...
       </div>
@@ -677,21 +677,21 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
   return (
     <>
       {error && (
-        <div className="mb-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700 flex items-center gap-2">
+        <div className="mb-2 p-2 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded text-xs text-red-700 dark:text-red-400 flex items-center gap-2">
           <AlertTriangle className="h-3 w-3 flex-shrink-0" />
           {error}
         </div>
       )}
 
       {isUnassigned && (
-        <div className="mb-2 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800 flex items-center gap-2">
+        <div className="mb-2 p-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded text-xs text-amber-800 dark:text-amber-400 flex items-center gap-2">
           <AlertTriangle className="h-3 w-3 flex-shrink-0" />
           No assignee — assign a person or team to enable time logging.
         </div>
       )}
 
       <div className={`flex items-center gap-2 p-3 rounded-lg ${
-        conflictLog ? 'bg-orange-50 border border-orange-200' : isUnassigned ? 'bg-gray-50 border border-gray-200' : 'bg-blue-50 border border-blue-200'
+        conflictLog ? 'bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800' : isUnassigned ? 'bg-gray-50 dark:bg-gray-800/30 border border-gray-200 dark:border-gray-700' : 'bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800'
       }`}>
         {conflictLog && conflictLog.user_id !== currentUser.id && (
           <div className="flex items-center gap-2 text-xs text-orange-700 flex-1">

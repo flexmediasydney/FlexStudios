@@ -43,11 +43,11 @@ function LiveClock({ log }) {
 }
 
 const roleColors = {
-  photographer: { bg: "bg-blue-100", text: "text-blue-700", dot: "bg-blue-500" },
-  videographer: { bg: "bg-purple-100", text: "text-purple-700", dot: "bg-purple-500" },
-  image_editor: { bg: "bg-emerald-100", text: "text-emerald-700", dot: "bg-emerald-500" },
-  video_editor: { bg: "bg-rose-100", text: "text-rose-700", dot: "bg-rose-500" },
-  admin: { bg: "bg-amber-100", text: "text-amber-700", dot: "bg-amber-500" },
+  photographer: { bg: "bg-blue-100 dark:bg-blue-900/30", text: "text-blue-700 dark:text-blue-400", dot: "bg-blue-500" },
+  videographer: { bg: "bg-purple-100 dark:bg-purple-900/30", text: "text-purple-700 dark:text-purple-400", dot: "bg-purple-500" },
+  image_editor: { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-400", dot: "bg-emerald-500" },
+  video_editor: { bg: "bg-rose-100 dark:bg-rose-900/30", text: "text-rose-700 dark:text-rose-400", dot: "bg-rose-500" },
+  admin: { bg: "bg-amber-100 dark:bg-amber-900/30", text: "text-amber-700 dark:text-amber-400", dot: "bg-amber-500" },
 };
 
 const roleLabels = {
@@ -179,9 +179,9 @@ export default function ActiveTimersPanel({ projectId, tasks = [] }) {
 
       {/* Timer rows */}
       {!collapsed && (
-        <div className="divide-y divide-emerald-100 border-t border-emerald-200">
+        <div className="divide-y divide-emerald-100 dark:divide-emerald-900/30 border-t border-emerald-200 dark:border-emerald-800">
           {activeTimers.map((log) => {
-            const colors = roleColors[log.role] || { bg: "bg-gray-100", text: "text-gray-700", dot: "bg-gray-400" };
+            const colors = roleColors[log.role] || { bg: "bg-gray-100 dark:bg-gray-800", text: "text-gray-700 dark:text-gray-300", dot: "bg-gray-400" };
             const taskTitle = taskMap[log.task_id];
             const isRunning = log.status === "running";
             return (

@@ -15,13 +15,13 @@ function formatDuration(seconds) {
 function getStatusColor(status) {
   switch (status) {
     case 'running':
-      return { bg: 'bg-green-50', border: 'border-green-200', dot: 'bg-green-400', text: 'text-green-700' };
+      return { bg: 'bg-green-50 dark:bg-green-950/20', border: 'border-green-200 dark:border-green-800', dot: 'bg-green-400', text: 'text-green-700 dark:text-green-400' };
     case 'paused':
-      return { bg: 'bg-amber-50', border: 'border-amber-200', dot: 'bg-amber-400', text: 'text-amber-700' };
+      return { bg: 'bg-amber-50 dark:bg-amber-950/20', border: 'border-amber-200 dark:border-amber-800', dot: 'bg-amber-400', text: 'text-amber-700 dark:text-amber-400' };
     case 'completed':
-      return { bg: 'bg-blue-50', border: 'border-blue-200', dot: 'bg-blue-400', text: 'text-blue-700' };
+      return { bg: 'bg-blue-50 dark:bg-blue-950/20', border: 'border-blue-200 dark:border-blue-800', dot: 'bg-blue-400', text: 'text-blue-700 dark:text-blue-400' };
     default:
-      return { bg: 'bg-gray-50', border: 'border-gray-200', dot: 'bg-gray-400', text: 'text-gray-700' };
+      return { bg: 'bg-gray-50 dark:bg-gray-800/30', border: 'border-gray-200 dark:border-gray-700', dot: 'bg-gray-400', text: 'text-gray-700 dark:text-gray-300' };
   }
 }
 

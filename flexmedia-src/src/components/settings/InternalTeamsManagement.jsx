@@ -317,7 +317,7 @@ export default function InternalTeamsManagement() {
                     <TableCell>
                       <Badge 
                         variant="outline"
-                        className={team.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-700"}
+                        className={team.is_active ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800" : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300"}
                       >
                         {team.is_active ? "Active" : "Inactive"}
                       </Badge>

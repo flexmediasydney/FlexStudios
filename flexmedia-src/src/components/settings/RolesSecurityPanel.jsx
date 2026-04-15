@@ -16,11 +16,11 @@ import EntityAccessMatrix from "@/components/settings/EntityAccessMatrix";
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const ROLES = {
-  master_admin: { label: "Owner", text: "text-red-700", bg: "bg-red-50", border: "border-red-200", fill: "#dc2626", ring: "ring-red-200" },
-  admin: { label: "Administrator", text: "text-orange-700", bg: "bg-orange-50", border: "border-orange-200", fill: "#ea580c", ring: "ring-orange-200" },
-  manager: { label: "Manager", text: "text-purple-700", bg: "bg-purple-50", border: "border-purple-200", fill: "#7c3aed", ring: "ring-purple-200" },
-  employee: { label: "Staff", text: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200", fill: "#2563eb", ring: "ring-blue-200" },
-  contractor: { label: "Contractor", text: "text-gray-700", bg: "bg-gray-50", border: "border-gray-200", fill: "#6b7280", ring: "ring-gray-200" },
+  master_admin: { label: "Owner", text: "text-red-700 dark:text-red-400", bg: "bg-red-50 dark:bg-red-950/20", border: "border-red-200 dark:border-red-800", fill: "#dc2626", ring: "ring-red-200 dark:ring-red-800" },
+  admin: { label: "Administrator", text: "text-orange-700 dark:text-orange-400", bg: "bg-orange-50 dark:bg-orange-950/20", border: "border-orange-200 dark:border-orange-800", fill: "#ea580c", ring: "ring-orange-200 dark:ring-orange-800" },
+  manager: { label: "Manager", text: "text-purple-700 dark:text-purple-400", bg: "bg-purple-50 dark:bg-purple-950/20", border: "border-purple-200 dark:border-purple-800", fill: "#7c3aed", ring: "ring-purple-200 dark:ring-purple-800" },
+  employee: { label: "Staff", text: "text-blue-700 dark:text-blue-400", bg: "bg-blue-50 dark:bg-blue-950/20", border: "border-blue-200 dark:border-blue-800", fill: "#2563eb", ring: "ring-blue-200 dark:ring-blue-800" },
+  contractor: { label: "Contractor", text: "text-gray-700 dark:text-gray-300", bg: "bg-gray-50 dark:bg-gray-800/30", border: "border-gray-200 dark:border-gray-700", fill: "#6b7280", ring: "ring-gray-200 dark:ring-gray-700" },
 };
 
 const PAGE_SECTIONS = [

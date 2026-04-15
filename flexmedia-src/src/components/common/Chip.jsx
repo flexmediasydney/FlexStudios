@@ -4,9 +4,9 @@ import { cn } from "@/lib/utils";
 
 export default function Chip({ label, onRemove, icon: Icon, variant = "default", className }) {
   const variants = {
-    default: "bg-gray-100 text-gray-800 hover:bg-gray-200",
+    default: "bg-gray-100 text-gray-800 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700",
     primary: "bg-primary/10 text-primary hover:bg-primary/20",
-    success: "bg-green-100 text-green-800",
+    success: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
   };
 
   return (
@@ -14,7 +14,7 @@ export default function Chip({ label, onRemove, icon: Icon, variant = "default",
       {Icon && <Icon className="h-3.5 w-3.5" />}
       <span>{label}</span>
       {onRemove && (
-        <Button variant="ghost" size="sm" onClick={onRemove} className="h-5 w-5 p-0 ml-1 rounded-full hover:bg-black/10" title="Remove">
+        <Button variant="ghost" size="sm" onClick={onRemove} className="h-5 w-5 p-0 ml-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10" title="Remove">
           <X className="h-3 w-3" />
         </Button>
       )}

@@ -115,7 +115,7 @@ function TaskProgressBar({ tasks }) {
   const total = regularTasks.length;
   const pct = Math.round((completed / total) * 100);
 
-  const barColor = pct === 100 ? 'bg-green-500' : pct >= 50 ? 'bg-blue-500' : pct > 0 ? 'bg-amber-500' : 'bg-gray-300';
+  const barColor = pct === 100 ? 'bg-green-500' : pct >= 50 ? 'bg-blue-500' : pct > 0 ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-600';
 
   return (
     <div className="flex items-center gap-1.5 mt-1.5">
@@ -147,7 +147,7 @@ function ProjectEmailIndicator({ emails = [] }) {
         <button
           className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
             hasUnread
-              ? "bg-purple-100 text-purple-700 hover:bg-purple-200"
+              ? "bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/40 dark:text-purple-400 dark:hover:bg-purple-900/60"
               : "bg-muted text-muted-foreground hover:bg-muted/80"
           }`}
           onClick={(e) => e.stopPropagation()}
@@ -167,7 +167,7 @@ function ProjectEmailIndicator({ emails = [] }) {
           <Mail className="h-3.5 w-3.5 text-purple-600" />
           <span className="text-xs font-semibold">Recent Emails</span>
           {hasUnread && (
-            <span className="ml-auto text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">
+            <span className="ml-auto text-[10px] bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400 px-1.5 py-0.5 rounded-full font-medium">
               {unreadCount} unread
             </span>
           )}
@@ -176,7 +176,7 @@ function ProjectEmailIndicator({ emails = [] }) {
           {emails.map(email => (
             <div
               key={email.id}
-              className={`px-3 py-2 text-xs ${email.is_unread ? "bg-purple-50/40" : ""}`}
+              className={`px-3 py-2 text-xs ${email.is_unread ? "bg-purple-50/40 dark:bg-purple-950/20" : ""}`}
             >
               <div className="flex items-start justify-between gap-2">
                 <p className={`truncate flex-1 ${email.is_unread ? "font-semibold text-foreground" : "font-medium text-foreground/80"}`}>
@@ -346,8 +346,8 @@ function CollapsedColumnView({ columns, activeProjects, allTasks, showPricing })
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-sm truncate">{column.label}</h3>
               <span className={`text-lg font-bold tabular-nums ${
-                colProjects.length > 10 ? 'text-red-600' :
-                colProjects.length > 6  ? 'text-amber-600' : ''
+                colProjects.length > 10 ? 'text-red-600 dark:text-red-400' :
+                colProjects.length > 6  ? 'text-amber-600 dark:text-amber-400' : ''
               }`}>
                 {colProjects.length}
               </span>
@@ -760,9 +760,9 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                       {/* ── Column count badge (requirement #3) ── */}
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                         columnProjects.length > 10
-                          ? 'bg-red-100 text-red-700'
+                          ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'
                           : columnProjects.length > 6
-                          ? 'bg-amber-100 text-amber-700'
+                          ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
                           : 'bg-card/40 text-foreground'
                       }`}>
                         {columnProjects.length}
@@ -810,13 +810,13 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                     className="flex items-center justify-between text-xs py-1 border-b border-border/50 last:border-0 w-full hover:bg-muted/50 transition-colors rounded px-1"
                                   >
                                     <span className="truncate flex-1 mr-2 text-left" title={p.title}>{p.title}</span>
-                                    <span className="font-medium text-green-700">${(p.calculated_price || p.price || 0).toLocaleString()}</span>
+                                    <span className="font-medium text-green-700 dark:text-green-400">${(p.calculated_price || p.price || 0).toLocaleString()}</span>
                                   </button>
                                 ))}
                             </div>
                             <div className="pt-2 border-t flex items-center justify-between font-semibold text-xs">
                               <span>Total</span>
-                              <span className="text-green-700">${columnRevenue.toLocaleString()}</span>
+                              <span className="text-green-700 dark:text-green-400">${columnRevenue.toLocaleString()}</span>
                             </div>
                           </div>
                         </HoverCardContent>
@@ -833,7 +833,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                         </HoverCardTrigger>
                         <HoverCardContent className="w-80 p-3" side="bottom" align="start">
                           <div className="space-y-2">
-                            <h4 className="font-semibold text-xs flex items-center gap-1 text-green-700">
+                            <h4 className="font-semibold text-xs flex items-center gap-1 text-green-700 dark:text-green-400">
                               <CheckCircle2 className="h-3 w-3" />
                               Completed Tasks ({tasksDone})
                             </h4>
@@ -871,7 +871,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                         </HoverCardTrigger>
                         <HoverCardContent className="w-80 p-3" side="bottom" align="start">
                           <div className="space-y-2">
-                            <h4 className="font-semibold text-xs flex items-center gap-1 text-blue-700">
+                            <h4 className="font-semibold text-xs flex items-center gap-1 text-blue-700 dark:text-blue-400">
                               <Clock className="h-3 w-3" />
                               In Progress Tasks ({tasksInProgress})
                             </h4>
@@ -903,14 +903,14 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                       {tasksOverdue > 0 && (
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-[11px] bg-red-100/50 dark:bg-red-950/30 backdrop-blur-sm rounded px-1.5 py-0.5 cursor-help hover:bg-red-100 transition-colors">
+                          <div className="flex items-center gap-1 text-[11px] bg-red-100/50 dark:bg-red-950/30 backdrop-blur-sm rounded px-1.5 py-0.5 cursor-help hover:bg-red-100 dark:hover:bg-red-950/40 transition-colors">
                             <AlertCircle className="h-3 w-3 text-red-600 flex-shrink-0" />
                             <span className="font-bold tabular-nums">{tasksOverdue}</span>
                           </div>
                         </HoverCardTrigger>
                         <HoverCardContent className="w-80 p-3" side="bottom" align="start">
                           <div className="space-y-2">
-                            <h4 className="font-semibold text-xs flex items-center gap-1 text-red-700">
+                            <h4 className="font-semibold text-xs flex items-center gap-1 text-red-700 dark:text-red-400">
                               <AlertCircle className="h-3 w-3" />
                               Overdue Tasks ({tasksOverdue})
                             </h4>
@@ -1070,8 +1070,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                     {/* Pricing tier & overdue chips */}
                                     <div className="flex items-center gap-1 flex-wrap mt-1">
                                       {project.pricing_tier === 'premium' && (
-                                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100
-                                                         text-amber-700 border border-amber-200 font-medium">
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40
+                                                         text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800 font-medium">
                                           Premium
                                         </span>
                                       )}
@@ -1080,8 +1080,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                         return project.shoot_date.slice(0, 10) < new Date().toLocaleDateString('en-CA');
                                       })() &&
                                        !['delivered', 'in_revision', 'cancelled'].includes(project.status) && (
-                                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100
-                                                         text-red-700 border border-red-200 font-medium animate-pulse">
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40
+                                                         text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 font-medium animate-pulse">
                                           Overdue
                                         </span>
                                       )}
@@ -1108,11 +1108,11 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                             <React.Fragment key="scheduled-twilight-lane">
                               {dayProjects.map((p, i) => renderCard(p, i))}
                               <div key="twilight-divider" className="flex items-center gap-2 my-2">
-                                <div className="flex-1 h-px bg-purple-200" />
+                                <div className="flex-1 h-px bg-purple-200 dark:bg-purple-800" />
                                 <span className="text-[9px] text-purple-500 font-medium flex-shrink-0">
                                   Twilight
                                 </span>
-                                <div className="flex-1 h-px bg-purple-200" />
+                                <div className="flex-1 h-px bg-purple-200 dark:bg-purple-800" />
                               </div>
                               {twilightProjects.map((p, i) => renderCard(p, i + dayProjects.length))}
                             </React.Fragment>

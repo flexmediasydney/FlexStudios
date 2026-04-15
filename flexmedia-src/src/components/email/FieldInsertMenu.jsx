@@ -67,7 +67,7 @@ export default function FieldInsertMenu({ onInsert }) {
                       onClick={() => onInsert(field.value)}
                       className="text-xs cursor-pointer flex items-center gap-2"
                     >
-                      {Icon && <Icon className="h-3.5 w-3.5 text-gray-500" />}
+                      {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground" />}
                       {field.label}
                     </DropdownMenuItem>
                   );

@@ -24,11 +24,11 @@ import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 
 const roleConfig = {
-  master_admin: { label: "Owner", color: "bg-red-100 text-red-700 border-red-200", icon: Shield },
-  admin: { label: "Administrator", color: "bg-orange-100 text-orange-700 border-orange-200", icon: Shield },
-  manager: { label: "Manager", color: "bg-purple-100 text-purple-700 border-purple-200", icon: UserCheck },
-  employee: { label: "Staff", color: "bg-blue-100 text-blue-700 border-blue-200", icon: UserCheck },
-  contractor: { label: "Contractor", color: "bg-gray-100 text-gray-700 border-gray-200", icon: UserX },
+  master_admin: { label: "Owner", color: "bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800", icon: Shield },
+  admin: { label: "Administrator", color: "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800", icon: Shield },
+  manager: { label: "Manager", color: "bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800", icon: UserCheck },
+  employee: { label: "Staff", color: "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800", icon: UserCheck },
+  contractor: { label: "Contractor", color: "bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700", icon: UserX },
 };
 
 const providerLabel = { email: "Email/Password", google: "Google", phone: "Phone OTP" };

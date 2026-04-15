@@ -254,9 +254,9 @@ const TaskCard = React.memo(function TaskCard({ task, index, isExpanded, onToggl
               {/* Source + Status */}
               <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t">
                 <Badge className={cn("text-[9px] px-1.5 py-0 border-0", task._source.color)}>{String(task._source.label)}</Badge>
-                {task.is_blocked && <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-300 text-amber-600">Blocked</Badge>}
-                {task.is_locked && <Badge variant="outline" className="text-[9px] px-1 py-0 border-red-300 text-red-600">Locked</Badge>}
-                {task.is_completed && <Badge variant="outline" className="text-[9px] px-1 py-0 border-green-300 text-green-600">Completed</Badge>}
+                {task.is_blocked && <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-300 dark:border-amber-700 text-amber-600">Blocked</Badge>}
+                {task.is_locked && <Badge variant="outline" className="text-[9px] px-1 py-0 border-red-300 dark:border-red-700 text-red-600">Locked</Badge>}
+                {task.is_completed && <Badge variant="outline" className="text-[9px] px-1 py-0 border-green-300 dark:border-green-700 text-green-600">Completed</Badge>}
               </div>
 
               {/* Click to expand CTA */}

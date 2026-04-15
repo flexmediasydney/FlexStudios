@@ -11,7 +11,7 @@ export default function FieldPlaceholder({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-gray-100 text-foreground/80 text-sm border border-gray-200 hover:bg-gray-150 transition-colors group",
+        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-muted text-foreground/80 text-sm border border-border hover:bg-muted/80 transition-colors group",
         className
       )}
       contentEditable={false}
@@ -25,7 +25,7 @@ export default function FieldPlaceholder({
             e.preventDefault();
             onRemove();
           }}
-          className="opacity-0 group-hover:opacity-100 transition-opacity ml-1 p-0.5 hover:bg-gray-200 rounded"
+          className="opacity-0 group-hover:opacity-100 transition-opacity ml-1 p-0.5 hover:bg-muted rounded"
         >
           <X className="h-3 w-3" />
         </button>

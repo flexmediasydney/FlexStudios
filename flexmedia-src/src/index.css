@@ -133,6 +133,12 @@
   color: #374151;
 }
 
+.dark .ql-placeholder {
+  background-color: hsl(220 20% 18%);
+  border-color: hsl(220 15% 25%);
+  color: hsl(220 10% 80%);
+}
+
 /* Leaflet cluster styles */
 .custom-cluster-icon {
   background: transparent;

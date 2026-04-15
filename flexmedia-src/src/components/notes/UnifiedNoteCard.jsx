@@ -221,7 +221,7 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
               <span className="text-sm font-semibold text-foreground">{note.author_name || 'Unknown'}</span>
               {note.is_pinned && <Pin className="h-3 w-3 fill-amber-400 text-amber-500" />}
               {isLegacy && (
-                <span className="bg-gray-100 text-gray-500 text-[9px] font-semibold px-1.5 py-0.5 rounded">Legacy</span>
+                <span className="bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-[9px] font-semibold px-1.5 py-0.5 rounded">Legacy</span>
               )}
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground flex-wrap mt-0.5">

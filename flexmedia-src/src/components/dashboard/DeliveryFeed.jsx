@@ -178,7 +178,7 @@ function getFolderStyle(folderName) {
   for (const [key, style] of Object.entries(FOLDER_STYLE)) {
     if (lower.includes(key)) return style;
   }
-  return { icon: Folder, color: 'text-gray-600', bg: 'bg-gray-50' };
+  return { icon: Folder, color: 'text-gray-600 dark:text-gray-400', bg: 'bg-gray-50 dark:bg-gray-800/30' };
 }
 
 function classifyUrl(url) {
