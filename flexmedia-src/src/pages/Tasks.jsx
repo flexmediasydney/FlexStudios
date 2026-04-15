@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -135,8 +136,8 @@ const TaskCard = React.memo(function TaskCard({ task, index, isExpanded, onToggl
   return (
     <Draggable draggableId={task.id} index={index} isDragDisabled={isDragDisabled}>
       {(provided, snapshot) => (
-        <Popover>
-          <PopoverTrigger asChild>
+        <HoverCard openDelay={400} closeDelay={100}>
+          <HoverCardTrigger asChild>
             <div
               ref={provided.innerRef}
               {...provided.draggableProps}
@@ -195,12 +196,10 @@ const TaskCard = React.memo(function TaskCard({ task, index, isExpanded, onToggl
                 </div>
               )}
             </div>
-          </PopoverTrigger>
+          </HoverCardTrigger>
 
-          {/* Hover popover — full task details */}
-          <PopoverContent side="right" align="start" className="w-72 p-0 shadow-lg" sideOffset={8}
-            onOpenAutoFocus={e => e.preventDefault()}
-          >
+          {/* Hover card — full task details */}
+          <HoverCardContent side="right" align="start" className="w-72 p-0 shadow-lg" sideOffset={8}>
             <div className="p-3 space-y-2.5 text-xs">
               {/* Title */}
               <div>
@@ -261,12 +260,12 @@ const TaskCard = React.memo(function TaskCard({ task, index, isExpanded, onToggl
               </div>
 
               {/* Click to expand CTA */}
-              <button className="w-full text-center text-[10px] text-primary hover:underline pt-1 border-t" onClick={() => onToggleExpand(task.id)}>
-                Click card to expand full detail panel
-              </button>
+              <p className="w-full text-center text-[10px] text-muted-foreground/50 pt-1 border-t">
+                Click card to expand detail panel
+              </p>
             </div>
-          </PopoverContent>
-        </Popover>
+          </HoverCardContent>
+        </HoverCard>
       )}
     </Draggable>
   );
