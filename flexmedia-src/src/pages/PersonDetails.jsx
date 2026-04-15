@@ -10,7 +10,7 @@ import { fmtDate, fmtTimestampCustom, fixTimestamp } from '@/components/utils/da
 import {
   ArrowLeft, ChevronDown, ChevronRight, Mail, Phone, Building2, Calendar,
   DollarSign, MessageSquare, FileText, Activity, Info, AlertCircle, Plus, Trash2, User, Copy, Check,
-  Bell, AlertTriangle, Clock, Tag, X, Hash, Star, Users, Paperclip, Pencil, Shield
+  Bell, AlertTriangle, Clock, Tag, X, Hash, Star, Users, Paperclip, Pencil, Shield, Rss
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +28,7 @@ import ContactActivityLog from '@/components/contacts/ContactActivityLog';
 import ContactFiles from '@/components/contacts/ContactFiles';
 import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
+import PulseIntelligencePanel from '@/components/pulse/PulseIntelligencePanel';
 import NurturingSequences from '@/components/nurturing/NurturingSequences';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
@@ -541,6 +542,7 @@ const TABS = [
   { id: 'calendar', label: 'Activities', icon: Calendar },
   { id: 'touchpoints', label: 'Touchpoints', icon: Activity },
   { id: 'retention', label: 'Retention', icon: Shield },
+  { id: 'intelligence', label: 'Intelligence', icon: Rss },
 ];
 
 // ── History sub-filter tabs for Notes unified view ───────────────────────────
@@ -1321,6 +1323,9 @@ export default function PersonDetails() {
 
             {activeTab === 'retention' && (
               <RetentionSubtab entityType="agent" entityId={agentId} entityLabel={agent?.name} />
+            )}
+            {activeTab === 'intelligence' && (
+              <PulseIntelligencePanel entityType="agent" crmEntityId={agentId} crmEntity={agent} />
             )}
           </div>
         </div>
