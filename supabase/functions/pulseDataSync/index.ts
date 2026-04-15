@@ -604,30 +604,37 @@ Deno.serve(async (req) => {
       const reaId = agent.rea_agent_id;
       if (!reaId || mappedReaIds.has(`agent:${reaId}`)) continue;
 
-      // Try phone match (strongest signal)
+      // Try phone match first (strongest signal)
       const agentMobile = normalizeMobile(agent.mobile);
       let matchedCrm: any = null;
       let matchType = '';
+      let hasNameOverlap = false;
 
       if (agentMobile) {
         matchedCrm = crmAgentsList.find((c: any) => normalizeMobile(c.phone) === agentMobile);
-        if (matchedCrm) matchType = 'phone';
+        if (matchedCrm) {
+          matchType = 'phone';
+          // Check if name also overlaps — agencies recycle mobile numbers,
+          // so phone match alone is NOT definitive. Phone + name = confirmed.
+          // Phone without name = suggested (flagged for human review).
+          hasNameOverlap = fuzzyNameMatch(matchedCrm.name || '', agent.full_name || '');
+        }
       }
 
-      // Try exact name match
+      // Try exact name match (no phone match found)
       if (!matchedCrm) {
         matchedCrm = crmAgentsList.find((c: any) => (c.name || '').toLowerCase().trim() === (agent.full_name || '').toLowerCase().trim());
-        if (matchedCrm) matchType = 'name_exact';
+        if (matchedCrm) { matchType = 'name_exact'; hasNameOverlap = true; }
       }
 
       // Try fuzzy name match
       if (!matchedCrm) {
         matchedCrm = crmAgentsList.find((c: any) => fuzzyNameMatch(c.name || '', agent.full_name || ''));
-        if (matchedCrm) matchType = 'name_fuzzy';
+        if (matchedCrm) { matchType = 'name_fuzzy'; hasNameOverlap = true; }
       }
 
       if (matchedCrm) {
-        // Check if mapping already exists
+        // Check if mapping already exists for this REA ID
         const { data: existMap } = await admin.from('pulse_crm_mappings')
           .select('id')
           .eq('rea_id', reaId)
@@ -635,18 +642,23 @@ Deno.serve(async (req) => {
           .limit(1);
 
         if (!existMap || existMap.length === 0) {
+          // Confidence logic:
+          //   phone + name overlap  → "confirmed" (definitive: same phone AND same person)
+          //   phone only (no name)  → "suggested" (could be recycled number — flag for review)
+          //   name only             → "suggested" (names can collide)
+          const confidence = (matchType === 'phone' && hasNameOverlap) ? 'confirmed' : 'suggested';
+
           await admin.from('pulse_crm_mappings').insert({
             entity_type: 'agent',
             rea_id: reaId,
             domain_id: agent.domain_agent_id || null,
             crm_entity_id: matchedCrm.id,
-            match_type: matchType,
-            confidence: matchType === 'phone' ? 'confirmed' : 'suggested',
+            match_type: hasNameOverlap ? `${matchType}+name` : matchType,
+            confidence,
           }).then(() => { mappingsCreated++; }).catch(() => {});
 
-          // Update pulse_agents.is_in_crm
-          if (matchType === 'phone') {
-            // Phone match = high confidence, auto-confirm
+          // Only auto-set is_in_crm for confirmed (phone+name) matches
+          if (confidence === 'confirmed') {
             const { data: freshAgent } = await admin.from('pulse_agents')
               .select('id')
               .eq('rea_agent_id', reaId)
