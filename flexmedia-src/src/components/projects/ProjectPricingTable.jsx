@@ -195,21 +195,13 @@ export default function ProjectPricingTable({
 
   // Step 1 of save: verify with backend, show total in confirm dialog
   const handleRequestSave = async () => {
-    console.log('[PRICING-DEBUG] ========== handleRequestSave CALLED ==========');
-    console.log('[PRICING-DEBUG] formState:', JSON.stringify(formState, null, 2));
-    console.log('[PRICING-DEBUG] allProducts count:', allProducts?.length, 'allPackages count:', allPackages?.length);
-    console.log('[PRICING-DEBUG] allProducts IDs:', allProducts?.map(p => p.id));
-    console.log('[PRICING-DEBUG] allPackages IDs:', allPackages?.map(p => p.id));
     setError(null);
     setIsVerifying(true);
     try {
       // Validate all products still exist (catch deleted/inactive items)
-      console.log('[PRICING-DEBUG] Starting product validation...');
       for (const prod of formState.products) {
         const found = allProducts.find(p => p.id === prod.product_id);
-        console.log('[PRICING-DEBUG] Product', prod.product_id, 'found?', !!found);
         if (!found) {
-          console.error('[PRICING-DEBUG] PRODUCT NOT FOUND:', prod.product_id);
           setError(`Product not found (may have been permanently deleted). Remove it to continue.`);
           setIsVerifying(false);
           return;
@@ -217,12 +209,8 @@ export default function ProjectPricingTable({
       }
 
       // Validate all packages still exist
-      console.log('[PRICING-DEBUG] Starting package validation...');
       for (const pkg of formState.packages) {
-        const found = allPackages.find(p => p.id === pkg.package_id);
-        console.log('[PRICING-DEBUG] Package', pkg.package_id, 'found?', !!found);
-        if (!found) {
-          console.error('[PRICING-DEBUG] PACKAGE NOT FOUND:', pkg.package_id);
+        if (!allPackages.find(p => p.id === pkg.package_id)) {
           setError(`Package not found. It may have been deleted or deactivated.`);
           setIsVerifying(false);
           return;
@@ -230,9 +218,7 @@ export default function ProjectPricingTable({
       }
 
       // If no products or packages, set price to 0 and skip backend verification
-      console.log('[PRICING-DEBUG] Checking if empty: products=', formState.products.length, 'packages=', formState.packages.length);
       if (formState.products.length === 0 && formState.packages.length === 0) {
-        console.log('[PRICING-DEBUG] Empty project, setting $0');
         setPendingTotal(0);
         setPendingCalcResult({
           success: true,
@@ -246,7 +232,6 @@ export default function ProjectPricingTable({
       }
 
       // Pricing engine fetches fresh data from DB — no client cache refresh needed.
-      console.log('[PRICING-DEBUG] About to invoke calculateProjectPricing...');
       const invokeBody = {
         agent_id: project?.agent_id || null,
         agency_id: project?.agency_id || null,
@@ -258,33 +243,28 @@ export default function ProjectPricingTable({
         discount_value: parseFloat(formState.discount_value) || 0,
         discount_mode: formState.discount_mode || 'discount',
       };
-      console.log('[PRICING-DEBUG] Invoke body:', JSON.stringify(invokeBody, null, 2));
 
       let response;
       try {
         response = await api.functions.invoke('calculateProjectPricing', invokeBody);
-        console.log('[PRICING-DEBUG] Invoke SUCCESS, response:', JSON.stringify(response, null, 2));
       } catch (invokeErr) {
-        // Retry once — Supabase auth lock can get stuck after transient errors
-        console.warn("[PRICING-DEBUG] Pricing invoke FAILED, retrying:", invokeErr?.message, invokeErr);
+        // Retry once — transient network or auth errors can occur
+        console.warn("Pricing invoke failed, retrying:", invokeErr?.message);
         await new Promise(r => setTimeout(r, 1000));
         response = await api.functions.invoke('calculateProjectPricing', invokeBody);
-        console.log('[PRICING-DEBUG] Retry invoke SUCCESS, response:', JSON.stringify(response, null, 2));
       }
       if (response.data?.success) {
-        console.log('[PRICING-DEBUG] Backend verified price:', response.data.calculated_price);
         setPendingTotal(response.data.calculated_price);
         setPendingCalcResult(response.data);
         setShowConfirmSave(true);
       } else {
-        console.error("[PRICING-DEBUG] Pricing verification FAILED response:", response);
+        console.error("Pricing verification response:", response);
         setError("Pricing verification failed — server returned an error. Please try again.");
       }
     } catch (err) {
-      console.error("[PRICING-DEBUG] OUTER CATCH - Pricing verification error:", err?.message, err?.stack, err);
+      console.error("Pricing verification error:", err);
       setError("Failed to verify pricing. Please try again.");
     } finally {
-      console.log('[PRICING-DEBUG] ========== handleRequestSave DONE ==========');
       setIsVerifying(false);
     }
   };
