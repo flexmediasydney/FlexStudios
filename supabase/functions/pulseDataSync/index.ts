@@ -452,42 +452,45 @@ Deno.serve(async (req) => {
     const _agentErrorMsgs: string[] = [];
     const BATCH = 50;
 
-    // Debug: log first agent and try single insert
-    if (mergedAgents.length > 0) {
-      const first = mergedAgents[0];
-      console.log(`DEBUG first agent keys: ${Object.keys(first).join(', ')}`);
-      console.log(`DEBUG first agent name: ${first.full_name}, mobile: ${first.mobile}, agency: ${first.agency_name}`);
-      const testRecord = {
-        full_name: first.full_name || 'Unknown',
-        mobile: first.mobile || null,
-        agency_name: first.agency_name || null,
-        source: first.source || 'test',
-        data_sources: typeof first.data_sources === 'string' ? JSON.parse(first.data_sources) : (first.data_sources || []),
-        suburbs_active: typeof first.suburbs_active === 'string' ? JSON.parse(first.suburbs_active) : (first.suburbs_active || []),
-        recent_listing_ids: typeof first.recent_listing_ids === 'string' ? JSON.parse(first.recent_listing_ids) : (first.recent_listing_ids || []),
-        last_synced_at: now,
-        is_in_crm: first.is_in_crm || false,
-      };
-      const { data: testData, error: testErr } = await admin.from('pulse_agents').insert(testRecord).select('id, full_name');
-      console.log(`DEBUG single insert: data=${JSON.stringify(testData)}, error=${testErr ? testErr.message : 'none'}`);
+    // Deduplicate merged agents by REA ID (same agent appears in multiple suburb searches)
+    const deduped = new Map<string, any>();
+    for (const agent of mergedAgents) {
+      const key = agent.rea_agent_id || `name:${(agent.full_name || '').toLowerCase()}`;
+      if (!deduped.has(key)) {
+        deduped.set(key, agent);
+      } else {
+        // Merge suburbs_active from duplicate
+        const existing = deduped.get(key);
+        try {
+          const existingSuburbs = typeof existing.suburbs_active === 'string' ? JSON.parse(existing.suburbs_active) : (existing.suburbs_active || []);
+          const newSuburbs = typeof agent.suburbs_active === 'string' ? JSON.parse(agent.suburbs_active) : (agent.suburbs_active || []);
+          existing.suburbs_active = JSON.stringify([...new Set([...existingSuburbs, ...newSuburbs])]);
+        } catch { /* keep existing */ }
+      }
     }
-    for (let i = 0; i < mergedAgents.length; i += BATCH) {
-      const batch = mergedAgents.slice(i, i + BATCH).map(a => ({
+    const uniqueAgents = [...deduped.values()];
+    console.log(`Deduped: ${mergedAgents.length} → ${uniqueAgents.length} unique agents`);
+
+    // Upsert agents by rea_agent_id (update if exists, insert if new)
+    for (let i = 0; i < uniqueAgents.length; i += BATCH) {
+      const batch = uniqueAgents.slice(i, i + BATCH).map(a => ({
         ...a,
-        // Ensure JSONB fields are actual arrays/objects, not strings
         data_sources: typeof a.data_sources === 'string' ? JSON.parse(a.data_sources) : (a.data_sources || []),
         suburbs_active: typeof a.suburbs_active === 'string' ? JSON.parse(a.suburbs_active) : (a.suburbs_active || []),
         recent_listing_ids: typeof a.recent_listing_ids === 'string' ? JSON.parse(a.recent_listing_ids) : (a.recent_listing_ids || []),
         sales_breakdown: typeof a.sales_breakdown === 'string' ? JSON.parse(a.sales_breakdown) : (a.sales_breakdown || null),
       }));
-      const { error } = await admin.from('pulse_agents').insert(batch);
+      const { error } = await admin.from('pulse_agents').upsert(batch, {
+        onConflict: 'rea_agent_id',
+        ignoreDuplicates: false,  // update existing records
+      });
       if (error) {
         agentErrors++;
         _agentErrorMsgs.push(error.message?.substring(0, 300) || 'unknown');
       } else {
         agentsInserted += batch.length;
       }
-      if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${mergedAgents.length}...`);
+      if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${uniqueAgents.length}...`);
     }
 
     // Insert agencies
