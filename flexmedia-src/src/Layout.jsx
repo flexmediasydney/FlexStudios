@@ -31,6 +31,7 @@ import {
   MapPin,
   Crosshair,
   ListChecks,
+  Briefcase,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -304,6 +305,7 @@ function LayoutContent({ currentPageName, children }) {
           can("Prospecting") && { name: "Pipeline", href: "Prospecting", icon: Target },
           can("SalesMap") && { name: "Sales Map", href: "SalesMap", icon: MapPin },
           can("ClientMonitor") && { name: "Client Retention", href: "ClientMonitor", icon: UserCheck },
+          can("TalentPulse") && { name: "Talent Pulse", href: "TalentPulse", icon: Briefcase },
         ].filter(Boolean)
       },
       can("SettingsProductsPackages") && {

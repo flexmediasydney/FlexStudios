@@ -109,6 +109,7 @@ const AIAuditLog = React.lazy(() => import('./pages/AIAuditLog'));
 const TeamDetails = React.lazy(() => import('./pages/TeamDetails'));
 const TonomoIntegrationDashboard = React.lazy(() => import('./pages/TonomoIntegrationDashboard'));
 const TonomoPulse = React.lazy(() => import('./pages/TonomoPulse'));
+const TalentPulse = React.lazy(() => import('./pages/TalentPulse'));
 const Users = React.lazy(() => import('./pages/Users'));
 
 
@@ -168,6 +169,7 @@ export const PAGES = {
     "TeamDetails": TeamDetails,
     "Teams": Teams,
     "TonomoIntegrationDashboard": TonomoIntegrationDashboard,
+    "TalentPulse": TalentPulse,
     "TonomoPulse": TonomoPulse,
     "UserSettings": UserSettings,
     "Users": Users,

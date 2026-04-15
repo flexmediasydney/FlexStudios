@@ -40,6 +40,7 @@ export const ROUTE_ACCESS = {
   IndustryPulse: MANAGER_AND_ABOVE,
   SalesCommand: MANAGER_AND_ABOVE,
   SalesMap: MANAGER_AND_ABOVE,
+  TalentPulse: MANAGER_AND_ABOVE,
 
   // ── SOCIAL MEDIA (all levels) ─────────────────────────────
   SocialMedia: ALL_LEVELS,
