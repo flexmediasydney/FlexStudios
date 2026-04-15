@@ -239,6 +239,7 @@ Deno.serve(async (req) => {
         business_phone: rea.businessPhone ? String(rea.businessPhone) : (domainMatch?.phone || null),
         phone: rea.businessPhone ? String(rea.businessPhone) : (domainMatch?.phone || null),
         agency_name: rea.agency?.name || domainMatch?.agency || null,
+        agency_rea_id: rea.agency?.id || null,
         agency_suburb: rea._suburb,
         job_title: rea.job_title || domainMatch?.title || null,
         years_experience: rea.years_experience || null,
@@ -535,6 +536,131 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── Step 6: Movement Detection + Timeline Logging ──────────────────
+
+    let movementsDetected = 0;
+    let timelineEntries = 0;
+    let mappingsCreated = 0;
+
+    // Load existing pulse_agents to compare for movements
+    const { data: existingPulseAgents = [] } = await admin.from('pulse_agents')
+      .select('id, rea_agent_id, agency_name, agency_rea_id, full_name')
+      .not('rea_agent_id', 'is', null);
+
+    const existingByReaId = new Map(existingPulseAgents.map((a: any) => [a.rea_agent_id, a]));
+
+    for (const agent of mergedAgents) {
+      const reaId = agent.rea_agent_id;
+      if (!reaId) continue;
+
+      const existing = existingByReaId.get(reaId);
+
+      if (!existing) {
+        // New agent — first seen
+        await admin.from('pulse_timeline').insert({
+          entity_type: 'agent',
+          rea_id: reaId,
+          event_type: 'first_seen',
+          event_category: 'system',
+          title: `${agent.full_name} first detected`,
+          description: `Agent first seen in ${agent.agency_name || 'unknown agency'}, ${agent.agency_suburb || ''}`,
+          new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id, suburb: agent.agency_suburb },
+          source: 'rea_sync',
+        }).then(() => { timelineEntries++; }).catch(() => {});
+      } else if (existing.agency_rea_id && agent.agency_rea_id && existing.agency_rea_id !== agent.agency_rea_id) {
+        // Agency change detected!
+        movementsDetected++;
+        await admin.from('pulse_timeline').insert({
+          entity_type: 'agent',
+          pulse_entity_id: existing.id,
+          rea_id: reaId,
+          event_type: 'agency_change',
+          event_category: 'movement',
+          title: `${agent.full_name} moved from ${existing.agency_name} → ${agent.agency_name}`,
+          description: `Agency change detected during sync. Previous: ${existing.agency_name} (REA ${existing.agency_rea_id}). New: ${agent.agency_name} (REA ${agent.agency_rea_id}).`,
+          previous_value: { agency_name: existing.agency_name, agency_rea_id: existing.agency_rea_id },
+          new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id },
+          source: 'rea_sync',
+        }).then(() => { timelineEntries++; }).catch(() => {});
+
+        // Update the existing record with movement data
+        await admin.from('pulse_agents').update({
+          previous_agency_name: existing.agency_name,
+          agency_changed_at: now,
+        }).eq('id', existing.id).then(() => {}).catch(() => {});
+      }
+    }
+
+    // ── Step 7: Auto-Mapping via Platform IDs + Phone ───────────────────
+
+    const crmAgentsList = await entities.Agent.filter({}, null, 1000).catch(() => []);
+    const crmAgenciesList = await entities.Agency.filter({}, null, 500).catch(() => []);
+
+    // Load existing mappings to skip already-mapped
+    const { data: existingMappings = [] } = await admin.from('pulse_crm_mappings').select('rea_id, entity_type, confidence');
+    const mappedReaIds = new Set(existingMappings.filter((m: any) => m.confidence === 'confirmed').map((m: any) => `${m.entity_type}:${m.rea_id}`));
+
+    for (const agent of mergedAgents) {
+      const reaId = agent.rea_agent_id;
+      if (!reaId || mappedReaIds.has(`agent:${reaId}`)) continue;
+
+      // Try phone match (strongest signal)
+      const agentMobile = normalizeMobile(agent.mobile);
+      let matchedCrm: any = null;
+      let matchType = '';
+
+      if (agentMobile) {
+        matchedCrm = crmAgentsList.find((c: any) => normalizeMobile(c.phone) === agentMobile);
+        if (matchedCrm) matchType = 'phone';
+      }
+
+      // Try exact name match
+      if (!matchedCrm) {
+        matchedCrm = crmAgentsList.find((c: any) => (c.name || '').toLowerCase().trim() === (agent.full_name || '').toLowerCase().trim());
+        if (matchedCrm) matchType = 'name_exact';
+      }
+
+      // Try fuzzy name match
+      if (!matchedCrm) {
+        matchedCrm = crmAgentsList.find((c: any) => fuzzyNameMatch(c.name || '', agent.full_name || ''));
+        if (matchedCrm) matchType = 'name_fuzzy';
+      }
+
+      if (matchedCrm) {
+        // Check if mapping already exists
+        const { data: existMap } = await admin.from('pulse_crm_mappings')
+          .select('id')
+          .eq('rea_id', reaId)
+          .eq('entity_type', 'agent')
+          .limit(1);
+
+        if (!existMap || existMap.length === 0) {
+          await admin.from('pulse_crm_mappings').insert({
+            entity_type: 'agent',
+            rea_id: reaId,
+            domain_id: agent.domain_agent_id || null,
+            crm_entity_id: matchedCrm.id,
+            match_type: matchType,
+            confidence: matchType === 'phone' ? 'confirmed' : 'suggested',
+          }).then(() => { mappingsCreated++; }).catch(() => {});
+
+          // Update pulse_agents.is_in_crm
+          if (matchType === 'phone') {
+            // Phone match = high confidence, auto-confirm
+            const { data: freshAgent } = await admin.from('pulse_agents')
+              .select('id')
+              .eq('rea_agent_id', reaId)
+              .limit(1);
+            if (freshAgent?.[0]) {
+              await admin.from('pulse_agents').update({ is_in_crm: true, linked_agent_id: matchedCrm.id }).eq('id', freshAgent[0].id);
+            }
+          }
+        }
+      }
+    }
+
+    console.log(`Post-sync: ${movementsDetected} movements, ${timelineEntries} timeline entries, ${mappingsCreated} mappings`);
+
     // Update sync log
     if (syncLogId) {
       await entities.PulseSyncLog.update(syncLogId, {
@@ -559,6 +685,9 @@ Deno.serve(async (req) => {
       agents_merged: agentsInserted,
       agencies_extracted: agenciesInserted,
       listings_stored: listingsInserted,
+      movements_detected: movementsDetected,
+      timeline_entries: timelineEntries,
+      mappings_created: mappingsCreated,
       dual_source_agents: mergedAgents.filter(a => (a.data_sources || '').includes('domain')).length,
       in_crm_agents: mergedAgents.filter(a => a.is_in_crm).length,
       in_crm_agencies: mergedAgencies.filter(a => a.is_in_crm).length,
