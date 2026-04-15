@@ -26,7 +26,7 @@ import {
   Rss, Plus, Search, TrendingUp, Users, Building2, MapPin, Calendar, Star, Globe,
   ExternalLink, ChevronLeft, ChevronRight, UserPlus, ArrowRight, Activity, AlertTriangle,
   CheckCircle2, Eye, Sparkles, Briefcase, BarChart3, Phone, Mail, X, Filter,
-  Clock, Award, Zap, Target, Hash, Home, DollarSign, Link2
+  Clock, Award, Zap, Target, Hash, Home, DollarSign, Link2, Loader2
 } from "lucide-react";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -95,6 +95,7 @@ export default function IndustryPulse() {
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
   const { data: pulseMappings = [] } = useEntityList("PulseCrmMapping", "-created_at");
   const { data: pulseTimelineEntries = [] } = useEntityList("PulseTimeline", "-created_at", 500);
+  const { data: syncLogs = [] } = useEntityList("PulseSyncLog", "-started_at", 50);
   const { data: user } = useCurrentUser();
 
   const [tab, setTab] = useState("command");
@@ -423,6 +424,7 @@ export default function IndustryPulse() {
           <TabsTrigger value="agents">Agent Intelligence{stats.notInCrm > 0 && <Badge className="ml-1.5 text-[9px] bg-amber-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.notInCrm}</Badge>}</TabsTrigger>
           <TabsTrigger value="events">Events{stats.upcomingEvents > 0 && <Badge className="ml-1.5 text-[9px] bg-purple-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.upcomingEvents}</Badge>}</TabsTrigger>
           <TabsTrigger value="market">Market Data</TabsTrigger>
+          <TabsTrigger value="datasources">Data Sources</TabsTrigger>
           <TabsTrigger value="mappings">Mappings{pulseMappings.filter(m => m.confidence === "suggested").length > 0 && <Badge className="ml-1.5 text-[9px] bg-indigo-500 text-white border-0 px-1.5 py-0 rounded-full">{pulseMappings.filter(m => m.confidence === "suggested").length}</Badge>}</TabsTrigger>
           <TabsTrigger value="signals">Signals{stats.newSignals > 0 && <Badge className="ml-1.5 text-[9px] bg-red-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.newSignals}</Badge>}</TabsTrigger>
         </TabsList>
@@ -914,6 +916,146 @@ export default function IndustryPulse() {
           </div>
         </TabsContent>
 
+        {/* ═══ DATA SOURCES TAB ═══ */}
+        <TabsContent value="datasources" className="mt-3">
+          <div className="space-y-4">
+            {/* Data source cards */}
+            {(() => {
+              const sources = [
+                { id: "rea_agents", label: "REA Agent Intelligence", description: "websift/realestateau — Agent profiles, sales data, reviews, awards from realestate.com.au", icon: Users, color: "text-blue-600",
+                  suburbs: ["Strathfield","Burwood","Homebush","Croydon Park","Bankstown","Punchbowl","Lakemba","Canterbury","Campsie"],
+                  runParams: (subs) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: true, skipListings: true }) },
+                { id: "domain_agents", label: "Domain Agent Data", description: "shahidirfan/domain-com-au — Agent listings, sold data, ratings from domain.com.au", icon: Globe, color: "text-purple-600",
+                  suburbs: ["Strathfield","Burwood","Homebush"],
+                  runParams: (subs) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: false, skipListings: true }) },
+                { id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana/real-estate-au-scraper-pro — Active listings with agent/agency details from realestate.com.au", icon: Home, color: "text-green-600",
+                  suburbs: ["Strathfield","Burwood","Bankstown","Punchbowl","Canterbury"],
+                  runParams: (subs) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipDomain: true, skipListings: false }) },
+              ];
+
+              const [runningSources, setRunningSources] = useState(new Set());
+
+              const runSource = async (source) => {
+                setRunningSources(prev => new Set([...prev, source.id]));
+                try {
+                  toast.info(`Running ${source.label}...`);
+                  const result = await api.functions.invoke("pulseDataSync", source.runParams(source.suburbs));
+                  refetchEntityList("PulseAgent"); refetchEntityList("PulseListing"); refetchEntityList("PulseAgency");
+                  refetchEntityList("PulseSyncLog"); refetchEntityList("PulseTimeline"); refetchEntityList("PulseCrmMapping");
+                  const d = result.data || {};
+                  toast.success(`${source.label}: ${d.agents_merged || 0} agents, ${d.agencies_extracted || 0} agencies, ${d.listings_stored || 0} listings`);
+                } catch (err) {
+                  toast.error(`${source.label} failed: ${err?.message || "unknown"}`);
+                } finally {
+                  setRunningSources(prev => { const next = new Set(prev); next.delete(source.id); return next; });
+                }
+              };
+
+              // Find last sync per source type
+              const lastSyncByType = {};
+              for (const log of syncLogs) {
+                if (!lastSyncByType[log.sync_type]) lastSyncByType[log.sync_type] = log;
+              }
+
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold">Data Sources</h3>
+                    <Button size="sm" variant="outline" onClick={async () => {
+                      for (const s of sources) await runSource(s);
+                    }} disabled={runningSources.size > 0}>
+                      {runningSources.size > 0 ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Running...</> : <><Zap className="h-3.5 w-3.5 mr-1.5" />Run All Sources</>}
+                    </Button>
+                  </div>
+
+                  {sources.map(source => {
+                    const isRunning = runningSources.has(source.id);
+                    const Icon = source.icon;
+                    const lastSync = lastSyncByType.full_sweep; // All go through full_sweep currently
+                    return (
+                      <Card key={source.id}>
+                        <CardContent className="p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-3 min-w-0 flex-1">
+                              <div className={cn("p-2 rounded-lg bg-muted/60 shrink-0")}>
+                                <Icon className={cn("h-5 w-5", source.color)} />
+                              </div>
+                              <div className="min-w-0">
+                                <h4 className="text-sm font-semibold">{source.label}</h4>
+                                <p className="text-xs text-muted-foreground mt-0.5">{source.description}</p>
+                                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                  <span className="text-[10px] text-muted-foreground">Suburbs:</span>
+                                  {source.suburbs.map(s => <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0">{s}</Badge>)}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1.5 shrink-0">
+                              <Button size="sm" variant={isRunning ? "default" : "outline"} className="h-7" onClick={() => runSource(source)} disabled={isRunning}>
+                                {isRunning ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Running</> : <><Zap className="h-3 w-3 mr-1" />Run Now</>}
+                              </Button>
+                              {lastSync && (
+                                <span className="text-[9px] text-muted-foreground">
+                                  Last: {new Date(lastSync.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+
+                  {/* Sync History */}
+                  <Card>
+                    <CardContent className="p-4">
+                      <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Clock className="h-4 w-4 text-primary" />Sync History</h3>
+                      {syncLogs.length === 0 ? (
+                        <p className="text-xs text-muted-foreground/50 text-center py-6">No syncs recorded yet</p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead className="bg-muted/30">
+                              <tr>
+                                <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Type</th>
+                                <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Status</th>
+                                <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Records</th>
+                                <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Started</th>
+                                <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Duration</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {syncLogs.slice(0, 20).map(log => {
+                                const duration = log.completed_at && log.started_at
+                                  ? Math.round((new Date(log.completed_at) - new Date(log.started_at)) / 1000)
+                                  : null;
+                                return (
+                                  <tr key={log.id} className="border-t">
+                                    <td className="px-3 py-1.5">{log.sync_type}</td>
+                                    <td className="px-3 py-1.5">
+                                      <Badge variant="outline" className={cn("text-[9px]",
+                                        log.status === "completed" ? "text-green-600 border-green-200" :
+                                        log.status === "running" ? "text-blue-600 border-blue-200" :
+                                        "text-red-600 border-red-200"
+                                      )}>{log.status}</Badge>
+                                    </td>
+                                    <td className="px-3 py-1.5 tabular-nums">{log.records_new || 0} new / {log.records_fetched || 0} fetched</td>
+                                    <td className="px-3 py-1.5">{new Date(log.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                                    <td className="px-3 py-1.5 tabular-nums">{duration != null ? `${duration}s` : "—"}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              );
+            })()}
+          </div>
+        </TabsContent>
+
         {/* ═══ TAB 6: MAPPINGS ═══ */}
         <TabsContent value="mappings" className="mt-3">
           <div className="space-y-4">
@@ -984,15 +1126,15 @@ export default function IndustryPulse() {
                                 <>
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-green-600" onClick={async () => {
                                     await api.entities.PulseCrmMapping.update(m.id, { confidence: "confirmed", confirmed_at: new Date().toISOString(), confirmed_by_name: user?.full_name });
-                                    // Also update pulse_agents.is_in_crm
                                     if (pulseAgent) await api.entities.PulseAgent.update(pulseAgent.id, { is_in_crm: true, linked_agent_id: m.crm_entity_id });
-                                    refetchEntityList("PulseCrmMapping");
-                                    refetchEntityList("PulseAgent");
+                                    api.entities.PulseTimeline.create({ entity_type: "agent", rea_id: m.rea_id, crm_entity_id: m.crm_entity_id, event_type: "crm_mapped", event_category: "system", title: `${pulseAgent?.full_name || "Agent"} mapping confirmed`, description: `Manually confirmed by ${user?.full_name}. Match type: ${m.match_type}.`, source: "manual" }).catch(() => {});
+                                    refetchEntityList("PulseCrmMapping"); refetchEntityList("PulseAgent"); refetchEntityList("PulseTimeline");
                                     toast.success("Mapping confirmed");
                                   }}>✓ Confirm</Button>
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-red-600" onClick={async () => {
                                     await api.entities.PulseCrmMapping.update(m.id, { confidence: "rejected" });
-                                    refetchEntityList("PulseCrmMapping");
+                                    api.entities.PulseTimeline.create({ entity_type: "agent", rea_id: m.rea_id, event_type: "crm_mapped", event_category: "system", title: `${pulseAgent?.full_name || "Agent"} mapping rejected`, description: `Rejected by ${user?.full_name}. Was matched via ${m.match_type}.`, source: "manual" }).catch(() => {});
+                                    refetchEntityList("PulseCrmMapping"); refetchEntityList("PulseTimeline");
                                     toast.success("Mapping rejected");
                                   }}>✗ Reject</Button>
                                 </>
