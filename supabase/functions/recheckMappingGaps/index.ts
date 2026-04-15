@@ -13,19 +13,40 @@ Deno.serve(async (req) => {
   try {
     const admin = getAdminClient();
 
-    // 1. Load all confirmed service mappings (tonomo_id + both label variants)
-    const { data: mappings = [] } = await admin
+    // 1. Load all confirmed mappings — services, agents, photographers
+    const { data: allMappings = [] } = await admin
       .from('tonomo_mapping_tables')
-      .select('tonomo_id, tonomo_label, flexmedia_label, is_confirmed')
-      .eq('is_confirmed', true)
-      .eq('mapping_type', 'service');
+      .select('tonomo_id, tonomo_label, flexmedia_label, flexmedia_entity_id, is_confirmed, mapping_type')
+      .eq('is_confirmed', true);
 
-    const confirmedTonomoIds = new Set(mappings.map((m: any) => m.tonomo_id));
-    // Match by BOTH the Tonomo original name AND the FlexMedia label (case-insensitive)
+    // Service mappings: match by tonomo_id or label
+    const serviceMappings = allMappings.filter((m: any) => m.mapping_type === 'service');
+    const confirmedTonomoIds = new Set(serviceMappings.map((m: any) => m.tonomo_id));
     const confirmedNames = new Set<string>();
-    for (const m of mappings) {
+    for (const m of serviceMappings) {
       if (m.flexmedia_label) confirmedNames.add(m.flexmedia_label.toLowerCase());
       if (m.tonomo_label) confirmedNames.add(m.tonomo_label.toLowerCase());
+    }
+
+    // Agent/photographer mappings: match by email or name (gap format: "agent:email" or "photographer:email")
+    const staffMappings = allMappings.filter((m: any) => ['agent', 'photographer'].includes(m.mapping_type) && m.flexmedia_entity_id);
+    const confirmedStaffEmails = new Set<string>();
+    const confirmedStaffNames = new Set<string>();
+    for (const m of staffMappings) {
+      if (m.tonomo_label) confirmedStaffNames.add(m.tonomo_label.toLowerCase());
+      if (m.flexmedia_label) confirmedStaffNames.add(m.flexmedia_label.toLowerCase());
+    }
+    // Also check agents table directly — gaps use email, agents have email field
+    const { data: agents = [] } = await admin.from('agents').select('id, email, name');
+    for (const a of agents) {
+      if (a.email) confirmedStaffEmails.add(a.email.toLowerCase());
+      if (a.name) confirmedStaffNames.add(a.name.toLowerCase());
+    }
+    // And users table for photographers
+    const { data: users = [] } = await admin.from('users').select('id, email, full_name');
+    for (const u of users) {
+      if (u.email) confirmedStaffEmails.add(u.email.toLowerCase());
+      if (u.full_name) confirmedStaffNames.add(u.full_name.toLowerCase());
     }
 
     // 2. Find all projects with non-empty mapping gaps
@@ -56,11 +77,20 @@ Deno.serve(async (req) => {
 
       if (gaps.length === 0 && productGaps.length === 0) continue;
 
-      // Recheck each gap: is the service now mapped?
-      // mapping_gaps format: ["service:tonomoId", ...]
+      // Recheck each gap: is the service/agent/photographer now mapped?
+      // mapping_gaps format: ["service:tonomoId", "agent:email", "photographer:email", ...]
       const remainingGaps = gaps.filter((g: string) => {
-        const tonomoId = g.replace('service:', '');
-        return !confirmedTonomoIds.has(tonomoId);
+        if (g.startsWith('service:')) {
+          const tonomoId = g.replace('service:', '');
+          return !confirmedTonomoIds.has(tonomoId);
+        }
+        if (g.startsWith('agent:') || g.startsWith('photographer:')) {
+          const identifier = g.replace(/^(agent|photographer):/, '').toLowerCase();
+          // Check if this email/name is now in confirmed mappings, agents, or users
+          return !confirmedStaffEmails.has(identifier) && !confirmedStaffNames.has(identifier);
+        }
+        // Unknown gap type — keep it
+        return true;
       });
 
       // products_mapping_gaps format: ["Service Display Name", ...]
