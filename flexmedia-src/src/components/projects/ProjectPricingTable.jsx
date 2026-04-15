@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { DollarSign, Plus, Minus, AlertCircle, Loader2, ChevronLeft, ChevronRight, Percent, Tag } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import Price from '@/components/common/Price';
 import { Button } from "@/components/ui/button";
