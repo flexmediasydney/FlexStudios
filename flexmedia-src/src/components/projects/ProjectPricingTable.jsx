@@ -231,30 +231,46 @@ export default function ProjectPricingTable({
         return;
       }
 
-      // Refresh products/packages to ensure we calculate against latest matrix data
-      // Don't await — invalidation triggers background refetch but shouldn't block
-      // or throw if Supabase has transient 503 errors
-      queryClient.invalidateQueries({ queryKey: ['products'] }).catch(() => {});
-      queryClient.invalidateQueries({ queryKey: ['packages'] }).catch(() => {});
+      // Pricing engine fetches fresh data from DB — no client cache refresh needed.
+      // Previous invalidateQueries calls here were using wrong keys AND could trigger
+      // auth lock contention after transient 503 errors, blocking the save entirely.
 
-      const response = await api.functions.invoke('calculateProjectPricing', {
-        agent_id: project?.agent_id || null,
-        agency_id: project?.agency_id || null,
-        products: formState.products,
-        packages: formState.packages,
-        pricing_tier: pricingTier,
-        project_type_id: project?.project_type_id || null,
-        discount_type: formState.discount_type || 'fixed',
-        discount_value: formState.discount_value || 0,
-        discount_mode: formState.discount_mode || 'discount',
-      });
+      let response;
+      try {
+        response = await api.functions.invoke('calculateProjectPricing', {
+          agent_id: project?.agent_id || null,
+          agency_id: project?.agency_id || null,
+          products: formState.products,
+          packages: formState.packages,
+          pricing_tier: pricingTier,
+          project_type_id: project?.project_type_id || null,
+          discount_type: formState.discount_type || 'fixed',
+          discount_value: parseFloat(formState.discount_value) || 0,
+          discount_mode: formState.discount_mode || 'discount',
+        });
+      } catch (invokeErr) {
+        // Retry once — Supabase auth lock can get stuck after transient errors
+        console.warn("Pricing invoke failed, retrying:", invokeErr?.message);
+        await new Promise(r => setTimeout(r, 1000));
+        response = await api.functions.invoke('calculateProjectPricing', {
+          agent_id: project?.agent_id || null,
+          agency_id: project?.agency_id || null,
+          products: formState.products,
+          packages: formState.packages,
+          pricing_tier: pricingTier,
+          project_type_id: project?.project_type_id || null,
+          discount_type: formState.discount_type || 'fixed',
+          discount_value: parseFloat(formState.discount_value) || 0,
+          discount_mode: formState.discount_mode || 'discount',
+        });
+      }
       if (response.data?.success) {
-        // Store verified result to use on confirm
         setPendingTotal(response.data.calculated_price);
         setPendingCalcResult(response.data);
         setShowConfirmSave(true);
       } else {
-        setError("Pricing verification failed. Please try again.");
+        console.error("Pricing verification response:", response);
+        setError("Pricing verification failed — server returned an error. Please try again.");
       }
     } catch (err) {
       console.error("Pricing verification error:", err);
