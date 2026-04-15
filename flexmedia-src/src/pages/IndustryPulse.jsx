@@ -110,6 +110,7 @@ export default function IndustryPulse() {
   const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: "" });
   const [addToCrmCandidate, setAddToCrmCandidate] = useState(null); // for double-confirm dialog
   const [addToCrmStep, setAddToCrmStep] = useState(1); // 1=preview, 2=confirm
+  const [runningSources, setRunningSources] = useState(new Set());
   const [eventStatus, setEventStatus] = useState("all");
   const [marketTimeRange, setMarketTimeRange] = useState("30");
   const [signalLevel, setSignalLevel] = useState("all");
@@ -932,8 +933,6 @@ export default function IndustryPulse() {
                   suburbs: ["Strathfield","Burwood","Bankstown","Punchbowl","Canterbury"],
                   runParams: (subs) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipDomain: true, skipListings: false }) },
               ];
-
-              const [runningSources, setRunningSources] = useState(new Set());
 
               const runSource = async (source) => {
                 setRunningSources(prev => new Set([...prev, source.id]));
