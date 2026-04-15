@@ -86,11 +86,24 @@ Deno.serve(async (req) => {
         const tqp = Number(tonomoQuotedPrice);
         const mismatch = Math.round((tqp - newPrice) * 100) / 100;
         if (Math.abs(mismatch) > 1) {
-          await entities.Project.update(project_id, {
+          const mismatchUpdates: Record<string, any> = {
             has_pricing_mismatch: true,
             pricing_mismatch_amount: mismatch,
             pricing_mismatch_details: `Tonomo: $${tqp.toFixed(2)} vs Matrix: $${newPrice.toFixed(2)} (${mismatch > 0 ? '+' : ''}$${mismatch.toFixed(2)})`,
-          });
+          };
+          // HARD RULE: Price mismatch downgrades confidence and blocks auto-approve.
+          // If the project was auto-approved (not in pending_review), push it back.
+          const AUTO_APPROVED_STAGES = ['to_be_scheduled', 'scheduled'];
+          if (project.auto_approved && AUTO_APPROVED_STAGES.includes(project.status)) {
+            mismatchUpdates.status = 'pending_review';
+            mismatchUpdates.pre_revision_stage = project.status;
+            mismatchUpdates.pending_review_type = 'pricing_mismatch';
+            mismatchUpdates.pending_review_reason = `Price mismatch detected: Tonomo quoted $${tqp.toFixed(2)} but our price matrix calculates $${newPrice.toFixed(2)} (difference: $${Math.abs(mismatch).toFixed(2)}). Please review pricing before proceeding.`;
+            mismatchUpdates.mapping_confidence = 'partial';
+            mismatchUpdates.auto_approved = false;
+            console.log(`Price mismatch for ${project_id}: reverting auto-approve → pending_review`);
+          }
+          await entities.Project.update(project_id, mismatchUpdates);
           // Notify admins about the mismatch
           const projectName = project.title || project.property_address || 'Project';
           entities.User.list('-created_date', 200).then(async (users: any[]) => {
