@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import PulseSignalCard from "@/components/nurturing/PulseSignalCard";
 import PulseSignalQuickAdd from "@/components/nurturing/PulseSignalQuickAdd";
@@ -672,6 +673,7 @@ export default function IndustryPulse() {
                         <SortHeader col="agency_name" label="Agency" />
                         <SortHeader col="agency_suburb" label="Suburb" className="hidden md:table-cell" />
                         <SortHeader col="mobile" label="Mobile" className="hidden lg:table-cell" />
+                        <SortHeader col="total_listings_active" label="Listings" />
                         <SortHeader col="sales_as_lead" label="Sales" />
                         <SortHeader col="avg_sold_price" label="Avg Price" className="hidden lg:table-cell" />
                         <SortHeader col="reviews_avg" label="Rating" className="hidden md:table-cell" />
@@ -681,7 +683,7 @@ export default function IndustryPulse() {
                     </thead>
                     <tbody>
                       {filteredAgents.length === 0 ? (
-                        <tr><td colSpan={9} className="py-12 text-center text-muted-foreground/50">
+                        <tr><td colSpan={10} className="py-12 text-center text-muted-foreground/50">
                           <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
                           {pulseAgents.length === 0 ? "No agents tracked yet — run a data sync from the Data Sources tab" : "No agents match filters"}
                         </td></tr>
@@ -694,6 +696,40 @@ export default function IndustryPulse() {
                           <td className="px-3 py-2 text-xs text-muted-foreground">{a.agency_name || "—"}</td>
                           <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">{a.agency_suburb || "—"}</td>
                           <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{a.mobile || "—"}</td>
+                          {/* Active listings with hover popover */}
+                          <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+                            {(() => {
+                              const recentIds = (() => { try { return typeof a.recent_listing_ids === "string" ? JSON.parse(a.recent_listing_ids) : (a.recent_listing_ids || []); } catch { return []; } })();
+                              const count = a.total_listings_active || recentIds.length || 0;
+                              if (count === 0) return <span className="text-xs text-muted-foreground/30">0</span>;
+                              return (
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <button className="text-xs font-medium tabular-nums text-primary hover:underline cursor-pointer">{count}</button>
+                                  </PopoverTrigger>
+                                  <PopoverContent side="bottom" align="start" className="w-72 p-3">
+                                    <p className="text-xs font-semibold mb-2">{a.full_name} — {count} Active Listings</p>
+                                    {recentIds.length > 0 ? (
+                                      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                                        {recentIds.map((id, i) => (
+                                          <a key={i} href={`https://www.realestate.com.au/property--nsw--${id}`} target="_blank" rel="noopener noreferrer"
+                                            className="flex items-center justify-between text-xs p-1.5 rounded hover:bg-muted/50 transition-colors">
+                                            <span className="font-mono text-muted-foreground">#{id}</span>
+                                            <ExternalLink className="h-3 w-3 text-primary" />
+                                          </a>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="text-[10px] text-muted-foreground">Listing detail not available — click agent for full profile</p>
+                                    )}
+                                    {a.rea_profile_url && (
+                                      <a href={a.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline mt-2 block">View all on realestate.com.au →</a>
+                                    )}
+                                  </PopoverContent>
+                                </Popover>
+                              );
+                            })()}
+                          </td>
                           <td className="px-3 py-2 text-xs font-medium tabular-nums">{a.sales_as_lead || a.total_sold_12m || 0}</td>
                           <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{fmtPrice(a.avg_sold_price)}</td>
                           <td className="px-3 py-2 hidden md:table-cell">
