@@ -312,6 +312,27 @@ export default function TonomoIntegrationDashboard() {
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              try {
+                toast.info("Rechecking all mapping gaps...");
+                const res = await api.functions.invoke('recheckMappingGaps', {});
+                const d = res.data || {};
+                toast.success(`Recheck complete: ${d.gaps_cleared || 0} gaps resolved, ${d.still_gapped || 0} remaining`);
+                queryClient.invalidateQueries();
+                setLastRefresh(new Date());
+              } catch (err) {
+                toast.error("Recheck failed: " + (err?.message || "unknown error"));
+              }
+            }}
+            className="shadow-sm hover:shadow-md transition-all"
+            title="Re-resolve all pending mapping gaps (agents, photographers, services) against current mappings"
+          >
+            <Zap className="h-4 w-4 mr-2" />
+            Recheck Gaps
+          </Button>
           <p className="text-xs text-muted-foreground mt-1" title={lastRefresh.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' })}>
             Last: {relativeTime(lastRefresh)}
           </p>
