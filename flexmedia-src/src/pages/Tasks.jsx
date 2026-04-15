@@ -515,7 +515,7 @@ export default function Tasks() {
   const { activeTimers = [] } = useActiveTimers();
 
   // State — filters (multi-select)
-  const emptyFilters = { status: new Set(), people: new Set(), teams: new Set(), projects: new Set(), products: new Set(), packages: new Set(), roles: new Set(), sources: new Set(), orgs: new Set(), projectTypes: new Set(), productCategories: new Set() };
+  const emptyFilters = { status: new Set(), people: new Set(), teams: new Set(), projects: new Set(), products: new Set(), packages: new Set(), roles: new Set(), sources: new Set(), orgs: new Set(), projectTypes: new Set(), productCategories: new Set(), projectStages: new Set() };
   const [filters, setFilters] = useState(emptyFilters);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -665,6 +665,9 @@ export default function Tasks() {
       if (filters.projectTypes.size > 0) {
         if (!filters.projectTypes.has(t._project?.project_type_name)) return false;
       }
+      if (filters.projectStages.size > 0) {
+        if (!filters.projectStages.has(t._project?.status)) return false;
+      }
       // Quick filters
       if (quickFilter === "overdue" && !t._overdue) return false;
       if (quickFilter === "blocked" && !t.is_blocked) return false;
@@ -766,7 +769,23 @@ export default function Tasks() {
     });
     const productCategoryItems = Object.entries(catCounts).map(([cat, count]) => ({ id: cat, name: cat, count })).sort((a, b) => a.name.localeCompare(b.name));
 
-    return { statusItems, peopleItems, teamItems, projectItems, roleItems, sourceItems, productItems, packageItems, orgItems, projectTypeItems, productCategoryItems };
+    // Project stages
+    const STAGE_LABELS = {
+      pending_review: "Pending Review", to_be_scheduled: "To Be Scheduled", scheduled: "Scheduled",
+      onsite: "Onsite", uploaded: "Uploaded", submitted: "Submitted", in_progress: "In Progress",
+      in_production: "In Production", ready_for_partial: "Ready for Partial", in_revision: "In Revision", delivered: "Delivered",
+    };
+    const stageCounts = {};
+    visibleTasks.forEach(t => {
+      const stage = t._project?.status;
+      if (stage) stageCounts[stage] = (stageCounts[stage] || 0) + 1;
+    });
+    const projectStageItems = Object.entries(stageCounts).map(([id, count]) => ({ id, name: STAGE_LABELS[id] || id, count })).sort((a, b) => {
+      const order = Object.keys(STAGE_LABELS);
+      return order.indexOf(a.id) - order.indexOf(b.id);
+    });
+
+    return { statusItems, peopleItems, teamItems, projectItems, roleItems, sourceItems, productItems, packageItems, orgItems, projectTypeItems, productCategoryItems, projectStageItems };
   }, [visibleTasks, productMap, packageMap, orgByAgency, organisations]);
 
   // Active filter count
@@ -1240,6 +1259,9 @@ export default function Tasks() {
         )}
         {filterItems.productCategoryItems.length > 0 && (
           <FilterDropdown label="Category" icon={Tag} items={filterItems.productCategoryItems} selected={filters.productCategories} onToggle={(id) => toggleFilter("productCategories", id)} onClear={() => clearFilter("productCategories")} />
+        )}
+        {filterItems.projectStageItems.length > 0 && (
+          <FilterDropdown label="Stage" icon={Columns3} items={filterItems.projectStageItems} selected={filters.projectStages} onToggle={(id) => toggleFilter("projectStages", id)} onClear={() => clearFilter("projectStages")} />
         )}
         {filterItems.projectTypeItems.length > 0 && (
           <FilterDropdown label="Type" icon={FolderKanban} items={filterItems.projectTypeItems} selected={filters.projectTypes} onToggle={(id) => toggleFilter("projectTypes", id)} onClear={() => clearFilter("projectTypes")} />
