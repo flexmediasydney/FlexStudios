@@ -232,8 +232,10 @@ export default function ProjectPricingTable({
       }
 
       // Refresh products/packages to ensure we calculate against latest matrix data
-      await queryClient.invalidateQueries({ queryKey: ['products'] });
-      await queryClient.invalidateQueries({ queryKey: ['packages'] });
+      // Don't await — invalidation triggers background refetch but shouldn't block
+      // or throw if Supabase has transient 503 errors
+      queryClient.invalidateQueries({ queryKey: ['products'] }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: ['packages'] }).catch(() => {});
 
       const response = await api.functions.invoke('calculateProjectPricing', {
         agent_id: project?.agent_id || null,
