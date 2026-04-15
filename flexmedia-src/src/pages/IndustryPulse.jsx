@@ -101,6 +101,10 @@ export default function IndustryPulse() {
   const [showAddSignal, setShowAddSignal] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [agentFilter, setAgentFilter] = useState("all"); // all, not_in_crm, in_crm, reinsw
+  const [agentSort, setAgentSort] = useState({ col: "sales_as_lead", dir: "desc" });
+  const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: "" });
+  const [addToCrmCandidate, setAddToCrmCandidate] = useState(null); // for double-confirm dialog
+  const [addToCrmStep, setAddToCrmStep] = useState(1); // 1=preview, 2=confirm
   const [eventStatus, setEventStatus] = useState("all");
   const [marketTimeRange, setMarketTimeRange] = useState("30");
   const [signalLevel, setSignalLevel] = useState("all");
@@ -184,22 +188,34 @@ export default function IndustryPulse() {
     ];
   }, [stats.totalAgents, crmAgents, projects]);
 
-  // Filtered agents for Agent Intelligence tab
+  // Filtered + sorted agents for Agent Intelligence tab
   const filteredAgents = useMemo(() => {
-    return pulseAgents.filter(a => {
+    let result = pulseAgents.filter(a => {
       if (agentFilter === "not_in_crm" && a.is_in_crm) return false;
       if (agentFilter === "in_crm" && !a.is_in_crm) return false;
       if (agentFilter === "reinsw" && !a.reinsw_member) return false;
+      if (agentColFilters.agency && !(a.agency_name || "").toLowerCase().includes(agentColFilters.agency.toLowerCase())) return false;
+      if (agentColFilters.suburb && !(a.agency_suburb || "").toLowerCase().includes(agentColFilters.suburb.toLowerCase())) return false;
       if (search) {
         const q = search.toLowerCase();
         return (a.full_name || "").toLowerCase().includes(q) ||
                (a.agency_name || "").toLowerCase().includes(q) ||
                (a.email || "").toLowerCase().includes(q) ||
+               (a.mobile || "").includes(q) ||
                (a.agency_suburb || "").toLowerCase().includes(q);
       }
       return true;
     });
-  }, [pulseAgents, agentFilter, search]);
+    // Sort
+    const { col, dir } = agentSort;
+    result.sort((a, b) => {
+      let va = a[col], vb = b[col];
+      if (typeof va === "number" && typeof vb === "number") return dir === "desc" ? vb - va : va - vb;
+      va = String(va || ""); vb = String(vb || "");
+      return dir === "desc" ? vb.localeCompare(va) : va.localeCompare(vb);
+    });
+    return result;
+  }, [pulseAgents, agentFilter, agentColFilters, search, agentSort]);
 
   // Filtered events
   const filteredEvents = useMemo(() => {
@@ -267,20 +283,88 @@ export default function IndustryPulse() {
     refetchEntityList("PulseEvent");
   }, []);
 
-  const addToCrm = useCallback(async (pulseAgent) => {
+  // Smart dedup: check for existing agent/agency before adding
+  const getDeduplicationPreview = useCallback((pulseAgent) => {
+    const agentName = (pulseAgent.full_name || "").toLowerCase().trim();
+    const agencyName = (pulseAgent.agency_name || "").toLowerCase().trim();
+    const mobile = (pulseAgent.mobile || "").replace(/\D/g, "");
+
+    // Check for existing agents (fuzzy name + exact mobile)
+    const existingAgentByName = crmAgents.filter(a => {
+      const n = (a.name || "").toLowerCase().trim();
+      if (n === agentName) return true;
+      const pa = agentName.split(/\s+/), pb = n.split(/\s+/);
+      return pa.length >= 2 && pb.length >= 2 && pa[0] === pb[0] && pa[pa.length - 1] === pb[pb.length - 1];
+    });
+    const existingAgentByMobile = mobile ? crmAgents.filter(a => (a.phone || "").replace(/\D/g, "") === mobile) : [];
+
+    // Check for existing agency
+    const existingAgency = crmAgencies.find(a => {
+      const n = (a.name || "").toLowerCase().trim();
+      return n === agencyName || n.includes(agencyName) || agencyName.includes(n);
+    });
+
+    // Check pulse_agencies for richer data
+    const pulseAgencyData = pulseAgents.length > 0 ? null : null; // TODO: use pulse_agencies when loaded
+
+    return {
+      agent: pulseAgent,
+      existingAgentByName,
+      existingAgentByMobile,
+      existingAgency,
+      isDuplicate: existingAgentByName.length > 0 || existingAgentByMobile.length > 0,
+      agencyExists: !!existingAgency,
+    };
+  }, [crmAgents, crmAgencies, pulseAgents]);
+
+  const confirmAddToCrm = useCallback(async (pulseAgent, preview) => {
     try {
+      // 1. Create or find agency
+      let agencyId = null;
+      if (pulseAgent.agency_name) {
+        if (preview.existingAgency) {
+          agencyId = preview.existingAgency.id;
+        } else {
+          // Create new agency from pulse data
+          const newAgency = await api.entities.Agency.create({
+            name: pulseAgent.agency_name,
+            relationship_state: "Prospecting",
+            source: "industry_pulse",
+          });
+          agencyId = newAgency.id;
+        }
+      }
+
+      // 2. Create agent
       await api.entities.Agent.create({
         name: pulseAgent.full_name,
-        email: pulseAgent.email,
-        phone: pulseAgent.phone,
+        email: pulseAgent.email || null,
+        phone: pulseAgent.mobile || pulseAgent.business_phone || null,
         source: "industry_pulse",
         relationship_state: "Prospecting",
+        current_agency_id: agencyId,
+        notes: [
+          pulseAgent.job_title ? `Title: ${pulseAgent.job_title}` : null,
+          pulseAgent.years_experience ? `Experience: ${pulseAgent.years_experience} years` : null,
+          pulseAgent.sales_as_lead ? `Sales as lead: ${pulseAgent.sales_as_lead}` : null,
+          pulseAgent.awards ? `Awards: ${pulseAgent.awards.split("\n")[0]}` : null,
+          pulseAgent.rea_profile_url ? `REA: ${pulseAgent.rea_profile_url}` : null,
+          pulseAgent.domain_profile_url ? `Domain: ${pulseAgent.domain_profile_url}` : null,
+        ].filter(Boolean).join("\n"),
       });
+
+      // 3. Mark pulse agent as in CRM
       await api.entities.PulseAgent.update(pulseAgent.id, { is_in_crm: true, is_prospect: true });
+
       refetchEntityList("Agent");
+      refetchEntityList("Agency");
       refetchEntityList("PulseAgent");
-      toast.success(`${pulseAgent.full_name} added to CRM pipeline`);
-    } catch { toast.error("Failed to add to CRM"); }
+      toast.success(`${pulseAgent.full_name} added to CRM${agencyId && !preview.agencyExists ? ` + ${pulseAgent.agency_name} created` : ""}`);
+      setAddToCrmCandidate(null);
+      setAddToCrmStep(1);
+    } catch (err) {
+      toast.error("Failed to add to CRM: " + (err?.message || "unknown"));
+    }
   }, []);
 
   // ── Loading ─────────────────────────────────────────────────────────────
@@ -538,7 +622,7 @@ export default function IndustryPulse() {
             {stats.notInCrm > 0 && (
               <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-center gap-3">
                 <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
-                <p className="text-sm"><span className="font-semibold text-amber-700 dark:text-amber-400">{stats.notInCrm} agents</span> in your territory you don't work with</p>
+                <p className="text-sm"><span className="font-semibold text-amber-700 dark:text-amber-400">{stats.notInCrm} agents</span> in your territory you don't work with — {filteredAgents.length} showing</p>
               </div>
             )}
 
@@ -557,72 +641,92 @@ export default function IndustryPulse() {
                   {f.label} <span className="tabular-nums">{f.count}</span>
                 </button>
               ))}
+              {/* Column filters */}
+              <Input placeholder="Filter agency..." className="h-7 w-32 text-xs" value={agentColFilters.agency} onChange={e => setAgentColFilters(p => ({ ...p, agency: e.target.value }))} />
+              <Input placeholder="Filter suburb..." className="h-7 w-28 text-xs" value={agentColFilters.suburb} onChange={e => setAgentColFilters(p => ({ ...p, suburb: e.target.value }))} />
+              {(agentColFilters.agency || agentColFilters.suburb) && (
+                <button className="text-[10px] text-muted-foreground hover:text-foreground underline" onClick={() => setAgentColFilters({ agency: "", suburb: "" })}>Clear</button>
+              )}
               <Button size="sm" variant="outline" className="ml-auto" onClick={() => setShowAddAgent(true)}>
                 <UserPlus className="h-3.5 w-3.5 mr-1.5" />Add Agent
               </Button>
             </div>
 
-            {/* Agent table */}
-            <div className="overflow-x-auto border rounded-lg">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/30">
-                  <tr>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Agent</th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Agency</th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground hidden md:table-cell">Suburb</th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Listings</th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground hidden lg:table-cell">Sold (12m)</th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground hidden lg:table-cell">Avg Price</th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground hidden md:table-cell">Rating</th>
-                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Status</th>
-                    <th className="px-3 py-2 w-20"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredAgents.length === 0 ? (
-                    <tr><td colSpan={9} className="py-12 text-center text-muted-foreground/50">
-                      <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                      {pulseAgents.length === 0 ? "No agents tracked yet — add from Fair Trading or Apify" : "No agents match filters"}
-                    </td></tr>
-                  ) : filteredAgents.slice(0, 100).map(a => (
-                    <tr key={a.id} className="hover:bg-muted/30 border-t cursor-pointer" onClick={() => setSelectedAgent(a)}>
-                      <td className="px-3 py-2">
-                        <p className="font-medium text-sm">{a.full_name}</p>
-                        {a.email && <p className="text-[10px] text-muted-foreground">{a.email}</p>}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">{a.agency_name || "—"}</td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">{a.agency_suburb || "—"}</td>
-                      <td className="px-3 py-2 text-xs font-medium tabular-nums">{a.total_listings_active || 0}</td>
-                      <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{a.total_sold_12m || 0}</td>
-                      <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{fmtPrice(a.avg_sold_price)}</td>
-                      <td className="px-3 py-2 hidden md:table-cell">
-                        {a.reviews_avg > 0 ? (
-                          <div className="flex items-center gap-0.5">
-                            <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                            <span className="text-xs tabular-nums">{Number(a.reviews_avg).toFixed(1)}</span>
-                          </div>
-                        ) : <span className="text-xs text-muted-foreground/30">—</span>}
-                      </td>
-                      <td className="px-3 py-2">
-                        {a.is_in_crm ? (
-                          <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">In CRM</Badge>
-                        ) : (
-                          <Badge className="text-[9px] bg-amber-100 text-amber-700 border-0 dark:bg-amber-900/30 dark:text-amber-400">Prospect</Badge>
-                        )}
-                        {a.reinsw_member && <Badge variant="outline" className="text-[8px] px-1 py-0 ml-1">REINSW</Badge>}
-                      </td>
-                      <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                        {!a.is_in_crm && (
-                          <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => addToCrm(a)}>
-                            <Plus className="h-3 w-3" />
-                          </Button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {/* Sortable agent table */}
+            {(() => {
+              const SortHeader = ({ col, label, className: cls }) => (
+                <th className={cn("px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground cursor-pointer hover:text-foreground select-none", cls)}
+                    onClick={() => setAgentSort(prev => prev.col === col ? { col, dir: prev.dir === "asc" ? "desc" : "asc" } : { col, dir: "desc" })}>
+                  <span className="flex items-center gap-1">
+                    {label}
+                    {agentSort.col === col && <span className="text-primary">{agentSort.dir === "asc" ? "↑" : "↓"}</span>}
+                  </span>
+                </th>
+              );
+              return (
+                <div className="overflow-x-auto border rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/30">
+                      <tr>
+                        <SortHeader col="full_name" label="Agent" />
+                        <SortHeader col="agency_name" label="Agency" />
+                        <SortHeader col="agency_suburb" label="Suburb" className="hidden md:table-cell" />
+                        <SortHeader col="mobile" label="Mobile" className="hidden lg:table-cell" />
+                        <SortHeader col="sales_as_lead" label="Sales" />
+                        <SortHeader col="avg_sold_price" label="Avg Price" className="hidden lg:table-cell" />
+                        <SortHeader col="reviews_avg" label="Rating" className="hidden md:table-cell" />
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Status</th>
+                        <th className="px-3 py-2 w-24"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAgents.length === 0 ? (
+                        <tr><td colSpan={9} className="py-12 text-center text-muted-foreground/50">
+                          <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                          {pulseAgents.length === 0 ? "No agents tracked yet — run a data sync from the Data Sources tab" : "No agents match filters"}
+                        </td></tr>
+                      ) : filteredAgents.slice(0, 150).map(a => (
+                        <tr key={a.id} className="hover:bg-muted/30 border-t cursor-pointer" onClick={() => setSelectedAgent(a)}>
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-sm">{a.full_name}</p>
+                            {a.job_title && <p className="text-[10px] text-muted-foreground">{a.job_title}</p>}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">{a.agency_name || "—"}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">{a.agency_suburb || "—"}</td>
+                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{a.mobile || "—"}</td>
+                          <td className="px-3 py-2 text-xs font-medium tabular-nums">{a.sales_as_lead || a.total_sold_12m || 0}</td>
+                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{fmtPrice(a.avg_sold_price)}</td>
+                          <td className="px-3 py-2 hidden md:table-cell">
+                            {(a.reviews_avg || a.rea_rating) > 0 ? (
+                              <div className="flex items-center gap-0.5">
+                                <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                                <span className="text-xs tabular-nums">{Number(a.reviews_avg || a.rea_rating).toFixed(1)}</span>
+                                {a.reviews_count > 0 && <span className="text-[9px] text-muted-foreground">({a.reviews_count})</span>}
+                              </div>
+                            ) : <span className="text-xs text-muted-foreground/30">—</span>}
+                          </td>
+                          <td className="px-3 py-2">
+                            {a.is_in_crm ? (
+                              <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">In CRM</Badge>
+                            ) : (
+                              <Badge className="text-[9px] bg-amber-100 text-amber-700 border-0 dark:bg-amber-900/30 dark:text-amber-400">Prospect</Badge>
+                            )}
+                          </td>
+                          <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+                            {!a.is_in_crm && (
+                              <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => { setAddToCrmCandidate(a); setAddToCrmStep(1); }}>
+                                <Plus className="h-3 w-3 mr-0.5" />Add to CRM
+                              </Button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {filteredAgents.length > 150 && <div className="text-center text-xs text-muted-foreground py-2 border-t">Showing 150 of {filteredAgents.length} — use filters to narrow</div>}
+                </div>
+              );
+            })()}
           </div>
         </TabsContent>
 
@@ -904,13 +1008,114 @@ export default function IndustryPulse() {
               {selectedAgent.rea_profile_url && <a href={selectedAgent.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />REA</a>}
             </div>
             {!selectedAgent.is_in_crm && (
-              <Button className="w-full" onClick={() => { addToCrm(selectedAgent); setSelectedAgent(null); }}>
+              <Button className="w-full" onClick={() => { setAddToCrmCandidate(selectedAgent); setAddToCrmStep(1); setSelectedAgent(null); }}>
                 <UserPlus className="h-4 w-4 mr-2" />Add to CRM Pipeline
               </Button>
             )}
           </div>
         </div>
       )}
+
+      {/* ═══ ADD TO CRM — Double Confirmation Dialog ═══ */}
+      {addToCrmCandidate && (() => {
+        const preview = getDeduplicationPreview(addToCrmCandidate);
+        const agent = addToCrmCandidate;
+        return (
+          <Dialog open={true} onOpenChange={() => { setAddToCrmCandidate(null); setAddToCrmStep(1); }}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>{addToCrmStep === 1 ? "Add Agent to CRM — Review" : "Confirm — Are you sure?"}</DialogTitle>
+              </DialogHeader>
+
+              {addToCrmStep === 1 ? (
+                /* Step 1: Preview what will be created */
+                <div className="space-y-4">
+                  {/* Dedup warnings */}
+                  {preview.isDuplicate && (
+                    <div className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                      <p className="text-sm font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5"><AlertTriangle className="h-4 w-4" />Potential duplicate detected!</p>
+                      {preview.existingAgentByName.map(a => <p key={a.id} className="text-xs text-red-600 dark:text-red-400 mt-1">Name match: <strong>{a.name}</strong> already in CRM</p>)}
+                      {preview.existingAgentByMobile.map(a => <p key={a.id} className="text-xs text-red-600 dark:text-red-400 mt-1">Mobile match: <strong>{a.name}</strong> ({a.phone})</p>)}
+                    </div>
+                  )}
+
+                  {/* What will be created */}
+                  <div className="border rounded-lg p-3 space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase">New Agent Record</p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div><span className="text-muted-foreground">Name:</span> <strong>{agent.full_name}</strong></div>
+                      <div><span className="text-muted-foreground">Mobile:</span> <strong>{agent.mobile || "—"}</strong></div>
+                      <div><span className="text-muted-foreground">Phone:</span> {agent.business_phone || "—"}</div>
+                      <div><span className="text-muted-foreground">Email:</span> {agent.email || "Not available"}</div>
+                      <div><span className="text-muted-foreground">Source:</span> Industry Pulse</div>
+                      <div><span className="text-muted-foreground">Status:</span> Prospecting</div>
+                    </div>
+                    {(agent.job_title || agent.awards || agent.rea_profile_url) && (
+                      <div className="text-[10px] text-muted-foreground mt-2 border-t pt-2">
+                        <p className="font-medium mb-1">Notes that will be attached:</p>
+                        {agent.job_title && <p>• Title: {agent.job_title}</p>}
+                        {agent.years_experience && <p>• Experience: {agent.years_experience} years</p>}
+                        {agent.sales_as_lead && <p>• Sales as lead: {agent.sales_as_lead}</p>}
+                        {agent.awards && <p>• Awards: {agent.awards.split("\n")[0]}</p>}
+                        {agent.rea_profile_url && <p>• REA: {agent.rea_profile_url}</p>}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Agency handling */}
+                  <div className="border rounded-lg p-3 space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase">Agency / Organisation</p>
+                    {preview.agencyExists ? (
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                        <div className="text-xs">
+                          <p><strong>{preview.existingAgency.name}</strong> already exists in CRM</p>
+                          <p className="text-muted-foreground">Agent will be linked to this agency</p>
+                        </div>
+                      </div>
+                    ) : agent.agency_name ? (
+                      <div className="flex items-center gap-2">
+                        <Plus className="h-4 w-4 text-amber-500 shrink-0" />
+                        <div className="text-xs">
+                          <p><strong>{agent.agency_name}</strong> will be created as a new agency</p>
+                          <p className="text-muted-foreground">Agent will be linked to the new agency</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No agency — agent will be unlinked</p>
+                    )}
+                  </div>
+
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => { setAddToCrmCandidate(null); setAddToCrmStep(1); }}>Cancel</Button>
+                    <Button onClick={() => setAddToCrmStep(2)} disabled={preview.isDuplicate}>
+                      {preview.isDuplicate ? "Cannot add — duplicate exists" : "Next: Confirm"}
+                    </Button>
+                  </DialogFooter>
+                </div>
+              ) : (
+                /* Step 2: Final confirmation */
+                <div className="space-y-4">
+                  <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-center">
+                    <UserPlus className="h-8 w-8 text-blue-500 mx-auto mb-2" />
+                    <p className="text-sm font-semibold">Add <strong>{agent.full_name}</strong> to your CRM?</p>
+                    {agent.agency_name && !preview.agencyExists && (
+                      <p className="text-xs text-muted-foreground mt-1">This will also create <strong>{agent.agency_name}</strong> as a new agency</p>
+                    )}
+                    <p className="text-xs text-muted-foreground mt-2">The agent will be set to <strong>Prospecting</strong> status</p>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setAddToCrmStep(1)}>Back</Button>
+                    <Button onClick={() => confirmAddToCrm(agent, preview)}>
+                      Confirm — Add to CRM
+                    </Button>
+                  </DialogFooter>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
     </div>
   );
 }
