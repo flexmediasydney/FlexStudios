@@ -754,8 +754,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
               return (
                 <div key={column.id} className={fitToScreen ? "flex-1 min-w-0" : "flex-shrink-0 w-72"} style={{ scrollSnapAlign: 'start' }}>
                   {/* Column Header */}
-                  <div className={`${column.color} px-3 py-2.5 rounded-t-md shadow-sm`}>
-                    <div className="flex items-center justify-between mb-2">
+                  <div className={`${column.color} px-3 py-2 rounded-t-md shadow-sm`}>
+                    <div className="flex items-center justify-between mb-0.5">
                       <h3 className="font-semibold text-sm truncate" title={`${column.label} (${columnProjects.length} projects)`}>{column.label}</h3>
                       {/* ── Column count badge (requirement #3) ── */}
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
@@ -772,13 +772,13 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                         render creates a new value every cycle, which can cause
                         unnecessary re-renders and React reconciliation noise. */}
 
-                    {/* Column Metrics */}
-                    <div className="grid grid-cols-2 gap-1.5 mt-2">
+                    {/* Column Metrics — compact single row */}
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                       {/* Revenue */}
                       {showPricing && (
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
+                          <div className="flex items-center gap-1 text-[11px] bg-card/30 backdrop-blur-sm rounded px-1.5 py-0.5 cursor-help hover:bg-card/40 transition-colors">
                             <DollarSign className="h-3 w-3 flex-shrink-0" />
                             <span className="font-bold tabular-nums">
                               {columnRevenue >= 1000000
@@ -826,7 +826,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                       {/* Tasks Done */}
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
+                          <div className="flex items-center gap-1 text-[11px] bg-card/30 backdrop-blur-sm rounded px-1.5 py-0.5 cursor-help hover:bg-card/40 transition-colors">
                             <CheckCircle2 className="h-3 w-3 text-green-600 flex-shrink-0" />
                             <span className="font-bold tabular-nums">{tasksDone}</span>
                           </div>
@@ -864,7 +864,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                       {/* Tasks In Progress */}
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
+                          <div className="flex items-center gap-1 text-[11px] bg-card/30 backdrop-blur-sm rounded px-1.5 py-0.5 cursor-help hover:bg-card/40 transition-colors">
                             <Clock className="h-3 w-3 text-blue-600 flex-shrink-0" />
                             <span className="font-bold tabular-nums">{tasksInProgress}</span>
                           </div>
@@ -900,9 +900,10 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                       </HoverCard>
 
                       {/* Tasks Overdue */}
+                      {tasksOverdue > 0 && (
                       <HoverCard openDelay={200}>
                         <HoverCardTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs bg-card/30 backdrop-blur-sm rounded px-2 py-1 cursor-help hover:bg-card/40 transition-colors shadow-sm">
+                          <div className="flex items-center gap-1 text-[11px] bg-red-100/50 dark:bg-red-950/30 backdrop-blur-sm rounded px-1.5 py-0.5 cursor-help hover:bg-red-100 transition-colors">
                             <AlertCircle className="h-3 w-3 text-red-600 flex-shrink-0" />
                             <span className="font-bold tabular-nums">{tasksOverdue}</span>
                           </div>
@@ -945,6 +946,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                           </div>
                         </HoverCardContent>
                       </HoverCard>
+                      )}
                     </div>
                   </div>
 
