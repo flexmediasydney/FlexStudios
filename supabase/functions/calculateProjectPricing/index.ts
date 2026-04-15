@@ -65,6 +65,7 @@ Deno.serve(async (req) => {
       project_type_id = null,
       discount_type = 'fixed',
       discount_value = 0,
+      discount_mode = 'discount',
     } = body;
 
     // Input validation
@@ -310,16 +311,30 @@ Deno.serve(async (req) => {
       finalPrice = Math.max(0, totalPrice - appliedDiscount);
     }
 
-    // Manual per-project discount (Pipedrive-style)
+    // Manual per-project adjustment — discount (subtract) or fee (add)
     let manualDiscountApplied = 0;
+    let manualFeeApplied = 0;
     const discVal = Math.max(0, parseFloat(String(discount_value)) || 0);
+    const mode = discount_mode || 'discount';
+
     if (discVal > 0) {
-      if (discount_type === 'percent') {
-        manualDiscountApplied = Math.min(finalPrice, Math.round((finalPrice * discVal) / 100 * 100) / 100);
+      if (mode === 'fee') {
+        // FEE: add to price. No cap — fees can exceed subtotal.
+        if (discount_type === 'percent') {
+          manualFeeApplied = Math.round((finalPrice * discVal) / 100 * 100) / 100;
+        } else {
+          manualFeeApplied = discVal;
+        }
+        finalPrice = finalPrice + manualFeeApplied;
       } else {
-        manualDiscountApplied = Math.min(finalPrice, discVal);
+        // DISCOUNT: subtract from price. Capped to finalPrice (can't go negative).
+        if (discount_type === 'percent') {
+          manualDiscountApplied = Math.min(finalPrice, Math.round((finalPrice * discVal) / 100 * 100) / 100);
+        } else {
+          manualDiscountApplied = Math.min(finalPrice, discVal);
+        }
+        finalPrice = Math.max(0, finalPrice - manualDiscountApplied);
       }
-      finalPrice = Math.max(0, finalPrice - manualDiscountApplied);
     }
 
     return jsonResponse({
@@ -330,8 +345,10 @@ Deno.serve(async (req) => {
       subtotal: totalPrice,
       blanket_discount_applied: appliedDiscount,
       manual_discount_applied: manualDiscountApplied,
+      manual_fee_applied: manualFeeApplied,
       discount_type: discount_type || 'fixed',
       discount_value: discVal,
+      discount_mode: mode,
       price_matrix_snapshot: agentM || agencyM || rawAgentM || rawAgencyM,
     });
 

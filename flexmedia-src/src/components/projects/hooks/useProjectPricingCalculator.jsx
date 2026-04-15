@@ -205,17 +205,25 @@ export function useProjectPricingCalculator(formState, allProducts, allPackages,
        productItems.reduce((sum, p) => sum + p.lineTotal, 0)) * 100
     ) / 100;
 
-    // Manual per-project discount (Pipedrive-style)
+    // Manual per-project adjustment — discount (subtract) or fee (add)
+    const discMode = formState.discount_mode || 'discount';
     const discType = formState.discount_type || 'fixed';
     const discVal = discType === 'percent'
       ? Math.min(100, Math.max(0, parseFloat(formState.discount_value) || 0))
       : Math.max(0, parseFloat(formState.discount_value) || 0);
     let manualDiscount = 0;
+    let manualFee = 0;
     if (discVal > 0) {
-      if (discType === 'percent') {
-        manualDiscount = Math.min(subtotal, Math.round(subtotal * discVal / 100 * 100) / 100);
+      if (discMode === 'fee') {
+        // FEE: add to price. No cap.
+        manualFee = discType === 'percent'
+          ? Math.round(subtotal * discVal / 100 * 100) / 100
+          : discVal;
       } else {
-        manualDiscount = Math.min(subtotal, discVal);
+        // DISCOUNT: subtract from price. Capped to subtotal.
+        manualDiscount = discType === 'percent'
+          ? Math.min(subtotal, Math.round(subtotal * discVal / 100 * 100) / 100)
+          : Math.min(subtotal, discVal);
       }
     }
 
@@ -224,9 +232,11 @@ export function useProjectPricingCalculator(formState, allProducts, allPackages,
       products: productItems,
       subtotal: Math.max(0, subtotal),
       manualDiscount,
+      manualFee,
       discountType: discType,
       discountValue: discVal,
-      total: Math.max(0, subtotal - manualDiscount),
+      discountMode: discMode,
+      total: Math.max(0, subtotal - manualDiscount + manualFee),
     };
   }, [formState, productMap, packageMap, tierKey]);
 

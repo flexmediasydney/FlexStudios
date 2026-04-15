@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { DollarSign, Plus, AlertCircle, Loader2, ChevronLeft, ChevronRight, Percent, Tag } from "lucide-react";
+import { DollarSign, Plus, Minus, AlertCircle, Loader2, ChevronLeft, ChevronRight, Percent, Tag } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import Price from '@/components/common/Price';
 import { Button } from "@/components/ui/button";
@@ -71,6 +71,7 @@ export default function ProjectPricingTable({
       })),
       discount_type: project?.discount_type || 'fixed',
       discount_value: project?.discount_value || 0,
+      discount_mode: project?.discount_mode || 'discount',
     };
     setFormState(newFormState);
     setPendingTotal(null);
@@ -242,6 +243,7 @@ export default function ProjectPricingTable({
         project_type_id: project?.project_type_id || null,
         discount_type: formState.discount_type || 'fixed',
         discount_value: formState.discount_value || 0,
+        discount_mode: formState.discount_mode || 'discount',
       });
       if (response.data?.success) {
         // Store verified result to use on confirm
@@ -307,6 +309,7 @@ export default function ProjectPricingTable({
         pricing_tier: pricingTier,
         discount_type: formState.discount_type || 'fixed',
         discount_value: parseFloat(formState.discount_value) || 0,
+        discount_mode: formState.discount_mode || 'discount',
         manually_overridden_fields: JSON.stringify([...overrideSet]),
       });
       
@@ -426,8 +429,10 @@ export default function ProjectPricingTable({
     // Discount changes
     const origDiscType = project?.discount_type || 'fixed';
     const origDiscVal = parseFloat(project?.discount_value) || 0;
+    const origDiscMode = project?.discount_mode || 'discount';
     if ((formState.discount_type || 'fixed') !== origDiscType) return true;
     if ((parseFloat(formState.discount_value) || 0) !== origDiscVal) return true;
+    if ((formState.discount_mode || 'discount') !== origDiscMode) return true;
 
     if (formState.products.length !== origProducts.length) return true;
     if (formState.packages.length !== origPackages.length) return true;
@@ -617,14 +622,33 @@ export default function ProjectPricingTable({
                   </span>
                 </div>
 
-                {/* Manual discount row */}
+                {/* Manual discount / fee row */}
                 <div className="flex items-center justify-between px-4 py-2 gap-3">
                   <div className="flex items-center gap-2">
-                    <Tag className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Discount</span>
+                    {(formState.discount_mode || 'discount') === 'fee'
+                      ? <><Plus className="h-3.5 w-3.5 text-amber-600" /><span className="text-sm text-amber-700 font-medium">Additional Fee</span></>
+                      : <><Tag className="h-3.5 w-3.5 text-muted-foreground" /><span className="text-sm text-muted-foreground">Discount</span></>
+                    }
                   </div>
                   {canEdit ? (
                     <div className="flex items-center gap-1.5">
+                      {/* Discount ↔ Fee mode toggle */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newMode = (formState.discount_mode || 'discount') === 'fee' ? 'discount' : 'fee';
+                          setFormState(prev => ({ ...prev, discount_mode: newMode }));
+                        }}
+                        className={cn(
+                          "flex items-center gap-1 h-8 px-2 rounded border text-xs font-medium transition-colors shrink-0",
+                          (formState.discount_mode || 'discount') === 'fee'
+                            ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-400"
+                            : "border-border text-muted-foreground hover:bg-muted"
+                        )}
+                        title={`Switch to ${(formState.discount_mode || 'discount') === 'fee' ? 'discount (subtract)' : 'fee (add)'}`}
+                      >
+                        {(formState.discount_mode || 'discount') === 'fee' ? <><Plus className="h-3 w-3" />Fee</> : <><Minus className="h-3 w-3" />Disc</>}
+                      </button>
                       {/* $ / % toggle */}
                       <button
                         type="button"
@@ -653,19 +677,30 @@ export default function ProjectPricingTable({
                         placeholder="0"
                         className="h-8 w-24 text-right font-mono text-sm"
                       />
-                      {/* Show computed discount amount */}
+                      {/* Show computed amount */}
                       {breakdown.manualDiscount > 0 && (
                         <span className="text-sm font-mono tabular-nums text-red-600 whitespace-nowrap">
                           −<Price value={breakdown.manualDiscount} />
                         </span>
                       )}
+                      {breakdown.manualFee > 0 && (
+                        <span className="text-sm font-mono tabular-nums text-amber-600 whitespace-nowrap">
+                          +<Price value={breakdown.manualFee} />
+                        </span>
+                      )}
                     </div>
                   ) : (
-                    <span className="text-sm font-mono tabular-nums text-red-600">
+                    <span className={cn("text-sm font-mono tabular-nums", (formState.discount_mode || 'discount') === 'fee' ? "text-amber-600" : "text-red-600")}>
                       {breakdown.manualDiscount > 0 ? (
                         <>−<Price value={breakdown.manualDiscount} />
                           <span className="text-xs text-muted-foreground ml-1">
                             ({formState.discount_type === 'percent' ? `${formState.discount_value}%` : `$${formState.discount_value}`})
+                          </span>
+                        </>
+                      ) : breakdown.manualFee > 0 ? (
+                        <>+<Price value={breakdown.manualFee} />
+                          <span className="text-xs text-muted-foreground ml-1">
+                            ({formState.discount_type === 'percent' ? `${formState.discount_value}%` : `$${formState.discount_value}`} fee)
                           </span>
                         </>
                       ) : '—'}
