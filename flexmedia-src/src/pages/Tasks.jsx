@@ -124,83 +124,149 @@ function DueDateBadge({ dueDate, isCompleted }) {
   return <span className={cn("text-[10px] rounded px-1.5 py-0.5 font-medium whitespace-nowrap", color)}>{label}</span>;
 }
 
-// ── TaskCard (Draggable) ────────────────────────────────────────────────────
+// ── TaskCard (Draggable) — compact with hover popover ────────────────────────
 
 const TaskCard = React.memo(function TaskCard({ task, index, isExpanded, onToggleExpand, draggingId }) {
   const isDragDisabled = task.is_locked || task.is_blocked || (!!draggingId && draggingId !== task.id);
+  const estMin = task.estimated_minutes || 0;
+  const actSec = task._effortSeconds || 0;
+  const effortPct = estMin > 0 ? Math.min(100, Math.round((actSec / (estMin * 60)) * 100)) : 0;
 
   return (
     <Draggable draggableId={task.id} index={index} isDragDisabled={isDragDisabled}>
       {(provided, snapshot) => (
-        <div
-          ref={provided.innerRef}
-          {...provided.draggableProps}
-          {...provided.dragHandleProps}
-          className={cn(
-            "kanban-card-animated bg-card rounded-lg border shadow-sm p-2.5 space-y-1.5 cursor-pointer transition-all select-none",
-            snapshot.isDragging && "kanban-dragging",
-            task.is_locked && "opacity-50 cursor-not-allowed",
-            task._overdue && !task.is_completed && "border-l-[3px] border-l-red-500",
-            task.is_completed && "opacity-60",
-            isExpanded && "ring-2 ring-primary/30",
-          )}
-          style={{ ...provided.draggableProps.style, animationDelay: `${Math.min(index, 15) * 25}ms` }}
-          onClick={() => onToggleExpand(task.id)}
-        >
-          {/* Row 1: Title + timer dot */}
-          <div className="flex items-start gap-1.5">
-            <span className={cn("text-[13px] font-medium truncate flex-1 leading-tight", task.is_completed && "line-through text-muted-foreground")}>
-              {String(task.title || "Untitled")}
-            </span>
-            {task._hasTimer && (
-              <span className="relative flex h-2 w-2 shrink-0 mt-1">
-                <span className="animate-ping absolute h-full w-full rounded-full bg-green-400 opacity-75" />
-                <span className="relative rounded-full h-2 w-2 bg-green-500" />
-              </span>
-            )}
-          </div>
-
-          {/* Row 2: Project link */}
-          {task._project && (
-            <Link
-              to={createPageUrl("ProjectDetails") + `?id=${task.project_id}&tab=tasks`}
-              className="text-[11px] text-muted-foreground hover:text-primary hover:underline truncate block leading-tight"
-              onClick={e => e.stopPropagation()}
+        <Popover>
+          <PopoverTrigger asChild>
+            <div
+              ref={provided.innerRef}
+              {...provided.draggableProps}
+              {...provided.dragHandleProps}
+              className={cn(
+                "kanban-card-animated bg-card rounded-lg border shadow-sm px-2.5 py-2 cursor-pointer transition-all select-none group",
+                snapshot.isDragging && "kanban-dragging",
+                task.is_locked && "opacity-50 cursor-not-allowed",
+                task._overdue && !task.is_completed && "border-l-[3px] border-l-red-500",
+                task.is_completed && "opacity-60",
+                isExpanded && "ring-2 ring-primary/30",
+              )}
+              style={{ ...provided.draggableProps.style, animationDelay: `${Math.min(index, 15) * 20}ms` }}
+              onClick={() => onToggleExpand(task.id)}
             >
-              {String(task._project.property_address || task._project.title || "—")}
-            </Link>
-          )}
+              {/* Row 1: Title + badges inline */}
+              <div className="flex items-center gap-1.5 min-w-0">
+                {task._hasTimer && (
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute h-full w-full rounded-full bg-green-400 opacity-75" />
+                    <span className="relative rounded-full h-2 w-2 bg-green-500" />
+                  </span>
+                )}
+                {task.is_locked && <Lock className="h-3 w-3 text-red-400 shrink-0" />}
+                <span className={cn("text-[12px] font-medium truncate flex-1 leading-tight", task.is_completed && "line-through text-muted-foreground")}>
+                  {String(task.title || "Untitled")}
+                </span>
+                <Badge className={cn("text-[8px] px-1 py-0 border-0 whitespace-nowrap shrink-0 opacity-80", task._source.color)}>
+                  {String(task._source.label)}
+                </Badge>
+              </div>
 
-          {/* Row 3: Metadata chips */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {task._assigneeName ? (
-              <span className="w-5 h-5 rounded-full bg-muted text-[9px] font-bold flex items-center justify-center shrink-0" title={String(task._assigneeName)}>
-                {task._isTeam ? <Users className="h-3 w-3 text-muted-foreground" /> : String(task._assigneeName).charAt(0).toUpperCase()}
-              </span>
-            ) : null}
+              {/* Row 2: Compact metadata — assignee initial, project, due */}
+              <div className="flex items-center gap-1.5 mt-1 text-[10px] text-muted-foreground min-w-0">
+                {task._assigneeName ? (
+                  <span className="w-4 h-4 rounded-full bg-muted text-[8px] font-bold flex items-center justify-center shrink-0" title={String(task._assigneeName)}>
+                    {task._isTeam ? <Users className="h-2.5 w-2.5" /> : String(task._assigneeName).charAt(0).toUpperCase()}
+                  </span>
+                ) : null}
+                {task._project && (
+                  <span className="truncate flex-1 opacity-70">{String(task._project.property_address || task._project.title || "").split(",")[0]}</span>
+                )}
+                <span className="shrink-0 ml-auto">
+                  {task.is_blocked && !task.due_date ? (
+                    <span className="text-amber-500">deps</span>
+                  ) : task.due_date ? (
+                    <DueDateBadge dueDate={task.due_date} isCompleted={task.is_completed} />
+                  ) : null}
+                </span>
+              </div>
 
-            {task.is_blocked && !task.due_date ? (
-              <span className="text-[10px] text-amber-600 bg-amber-50 dark:bg-amber-950/30 rounded px-1.5 py-0.5 whitespace-nowrap">Awaiting deps</span>
-            ) : task.due_date ? (
-              <DueDateBadge dueDate={task.due_date} isCompleted={task.is_completed} />
-            ) : null}
-
-            <Badge className={cn("text-[9px] px-1.5 py-0 border-0 whitespace-nowrap", task._source.color)}>
-              {String(task._source.label)}
-            </Badge>
-          </div>
-
-          {/* Row 4: Effort mini-bar */}
-          {(task.estimated_minutes > 0 || task._effortSeconds > 0) && (
-            <div className="pt-0.5">
-              <TaskEffortBadge
-                estimatedMinutes={task.estimated_minutes || 0}
-                actualSeconds={task._effortSeconds}
-                compact
-              />
+              {/* Row 3: Micro effort bar (only if has estimate) */}
+              {estMin > 0 && (
+                <div className="mt-1 h-1 bg-muted rounded-full overflow-hidden">
+                  <div className={cn("h-full rounded-full transition-all", effortPct >= 100 ? "bg-red-500" : effortPct >= 75 ? "bg-amber-500" : "bg-primary/60")} style={{ width: `${effortPct}%` }} />
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </PopoverTrigger>
+
+          {/* Hover popover — full task details */}
+          <PopoverContent side="right" align="start" className="w-72 p-0 shadow-lg" sideOffset={8}
+            onOpenAutoFocus={e => e.preventDefault()}
+          >
+            <div className="p-3 space-y-2.5 text-xs">
+              {/* Title */}
+              <div>
+                <p className="font-semibold text-sm leading-snug">{String(task.title || "Untitled")}</p>
+                {task.description && <p className="text-muted-foreground mt-1 line-clamp-2">{String(task.description)}</p>}
+              </div>
+
+              {/* Project */}
+              {task._project && (
+                <div className="flex items-center gap-1.5">
+                  <Building2 className="h-3 w-3 text-muted-foreground shrink-0" />
+                  <Link to={createPageUrl("ProjectDetails") + `?id=${task.project_id}&tab=tasks`} className="text-primary hover:underline truncate" onClick={e => e.stopPropagation()}>
+                    {String(task._project.property_address || task._project.title || "—")}
+                  </Link>
+                </div>
+              )}
+
+              {/* Assignee */}
+              <div className="flex items-center gap-1.5">
+                <User className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span>{task._assigneeName || "Unassigned"}</span>
+                {task.auto_assign_role && task.auto_assign_role !== "none" && (
+                  <Badge variant="outline" className="text-[9px] px-1 py-0">{ROLE_LABELS[task.auto_assign_role] || task.auto_assign_role}</Badge>
+                )}
+              </div>
+
+              {/* Due date */}
+              <div className="flex items-center gap-1.5">
+                <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+                {task.due_date ? (
+                  <span className={cn(task._overdue && "text-red-600 font-medium")}>
+                    {new Date(fixTimestamp(task.due_date)).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    {task._overdue && " — OVERDUE"}
+                  </span>
+                ) : task.is_blocked ? (
+                  <span className="text-amber-600">Awaiting dependencies</span>
+                ) : (
+                  <span className="text-muted-foreground/50">No due date</span>
+                )}
+              </div>
+
+              {/* Effort */}
+              <div className="flex items-center gap-1.5">
+                <Timer className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span>
+                  {fmtDuration(actSec)} logged
+                  {estMin > 0 && <span className="text-muted-foreground"> / {fmtDuration(estMin * 60)} est ({effortPct}%)</span>}
+                </span>
+                {task._hasTimer && <span className="text-green-600 font-medium">● Timer running</span>}
+              </div>
+
+              {/* Source + Status */}
+              <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t">
+                <Badge className={cn("text-[9px] px-1.5 py-0 border-0", task._source.color)}>{String(task._source.label)}</Badge>
+                {task.is_blocked && <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-300 text-amber-600">Blocked</Badge>}
+                {task.is_locked && <Badge variant="outline" className="text-[9px] px-1 py-0 border-red-300 text-red-600">Locked</Badge>}
+                {task.is_completed && <Badge variant="outline" className="text-[9px] px-1 py-0 border-green-300 text-green-600">Completed</Badge>}
+              </div>
+
+              {/* Click to expand CTA */}
+              <button className="w-full text-center text-[10px] text-primary hover:underline pt-1 border-t" onClick={() => onToggleExpand(task.id)}>
+                Click card to expand full detail panel
+              </button>
+            </div>
+          </PopoverContent>
+        </Popover>
       )}
     </Draggable>
   );
@@ -279,28 +345,61 @@ function StatusColumn({ statusDef, tasks, droppableId, expandedKanbanId, onToggl
 
 // ── SwimLane ─────────────────────────────────────────────────────────────────
 
-function SwimLane({ laneKey, laneIndex, tasksByStatus, isCollapsed, onToggleCollapse, expandedKanbanId, onToggleExpand, canEdit, user }) {
-  const totalCount = Object.values(tasksByStatus).reduce((sum, arr) => sum + arr.length, 0);
+function SwimLane({ laneKey, laneIndex, tasksByStatus, isCollapsed, onToggleCollapse, expandedKanbanId, onToggleExpand, canEdit, user, typePill }) {
+  const allTasks = useMemo(() => Object.values(tasksByStatus).flat(), [tasksByStatus]);
+  const totalCount = allTasks.length;
+  const completedCount = (tasksByStatus.completed || []).length;
+  const blockedCount = (tasksByStatus.blocked || []).length;
+  const pct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const overdueCount = allTasks.filter(t => t._overdue).length;
+  const totalEffort = allTasks.reduce((s, t) => s + (t._effortSeconds || 0), 0);
+  const totalEstimate = allTasks.reduce((s, t) => s + ((t.estimated_minutes || 0) * 60), 0);
+  const utilizationPct = totalEstimate > 0 ? Math.round((totalEffort / totalEstimate) * 100) : 0;
 
   return (
     <div className="border rounded-lg overflow-hidden">
-      {/* Sticky header */}
+      {/* Sticky header with progress stats */}
       <button
         className="w-full flex items-center justify-between px-4 py-2 bg-muted/40 hover:bg-muted/60 transition-colors"
         onClick={() => onToggleCollapse(laneKey)}
       >
-        <div className="flex items-center gap-2">
-          {isCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-          <span className="text-sm font-semibold">{String(laneKey)}</span>
-          <Badge variant="secondary" className="text-[10px]">{totalCount}</Badge>
+        <div className="flex items-center gap-2 min-w-0">
+          {isCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
+          <span className="text-sm font-semibold truncate">{String(laneKey)}</span>
+          {typePill && <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0 opacity-60">{typePill}</Badge>}
+          <Badge variant="secondary" className="text-[10px] shrink-0">{totalCount}</Badge>
+          {/* Progress bar */}
+          <div className="hidden sm:flex items-center gap-1.5 ml-2">
+            <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div className={cn("h-full rounded-full transition-all", pct === 100 ? "bg-green-500" : pct >= 50 ? "bg-blue-500" : "bg-amber-500")} style={{ width: `${pct}%` }} />
+            </div>
+            <span className={cn("text-[10px] font-medium tabular-nums", pct === 100 ? "text-green-600" : "text-muted-foreground")}>{pct}%</span>
+          </div>
         </div>
-        {/* Mini status breakdown */}
-        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+
+        {/* Right side: stats + status icons */}
+        <div className="flex items-center gap-3 text-[10px] text-muted-foreground shrink-0">
+          {/* Effort / utilisation */}
+          {totalEffort > 0 && (
+            <span className="hidden md:flex items-center gap-1 tabular-nums" title={`${fmtDuration(totalEffort)} logged / ${fmtDuration(totalEstimate)} estimated`}>
+              <Activity className="h-3 w-3" />
+              {fmtDuration(totalEffort)}
+              {totalEstimate > 0 && <span className="opacity-60">({utilizationPct}%)</span>}
+            </span>
+          )}
+          {/* Overdue count */}
+          {overdueCount > 0 && (
+            <span className="flex items-center gap-1 text-red-600 tabular-nums">
+              <AlertTriangle className="h-3 w-3" />
+              {overdueCount}
+            </span>
+          )}
+          {/* Status breakdown */}
           {KANBAN_STATUSES.map(s => {
             const count = (tasksByStatus[s.id] || []).length;
             if (count === 0) return null;
             return (
-              <span key={s.id} className="flex items-center gap-1 tabular-nums">
+              <span key={s.id} className="flex items-center gap-0.5 tabular-nums">
                 <s.icon className={cn("h-3 w-3", s.headerText)} />
                 {count}
               </span>
@@ -417,7 +516,7 @@ export default function Tasks() {
   const { activeTimers = [] } = useActiveTimers();
 
   // State — filters (multi-select)
-  const emptyFilters = { status: new Set(), people: new Set(), teams: new Set(), projects: new Set(), products: new Set(), packages: new Set(), roles: new Set(), sources: new Set(), orgs: new Set(), projectTypes: new Set() };
+  const emptyFilters = { status: new Set(), people: new Set(), teams: new Set(), projects: new Set(), products: new Set(), packages: new Set(), roles: new Set(), sources: new Set(), orgs: new Set(), projectTypes: new Set(), productCategories: new Set() };
   const [filters, setFilters] = useState(emptyFilters);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -556,6 +655,10 @@ export default function Tasks() {
       if (filters.packages.size > 0 && !filters.packages.has(t.package_id)) return false;
       if (filters.roles.size > 0 && !filters.roles.has(t.auto_assign_role || "none")) return false;
       if (filters.sources.size > 0 && !filters.sources.has(t._source.key)) return false;
+      if (filters.productCategories.size > 0) {
+        const prod = t.product_id ? productMap.get(t.product_id) : null;
+        if (!prod || !filters.productCategories.has(prod.category)) return false;
+      }
       if (filters.orgs.size > 0) {
         const agencyId = t._project?.agency_id;
         if (!agencyId || !filters.orgs.has(orgByAgency[agencyId])) return false;
@@ -654,7 +757,17 @@ export default function Tasks() {
     });
     const projectTypeItems = [...ptSet.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
 
-    return { statusItems, peopleItems, teamItems, projectItems, roleItems, sourceItems, productItems, packageItems, orgItems, projectTypeItems };
+    // Product categories
+    const catCounts = {};
+    visibleTasks.forEach(t => {
+      if (t.product_id) {
+        const prod = productMap.get(t.product_id);
+        if (prod?.category) catCounts[prod.category] = (catCounts[prod.category] || 0) + 1;
+      }
+    });
+    const productCategoryItems = Object.entries(catCounts).map(([cat, count]) => ({ id: cat, name: cat, count })).sort((a, b) => a.name.localeCompare(b.name));
+
+    return { statusItems, peopleItems, teamItems, projectItems, roleItems, sourceItems, productItems, packageItems, orgItems, projectTypeItems, productCategoryItems };
   }, [visibleTasks, productMap, packageMap, orgByAgency, organisations]);
 
   // Active filter count
@@ -702,13 +815,22 @@ export default function Tasks() {
     return map;
   }, [filteredTasks, kanbanSortFn]);
 
-  // Swimlanes (when groupBy !== "none")
+  // Group-by type labels for pills
+  const GROUP_TYPE_LABELS = { assignee: "Person", project: "Project", role: "Role", source: "Source" };
+
+  // Swimlanes (when groupBy !== "none") — used by both Kanban and List views
   const swimLanes = useMemo(() => {
     if (groupBy === "none") return null;
 
+    // Normalize name to merge case variants ("Janet saad" + "Janet Saad" → "Janet Saad")
+    const normalizeName = (name) => {
+      if (!name) return "";
+      return name.replace(/\b\w/g, c => c.toUpperCase()); // Title Case
+    };
+
     const getGroupKey = (task) => {
       switch (groupBy) {
-        case "assignee": return task._assigneeName || "Unassigned";
+        case "assignee": return normalizeName(task._assigneeName) || "Unassigned";
         case "project": return task._project?.property_address || task._project?.title || "No Project";
         case "role": return ROLE_LABELS[task.auto_assign_role] || ROLE_LABELS.none;
         case "source": return task._source.label;
@@ -716,23 +838,33 @@ export default function Tasks() {
       }
     };
 
+    // Also determine if grouping is by team or person for assignee groups
+    const getGroupMeta = (task) => {
+      if (groupBy === "assignee") return task._isTeam ? "Team" : (task._assigneeName ? "User" : "");
+      return "";
+    };
+
     const lanes = new Map();
+    const laneMeta = new Map(); // key → meta label
     filteredTasks.forEach(t => {
       const key = getGroupKey(t);
       if (!lanes.has(key)) lanes.set(key, { blocked: [], not_started: [], in_progress: [], completed: [] });
       const lane = lanes.get(key);
       (lane[t._status] || lane.not_started).push(t);
+      if (!laneMeta.has(key)) laneMeta.set(key, getGroupMeta(t));
     });
 
     for (const lane of lanes.values()) {
       Object.values(lane).forEach(arr => arr.sort(kanbanSortFn));
     }
 
-    return [...lanes.entries()].sort(([a], [b]) => {
-      if (a === "Unassigned" || a === "No Project") return 1;
-      if (b === "Unassigned" || b === "No Project") return -1;
-      return a.localeCompare(b);
-    });
+    return [...lanes.entries()]
+      .map(([key, data]) => [key, data, laneMeta.get(key) || GROUP_TYPE_LABELS[groupBy] || ""])
+      .sort(([a], [b]) => {
+        if (a === "Unassigned" || a === "No Project") return 1;
+        if (b === "Unassigned" || b === "No Project") return -1;
+        return a.localeCompare(b);
+      });
   }, [filteredTasks, groupBy, kanbanSortFn]);
 
   // ── List view: sort ─────────────────────────────────────────────────────
@@ -918,6 +1050,61 @@ export default function Tasks() {
     });
   }, []);
 
+  // ── Render helper: single task row for list view ─────────────────────
+  const renderTaskRow = (t) => (
+    <React.Fragment key={t.id}>
+      <tr className={cn("hover:bg-muted/30 transition-colors cursor-pointer border-t", t._overdue && "bg-red-50/50 dark:bg-red-950/20", expandedTaskId === t.id && "bg-accent/30")}
+          onClick={() => setExpandedTaskId(expandedTaskId === t.id ? null : t.id)}>
+        <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
+          <Checkbox checked={selectedIds.has(t.id)} onCheckedChange={() => toggleSelect(t.id)} />
+        </td>
+        <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
+          {t.is_locked ? <Lock className="h-4 w-4 text-red-500" title="Locked" />
+           : t.is_blocked ? <ShieldAlert className="h-4 w-4 text-amber-500" title="Blocked" />
+           : <Checkbox checked={t.is_completed} onCheckedChange={() => toggleComplete(t)} className={cn(t.is_completed && "data-[state=checked]:bg-green-600 data-[state=checked]:border-green-600")} />}
+        </td>
+        <td className="px-2 py-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={cn("text-sm truncate", t.is_completed && "line-through text-muted-foreground")}>{String(t.title || "Untitled")}</span>
+            <Badge className={cn("text-[9px] px-1.5 py-0 shrink-0 border-0 whitespace-nowrap", t._source.color)}>{String(t._source.label)}</Badge>
+            {t._overdue && <Badge className="text-[9px] px-1 py-0 bg-red-600 text-white border-0 shrink-0">OVERDUE</Badge>}
+          </div>
+        </td>
+        <td className="px-2 py-2 hidden lg:table-cell" onClick={e => e.stopPropagation()}>
+          {t._project ? <Link to={createPageUrl("ProjectDetails") + `?id=${t.project_id}&tab=tasks`} className="text-xs text-muted-foreground hover:text-primary hover:underline truncate block max-w-[180px]">{String(t._project.property_address || t._project.title || "—")}</Link> : <span className="text-xs text-muted-foreground/40">—</span>}
+        </td>
+        <td className="px-2 py-2 hidden md:table-cell">
+          {t._assigneeName ? (
+            <div className="flex items-center gap-1.5">
+              {t._isTeam ? <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> : <span className="w-5 h-5 rounded-full bg-muted text-[10px] font-bold flex items-center justify-center text-muted-foreground shrink-0">{String(t._assigneeName).charAt(0).toUpperCase()}</span>}
+              <span className="text-xs truncate max-w-[100px]">{String(t._assigneeName)}</span>
+            </div>
+          ) : <span className="text-xs text-muted-foreground/40">—</span>}
+        </td>
+        <td className="px-2 py-2">
+          {t.is_blocked && !t.due_date ? <span className="text-[10px] text-amber-600">Awaiting deps</span>
+           : t.due_date ? <CountdownTimer dueDate={t.due_date} compact thresholds={{ yellow_start: 12, yellow_end: 6, red_threshold: 4 }} />
+           : <span className="text-xs text-muted-foreground/30">—</span>}
+        </td>
+        <td className="px-2 py-2 hidden md:table-cell">
+          {(t.estimated_minutes > 0 || t._effortSeconds > 0) ? <span className="text-[10px] text-muted-foreground tabular-nums">{fmtDuration(t._effortSeconds)} / {t.estimated_minutes ? fmtDuration(t.estimated_minutes * 60) : "—"}</span> : <span className="text-xs text-muted-foreground/30">—</span>}
+        </td>
+        <td className="px-2 py-2 text-center hidden sm:table-cell">
+          {t._hasTimer && <span className="relative flex h-2.5 w-2.5 mx-auto" title="Active timer running"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" /><span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" /></span>}
+        </td>
+      </tr>
+      {expandedTaskId === t.id && (
+        <tr><td colSpan={8} className="p-0 border-t-0">
+          <ErrorBoundary fallbackLabel="Task Detail">
+            <TaskDetailPanel task={t} canEdit={canEdit} onEdit={() => {}} onDelete={() => {}}
+              onUpdateDeadline={(id, data) => { api.entities.ProjectTask.update(id, data).then(() => refetchEntityList("ProjectTask")).catch(() => toast.error("Failed")); }}
+              thresholds={{ yellow_start: 12, yellow_end: 6, red_threshold: 4 }} projectId={t.project_id} project={t._project} user={user} onClose={() => setExpandedTaskId(null)} />
+          </ErrorBoundary>
+        </td></tr>
+      )}
+    </React.Fragment>
+  );
+
   // ── Loading ─────────────────────────────────────────────────────────────
 
   if (tasksLoading) {
@@ -1002,16 +1189,16 @@ export default function Tasks() {
             </button>
           </div>
 
-          {/* Kanban controls */}
-          {viewMode === "kanban" && (
-            <>
-              <select className="h-8 px-2 text-xs border rounded-md bg-background" value={groupBy} onChange={e => { setGroupBy(e.target.value); setCollapsedLanes(new Set()); }}>
-                <option value="none">No Grouping</option>
-                <option value="assignee">Group: Assignee</option>
-                <option value="project">Group: Project</option>
+          {/* Group + Sort controls (both views) */}
+          <>
+            <select className="h-8 px-2 text-xs border rounded-md bg-background" value={groupBy} onChange={e => { setGroupBy(e.target.value); setCollapsedLanes(new Set()); }}>
+              <option value="none">No Grouping</option>
+              <option value="assignee">Group: Assignee</option>
+              <option value="project">Group: Project</option>
                 <option value="role">Group: Role</option>
                 <option value="source">Group: Source</option>
               </select>
+            {viewMode === "kanban" && (
               <select className="h-8 px-2 text-xs border rounded-md bg-background" value={kanbanSort} onChange={e => setKanbanSort(e.target.value)}>
                 <option value="due_date">Sort: Due Date</option>
                 <option value="priority">Sort: Priority</option>
@@ -1019,8 +1206,8 @@ export default function Tasks() {
                 <option value="project">Sort: Project</option>
                 <option value="created">Sort: Newest</option>
               </select>
-            </>
-          )}
+            )}
+          </>
         </div>
       </div>
 
@@ -1051,6 +1238,9 @@ export default function Tasks() {
         )}
         {filterItems.orgItems.length > 0 && (
           <FilterDropdown label="Organisation" icon={Building2} items={filterItems.orgItems} selected={filters.orgs} onToggle={(id) => toggleFilter("orgs", id)} onClear={() => clearFilter("orgs")} />
+        )}
+        {filterItems.productCategoryItems.length > 0 && (
+          <FilterDropdown label="Category" icon={Tag} items={filterItems.productCategoryItems} selected={filters.productCategories} onToggle={(id) => toggleFilter("productCategories", id)} onClear={() => clearFilter("productCategories")} />
         )}
         {filterItems.projectTypeItems.length > 0 && (
           <FilterDropdown label="Type" icon={FolderKanban} items={filterItems.projectTypeItems} selected={filters.projectTypes} onToggle={(id) => toggleFilter("projectTypes", id)} onClear={() => clearFilter("projectTypes")} />
@@ -1168,7 +1358,7 @@ export default function Tasks() {
                       <button className="hover:text-foreground underline" onClick={() => setCollapsedLanes(new Set())}>Expand all</button>
                     </div>
                   )}
-                  {(swimLanes || []).map(([laneKey, laneData], laneIndex) => (
+                  {(swimLanes || []).map(([laneKey, laneData, laneMeta], laneIndex) => (
                     <SwimLane
                       key={laneKey}
                       laneKey={laneKey}
@@ -1180,6 +1370,7 @@ export default function Tasks() {
                       onToggleExpand={toggleKanbanExpand}
                       canEdit={canEdit}
                       user={user}
+                      typePill={laneMeta}
                     />
                   ))}
                 </div>
@@ -1232,113 +1423,47 @@ export default function Tasks() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTasks.map(t => (
-                    <React.Fragment key={t.id}>
-                      <tr
-                        className={cn(
-                          "hover:bg-muted/30 transition-colors cursor-pointer border-t",
-                          t._overdue && "bg-red-50/50 dark:bg-red-950/20",
-                          expandedTaskId === t.id && "bg-accent/30"
-                        )}
-                        onClick={() => setExpandedTaskId(expandedTaskId === t.id ? null : t.id)}
-                      >
-                        <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
-                          <Checkbox checked={selectedIds.has(t.id)} onCheckedChange={() => toggleSelect(t.id)} />
-                        </td>
-                        <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
-                          {t.is_locked ? (
-                            <Lock className="h-4 w-4 text-red-500" title="Locked" />
-                          ) : t.is_blocked ? (
-                            <ShieldAlert className="h-4 w-4 text-amber-500" title="Blocked" />
-                          ) : (
-                            <Checkbox
-                              checked={t.is_completed}
-                              onCheckedChange={() => toggleComplete(t)}
-                              className={cn(t.is_completed && "data-[state=checked]:bg-green-600 data-[state=checked]:border-green-600")}
-                            />
-                          )}
-                        </td>
-                        <td className="px-2 py-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className={cn("text-sm truncate", t.is_completed && "line-through text-muted-foreground")}>
-                              {String(t.title || "Untitled")}
-                            </span>
-                            <Badge className={cn("text-[9px] px-1.5 py-0 shrink-0 border-0 whitespace-nowrap", t._source.color)}>
-                              {String(t._source.label)}
-                            </Badge>
-                            {t._overdue && <Badge className="text-[9px] px-1 py-0 bg-red-600 text-white border-0 shrink-0">OVERDUE</Badge>}
-                          </div>
-                        </td>
-                        <td className="px-2 py-2 hidden lg:table-cell" onClick={e => e.stopPropagation()}>
-                          {t._project ? (
-                            <Link
-                              to={createPageUrl("ProjectDetails") + `?id=${t.project_id}&tab=tasks`}
-                              className="text-xs text-muted-foreground hover:text-primary hover:underline truncate block max-w-[180px]"
-                            >
-                              {String(t._project.property_address || t._project.title || "—")}
-                            </Link>
-                          ) : <span className="text-xs text-muted-foreground/40">—</span>}
-                        </td>
-                        <td className="px-2 py-2 hidden md:table-cell">
-                          {t._assigneeName ? (
-                            <div className="flex items-center gap-1.5">
-                              {t._isTeam ? (
-                                <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              ) : (
-                                <span className="w-5 h-5 rounded-full bg-muted text-[10px] font-bold flex items-center justify-center text-muted-foreground shrink-0">
-                                  {String(t._assigneeName).charAt(0).toUpperCase()}
-                                </span>
-                              )}
-                              <span className="text-xs truncate max-w-[100px]">{String(t._assigneeName)}</span>
+                  {(groupBy !== "none" && swimLanes ? (
+                    // ── Grouped list ──
+                    swimLanes.flatMap(([laneKey, laneData, laneMeta]) => {
+                      const laneTasks = Object.values(laneData).flat().sort((a, b) => {
+                        let cmp = 0;
+                        switch (sortCol) {
+                          case "status": cmp = (a._status || "").localeCompare(b._status || ""); break;
+                          case "title": cmp = (a.title || "").localeCompare(b.title || ""); break;
+                          case "project": cmp = (a._project?.property_address || "").localeCompare(b._project?.property_address || ""); break;
+                          case "assignee": cmp = (a._assigneeName || "").localeCompare(b._assigneeName || ""); break;
+                          case "due": cmp = (a.due_date || "9999").localeCompare(b.due_date || "9999"); break;
+                          default: cmp = 0;
+                        }
+                        return sortDir === "desc" ? -cmp : cmp;
+                      });
+                      const completedCount = laneTasks.filter(t => t.is_completed).length;
+                      const totalEffortLane = laneTasks.reduce((s, t) => s + (t._effortSeconds || 0), 0);
+                      const pct = laneTasks.length > 0 ? Math.round((completedCount / laneTasks.length) * 100) : 0;
+                      const overdueInLane = laneTasks.filter(t => t._overdue).length;
+                      return [
+                        <tr key={`hdr-${laneKey}`} className="bg-muted/50 dark:bg-muted/20 sticky top-0 z-10">
+                          <td colSpan={8} className="px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold">{String(laneKey)}</span>
+                              {laneMeta && <Badge variant="outline" className="text-[9px] px-1.5 py-0 opacity-60">{laneMeta}</Badge>}
+                              <Badge variant="secondary" className="text-[10px]">{laneTasks.length}</Badge>
+                              <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                                <div className={cn("h-full rounded-full", pct === 100 ? "bg-green-500" : pct >= 50 ? "bg-blue-500" : "bg-amber-500")} style={{ width: `${pct}%` }} />
+                              </div>
+                              <span className={cn("text-[10px] tabular-nums", pct === 100 ? "text-green-600 font-medium" : "text-muted-foreground")}>{pct}%</span>
+                              {totalEffortLane > 0 && <span className="text-[10px] text-muted-foreground tabular-nums hidden md:inline">{fmtDuration(totalEffortLane)}</span>}
+                              {overdueInLane > 0 && <span className="text-[10px] text-red-600 tabular-nums">{overdueInLane} overdue</span>}
                             </div>
-                          ) : <span className="text-xs text-muted-foreground/40">—</span>}
-                        </td>
-                        <td className="px-2 py-2">
-                          {t.is_blocked && !t.due_date ? (
-                            <span className="text-[10px] text-amber-600">Awaiting deps</span>
-                          ) : t.due_date ? (
-                            <CountdownTimer dueDate={t.due_date} compact thresholds={{ yellow_start: 12, yellow_end: 6, red_threshold: 4 }} />
-                          ) : <span className="text-xs text-muted-foreground/30">—</span>}
-                        </td>
-                        <td className="px-2 py-2 hidden md:table-cell">
-                          {(t.estimated_minutes > 0 || t._effortSeconds > 0) ? (
-                            <span className="text-[10px] text-muted-foreground tabular-nums">
-                              {fmtDuration(t._effortSeconds)} / {t.estimated_minutes ? fmtDuration(t.estimated_minutes * 60) : "—"}
-                            </span>
-                          ) : <span className="text-xs text-muted-foreground/30">—</span>}
-                        </td>
-                        <td className="px-2 py-2 text-center hidden sm:table-cell">
-                          {t._hasTimer && (
-                            <span className="relative flex h-2.5 w-2.5 mx-auto" title="Active timer running">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                      {expandedTaskId === t.id && (
-                        <tr>
-                          <td colSpan={8} className="p-0 border-t-0">
-                            <ErrorBoundary fallbackLabel="Task Detail">
-                              <TaskDetailPanel
-                                task={t}
-                                canEdit={canEdit}
-                                onEdit={() => {}}
-                                onDelete={() => {}}
-                                onUpdateDeadline={(id, data) => {
-                                  api.entities.ProjectTask.update(id, data).then(() => refetchEntityList("ProjectTask")).catch(() => toast.error("Failed"));
-                                }}
-                                thresholds={{ yellow_start: 12, yellow_end: 6, red_threshold: 4 }}
-                                projectId={t.project_id}
-                                project={t._project}
-                                user={user}
-                                onClose={() => setExpandedTaskId(null)}
-                              />
-                            </ErrorBoundary>
                           </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
+                        </tr>,
+                        ...laneTasks.map(t => renderTaskRow(t)),
+                      ];
+                    })
+                  ) : (
+                    // ── Flat list ──
+                    sortedTasks.map(t => renderTaskRow(t))
                   ))}
                 </tbody>
               </table>
