@@ -737,6 +737,9 @@ export async function fireNotif(entities: any, p: any) {
       } catch { /* allow if pref check fails */ }
     }
 
+    // Dedup: skip if a notification with this idempotency_key already exists.
+    // The filter check handles the common case; the unique constraint catch (below)
+    // handles concurrent race conditions where multiple processors run simultaneously.
     if (p.idempotencyKey) {
       const existing = await entities.Notification.filter(
         { idempotency_key: p.idempotencyKey }, null, 1
@@ -744,22 +747,29 @@ export async function fireNotif(entities: any, p: any) {
       if (existing.length > 0) return;
     }
 
-    await entities.Notification.create({
-      user_id: p.userId,
-      type: p.type,
-      category: p.category,
-      severity: p.severity,
-      title: p.title,
-      message: p.message,
-      project_id: p.projectId || null,
-      project_name: p.projectName || null,
-      cta_label: p.ctaLabel || 'View',
-      is_read: false,
-      is_dismissed: false,
-      source: p.source || 'system',
-      idempotency_key: p.idempotencyKey || null,
-      created_date: new Date().toISOString(),
-    });
+    try {
+      await entities.Notification.create({
+        user_id: p.userId,
+        type: p.type,
+        category: p.category,
+        severity: p.severity,
+        title: p.title,
+        message: p.message,
+        project_id: p.projectId || null,
+        project_name: p.projectName || null,
+        cta_label: p.ctaLabel || 'View',
+        is_read: false,
+        is_dismissed: false,
+        source: p.source || 'system',
+        idempotency_key: p.idempotencyKey || null,
+        created_date: new Date().toISOString(),
+      });
+    } catch (createErr: any) {
+      // Silently swallow unique constraint violations (duplicate idempotency_key)
+      const isDupe = createErr?.code === '23505' || createErr?.message?.includes('duplicate key') || createErr?.message?.includes('unique constraint');
+      if (isDupe) return; // Already exists — race condition dedup
+      throw createErr; // Re-throw real errors
+    }
   } catch (e: any) {
     console.warn('fireNotif error:', e.message);
   }
