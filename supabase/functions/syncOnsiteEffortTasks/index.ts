@@ -68,9 +68,34 @@ Deno.serve(async (req) => {
 
     const existingTasks = await entities.ProjectTask.filter({ project_id }, null, 1000);
 
+    // ── Determine which onsite roles are actually needed based on products ──
+    // Photography categories: Images, Drones, Floorplan (require photographer on-site)
+    // Videography categories: Video (requires videographer on-site)
+    // Neither: Fees, Editing (post-production only, no onsite presence)
+    const PHOTO_CATEGORIES = new Set(['Images', 'Drones', 'Floorplan']);
+    const VIDEO_CATEGORIES = new Set(['Video']);
+
+    let needsPhotographer = false;
+    let needsVideographer = false;
+
+    const checkProduct = (productId: string) => {
+      const product = productMap.get(productId);
+      if (!product?.category) return;
+      if (PHOTO_CATEGORIES.has(product.category)) needsPhotographer = true;
+      if (VIDEO_CATEGORIES.has(product.category)) needsVideographer = true;
+    };
+
+    (project.products || []).forEach((item: any) => checkProduct(item.product_id));
+    (project.packages || []).forEach((pkgItem: any) => {
+      const pkg = packageMap.get(pkgItem.package_id);
+      if (!pkg) return;
+      // Check nested products within the package
+      (pkgItem.products || pkg.products || []).forEach((prodItem: any) => checkProduct(prodItem.product_id));
+    });
+
     const onsiteRoles = [
-      { role: 'photographer', staffId: project.photographer_id || project.onsite_staff_1_id || null, staffName: project.photographer_name || project.onsite_staff_1_name || null, staffType: project.photographer_type || project.onsite_staff_1_type || 'user' },
-      { role: 'videographer', staffId: project.videographer_id || project.onsite_staff_2_id || null, staffName: project.videographer_name || project.onsite_staff_2_name || null, staffType: project.videographer_type || project.onsite_staff_2_type || 'user' },
+      { role: 'photographer', needed: needsPhotographer, staffId: project.photographer_id || project.onsite_staff_1_id || null, staffName: project.photographer_name || project.onsite_staff_1_name || null, staffType: project.photographer_type || project.onsite_staff_1_type || 'user' },
+      { role: 'videographer', needed: needsVideographer, staffId: project.videographer_id || project.onsite_staff_2_id || null, staffName: project.videographer_name || project.onsite_staff_2_name || null, staffType: project.videographer_type || project.onsite_staff_2_type || 'user' },
     ];
 
     let dueDate: string | null = null;
@@ -91,15 +116,17 @@ Deno.serve(async (req) => {
       }
     }
 
-    for (const { role, staffId, staffName, staffType } of onsiteRoles) {
+    for (const { role, needed, staffId, staffName, staffType } of onsiteRoles) {
       const templateId = `onsite:${role}`;
       const existingTask = existingTasks.find((t: any) => t.template_id === templateId);
 
-      if (onsiteMaxMins === 0 || !staffId) {
+      // Delete task if: no onsite time, no staff assigned, OR role not needed by products
+      if (onsiteMaxMins === 0 || !staffId || !needed) {
         if (existingTask && !existingTask.is_deleted) {
           await entities.ProjectTask.update(existingTask.id, { is_deleted: true });
           const timeLogs = await entities.TaskTimeLog.filter({ task_id: existingTask.id });
           await Promise.all(timeLogs.map((log: any) => entities.TaskTimeLog.update(log.id, { is_active: false, status: 'completed' })));
+          console.log(`syncOnsiteEffortTasks: removed ${role} onsite task (needed=${needed}, staffId=${!!staffId}, onsiteMaxMins=${onsiteMaxMins})`);
         }
         continue;
       }
@@ -118,7 +145,7 @@ Deno.serve(async (req) => {
       else { await entities.ProjectTask.create({ ...taskData, is_completed: false, is_locked: false }); }
     }
 
-    console.log(`syncOnsiteEffortTasks: upserted onsite tasks for project ${project_id}.`);
+    console.log(`syncOnsiteEffortTasks: project ${project_id} — photo=${needsPhotographer}, video=${needsVideographer}, onsiteMaxMins=${onsiteMaxMins}`);
     return jsonResponse({ success: true, project_id, onsite_minutes: onsiteMaxMins });
   } catch (error: any) {
     console.error('syncOnsiteEffortTasks error:', error);
