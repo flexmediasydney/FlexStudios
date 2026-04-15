@@ -160,26 +160,47 @@ def analyze_agent_results(items):
         return {"score": 0, "details": "No results"}
 
     total = len(items)
+    # ── THE 6 NON-NEGOTIABLE FIELDS ──
+    # 1. Agent name
     has_name = sum(1 for i in items if i.get("name") or i.get("agentName") or i.get("full_name") or i.get("firstName"))
-    has_phone = sum(1 for i in items if i.get("phone") or i.get("phoneNumber") or i.get("mobile"))
-    has_email = sum(1 for i in items if i.get("email"))
-    has_agency = sum(1 for i in items if i.get("agency") or i.get("agencyName") or i.get("agency_name"))
-    has_suburb = sum(1 for i in items if i.get("suburb") or i.get("location") or i.get("area"))
-    has_listings = sum(1 for i in items if i.get("totalListings") or i.get("listings") or i.get("propertiesForSale") or i.get("total_listings"))
-    has_sold = sum(1 for i in items if i.get("propertiesSold") or i.get("sold") or i.get("totalSold"))
-    has_rating = sum(1 for i in items if i.get("rating") or i.get("reviews") or i.get("reviewCount"))
-    has_profile_url = sum(1 for i in items if i.get("url") or i.get("profileUrl") or i.get("agentUrl"))
+    # 2. Email
+    has_email = sum(1 for i in items if i.get("email") or i.get("emailAddress") or i.get("agentEmail"))
+    # 3. Mobile/Phone
+    has_phone = sum(1 for i in items if i.get("phone") or i.get("phoneNumber") or i.get("mobile") or i.get("contactNumber"))
+    # 4. Agency
+    has_agency = sum(1 for i in items if i.get("agency") or i.get("agencyName") or i.get("agency_name") or i.get("agencyBrand"))
+    # 5. Listing count / activity (active or sold in last 12m)
+    has_listings = sum(1 for i in items if
+        i.get("totalListings") or i.get("listings") or i.get("propertiesForSale") or
+        i.get("total_listings") or i.get("propertiesSold") or i.get("sold") or
+        i.get("totalSold") or i.get("salesLastYear") or i.get("recentListings") or
+        i.get("propertiesForRent") or i.get("soldProperties"))
+    # 6. Active/not active signal (any sign of recent activity)
+    has_active_signal = sum(1 for i in items if
+        (i.get("propertiesForSale") or 0) > 0 or
+        (i.get("totalListings") or 0) > 0 or
+        (i.get("listings") or 0) > 0 or
+        i.get("lastActiveDate") or i.get("isActive"))
 
-    # Score: weighted by importance to FlexStudios prospecting
+    # ── BONUS FIELDS ──
+    has_suburb = sum(1 for i in items if i.get("suburb") or i.get("location") or i.get("area") or i.get("suburbs"))
+    has_rating = sum(1 for i in items if i.get("rating") or i.get("reviews") or i.get("reviewCount") or i.get("avgRating"))
+    has_profile_url = sum(1 for i in items if i.get("url") or i.get("profileUrl") or i.get("agentUrl") or i.get("link"))
+    has_sold = sum(1 for i in items if i.get("propertiesSold") or i.get("sold") or i.get("totalSold") or i.get("soldProperties"))
+
+    # Score: 6 core fields = 85 points, bonus = 15 points
     score = 0
-    score += (has_name / total) * 15        # Name is essential
-    score += (has_phone / total) * 20       # Phone = direct outreach
-    score += (has_email / total) * 20       # Email = direct outreach (equally important)
-    score += (has_agency / total) * 15      # Agency = context for targeting
-    score += (has_listings / total) * 10    # Listings = activity signal (active = worth pursuing)
-    score += (has_sold / total) * 10        # Sold = performance signal
-    score += (has_rating / total) * 5       # Rating = quality signal
-    score += (has_profile_url / total) * 5  # URL = reference link
+    score += (has_name / total) * 15        # 1. Name
+    score += (has_email / total) * 20       # 2. Email (critical for outreach)
+    score += (has_phone / total) * 20       # 3. Mobile (critical for outreach)
+    score += (has_agency / total) * 15      # 4. Agency
+    score += (has_listings / total) * 10    # 5. Listing count / volume
+    score += (has_active_signal / total) * 5 # 6. Active signal
+    # Bonus
+    score += (has_suburb / total) * 5       # Suburb coverage
+    score += (has_sold / total) * 5         # Sold history
+    score += (has_rating / total) * 3       # Reviews/rating
+    score += (has_profile_url / total) * 2  # Profile URL link
 
     # Sample first record keys for inspection
     sample_keys = list(items[0].keys())[:20] if items else []
@@ -264,9 +285,11 @@ def run_benchmark(category_name, actors, analyzer):
             continue
 
         analysis = analyzer(result.get("items", []))
+        t = analysis.get('total', 0)
         print(f"    ✅ {result['count']} results in {elapsed}s — Score: {analysis['score']}/100")
-        print(f"    Fields: name={analysis.get('has_name','?')}/{analysis.get('total','?')} phone={analysis.get('has_phone','?')} email={analysis.get('has_email','?')} agency={analysis.get('has_agency','?')}")
-        print(f"    Sample keys: {analysis.get('sample_keys', [])[:12]}")
+        print(f"    CORE 6: name={analysis.get('has_name',0)}/{t} email={analysis.get('has_email',0)}/{t} phone={analysis.get('has_phone',0)}/{t} agency={analysis.get('has_agency',0)}/{t} listings={analysis.get('has_listings',0)}/{t} active={analysis.get('has_active_signal',0)}/{t}")
+        print(f"    BONUS:  suburb={analysis.get('has_suburb',0)}/{t} sold={analysis.get('has_sold',0)}/{t} rating={analysis.get('has_rating',0)}/{t}")
+        print(f"    Keys: {analysis.get('sample_keys', [])[:15]}")
 
         results.append({
             "label": actor["label"],
