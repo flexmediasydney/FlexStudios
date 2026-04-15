@@ -18,6 +18,7 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import PulseSignalCard from "@/components/nurturing/PulseSignalCard";
 import PulseSignalQuickAdd from "@/components/nurturing/PulseSignalQuickAdd";
+import PulseTimeline from "@/components/pulse/PulseTimeline";
 import { BarChart, Bar, AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -25,7 +26,7 @@ import {
   Rss, Plus, Search, TrendingUp, Users, Building2, MapPin, Calendar, Star, Globe,
   ExternalLink, ChevronLeft, ChevronRight, UserPlus, ArrowRight, Activity, AlertTriangle,
   CheckCircle2, Eye, Sparkles, Briefcase, BarChart3, Phone, Mail, X, Filter,
-  Clock, Award, Zap, Target, Hash, Home, DollarSign
+  Clock, Award, Zap, Target, Hash, Home, DollarSign, Link2
 } from "lucide-react";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -92,6 +93,8 @@ export default function IndustryPulse() {
   const { data: crmAgents = [] } = useEntityList("Agent", "name");
   const { data: crmAgencies = [] } = useEntityList("Agency", "name");
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
+  const { data: pulseMappings = [] } = useEntityList("PulseCrmMapping", "-created_at");
+  const { data: pulseTimelineEntries = [] } = useEntityList("PulseTimeline", "-created_at", 500);
   const { data: user } = useCurrentUser();
 
   const [tab, setTab] = useState("command");
@@ -420,6 +423,7 @@ export default function IndustryPulse() {
           <TabsTrigger value="agents">Agent Intelligence{stats.notInCrm > 0 && <Badge className="ml-1.5 text-[9px] bg-amber-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.notInCrm}</Badge>}</TabsTrigger>
           <TabsTrigger value="events">Events{stats.upcomingEvents > 0 && <Badge className="ml-1.5 text-[9px] bg-purple-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.upcomingEvents}</Badge>}</TabsTrigger>
           <TabsTrigger value="market">Market Data</TabsTrigger>
+          <TabsTrigger value="mappings">Mappings{pulseMappings.filter(m => m.confidence === "suggested").length > 0 && <Badge className="ml-1.5 text-[9px] bg-indigo-500 text-white border-0 px-1.5 py-0 rounded-full">{pulseMappings.filter(m => m.confidence === "suggested").length}</Badge>}</TabsTrigger>
           <TabsTrigger value="signals">Signals{stats.newSignals > 0 && <Badge className="ml-1.5 text-[9px] bg-red-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.newSignals}</Badge>}</TabsTrigger>
         </TabsList>
 
@@ -905,6 +909,116 @@ export default function IndustryPulse() {
                     </tbody>
                   </table>
                 </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* ═══ TAB 6: MAPPINGS ═══ */}
+        <TabsContent value="mappings" className="mt-3">
+          <div className="space-y-4">
+            {/* Mapping stats */}
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3 text-green-500" />{pulseMappings.filter(m => m.confidence === "confirmed").length} confirmed</span>
+              <span className="flex items-center gap-1"><AlertTriangle className="h-3 w-3 text-amber-500" />{pulseMappings.filter(m => m.confidence === "suggested").length} suggested</span>
+              <span className="flex items-center gap-1"><Users className="h-3 w-3 text-muted-foreground" />{pulseAgents.filter(a => !a.is_in_crm).length} unmapped agents</span>
+            </div>
+
+            {/* Mappings list */}
+            {pulseMappings.length === 0 ? (
+              <Card className="border-dashed border-2"><CardContent className="py-12 text-center">
+                <Link2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground">No mappings yet. Run a data sync — the engine auto-detects matches by phone number and name.</p>
+              </CardContent></Card>
+            ) : (
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/30">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Pulse Agent (REA/Domain)</th>
+                      <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase text-muted-foreground w-16">Link</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">CRM Record</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Match</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Status</th>
+                      <th className="px-3 py-2 w-32"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pulseMappings.map(m => {
+                      const pulseAgent = pulseAgents.find(a => a.rea_agent_id === m.rea_id);
+                      const crmAgent = crmAgents.find(a => a.id === m.crm_entity_id);
+                      return (
+                        <tr key={m.id} className="border-t hover:bg-muted/20">
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-sm">{pulseAgent?.full_name || `REA ${m.rea_id}`}</p>
+                            <p className="text-[10px] text-muted-foreground">{pulseAgent?.agency_name || "—"} · {pulseAgent?.mobile || "—"}</p>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {m.confidence === "confirmed" ? (
+                              <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
+                            ) : m.confidence === "suggested" ? (
+                              <AlertTriangle className="h-5 w-5 text-amber-500 mx-auto" />
+                            ) : (
+                              <X className="h-5 w-5 text-red-400 mx-auto" />
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-sm">{crmAgent?.name || `CRM ${String(m.crm_entity_id).slice(0, 8)}...`}</p>
+                            <p className="text-[10px] text-muted-foreground">{crmAgent?.current_agency_name || "—"} · {crmAgent?.phone || "—"}</p>
+                          </td>
+                          <td className="px-3 py-2">
+                            <Badge variant="outline" className="text-[9px]">{m.match_type}</Badge>
+                          </td>
+                          <td className="px-3 py-2">
+                            {m.confidence === "confirmed" ? (
+                              <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">Confirmed</Badge>
+                            ) : m.confidence === "suggested" ? (
+                              <Badge className="text-[9px] bg-amber-100 text-amber-700 border-0 dark:bg-amber-900/30 dark:text-amber-400">Suggested</Badge>
+                            ) : (
+                              <Badge className="text-[9px] bg-red-100 text-red-700 border-0 dark:bg-red-900/30 dark:text-red-400">Rejected</Badge>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex gap-1">
+                              {m.confidence === "suggested" && (
+                                <>
+                                  <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-green-600" onClick={async () => {
+                                    await api.entities.PulseCrmMapping.update(m.id, { confidence: "confirmed", confirmed_at: new Date().toISOString(), confirmed_by_name: user?.full_name });
+                                    // Also update pulse_agents.is_in_crm
+                                    if (pulseAgent) await api.entities.PulseAgent.update(pulseAgent.id, { is_in_crm: true, linked_agent_id: m.crm_entity_id });
+                                    refetchEntityList("PulseCrmMapping");
+                                    refetchEntityList("PulseAgent");
+                                    toast.success("Mapping confirmed");
+                                  }}>✓ Confirm</Button>
+                                  <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-red-600" onClick={async () => {
+                                    await api.entities.PulseCrmMapping.update(m.id, { confidence: "rejected" });
+                                    refetchEntityList("PulseCrmMapping");
+                                    toast.success("Mapping rejected");
+                                  }}>✗ Reject</Button>
+                                </>
+                              )}
+                              {m.confidence === "confirmed" && (
+                                <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-muted-foreground" onClick={async () => {
+                                  await api.entities.PulseCrmMapping.update(m.id, { confidence: "suggested", confirmed_at: null, confirmed_by: null });
+                                  refetchEntityList("PulseCrmMapping");
+                                  toast.success("Mapping unlinked");
+                                }}>Unlink</Button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Timeline */}
+            <Card>
+              <CardContent className="p-4">
+                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Clock className="h-4 w-4 text-primary" />Intelligence Timeline</h3>
+                <PulseTimeline entries={pulseTimelineEntries} showEntityName maxHeight="max-h-[400px]" />
               </CardContent>
             </Card>
           </div>
