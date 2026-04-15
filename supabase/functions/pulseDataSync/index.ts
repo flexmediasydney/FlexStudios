@@ -449,6 +449,26 @@ Deno.serve(async (req) => {
     let agentsInserted = 0;
     let agentErrors = 0;
     const BATCH = 50;
+
+    // Debug: log first agent and try single insert
+    if (mergedAgents.length > 0) {
+      const first = mergedAgents[0];
+      console.log(`DEBUG first agent keys: ${Object.keys(first).join(', ')}`);
+      console.log(`DEBUG first agent name: ${first.full_name}, mobile: ${first.mobile}, agency: ${first.agency_name}`);
+      const testRecord = {
+        full_name: first.full_name || 'Unknown',
+        mobile: first.mobile || null,
+        agency_name: first.agency_name || null,
+        source: first.source || 'test',
+        data_sources: typeof first.data_sources === 'string' ? JSON.parse(first.data_sources) : (first.data_sources || []),
+        suburbs_active: typeof first.suburbs_active === 'string' ? JSON.parse(first.suburbs_active) : (first.suburbs_active || []),
+        recent_listing_ids: typeof first.recent_listing_ids === 'string' ? JSON.parse(first.recent_listing_ids) : (first.recent_listing_ids || []),
+        last_synced_at: now,
+        is_in_crm: first.is_in_crm || false,
+      };
+      const { data: testData, error: testErr } = await admin.from('pulse_agents').insert(testRecord).select('id, full_name');
+      console.log(`DEBUG single insert: data=${JSON.stringify(testData)}, error=${testErr ? testErr.message : 'none'}`);
+    }
     for (let i = 0; i < mergedAgents.length; i += BATCH) {
       const batch = mergedAgents.slice(i, i + BATCH).map(a => ({
         ...a,
