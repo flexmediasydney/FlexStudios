@@ -445,19 +445,25 @@ Deno.serve(async (req) => {
     // Clear existing Fair Trading junk data first
     await admin.from('pulse_agents').delete().eq('source', 'fair_trading').then(() => {});
 
-    // Batch insert agents using entity API (handles field mapping)
+    // Batch insert agents — use raw admin client with explicit JSONB handling
     let agentsInserted = 0;
+    let agentErrors = 0;
     const BATCH = 50;
     for (let i = 0; i < mergedAgents.length; i += BATCH) {
-      const batch = mergedAgents.slice(i, i + BATCH);
-      for (const agent of batch) {
-        try {
-          await entities.PulseAgent.create(agent);
-          agentsInserted++;
-        } catch (err: any) {
-          // Log first few errors then continue
-          if (agentsInserted < 3) console.error(`Agent insert failed:`, err.message?.substring(0, 200));
-        }
+      const batch = mergedAgents.slice(i, i + BATCH).map(a => ({
+        ...a,
+        // Ensure JSONB fields are actual arrays/objects, not strings
+        data_sources: typeof a.data_sources === 'string' ? JSON.parse(a.data_sources) : (a.data_sources || []),
+        suburbs_active: typeof a.suburbs_active === 'string' ? JSON.parse(a.suburbs_active) : (a.suburbs_active || []),
+        recent_listing_ids: typeof a.recent_listing_ids === 'string' ? JSON.parse(a.recent_listing_ids) : (a.recent_listing_ids || []),
+        sales_breakdown: typeof a.sales_breakdown === 'string' ? JSON.parse(a.sales_breakdown) : (a.sales_breakdown || null),
+      }));
+      const { error } = await admin.from('pulse_agents').insert(batch);
+      if (error) {
+        agentErrors++;
+        if (agentErrors <= 3) console.error(`Agent batch ${i/BATCH} error:`, error.message?.substring(0, 300));
+      } else {
+        agentsInserted += batch.length;
       }
       if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${mergedAgents.length}...`);
     }
@@ -465,11 +471,16 @@ Deno.serve(async (req) => {
     // Insert agencies
     let agenciesInserted = 0;
     for (const agency of mergedAgencies) {
-      try {
-        await entities.PulseAgency.create(agency);
+      const cleaned = {
+        ...agency,
+        suburbs_active: typeof agency.suburbs_active === 'string' ? JSON.parse(agency.suburbs_active) : (agency.suburbs_active || []),
+        data_sources: typeof agency.data_sources === 'string' ? JSON.parse(agency.data_sources) : (agency.data_sources || []),
+      };
+      const { error } = await admin.from('pulse_agencies').insert(cleaned);
+      if (error) {
+        if (agenciesInserted < 2) console.error(`Agency insert error:`, error.message?.substring(0, 200));
+      } else {
         agenciesInserted++;
-      } catch (err: any) {
-        if (agenciesInserted < 2) console.error(`Agency insert failed:`, err.message?.substring(0, 200));
       }
     }
 
@@ -493,12 +504,13 @@ Deno.serve(async (req) => {
       last_synced_at: now,
     }));
 
-    for (const listing of listingRecords) {
-      try {
-        await entities.PulseListing.create(listing);
-        listingsInserted++;
-      } catch (err: any) {
-        if (listingsInserted < 2) console.error(`Listing insert failed:`, err.message?.substring(0, 200));
+    for (let i = 0; i < listingRecords.length; i += BATCH) {
+      const batch = listingRecords.slice(i, i + BATCH);
+      const { error } = await admin.from('pulse_listings').insert(batch);
+      if (error) {
+        if (listingsInserted < 2) console.error(`Listing insert error:`, error.message?.substring(0, 200));
+      } else {
+        listingsInserted += batch.length;
       }
     }
 
