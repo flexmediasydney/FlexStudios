@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Search, Link2, X } from "lucide-react";
 import { toast } from "sonner";
 import { usePriceGate } from "@/components/auth/RoleGate";
+import { useCurrentUser } from "@/components/auth/PermissionGuard";
 
 export default function ProjectLinkDialogForInbox({
   thread,
@@ -24,6 +25,7 @@ export default function ProjectLinkDialogForInbox({
   const [searchQuery, setSearchQuery] = useState("");
   const queryClient = useQueryClient();
   const { visible: showPricing } = usePriceGate();
+  const { data: user } = useCurrentUser();
 
   // Fetch recent projects once, filter client-side (avoids re-fetching on every keystroke)
   const { data: allProjects = [], isLoading } = useQuery({
@@ -58,6 +60,16 @@ export default function ProjectLinkDialogForInbox({
           })
         )
       );
+      // Audit log: who linked what email to which project
+      api.entities.ProjectActivity.create({
+        project_id: projectId,
+        project_title: project.title,
+        action: "email_linked",
+        activity_type: "email",
+        description: `Email thread "${thread.subject || 'Untitled'}" (${messageIds.length} messages) linked to project by ${user?.full_name || 'unknown'}`,
+        user_name: user?.full_name,
+        user_email: user?.email,
+      }).catch(() => {});
       return { messageIds, projectId, projectTitle: project.title };
     },
     onSuccess: (data) => {
