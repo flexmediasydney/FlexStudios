@@ -89,8 +89,10 @@ Deno.serve(async (req) => {
     (project.packages || []).forEach((pkgItem: any) => {
       const pkg = packageMap.get(pkgItem.package_id);
       if (!pkg) return;
-      // Check nested products within the package
-      (pkgItem.products || pkg.products || []).forEach((prodItem: any) => checkProduct(prodItem.product_id));
+      // Check nested products within the package — prefer pkgItem.products if non-empty,
+      // otherwise fall back to the package definition's products
+      const nestedProducts = (pkgItem.products?.length > 0 ? pkgItem.products : pkg.products) || [];
+      nestedProducts.forEach((prodItem: any) => checkProduct(prodItem.product_id));
     });
 
     const onsiteRoles = [
