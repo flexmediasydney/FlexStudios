@@ -547,6 +547,13 @@ Deno.serve(async (req) => {
     return jsonResponse({
       success: true,
       suburbs,
+      _debug: {
+        rea_raw: allReaAgents.length,
+        domain_raw: allDomainAgents.length,
+        merged_count: mergedAgents.length,
+        agent_errors: agentErrors,
+        first_agent_name: mergedAgents[0]?.full_name || 'none',
+      },
       agents_merged: agentsInserted,
       agencies_extracted: agenciesInserted,
       listings_stored: listingsInserted,
