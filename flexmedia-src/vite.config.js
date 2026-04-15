@@ -24,7 +24,9 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'], // Prevents duplicate React in worktrees
   },
   esbuild: {
-    drop: ['console', 'debugger'],
+    // NOTE: 'console' was in drop list but it strips ALL console.* calls including
+    // error logging needed for debugging production issues. Removed temporarily.
+    drop: ['debugger'],
   },
   build: {
     target: 'es2020',
