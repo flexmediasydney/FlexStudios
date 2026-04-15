@@ -977,44 +977,168 @@ export default function IndustryPulse() {
         />
       )}
 
-      {/* Agent Detail Slide-out */}
-      {selectedAgent && (
-        <div className="fixed inset-y-0 right-0 w-[380px] bg-background border-l shadow-2xl z-50 flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between p-4 border-b">
-            <h3 className="font-semibold truncate">{selectedAgent.full_name}</h3>
-            <Button variant="ghost" size="icon" onClick={() => setSelectedAgent(null)}><X className="h-4 w-4" /></Button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
-            {selectedAgent.email && <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 text-muted-foreground" />{selectedAgent.email}</div>}
-            {selectedAgent.phone && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground" />{selectedAgent.phone}</div>}
-            {selectedAgent.agency_name && <div className="flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-muted-foreground" />{selectedAgent.agency_name}</div>}
-            {selectedAgent.agency_suburb && <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 text-muted-foreground" />{selectedAgent.agency_suburb}</div>}
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t">
-              <div><p className="text-[10px] text-muted-foreground">Active Listings</p><p className="text-lg font-bold">{selectedAgent.total_listings_active || 0}</p></div>
-              <div><p className="text-[10px] text-muted-foreground">Sold (12m)</p><p className="text-lg font-bold">{selectedAgent.total_sold_12m || 0}</p></div>
-              <div><p className="text-[10px] text-muted-foreground">Avg Sold Price</p><p className="text-lg font-bold">{fmtPrice(selectedAgent.avg_sold_price)}</p></div>
-              <div><p className="text-[10px] text-muted-foreground">Avg DOM</p><p className="text-lg font-bold">{selectedAgent.avg_days_on_market || "—"}</p></div>
-              <div><p className="text-[10px] text-muted-foreground">Reviews</p><p className="text-lg font-bold">{selectedAgent.reviews_count || 0} ({selectedAgent.reviews_avg ? Number(selectedAgent.reviews_avg).toFixed(1) : "—"}★)</p></div>
-              <div><p className="text-[10px] text-muted-foreground">Source</p><p className="text-sm">{selectedAgent.source || "manual"}</p></div>
-            </div>
-            {selectedAgent.licence_number && (
-              <div className="pt-2 border-t">
-                <p className="text-[10px] text-muted-foreground">NSW Licence</p>
-                <p className="text-sm font-mono">{selectedAgent.licence_number} — {selectedAgent.licence_status || "?"}</p>
+      {/* Agent Detail Slide-out — Rich Intelligence Panel */}
+      {selectedAgent && (() => {
+        const a = selectedAgent;
+        const salesBreakdown = (() => { try { return typeof a.sales_breakdown === "string" ? JSON.parse(a.sales_breakdown) : a.sales_breakdown; } catch { return null; } })();
+        const recentListings = (() => { try { return typeof a.recent_listing_ids === "string" ? JSON.parse(a.recent_listing_ids) : a.recent_listing_ids; } catch { return []; } })();
+        return (
+          <div className="fixed inset-y-0 right-0 w-[420px] bg-background border-l shadow-2xl z-50 flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="p-4 border-b bg-muted/30">
+              <div className="flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-bold text-lg truncate">{a.full_name}</h3>
+                  {a.job_title && <p className="text-xs text-muted-foreground mt-0.5">{a.job_title}</p>}
+                  <div className="flex items-center gap-2 mt-1.5">
+                    {a.is_in_crm ? <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">In CRM</Badge>
+                     : <Badge className="text-[9px] bg-amber-100 text-amber-700 border-0 dark:bg-amber-900/30 dark:text-amber-400">Prospect</Badge>}
+                    {a.years_experience && <Badge variant="outline" className="text-[9px]">{a.years_experience} yrs exp</Badge>}
+                    {a.data_integrity_score > 0 && <Badge variant="outline" className="text-[9px]">Quality: {a.data_integrity_score}%</Badge>}
+                  </div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setSelectedAgent(null)}><X className="h-4 w-4" /></Button>
               </div>
-            )}
-            <div className="flex gap-2 pt-2 border-t">
-              {selectedAgent.domain_profile_url && <a href={selectedAgent.domain_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />Domain</a>}
-              {selectedAgent.rea_profile_url && <a href={selectedAgent.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />REA</a>}
             </div>
-            {!selectedAgent.is_in_crm && (
-              <Button className="w-full" onClick={() => { setAddToCrmCandidate(selectedAgent); setAddToCrmStep(1); setSelectedAgent(null); }}>
-                <UserPlus className="h-4 w-4 mr-2" />Add to CRM Pipeline
-              </Button>
-            )}
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
+              {/* Contact */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Contact</p>
+                {a.mobile && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`tel:${a.mobile}`} className="text-primary hover:underline">{a.mobile}</a>{a.mobile_validated && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">✓ Verified</Badge>}</div>}
+                {a.business_phone && a.business_phone !== a.mobile && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{a.business_phone} <span className="text-[10px] text-muted-foreground">(office)</span></div>}
+                {a.email && <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`mailto:${a.email}`} className="text-primary hover:underline">{a.email}</a></div>}
+              </div>
+
+              {/* Agency */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Agency</p>
+                {a.agency_name && <div className="flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><span className="font-medium">{a.agency_name}</span>{a.agency_validated && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">✓ Matched</Badge>}</div>}
+                {a.agency_suburb && <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{a.agency_suburb}</div>}
+              </div>
+
+              {/* Performance Stats */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Performance</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{a.sales_as_lead || a.total_sold_12m || 0}</p><p className="text-[9px] text-muted-foreground">Sales (Lead)</p></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{fmtPrice(a.avg_sold_price)}</p><p className="text-[9px] text-muted-foreground">Median Sold</p></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{a.avg_days_on_market || "—"}</p><p className="text-[9px] text-muted-foreground">Avg DOM</p></div>
+                </div>
+                {/* Dual source comparison */}
+                {(a.rea_median_sold_price && a.domain_avg_sold_price) && (
+                  <div className="text-[10px] text-muted-foreground bg-muted/20 rounded p-2">
+                    <p className="font-medium mb-1">Dual-source price comparison:</p>
+                    <p>REA median: {fmtPrice(a.rea_median_sold_price)} · Domain avg: {fmtPrice(a.domain_avg_sold_price)}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Reviews */}
+              {(a.reviews_count > 0 || a.rea_rating > 0) && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Reviews</p>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1">
+                      <Star className="h-5 w-5 fill-amber-400 text-amber-400" />
+                      <span className="text-xl font-bold">{Number(a.reviews_avg || a.rea_rating).toFixed(1)}</span>
+                    </div>
+                    <span className="text-xs text-muted-foreground">{a.reviews_count || 0} reviews</span>
+                    {a.rea_rating && a.domain_rating && <span className="text-[10px] text-muted-foreground">(REA: {a.rea_rating} · Domain: {a.domain_rating})</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* Sales Breakdown by Property Type */}
+              {salesBreakdown && Object.keys(salesBreakdown).length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Sales by Property Type</p>
+                  <div className="space-y-1">
+                    {Object.entries(salesBreakdown).map(([type, data]) => (
+                      <div key={type} className="flex items-center justify-between text-xs bg-muted/30 rounded px-2.5 py-1.5">
+                        <span className="capitalize font-medium">{type}</span>
+                        <span className="text-muted-foreground tabular-nums">{data.count} sold · {fmtPrice(data.medianSoldPrice)} median · {data.medianDaysOnSite}d DOM</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Awards */}
+              {a.awards && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1"><Award className="h-3 w-3" />Awards</p>
+                  <div className="text-xs text-muted-foreground whitespace-pre-line bg-amber-50/50 dark:bg-amber-950/10 rounded-lg p-2.5 border border-amber-200/50 dark:border-amber-800/30">{a.awards}</div>
+                </div>
+              )}
+
+              {/* Speciality Suburbs */}
+              {a.speciality_suburbs && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1"><MapPin className="h-3 w-3" />Speciality Areas</p>
+                  <p className="text-xs text-muted-foreground">{a.speciality_suburbs}</p>
+                </div>
+              )}
+
+              {/* Community Involvement */}
+              {a.community_involvement && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Community</p>
+                  <p className="text-xs text-muted-foreground whitespace-pre-line">{a.community_involvement}</p>
+                </div>
+              )}
+
+              {/* Social Links */}
+              {(a.social_facebook || a.social_instagram || a.social_linkedin) && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Social</p>
+                  <div className="flex gap-3">
+                    {a.social_facebook && <a href={a.social_facebook} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">Facebook</a>}
+                    {a.social_instagram && <a href={`https://instagram.com/${a.social_instagram.replace("@","")}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">Instagram</a>}
+                    {a.social_linkedin && <a href={a.social_linkedin} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">LinkedIn</a>}
+                  </div>
+                </div>
+              )}
+
+              {/* Profile Links */}
+              <div className="space-y-1.5 pt-2 border-t">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Profiles</p>
+                <div className="flex gap-3">
+                  {a.rea_profile_url && <a href={a.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />realestate.com.au</a>}
+                  {a.domain_profile_url && <a href={a.domain_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />domain.com.au</a>}
+                </div>
+              </div>
+
+              {/* Recent Listings */}
+              {recentListings && recentListings.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Recent Listings ({recentListings.length})</p>
+                  <div className="flex flex-wrap gap-1">
+                    {recentListings.slice(0, 5).map((id, i) => (
+                      <a key={i} href={`https://www.realestate.com.au/property--nsw--${id}`} target="_blank" rel="noopener noreferrer"
+                        className="text-[10px] px-2 py-0.5 rounded bg-muted hover:bg-muted/80 text-primary">#{id}</a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Data Source + Integrity */}
+              <div className="space-y-1 pt-2 border-t text-[10px] text-muted-foreground">
+                <p>Source: {a.source || "manual"} · Synced: {fmtDate(a.last_synced_at)}</p>
+                {a.rea_agent_id && <p>REA ID: {a.rea_agent_id}</p>}
+                {a.domain_agent_id && <p>Domain ID: {a.domain_agent_id}</p>}
+              </div>
+
+              {/* Add to CRM button */}
+              {!a.is_in_crm && (
+                <Button className="w-full" onClick={() => { setAddToCrmCandidate(a); setAddToCrmStep(1); setSelectedAgent(null); }}>
+                  <UserPlus className="h-4 w-4 mr-2" />Add to CRM Pipeline
+                </Button>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ═══ ADD TO CRM — Double Confirmation Dialog ═══ */}
       {addToCrmCandidate && (() => {
