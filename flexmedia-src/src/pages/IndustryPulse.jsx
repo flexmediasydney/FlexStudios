@@ -1003,8 +1003,9 @@ export default function IndustryPulse() {
                         <SortHeader col="bedrooms" label="Bed" className="hidden lg:table-cell" />
                         <SortHeader col="agent_name" label="Agent" className="hidden md:table-cell" />
                         <SortHeader col="agency_name" label="Agency" className="hidden lg:table-cell" />
-                        <SortHeader col="listed_date" label="Listed" />
+                        <SortHeader col="first_seen_at" label="First Seen" />
                         <SortHeader col="days_on_market" label="DOM" className="hidden md:table-cell" />
+                        <SortHeader col="next_inspection" label="Inspection" className="hidden lg:table-cell" />
                         <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Type</th>
                       </tr>
                     </thead>
@@ -1030,8 +1031,11 @@ export default function IndustryPulse() {
                             {agentInCrm && <Badge className="ml-1 text-[7px] bg-green-100 text-green-700 border-0 px-1 py-0">Client</Badge>}
                           </td>
                           <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">{l.agency_name || "—"}</td>
-                          <td className="px-3 py-2 text-xs text-muted-foreground">{fmtShortDate(l.listed_date)}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">
+                            {l.first_seen_at ? new Date(l.first_seen_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : fmtShortDate(l.listed_date) || "—"}
+                          </td>
                           <td className="px-3 py-2 text-xs tabular-nums hidden md:table-cell">{l.days_on_market || "—"}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">{l.next_inspection ? fmtShortDate(l.next_inspection) : "—"}</td>
                           <td className="px-3 py-2">
                             {l.listing_type === "for_sale" ? <Badge className="text-[9px] bg-green-100 text-green-700 border-0">Sale</Badge>
                              : l.listing_type === "sold" ? <Badge className="text-[9px] bg-blue-100 text-blue-700 border-0">Sold</Badge>
@@ -2067,9 +2071,12 @@ export default function IndustryPulse() {
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase">Timeline</p>
                 <div className="space-y-1 text-xs">
+                  {l.first_seen_at && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>First Detected</span><span className="text-muted-foreground">{new Date(l.first_seen_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span></div>}
                   {l.listed_date && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Listed</span><span className="text-muted-foreground">{fmtDate(l.listed_date)}</span></div>}
+                  {l.next_inspection && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Next Inspection</span><span className="text-muted-foreground">{new Date(l.next_inspection).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span></div>}
                   {l.sold_date && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Sold</span><span className="text-muted-foreground">{fmtDate(l.sold_date)}</span></div>}
                   {l.days_on_market > 0 && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Days on Market</span><span className="font-medium tabular-nums">{l.days_on_market}</span></div>}
+                  {l.status && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Status</span><Badge variant="outline" className="text-[9px]">{l.status}</Badge></div>}
                 </div>
               </div>
 

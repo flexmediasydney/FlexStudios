@@ -667,6 +667,8 @@ Deno.serve(async (req) => {
     const listingRecords = allListings.map(l => {
       const listingId = l.listingId ? String(l.listingId) : null;
       const isNew = listingId && !existingListingIds.has(listingId);
+      // Extract first inspection as next_inspection timestamp
+      const nextInspection = (l.inspections && l.inspections[0]?.startTime) || null;
       return {
         address: l.address || null,
         suburb: l.suburb || l._suburb || null,
@@ -674,14 +676,16 @@ Deno.serve(async (req) => {
         property_type: l.propertyType || null,
         bedrooms: l.bedrooms || null,
         bathrooms: l.bathrooms || null,
-        parking: l.parking || l.carSpaces || null,
-        land_size: l.landSize || null,
+        parking: l.parking || l.carSpaces ? String(l.parking || l.carSpaces) : null,
+        land_size: l.landSize ? String(l.landSize) : null,
         listing_type: l.isSold ? 'sold' : l.isBuy ? 'for_sale' : l.isRent ? 'for_rent' : 'other',
         asking_price: parseFloat(String(l.price || '').replace(/[^0-9.]/g, '')) || null,
         sold_price: l.soldPrice ? parseFloat(String(l.soldPrice).replace(/[^0-9.]/g, '')) : null,
         listed_date: l.listedDate || l.dateAvailable || null,
         sold_date: l.soldDate || null,
         days_on_market: l.daysOnMarket || null,
+        status: l.status || null,
+        next_inspection: nextInspection,
         agent_name: (l.agents && l.agents[0]) ? l.agents[0].name : null,
         agent_phone: (l.agents && l.agents[0]) ? l.agents[0].phoneNumber : null,
         agency_name: l.agencyName || null,
@@ -691,6 +695,7 @@ Deno.serve(async (req) => {
         source_url: l.url || null,
         source_listing_id: listingId,
         last_synced_at: now,
+        // first_seen_at is set by DB default on INSERT, not overwritten on upsert
         _isNew: isNew,
       };
     });
