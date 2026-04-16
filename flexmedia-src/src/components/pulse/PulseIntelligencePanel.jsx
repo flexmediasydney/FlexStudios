@@ -79,9 +79,13 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
         const match = pulseAgencies.find(a => a.domain_agency_id === mapping.domain_id);
         if (match) return match;
       }
-      // Priority 3: Name fallback
-      const name = (crmEntity?.name || "").toLowerCase().trim();
-      return pulseAgencies.find(a => (a.name || "").toLowerCase().trim().includes(name) || name.includes((a.name || "").toLowerCase().trim()));
+      // Priority 3: Name fallback (normalize dashes for matching)
+      const normName = (s) => (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+      const name = normName(crmEntity?.name);
+      return pulseAgencies.find(a => {
+        const n = normName(a.name);
+        return n === name || n.includes(name) || name.includes(n);
+      });
     }
   }, [entityType, mapping, pulseAgents, pulseAgencies, crmEntity]);
 
@@ -91,18 +95,23 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
     return timeline.filter(t => {
       if (t.crm_entity_id === crmEntityId) return true;
       if (mapping?.rea_id && t.rea_id === mapping.rea_id) return true;
+      if (mapping?.domain_id && t.domain_id === mapping.domain_id) return true;
       if (mapping?.pulse_entity_id && t.pulse_entity_id === mapping.pulse_entity_id) return true;
+      // Also match by CRM entity's own platform IDs
+      if (crmEntity?.rea_agent_id && t.rea_id === crmEntity.rea_agent_id) return true;
+      if (crmEntity?.rea_agency_id && t.rea_id === crmEntity.rea_agency_id) return true;
       return false;
     });
-  }, [timeline, crmEntityId, mapping]);
+  }, [timeline, crmEntityId, mapping, crmEntity]);
 
-  // For agencies: find all agents at this agency
+  // For agencies: find all agents at this agency (normalize dashes)
   const agencyAgents = useMemo(() => {
     if (entityType !== "agency" || !crmEntity?.name) return [];
-    const agencyName = (crmEntity.name || "").toLowerCase().trim();
+    const normName = (s) => (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const agencyName = normName(crmEntity.name);
     return pulseAgents.filter(a => {
-      const an = (a.agency_name || "").toLowerCase().trim();
-      return an.includes(agencyName) || agencyName.includes(an);
+      const an = normName(a.agency_name);
+      return an === agencyName || an.includes(agencyName) || agencyName.includes(an);
     }).sort((a, b) => (b.sales_as_lead || 0) - (a.sales_as_lead || 0));
   }, [entityType, crmEntity, pulseAgents]);
 
