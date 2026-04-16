@@ -35,10 +35,31 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
     [mappings, crmEntityId, entityType]
   );
 
-  // Find pulse data via 6-ID platform matching, then mapping, then name fallback
+  // Find pulse data via mapping's pulse_entity_id (the canonical link)
+  // Falls back to platform IDs only if pulse_entity_id is missing (legacy data)
   const pulseData = useMemo(() => {
+    const collection = entityType === "agent" ? pulseAgents : pulseAgencies;
+
+    // Priority 1: mapping.pulse_entity_id — the direct FK link
+    if (mapping?.pulse_entity_id) {
+      const match = collection.find(a => a.id === mapping.pulse_entity_id);
+      if (match) return match;
+    }
+
+    // Priority 2: mapping.rea_id / domain_id — fallback for mappings without pulse_entity_id
+    if (mapping?.rea_id) {
+      const idField = entityType === "agent" ? "rea_agent_id" : "rea_agency_id";
+      const match = collection.find(a => a[idField] === mapping.rea_id);
+      if (match) return match;
+    }
+    if (mapping?.domain_id) {
+      const idField = entityType === "agent" ? "domain_agent_id" : "domain_agency_id";
+      const match = collection.find(a => a[idField] === mapping.domain_id);
+      if (match) return match;
+    }
+
+    // Priority 3: CRM record's own platform IDs (for entities mapped before pulse_entity_id existed)
     if (entityType === "agent") {
-      // Priority 1: Direct ID match from CRM record's platform IDs
       if (crmEntity?.rea_agent_id) {
         const match = pulseAgents.find(a => a.rea_agent_id === crmEntity.rea_agent_id);
         if (match) return match;
@@ -47,21 +68,7 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
         const match = pulseAgents.find(a => a.domain_agent_id === crmEntity.domain_agent_id);
         if (match) return match;
       }
-      // Priority 2: Mapping table
-      if (mapping?.rea_id) {
-        const match = pulseAgents.find(a => a.rea_agent_id === mapping.rea_id);
-        if (match) return match;
-      }
-      if (mapping?.domain_id) {
-        const match = pulseAgents.find(a => a.domain_agent_id === mapping.domain_id);
-        if (match) return match;
-      }
-      // Priority 3: Name fallback
-      const name = (crmEntity?.name || "").toLowerCase().trim();
-      return pulseAgents.find(a => (a.full_name || "").toLowerCase().trim() === name);
     } else {
-      // Agency matching
-      // Priority 1: Direct ID match
       if (crmEntity?.rea_agency_id) {
         const match = pulseAgencies.find(a => a.rea_agency_id === crmEntity.rea_agency_id);
         if (match) return match;
@@ -70,23 +77,10 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
         const match = pulseAgencies.find(a => a.domain_agency_id === crmEntity.domain_agency_id);
         if (match) return match;
       }
-      // Priority 2: Mapping table
-      if (mapping?.rea_id) {
-        const match = pulseAgencies.find(a => a.rea_agency_id === mapping.rea_id);
-        if (match) return match;
-      }
-      if (mapping?.domain_id) {
-        const match = pulseAgencies.find(a => a.domain_agency_id === mapping.domain_id);
-        if (match) return match;
-      }
-      // Priority 3: Name fallback (normalize dashes for matching)
-      const normName = (s) => (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-      const name = normName(crmEntity?.name);
-      return pulseAgencies.find(a => {
-        const n = normName(a.name);
-        return n === name || n.includes(name) || name.includes(n);
-      });
     }
+
+    // No name fallback — if IDs don't link, the entity is genuinely unlinked
+    return null;
   }, [entityType, mapping, pulseAgents, pulseAgencies, crmEntity]);
 
   // Filter timeline entries for this entity
@@ -104,14 +98,20 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
     });
   }, [timeline, crmEntityId, mapping, crmEntity]);
 
-  // For agencies: find all agents at this agency (normalize dashes)
+  // For agencies: find all agents at this agency via ID linking, name fallback
   const agencyAgents = useMemo(() => {
-    if (entityType !== "agency" || !crmEntity?.name) return [];
+    if (entityType !== "agency" || !pulseData) return [];
+    // Priority 1: Link by rea_agency_id (if the pulse agency has one)
+    if (pulseData.rea_agency_id) {
+      const byId = pulseAgents.filter(a => a.agency_rea_id === pulseData.rea_agency_id);
+      if (byId.length > 0) return byId;
+    }
+    // Priority 2: Link by normalized agency name
     const normName = (s) => (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
-    const agencyName = normName(crmEntity.name);
+    const agencyName = normName(pulseData.name || crmEntity?.name);
     return pulseAgents.filter(a => {
       const an = normName(a.agency_name);
-      return an === agencyName || an.includes(agencyName) || agencyName.includes(an);
+      return an === agencyName;
     }).sort((a, b) => (b.sales_as_lead || 0) - (a.sales_as_lead || 0));
   }, [entityType, crmEntity, pulseAgents]);
 
