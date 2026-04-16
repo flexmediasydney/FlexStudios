@@ -6,7 +6,7 @@ export default function ProjectRulebook() {
     {
       id: 1,
       title: "Eight Lifecycle Stages",
-      description: "Projects flow through: To Be Scheduled → Scheduled → Onsite → Uploaded → Submitted → In Progress → Ready for Partial → Delivered",
+      description: "Projects flow through: To Be Scheduled → Scheduled → Onsite → Uploaded → Submitted → In Progress → Partially Delivered → Delivered",
       icon: Package,
       color: "bg-blue-100 text-blue-700"
     },

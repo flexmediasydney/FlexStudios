@@ -11,7 +11,7 @@ const STAGE_LABELS: Record<string, string> = {
   'uploaded': 'Uploaded',
   'submitted': 'Submitted',
   'in_progress': 'In Progress',
-  'ready_for_partial': 'Ready for Partial',
+  'ready_for_partial': 'Partially Delivered',
   'in_revision': 'In Revision',
   'delivered': 'Delivered',
 };

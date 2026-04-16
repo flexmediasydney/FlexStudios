@@ -252,7 +252,7 @@ const STATUS_LABELS = {
   uploaded: 'Uploaded',
   submitted: 'Submitted',
   in_progress: 'In Progress',
-  ready_for_partial: 'Ready',
+  ready_for_partial: 'Partial',
   in_revision: 'In Revision',
   delivered: 'Delivered',
 };

@@ -9,7 +9,7 @@ export const PROJECT_STAGES = [
   { value: "submitted",       label: "Submitted",       color: "bg-purple-100 dark:bg-purple-950/30",textColor: "text-purple-700 dark:text-purple-400",borderColor: "border-purple-200 dark:border-purple-800" },
   { value: "in_progress",     label: "In Progress",     color: "bg-violet-100 dark:bg-violet-950/30",textColor: "text-violet-700 dark:text-violet-400",borderColor: "border-violet-200 dark:border-violet-800" },
   { value: "in_production",    label: "In Production",   color: "bg-cyan-100 dark:bg-cyan-950/30",  textColor: "text-cyan-700 dark:text-cyan-400",  borderColor: "border-cyan-200 dark:border-cyan-800" },
-  { value: "ready_for_partial",label: "Ready for Partial",color: "bg-indigo-100 dark:bg-indigo-950/30",textColor: "text-indigo-700 dark:text-indigo-400",borderColor: "border-indigo-200 dark:border-indigo-800" },
+  { value: "ready_for_partial",label: "Partially Delivered",color: "bg-indigo-100 dark:bg-indigo-950/30",textColor: "text-indigo-700 dark:text-indigo-400",borderColor: "border-indigo-200 dark:border-indigo-800" },
   { value: "in_revision",     label: "In Revision",     color: "bg-amber-100 dark:bg-amber-950/30",textColor: "text-amber-700 dark:text-amber-400",borderColor: "border-amber-200 dark:border-amber-800" },
   { value: "delivered",       label: "Delivered",       color: "bg-emerald-100 dark:bg-emerald-950/30",textColor: "text-emerald-700 dark:text-emerald-400",borderColor: "border-emerald-200 dark:border-emerald-800" }
 ];

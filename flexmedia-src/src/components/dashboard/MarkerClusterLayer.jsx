@@ -30,7 +30,7 @@ const STAGE_LABELS = {
   submitted:         'Submitted',
   in_progress:       'In Progress',
   in_production:     'In Production',
-  ready_for_partial: 'Ready Partial',
+  ready_for_partial: 'Partial Delivery',
   in_revision:       'In Revision',
   delivered:         'Delivered',
 };
