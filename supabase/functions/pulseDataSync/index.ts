@@ -364,14 +364,32 @@ Deno.serve(async (req) => {
       const reaName = rea.name || '';
       const reaMobile = normalizeMobile(rea.mobile || '');
 
-      // Try to find matching Domain agent
+      // Try to find matching Domain agent (name + agency check, then phone fallback)
       let domainMatch: any = null;
       for (const dom of allDomainAgents) {
         if (usedDomainIds.has(dom.id?.toString())) continue;
-        if (fuzzyNameMatch(reaName, dom.name || '')) {
-          domainMatch = dom;
-          usedDomainIds.add(dom.id?.toString());
-          break;
+        const domName = dom.name || '';
+        if (fuzzyNameMatch(reaName, domName)) {
+          // Same-name check: verify agency matches too (prevents merging different people)
+          const reaAgency = normalizeAgencyName(rea.agency?.name || '');
+          const domAgency = normalizeAgencyName(dom.agencyName || dom.agency || '');
+          if (!reaAgency || !domAgency || reaAgency.includes(domAgency) || domAgency.includes(reaAgency)) {
+            domainMatch = dom;
+            usedDomainIds.add(dom.id?.toString());
+            break;
+          }
+        }
+      }
+      // Phone fallback: if no name match, try mobile number
+      if (!domainMatch && reaMobile) {
+        for (const dom of allDomainAgents) {
+          if (usedDomainIds.has(dom.id?.toString())) continue;
+          const domMobile = normalizeMobile(dom.mobile || dom.telephone || '');
+          if (domMobile && reaMobile === domMobile) {
+            domainMatch = dom;
+            usedDomainIds.add(dom.id?.toString());
+            break;
+          }
         }
       }
 
@@ -846,7 +864,7 @@ Deno.serve(async (req) => {
         agency_rea_id: l.agencyProfileUrl ? l.agencyProfileUrl.replace(/.*\/agency\/[^-]+-/, '') : null,
         source: l._source || 'rea',
         source_url: l.url || null,
-        source_listing_id: l._source === 'domain_listings' ? null : listingId,
+        source_listing_id: listingId ? (l._source === 'domain_listings' ? `domain_${listingId}` : listingId) : null,
         last_synced_at: now,
         _isNew: isNew,
         // Cross-enrichment data (stripped before DB insert, used for agent enrichment)

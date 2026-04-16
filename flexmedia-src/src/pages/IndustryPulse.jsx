@@ -246,8 +246,8 @@ export default function IndustryPulse() {
     // Compute mapped position for each agent
     result = result.map(a => {
       const jt = (a.job_title || "").toLowerCase();
-      const _position = (jt.includes("principal") || jt.includes("director") || jt.includes("managing")) ? "Partner"
-        : (jt.includes("senior") || jt.includes("manager") || jt.includes("head of")) ? "Senior" : "Junior";
+      const _position = (jt.includes("principal") || jt.includes("director") || jt.includes("managing") || jt.includes("licensee") || jt.includes("owner") || jt.includes("ceo") || jt.includes("coo") || jt.includes("partner")) ? "Partner"
+        : (jt.includes("senior") || jt.includes("manager") || jt.includes("head of") || jt.includes("associate director") || jt.includes("auctioneer")) ? "Senior" : "Junior";
       return { ...a, _position };
     });
     // Sort
@@ -321,6 +321,11 @@ export default function IndustryPulse() {
       let va = a[col], vb = b[col];
       if (col === "asking_price" || col === "days_on_market" || col === "bedrooms") {
         va = Number(va) || 0; vb = Number(vb) || 0;
+        return dir === "desc" ? vb - va : va - vb;
+      }
+      // Date columns: compare as timestamps, null → 0
+      if (col.includes("date") || col.includes("_at") || col === "next_inspection" || col === "first_seen_at") {
+        va = va ? new Date(va).getTime() : 0; vb = vb ? new Date(vb).getTime() : 0;
         return dir === "desc" ? vb - va : va - vb;
       }
       va = String(va || ""); vb = String(vb || "");
@@ -612,7 +617,7 @@ export default function IndustryPulse() {
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <span className="text-xs tabular-nums text-muted-foreground">{a.total_listings_active || 0} listings</span>
-                          <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => addToCrm(a)}>
+                          <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => { setAddToCrmCandidate(a); setAddToCrmStep(1); }}>
                             <Plus className="h-3 w-3 mr-0.5" />Add
                           </Button>
                         </div>
@@ -2458,6 +2463,7 @@ export default function IndustryPulse() {
                       rea_profile_url: ag.rea_profile_url || null,
                       domain_profile_url: ag.domain_profile_url || null,
                     });
+                    await api.entities.PulseAgency.update(ag.id, { is_in_crm: true });
                     refetchEntityList("Agency"); refetchEntityList("PulseAgency");
                     toast.success(ag.name + " added to CRM");
                     setSelectedAgency(null);
