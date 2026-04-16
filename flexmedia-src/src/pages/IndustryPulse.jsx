@@ -98,6 +98,7 @@ export default function IndustryPulse() {
   const { data: pulseTimelineEntries = [] } = useEntityList("PulseTimeline", "-created_at", 500);
   const { data: syncLogs = [] } = useEntityList("PulseSyncLog", "-started_at", 100);
   const { data: sourceConfigs = [] } = useEntityList("PulseSourceConfig", "label");
+  const { data: targetSuburbs = [] } = useEntityList("PulseTargetSuburb", "-priority", 500);
   const { data: user } = useCurrentUser();
 
   const [tab, setTab] = useState("command");
@@ -118,9 +119,12 @@ export default function IndustryPulse() {
   const [drillPayloadTab, setDrillPayloadTab] = useState("rea_agents");
   const [drillPage, setDrillPage] = useState(0);
   const [editingSource, setEditingSource] = useState(null); // source_id being edited
-  const [editDraft, setEditDraft] = useState({}); // { suburbs: [], max_results: N }
+  const [editDraft, setEditDraft] = useState({}); // { max_results: N }
   const [savingConfig, setSavingConfig] = useState(false);
   const [newSuburb, setNewSuburb] = useState("");
+  const [suburbSearch, setSuburbSearch] = useState("");
+  const [expandedRegions, setExpandedRegions] = useState(new Set());
+  const [addingSuburb, setAddingSuburb] = useState(false);
   const [eventStatus, setEventStatus] = useState("all");
   const [marketTimeRange, setMarketTimeRange] = useState("30");
   const [signalLevel, setSignalLevel] = useState("all");
@@ -931,55 +935,47 @@ export default function IndustryPulse() {
         <TabsContent value="datasources" className="mt-3">
           <div className="space-y-4">
             {(() => {
-              // Hardcoded fallbacks — used when pulse_source_configs table is empty
-              const FALLBACK_SOURCES = [
-                { source_id: "rea_agents", label: "REA Agent Intelligence", description: "websift/realestateau — Agent profiles, sales data, reviews, awards from realestate.com.au", icon: "Users", color: "text-blue-600",
-                  actor_slug: "websift/realestateau",
-                  suburbs: ["Strathfield","Burwood","Homebush","Croydon Park","Bankstown","Punchbowl","Lakemba","Canterbury","Campsie"],
-                  max_results_per_suburb: 30, state: "NSW", is_enabled: true,
-                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipListings: true }) },
-                { source_id: "domain_agents", label: "Domain Agent Data", description: "shahidirfan/domain-com-au — Agent listings, sold data, ratings from domain.com.au", icon: "Globe", color: "text-purple-600",
-                  actor_slug: "shahidirfan/domain-com-au-real-estate-agents-scraper",
-                  suburbs: ["Strathfield","Burwood","Homebush"],
-                  max_results_per_suburb: 30, state: "NSW", is_enabled: true,
-                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: false, skipListings: true }) },
-                { source_id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana/real-estate-au-scraper-pro — Active listings with agent/agency details from realestate.com.au", icon: "Home", color: "text-green-600",
-                  actor_slug: "azzouzana/real-estate-au-scraper-pro",
-                  suburbs: ["Strathfield","Burwood","Bankstown","Punchbowl","Canterbury"],
-                  max_results_per_suburb: 20, state: "NSW", is_enabled: true,
-                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: max, skipDomain: true, skipListings: false }) },
-              ];
+              // ── Shared suburb pool ──
+              const activeSuburbs = targetSuburbs.filter(s => s.is_active);
+              const activeSuburbNames = activeSuburbs.map(s => s.name);
+              const regionGroups = {};
+              for (const s of targetSuburbs) {
+                const r = s.region || "Other";
+                if (!regionGroups[r]) regionGroups[r] = [];
+                regionGroups[r].push(s);
+              }
+              const sortedRegions = Object.keys(regionGroups).sort();
+              const filteredSuburbs = suburbSearch
+                ? targetSuburbs.filter(s => s.name.toLowerCase().includes(suburbSearch.toLowerCase()) || (s.region || "").toLowerCase().includes(suburbSearch.toLowerCase()))
+                : null;
 
-              // Merge DB configs over fallbacks
-              const sources = FALLBACK_SOURCES.map(fb => {
-                const db = sourceConfigs.find(c => c.source_id === fb.source_id);
-                if (db) {
-                  return {
-                    ...fb,
-                    label: db.label || fb.label,
-                    description: db.description || fb.description,
-                    suburbs: Array.isArray(db.suburbs) ? db.suburbs : fb.suburbs,
-                    max_results_per_suburb: db.max_results_per_suburb ?? fb.max_results_per_suburb,
-                    state: db.state || fb.state,
-                    is_enabled: db.is_enabled ?? true,
-                    schedule_cron: db.schedule_cron || null,
-                    last_run_at: db.last_run_at || null,
-                    next_run_at: db.next_run_at || null,
-                    _dbId: db.id,
-                  };
-                }
-                return fb;
+              // ── Source definitions (pull suburbs from shared pool) ──
+              const SOURCES = [
+                { source_id: "rea_agents", label: "REA Agent Intelligence", description: "websift/realestateau — Agent profiles, sales data, reviews, awards", icon: Users, color: "text-blue-600",
+                  defaultMax: 30,
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipListings: true }) },
+                { source_id: "domain_agents", label: "Domain Agent Data", description: "shahidirfan/domain-com-au — Agent listings, sold data, ratings", icon: Globe, color: "text-purple-600",
+                  defaultMax: 30,
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: false, skipListings: true }) },
+                { source_id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana/real-estate-au-scraper-pro — Active listings with agent/agency details", icon: Home, color: "text-green-600",
+                  defaultMax: 20,
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: max, skipDomain: true, skipListings: false }) },
+              ].map(s => {
+                const db = sourceConfigs.find(c => c.source_id === s.source_id);
+                return { ...s,
+                  max_results_per_suburb: db?.max_results_per_suburb ?? s.defaultMax,
+                  is_enabled: db?.is_enabled ?? true,
+                  _dbId: db?.id || null,
+                };
               });
 
-              const ICONS = { Users, Globe, Home };
-
               const runSource = async (source) => {
-                if (!source.is_enabled) return;
+                if (!source.is_enabled || activeSuburbNames.length === 0) return;
                 setRunningSources(prev => new Set([...prev, source.source_id]));
                 try {
-                  toast.info(`Running ${source.label}...`);
+                  toast.info(`Running ${source.label} across ${activeSuburbNames.length} suburbs...`);
                   const params = {
-                    ...source.runParams(source.suburbs, source.max_results_per_suburb),
+                    ...source.runParams(activeSuburbNames, source.max_results_per_suburb),
                     source_id: source.source_id,
                     source_label: source.label,
                     triggered_by: user?.id || null,
@@ -1003,10 +999,6 @@ export default function IndustryPulse() {
                   const payload = {
                     source_id: source.source_id,
                     label: source.label,
-                    description: source.description,
-                    actor_slug: source.actor_slug,
-                    suburbs: editDraft.suburbs || source.suburbs,
-                    state: source.state,
                     max_results_per_suburb: editDraft.max_results ?? source.max_results_per_suburb,
                     is_enabled: editDraft.is_enabled ?? source.is_enabled,
                   };
@@ -1017,14 +1009,47 @@ export default function IndustryPulse() {
                   }
                   refetchEntityList("PulseSourceConfig");
                   toast.success(`${source.label} config saved`);
-                  setEditingSource(null);
-                  setEditDraft({});
+                  setEditingSource(null); setEditDraft({});
+                } catch (err) { toast.error(`Save failed: ${err?.message || "unknown"}`); }
+                finally { setSavingConfig(false); }
+              };
+
+              const toggleSuburb = async (suburb) => {
+                try {
+                  await api.entities.PulseTargetSuburb.update(suburb.id, { is_active: !suburb.is_active });
+                  refetchEntityList("PulseTargetSuburb");
+                } catch (err) { toast.error(`Toggle failed: ${err?.message}`); }
+              };
+
+              const toggleRegion = async (region, active) => {
+                try {
+                  const subs = regionGroups[region] || [];
+                  for (const s of subs) {
+                    if (s.is_active !== active) await api.entities.PulseTargetSuburb.update(s.id, { is_active: active });
+                  }
+                  refetchEntityList("PulseTargetSuburb");
+                  toast.success(`${region}: ${active ? "enabled" : "disabled"} ${subs.length} suburbs`);
+                } catch (err) { toast.error(`Toggle failed: ${err?.message}`); }
+              };
+
+              const addSuburb = async () => {
+                const name = newSuburb.trim();
+                if (!name) return;
+                setAddingSuburb(true);
+                try {
+                  await api.entities.PulseTargetSuburb.create({ name, state: "NSW", is_active: true, priority: 5 });
+                  refetchEntityList("PulseTargetSuburb");
                   setNewSuburb("");
-                } catch (err) {
-                  toast.error(`Save failed: ${err?.message || "unknown"}`);
-                } finally {
-                  setSavingConfig(false);
-                }
+                  toast.success(`Added ${name}`);
+                } catch (err) { toast.error(`Add failed: ${err?.message}`); }
+                finally { setAddingSuburb(false); }
+              };
+
+              const removeSuburb = async (suburb) => {
+                try {
+                  await api.entities.PulseTargetSuburb.delete(suburb.id);
+                  refetchEntityList("PulseTargetSuburb");
+                } catch (err) { toast.error(`Remove failed: ${err?.message}`); }
               };
 
               // Sync logs grouped by source
@@ -1035,79 +1060,144 @@ export default function IndustryPulse() {
                 logsBySource[sid].push(log);
               }
 
-              const DRILL_PAGE_SIZE = 25;
-
               return (
                 <div className="space-y-3">
+                  {/* ═══ TARGET SUBURBS POOL ═══ */}
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold flex items-center gap-2">
+                          <MapPin className="h-4 w-4 text-primary" />Target Suburbs
+                          <Badge variant="outline" className="text-[9px] ml-1">{activeSuburbs.length} active / {targetSuburbs.length} total</Badge>
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <div className="relative">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+                            <Input className="h-7 w-40 text-xs pl-7" placeholder="Search suburbs..." value={suburbSearch} onChange={e => setSuburbSearch(e.target.value)} />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Add suburb */}
+                      <form className="flex items-center gap-2 mb-3" onSubmit={e => { e.preventDefault(); addSuburb(); }}>
+                        <Input className="h-7 text-xs flex-1" placeholder="Add suburb (e.g. Rhodes, Wolli Creek...)" value={newSuburb} onChange={e => setNewSuburb(e.target.value)} />
+                        <Button type="submit" size="sm" variant="outline" className="h-7 text-xs" disabled={!newSuburb.trim() || addingSuburb}>
+                          {addingSuburb ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3 mr-1" />}Add
+                        </Button>
+                      </form>
+
+                      {/* Search results */}
+                      {filteredSuburbs ? (
+                        <div className="flex items-center gap-1.5 flex-wrap max-h-[200px] overflow-y-auto">
+                          {filteredSuburbs.length === 0 && <p className="text-xs text-muted-foreground/50 py-2">No suburbs match "{suburbSearch}"</p>}
+                          {filteredSuburbs.map(s => (
+                            <Badge key={s.id} variant={s.is_active ? "default" : "outline"}
+                              className={cn("text-[10px] px-1.5 py-0.5 cursor-pointer gap-1 select-none transition-colors",
+                                s.is_active ? "bg-primary/10 text-primary border-primary/20 hover:bg-primary/20" : "text-muted-foreground hover:bg-muted")}
+                              onClick={() => toggleSuburb(s)}>
+                              {s.name}
+                              <span className="text-[8px] opacity-50">{s.region}</span>
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : (
+                        /* Region groups */
+                        <div className="space-y-1">
+                          {sortedRegions.map(region => {
+                            const subs = regionGroups[region];
+                            const activeCount = subs.filter(s => s.is_active).length;
+                            const isOpen = expandedRegions.has(region);
+                            return (
+                              <div key={region} className="border rounded-lg">
+                                <button className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-muted/30 text-left"
+                                  onClick={() => setExpandedRegions(prev => { const next = new Set(prev); next.has(region) ? next.delete(region) : next.add(region); return next; })}>
+                                  <div className="flex items-center gap-2">
+                                    {isOpen ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+                                    <span className="text-xs font-medium">{region}</span>
+                                    <Badge variant="outline" className={cn("text-[9px] py-0", activeCount === subs.length ? "text-green-600 border-green-200" : activeCount === 0 ? "text-muted-foreground" : "text-amber-600 border-amber-200")}>
+                                      {activeCount}/{subs.length}
+                                    </Badge>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    {activeCount < subs.length && (
+                                      <button className="text-[9px] text-primary hover:underline px-1" onClick={e => { e.stopPropagation(); toggleRegion(region, true); }}>Enable all</button>
+                                    )}
+                                    {activeCount > 0 && (
+                                      <button className="text-[9px] text-muted-foreground hover:underline px-1" onClick={e => { e.stopPropagation(); toggleRegion(region, false); }}>Disable all</button>
+                                    )}
+                                  </div>
+                                </button>
+                                {isOpen && (
+                                  <div className="px-3 pb-2 flex items-center gap-1.5 flex-wrap">
+                                    {subs.sort((a, b) => (b.priority || 0) - (a.priority || 0)).map(s => (
+                                      <Badge key={s.id} variant={s.is_active ? "default" : "outline"}
+                                        className={cn("text-[10px] px-1.5 py-0.5 cursor-pointer gap-1 select-none transition-colors group",
+                                          s.is_active ? "bg-primary/10 text-primary border-primary/20 hover:bg-primary/20" : "text-muted-foreground hover:bg-muted")}
+                                        onClick={() => toggleSuburb(s)}>
+                                        {s.name}
+                                        <button className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity" onClick={e => { e.stopPropagation(); removeSuburb(s); }}>
+                                          <X className="h-2.5 w-2.5" />
+                                        </button>
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* ═══ SOURCE CARDS ═══ */}
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold flex items-center gap-2"><Database className="h-4 w-4 text-primary" />Data Sources</h3>
+                    <h3 className="text-sm font-semibold flex items-center gap-2"><Database className="h-4 w-4 text-primary" />Scrapers</h3>
                     <Button size="sm" variant="outline" onClick={async () => {
-                      for (const s of sources.filter(s => s.is_enabled)) await runSource(s);
-                    }} disabled={runningSources.size > 0}>
-                      {runningSources.size > 0 ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Running...</> : <><Zap className="h-3.5 w-3.5 mr-1.5" />Run All Sources</>}
+                      for (const s of SOURCES.filter(s => s.is_enabled)) await runSource(s);
+                    }} disabled={runningSources.size > 0 || activeSuburbNames.length === 0}>
+                      {runningSources.size > 0 ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Running...</> : <><Zap className="h-3.5 w-3.5 mr-1.5" />Run All ({activeSuburbs.length} suburbs)</>}
                     </Button>
                   </div>
 
-                  {sources.map(source => {
+                  {SOURCES.map(source => {
                     const isRunning = runningSources.has(source.source_id);
                     const isExpanded = expandedSource === source.source_id;
                     const isEditing = editingSource === source.source_id;
-                    const Icon = ICONS[source.icon] || Rss;
+                    const Icon = source.icon;
                     const sourceLogs = logsBySource[source.source_id] || logsBySource.full_sweep || [];
                     const lastSync = sourceLogs[0];
-                    const currentSuburbs = isEditing ? (editDraft.suburbs || source.suburbs) : source.suburbs;
                     const currentMax = isEditing ? (editDraft.max_results ?? source.max_results_per_suburb) : source.max_results_per_suburb;
                     const currentEnabled = isEditing ? (editDraft.is_enabled ?? source.is_enabled) : source.is_enabled;
 
                     return (
                       <Card key={source.source_id} className={cn(!currentEnabled && "opacity-60")}>
                         <CardContent className="p-4">
-                          {/* ── Source header ── */}
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0 flex-1">
                               <div className="p-2 rounded-lg bg-muted/60 shrink-0">
                                 <Icon className={cn("h-5 w-5", source.color)} />
                               </div>
-                              <div className="min-w-0 flex-1">
+                              <div className="min-w-0">
                                 <div className="flex items-center gap-2">
                                   <h4 className="text-sm font-semibold">{source.label}</h4>
                                   {!currentEnabled && <Badge variant="outline" className="text-[9px] text-muted-foreground border-muted">Disabled</Badge>}
                                 </div>
                                 <p className="text-xs text-muted-foreground mt-0.5">{source.description}</p>
-
-                                {/* Suburbs row (view or edit) */}
-                                {isEditing ? (
-                                  <div className="mt-2 space-y-2">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="text-[10px] text-muted-foreground font-medium">Suburbs:</span>
-                                      {currentSuburbs.map(s => (
-                                        <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0 gap-1">
-                                          {s}
-                                          <button className="ml-0.5 hover:text-red-500" onClick={() => setEditDraft(d => ({ ...d, suburbs: (d.suburbs || source.suburbs).filter(x => x !== s) }))}>
-                                            <X className="h-2.5 w-2.5" />
-                                          </button>
-                                        </Badge>
-                                      ))}
-                                      <form className="inline-flex" onSubmit={(e) => { e.preventDefault(); if (newSuburb.trim()) { setEditDraft(d => ({ ...d, suburbs: [...(d.suburbs || source.suburbs), newSuburb.trim()] })); setNewSuburb(""); } }}>
-                                        <Input className="h-5 w-24 text-[10px] px-1.5" placeholder="+ suburb" value={newSuburb} onChange={e => setNewSuburb(e.target.value)} />
-                                      </form>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                      <label className="text-[10px] text-muted-foreground font-medium">Max per suburb:</label>
-                                      <Input type="number" min={1} max={100} className="h-6 w-16 text-xs px-1.5" value={currentMax} onChange={e => setEditDraft(d => ({ ...d, max_results: parseInt(e.target.value) || 1 }))} />
-                                      <button className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setEditDraft(d => ({ ...d, is_enabled: !currentEnabled }))}>
-                                        {currentEnabled ? <ToggleRight className="h-4 w-4 text-green-500" /> : <ToggleLeft className="h-4 w-4" />}
-                                        {currentEnabled ? "Enabled" : "Disabled"}
+                                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                  <Badge variant="outline" className="text-[9px] px-1.5 py-0"><MapPin className="h-2.5 w-2.5 mr-0.5" />{activeSuburbs.length} suburbs</Badge>
+                                  {isEditing ? (
+                                    <div className="flex items-center gap-2">
+                                      <label className="text-[10px] text-muted-foreground">Max/suburb:</label>
+                                      <Input type="number" min={1} max={100} className="h-5 w-14 text-[10px] px-1.5" value={currentMax} onChange={e => setEditDraft(d => ({ ...d, max_results: parseInt(e.target.value) || 1 }))} />
+                                      <button className="flex items-center gap-1 text-[10px]" onClick={() => setEditDraft(d => ({ ...d, is_enabled: !currentEnabled }))}>
+                                        {currentEnabled ? <ToggleRight className="h-3.5 w-3.5 text-green-500" /> : <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />}
                                       </button>
                                     </div>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                    <span className="text-[10px] text-muted-foreground">Suburbs:</span>
-                                    {source.suburbs.map(s => <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0">{s}</Badge>)}
+                                  ) : (
                                     <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">Max {source.max_results_per_suburb}/suburb</Badge>
-                                  </div>
-                                )}
+                                  )}
+                                </div>
                               </div>
                             </div>
                             <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -1117,16 +1207,16 @@ export default function IndustryPulse() {
                                     <Button size="sm" variant="default" className="h-7 text-xs" onClick={() => saveSourceConfig(source)} disabled={savingConfig}>
                                       {savingConfig ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}Save
                                     </Button>
-                                    <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setEditingSource(null); setEditDraft({}); setNewSuburb(""); }}>
+                                    <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setEditingSource(null); setEditDraft({}); }}>
                                       <X className="h-3 w-3" />
                                     </Button>
                                   </>
                                 ) : (
                                   <>
-                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingSource(source.source_id); setEditDraft({ suburbs: [...source.suburbs], max_results: source.max_results_per_suburb, is_enabled: source.is_enabled }); }}>
+                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingSource(source.source_id); setEditDraft({ max_results: source.max_results_per_suburb, is_enabled: source.is_enabled }); }}>
                                       <Settings2 className="h-3.5 w-3.5" />
                                     </Button>
-                                    <Button size="sm" variant={isRunning ? "default" : "outline"} className="h-7" onClick={() => runSource(source)} disabled={isRunning || !currentEnabled}>
+                                    <Button size="sm" variant={isRunning ? "default" : "outline"} className="h-7" onClick={() => runSource(source)} disabled={isRunning || !currentEnabled || activeSuburbNames.length === 0}>
                                       {isRunning ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Running</> : <><Zap className="h-3 w-3 mr-1" />Run Now</>}
                                     </Button>
                                   </>
@@ -1146,7 +1236,7 @@ export default function IndustryPulse() {
                             </div>
                           </div>
 
-                          {/* ── Expandable run history ── */}
+                          {/* Expandable run history */}
                           {isExpanded && sourceLogs.length > 0 && (
                             <div className="mt-3 pt-3 border-t">
                               <div className="overflow-x-auto">
@@ -1180,19 +1270,17 @@ export default function IndustryPulse() {
                                           </td>
                                           <td className="px-2 py-1.5 tabular-nums">{log.records_new || 0} new / {log.records_fetched || 0}</td>
                                           <td className="px-2 py-1.5 text-muted-foreground">
-                                            {cfg ? (
-                                              <span className="text-[9px]">{(cfg.suburbs || []).length} suburbs, max {cfg.maxAgentsPerSuburb || cfg.maxListingsPerSuburb || "?"}</span>
-                                            ) : "—"}
+                                            {cfg ? <span className="text-[9px]">{(cfg.suburbs || []).length} suburbs, max {cfg.maxAgentsPerSuburb || cfg.maxListingsPerSuburb || "?"}</span> : "—"}
                                           </td>
                                           <td className="px-2 py-1.5">{new Date(log.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
                                           <td className="px-2 py-1.5 tabular-nums">{duration != null ? `${duration}s` : "—"}</td>
                                           <td className="px-2 py-1.5 text-muted-foreground">{log.triggered_by_name || "—"}</td>
                                           <td className="px-2 py-1.5">
-                                            {hasPayload ? (
+                                            {hasPayload && (
                                               <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5" onClick={() => { setDrillLog(log); setDrillPayloadTab("rea_agents"); setDrillPage(0); }}>
                                                 <Eye className="h-3 w-3 mr-0.5" />Data
                                               </Button>
-                                            ) : null}
+                                            )}
                                           </td>
                                         </tr>
                                       );
@@ -1235,9 +1323,7 @@ export default function IndustryPulse() {
                                 const hasPayload = log.raw_payload && (log.raw_payload.rea_agents?.length || log.raw_payload.domain_agents?.length || log.raw_payload.listings?.length);
                                 return (
                                   <tr key={log.id} className="border-t hover:bg-muted/20">
-                                    <td className="px-3 py-1.5">
-                                      <span className="font-medium">{log.source_label || log.sync_type || "full_sweep"}</span>
-                                    </td>
+                                    <td className="px-3 py-1.5"><span className="font-medium">{log.source_label || log.sync_type || "full_sweep"}</span></td>
                                     <td className="px-3 py-1.5">
                                       <Badge variant="outline" className={cn("text-[9px]",
                                         log.status === "completed" ? "text-green-600 border-green-200" :
@@ -1250,11 +1336,11 @@ export default function IndustryPulse() {
                                     <td className="px-3 py-1.5 tabular-nums">{duration != null ? `${duration}s` : "—"}</td>
                                     <td className="px-3 py-1.5 text-muted-foreground">{log.triggered_by_name || "—"}</td>
                                     <td className="px-3 py-1.5">
-                                      {hasPayload ? (
+                                      {hasPayload && (
                                         <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5" onClick={() => { setDrillLog(log); setDrillPayloadTab("rea_agents"); setDrillPage(0); }}>
                                           <Eye className="h-3 w-3 mr-0.5" />View
                                         </Button>
-                                      ) : null}
+                                      )}
                                     </td>
                                   </tr>
                                 );
