@@ -203,6 +203,27 @@ Deno.serve(async (req) => {
     const allListings: any[] = [];
     const allDomainAgencies: any[] = [];
 
+    // Load suburb postcodes for Domain URL construction (requires postcode in slug)
+    const suburbPostcodes = new Map<string, string>();
+    try {
+      const { data: suburbData } = await admin.from('pulse_target_suburbs')
+        .select('name, postcode').not('postcode', 'is', null);
+      (suburbData || []).forEach((s: any) => suburbPostcodes.set(s.name.toLowerCase(), s.postcode));
+    } catch { /* non-fatal */ }
+
+    // Common Sydney suburb postcodes fallback
+    const POSTCODE_FALLBACK: Record<string, string> = {
+      strathfield: '2135', burwood: '2134', homebush: '2140', bankstown: '2200',
+      canterbury: '2193', campsie: '2194', lakemba: '2195', punchbowl: '2196',
+      parramatta: '2150', auburn: '2144', lidcombe: '2141', concord: '2137',
+      ashfield: '2131', marrickville: '2204', hurstville: '2220', kogarah: '2217',
+      chatswood: '2067', bondi: '2026', manly: '2095', penrith: '2750',
+    };
+
+    function getSuburbPostcode(suburb: string): string {
+      return suburbPostcodes.get(suburb.toLowerCase()) || POSTCODE_FALLBACK[suburb.toLowerCase()] || '';
+    }
+
     // ── Step 0: Bounding box listings (single-URL mode, no per-suburb loop) ──
     if (listingsStartUrl && maxListingsTotal > 0) {
       console.log(`[bounding-box] Running azzouzana with custom URL, max ${maxListingsTotal}...`);
@@ -318,9 +339,13 @@ Deno.serve(async (req) => {
 
       // 1B: ScrapStorm Domain agent scraper (replaces shahidirfan — richer fields + agencyId)
       if (!skipDomain && maxAgentsPerSuburb > 0) {
-        console.log(`[${suburb}] Running scrapestorm Domain agents...`);
+        const postcode = getSuburbPostcode(suburb);
+        const domainAgentUrl = postcode
+          ? `https://www.domain.com.au/real-estate-agents/${suburbSlug}-${state.toLowerCase()}-${postcode}/`
+          : `https://www.domain.com.au/real-estate-agents/${suburbSlug}-${state.toLowerCase()}/`;
+        console.log(`[${suburb}] Running scrapestorm Domain agents (${domainAgentUrl})...`);
         const domResult = await runApifyActor('scrapestorm/domain-com-au-real-estate-agents-scraper---cheap', {
-          target_url: `https://www.domain.com.au/real-estate-agents/${suburbSlug}-${state.toLowerCase()}/`,
+          target_url: domainAgentUrl,
           max_items: maxAgentsPerSuburb,
         }, `domain-agents-${suburb}`, 120);
         domResult.items.forEach(a => { a._suburb = suburb; a._source = 'domain'; });
@@ -330,9 +355,13 @@ Deno.serve(async (req) => {
 
       // 1D: ScrapStorm Domain agency scraper (dedicated agency-level data)
       if (!skipDomainAgencies && maxAgenciesPerSuburb > 0) {
-        console.log(`[${suburb}] Running scrapestorm Domain agencies...`);
+        const agPostcode = getSuburbPostcode(suburb);
+        const domainAgencyUrl = agPostcode
+          ? `https://www.domain.com.au/real-estate-agencies/${suburbSlug}-${state.toLowerCase()}-${agPostcode}/`
+          : `https://www.domain.com.au/real-estate-agencies/${suburbSlug}-${state.toLowerCase()}/`;
+        console.log(`[${suburb}] Running scrapestorm Domain agencies (${domainAgencyUrl})...`);
         const agencyResult = await runApifyActor('scrapestorm/domain-com-au-real-estate-agencies-scraper---cheap', {
-          target_url: `https://www.domain.com.au/real-estate-agencies/${suburbSlug}-${state.toLowerCase()}/`,
+          target_url: domainAgencyUrl,
           max_items: maxAgenciesPerSuburb,
         }, `domain-agencies-${suburb}`, 120);
         agencyResult.items.forEach(a => { a._suburb = suburb; a._source = 'domain_agencies'; });
