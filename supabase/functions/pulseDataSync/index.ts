@@ -126,7 +126,9 @@ Deno.serve(async (req) => {
       state = 'NSW',
       maxAgentsPerSuburb = 50,
       maxListingsPerSuburb = 30,
+      maxAgenciesPerSuburb = 50,
       skipDomain = false,
+      skipDomainAgencies = false,
       skipListings = false,
       dryRun = false,
       source_id = null,
@@ -157,6 +159,7 @@ Deno.serve(async (req) => {
     const allReaAgents: any[] = [];
     const allDomainAgents: any[] = [];
     const allListings: any[] = [];
+    const allDomainAgencies: any[] = [];
 
     // ── Step 1: Run Apify actors per suburb ─────────────────────────────
 
@@ -178,16 +181,28 @@ Deno.serve(async (req) => {
         if (reaResult.runId) apifyRunIds[`websift-${suburb}`] = reaResult.runId;
       }
 
-      // 1B: shahidirfan Domain agent scraper
+      // 1B: ScrapStorm Domain agent scraper (replaces shahidirfan — richer fields + agencyId)
       if (!skipDomain && maxAgentsPerSuburb > 0) {
-        console.log(`[${suburb}] Running shahidirfan Domain agents...`);
-        const domResult = await runApifyActor('shahidirfan/domain-com-au-real-estate-agents-scraper', {
-          startUrls: [{ url: `https://www.domain.com.au/real-estate-agents/${suburbSlug}-${state.toLowerCase()}/` }],
-          maxItems: maxAgentsPerSuburb,
-        }, `domain-${suburb}`, 120);
+        console.log(`[${suburb}] Running scrapestorm Domain agents...`);
+        const domResult = await runApifyActor('scrapestorm/domain-com-au-real-estate-agents-scraper---cheap', {
+          domain_url: `https://www.domain.com.au/real-estate-agents/${suburbSlug}-${state.toLowerCase()}/`,
+          max_items: maxAgentsPerSuburb,
+        }, `domain-agents-${suburb}`, 120);
         domResult.items.forEach(a => { a._suburb = suburb; a._source = 'domain'; });
         allDomainAgents.push(...domResult.items);
-        if (domResult.runId) apifyRunIds[`domain-${suburb}`] = domResult.runId;
+        if (domResult.runId) apifyRunIds[`domain-agents-${suburb}`] = domResult.runId;
+      }
+
+      // 1D: ScrapStorm Domain agency scraper (dedicated agency-level data)
+      if (!skipDomainAgencies && maxAgenciesPerSuburb > 0) {
+        console.log(`[${suburb}] Running scrapestorm Domain agencies...`);
+        const agencyResult = await runApifyActor('scrapestorm/domain-com-au-real-estate-agencies-scraper---cheap', {
+          domain_url: `https://www.domain.com.au/real-estate-agencies/${suburbSlug}-${state.toLowerCase()}/`,
+          max_items: maxAgenciesPerSuburb,
+        }, `domain-agencies-${suburb}`, 120);
+        agencyResult.items.forEach(a => { a._suburb = suburb; a._source = 'domain_agencies'; });
+        allDomainAgencies.push(...agencyResult.items);
+        if (agencyResult.runId) apifyRunIds[`domain-agencies-${suburb}`] = agencyResult.runId;
       }
 
       // 1C: azzouzana REA listings
@@ -242,7 +257,7 @@ Deno.serve(async (req) => {
         }
 
         const reaAgency = normalizeAgencyName(rea.agency?.name || '');
-        const domAgency = normalizeAgencyName(domainMatch.agency || '');
+        const domAgency = normalizeAgencyName(domainMatch.agencyName || domainMatch.agency || '');
         if (reaAgency && domAgency && (reaAgency.includes(domAgency) || domAgency.includes(reaAgency))) {
           agencyValidated = true;
           integrityScore += 15;
@@ -257,16 +272,17 @@ Deno.serve(async (req) => {
         full_name: reaName,
         email: null, // Neither source provides actual emails
         mobile: rea.mobile ? String(rea.mobile) : (domainMatch?.mobile || null),
-        business_phone: rea.businessPhone ? String(rea.businessPhone) : (domainMatch?.phone || null),
-        phone: rea.businessPhone ? String(rea.businessPhone) : (domainMatch?.phone || null),
-        agency_name: rea.agency?.name || domainMatch?.agency || null,
+        business_phone: rea.businessPhone ? String(rea.businessPhone) : (domainMatch?.telephone || domainMatch?.phone || null),
+        phone: rea.businessPhone ? String(rea.businessPhone) : (domainMatch?.telephone || domainMatch?.phone || null),
+        agency_name: rea.agency?.name || domainMatch?.agencyName || domainMatch?.agency || null,
         agency_rea_id: rea.agency?.id || null,
+        agency_domain_id: domainMatch?.agencyId ? String(domainMatch.agencyId) : null,
         agency_suburb: rea._suburb,
-        job_title: rea.job_title || domainMatch?.title || null,
+        job_title: rea.job_title || domainMatch?.jobTitle || domainMatch?.title || null,
         years_experience: rea.years_experience || null,
         sales_as_lead: rea.sales_as_lead || null,
-        total_listings_active: domainMatch?.propertiesForSale || null,
-        total_sold_12m: domainMatch?.propertiesSold || (searchStats.sumSoldProperties || null),
+        total_listings_active: domainMatch?.totalForSale || domainMatch?.propertiesForSale || null,
+        total_sold_12m: domainMatch?.totalSoldAndAuctioned || domainMatch?.propertiesSold || (searchStats.sumSoldProperties || null),
         rea_median_sold_price: searchStats.medianSoldPrice || profileStats.medianSoldPrice || null,
         domain_avg_sold_price: domainMatch?.averageSoldPrice || null,
         avg_sold_price: searchStats.medianSoldPrice || domainMatch?.averageSoldPrice || null,
@@ -289,10 +305,10 @@ Deno.serve(async (req) => {
         recent_listing_ids: JSON.stringify((rea.recent_listings || []).slice(0, 10).map((l: any) => l.listing_id)),
         sales_breakdown: rea.profile_sales_breakdown ? JSON.stringify(rea.profile_sales_breakdown) : null,
         rea_agent_id: rea.salesperson_id ? String(rea.salesperson_id) : null,
-        domain_agent_id: domainMatch?.id ? String(domainMatch.id) : null,
+        domain_agent_id: domainMatch?.agentIdV2 ? String(domainMatch.agentIdV2) : (domainMatch?.id ? String(domainMatch.id) : null),
         rea_profile_url: rea.profile_url || null,
-        domain_profile_url: domainMatch?.url || null,
-        profile_image: domainMatch?.profileImage || null,
+        domain_profile_url: domainMatch?.profileUrl ? `https://www.domain.com.au${domainMatch.profileUrl}` : (domainMatch?.url || null),
+        profile_image: domainMatch?.profilePhoto || domainMatch?.profileImage || null,
         source: domainMatch ? 'rea+domain' : 'rea',
         data_sources: JSON.stringify(sources),
         data_integrity_score: integrityScore,
@@ -311,12 +327,14 @@ Deno.serve(async (req) => {
       mergedAgents.push({
         full_name: dom.name || '',
         mobile: dom.mobile || null,
-        business_phone: dom.phone || null,
-        phone: dom.phone || null,
-        agency_name: dom.agency || null,
+        business_phone: dom.telephone || dom.phone || null,
+        phone: dom.telephone || dom.phone || null,
+        agency_name: dom.agencyName || dom.agency || null,
+        agency_domain_id: dom.agencyId ? String(dom.agencyId) : null,
         agency_suburb: dom._suburb,
-        total_listings_active: dom.propertiesForSale || null,
-        total_sold_12m: dom.propertiesSold || null,
+        job_title: dom.jobTitle || dom.title || null,
+        total_listings_active: dom.totalForSale || dom.propertiesForSale || null,
+        total_sold_12m: dom.totalSoldAndAuctioned || dom.propertiesSold || null,
         domain_avg_sold_price: dom.averageSoldPrice || null,
         avg_sold_price: dom.averageSoldPrice || null,
         domain_avg_dom: dom.averageSoldDaysOnMarket || null,
@@ -326,9 +344,9 @@ Deno.serve(async (req) => {
         domain_review_count: dom.reviewCount || null,
         reviews_count: dom.reviewCount || 0,
         reviews_avg: dom.rating || null,
-        domain_agent_id: dom.id ? String(dom.id) : null,
-        domain_profile_url: dom.url || null,
-        profile_image: dom.profileImage || null,
+        domain_agent_id: dom.agentIdV2 ? String(dom.agentIdV2) : (dom.id ? String(dom.id) : null),
+        domain_profile_url: dom.profileUrl ? `https://www.domain.com.au${dom.profileUrl}` : (dom.url || null),
+        profile_image: dom.profilePhoto || dom.profileImage || null,
         source: 'domain',
         data_sources: JSON.stringify(['domain']),
         data_integrity_score: 40,
@@ -399,6 +417,43 @@ Deno.serve(async (req) => {
       if (agent.agency_suburb) agency.suburbs.add(agent.agency_suburb);
     }
 
+    // 3b.5: Enrich agencies from ScrapStorm Domain agency data (dedicated agency-level fields)
+    for (const domAgency of allDomainAgencies) {
+      const agencyName = domAgency.name;
+      if (!agencyName) continue;
+      const key = normalizeAgencyName(agencyName);
+      if (!agencyMap.has(key)) {
+        agencyMap.set(key, {
+          name: agencyName,
+          phone: null, email: null, website: null, address: null,
+          suburb: domAgency._suburb || null, state: null, postcode: null,
+          logo_url: null, rea_profile_url: null,
+          active_listings: 0, listing_prices: [],
+          suburbs: new Set<string>(),
+          sources: new Set<string>(),
+          rea_agency_ids: new Set<string>(),
+        });
+      }
+      const agency = agencyMap.get(key)!;
+      agency.sources.add('domain_agencies');
+      // Domain agency data is authoritative for these fields — overwrite if present
+      if (domAgency.displayAddress) agency.address = domAgency.displayAddress;
+      if (domAgency.telephone) agency.phone = agency.phone || domAgency.telephone;
+      if (domAgency.mobile) agency.phone = agency.phone || domAgency.mobile;
+      if (domAgency.email) agency.email = domAgency.email;
+      if (domAgency.logoSmall) agency.logo_url = agency.logo_url || domAgency.logoSmall;
+      // Domain-specific fields stored on the map for later
+      agency.domain_agency_id = domAgency.id ? String(domAgency.id) : null;
+      agency.domain_profile_url = domAgency.profileUrl ? `https://www.domain.com.au${domAgency.profileUrl}` : null;
+      agency.profile_tier = domAgency.profileTier || null;
+      agency.brand_colour = domAgency.brandColour || null;
+      agency.domain_total_for_sale = domAgency.totalForSale || 0;
+      agency.domain_total_sold = domAgency.totalSoldAndAuctioned || 0;
+      agency.domain_total_for_rent = domAgency.totalForRent || 0;
+      agency.domain_agents = domAgency.agents || [];
+      if (domAgency._suburb) agency.suburbs.add(domAgency._suburb);
+    }
+
     // 3c: Aggregate per-agency stats from agents
     const mergedAgencies: any[] = [];
     for (const [key, agency] of agencyMap.entries()) {
@@ -436,10 +491,16 @@ Deno.serve(async (req) => {
         logo_url: agency.logo_url,
         rea_profile_url: agency.rea_profile_url,
         rea_agency_id: reaIds[0] || null,
-        agent_count: agentCount,
-        active_listings: agency.active_listings,
+        domain_agency_id: agency.domain_agency_id || null,
+        domain_profile_url: agency.domain_profile_url || null,
+        profile_tier: agency.profile_tier || null,
+        brand_colour: agency.brand_colour || null,
+        agent_count: agentCount || (agency.domain_agents || []).length || 0,
+        active_listings: agency.active_listings || agency.domain_total_for_sale || 0,
+        total_sold_and_auctioned: agency.domain_total_sold || null,
+        total_for_rent: agency.domain_total_for_rent || null,
         avg_listing_price: prices.length > 0 ? Math.round(prices.reduce((s: number, p: number) => s + p, 0) / prices.length) : null,
-        total_sold_12m: totalSold || null,
+        total_sold_12m: totalSold || agency.domain_total_sold || null,
         avg_sold_price: avgSoldPrice,
         avg_days_on_market: avgDom,
         avg_agent_rating: avgRating,
@@ -659,83 +720,167 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── Step 7: Auto-Mapping via Platform IDs + Phone ───────────────────
+    // ── Step 7: Auto-Mapping via Platform IDs + Phone (Agents + Agencies) ──
 
     const crmAgentsList = await entities.Agent.filter({}, null, 1000).catch(() => []);
     const crmAgenciesList = await entities.Agency.filter({}, null, 500).catch(() => []);
 
     // Load existing mappings to skip already-mapped
-    const { data: existingMappings = [] } = await admin.from('pulse_crm_mappings').select('rea_id, entity_type, confidence');
-    const mappedReaIds = new Set(existingMappings.filter((m: any) => m.confidence === 'confirmed').map((m: any) => `${m.entity_type}:${m.rea_id}`));
+    const { data: existingMappings = [] } = await admin.from('pulse_crm_mappings').select('rea_id, domain_id, entity_type, confidence');
+    const mappedKeys = new Set(existingMappings.filter((m: any) => m.confidence === 'confirmed').map((m: any) =>
+      `${m.entity_type}:${m.rea_id || ''}:${m.domain_id || ''}`
+    ));
 
+    // 7a: Agent mapping — ID-first, then phone, then name
     for (const agent of mergedAgents) {
       const reaId = agent.rea_agent_id;
-      if (!reaId || mappedReaIds.has(`agent:${reaId}`)) continue;
+      const domainId = agent.domain_agent_id;
+      if (!reaId && !domainId) continue;
+      if (mappedKeys.has(`agent:${reaId || ''}:${domainId || ''}`)) continue;
 
-      // Try phone match first (strongest signal)
-      const agentMobile = normalizeMobile(agent.mobile);
       let matchedCrm: any = null;
       let matchType = '';
       let hasNameOverlap = false;
 
-      if (agentMobile) {
-        matchedCrm = crmAgentsList.find((c: any) => normalizeMobile(c.phone) === agentMobile);
-        if (matchedCrm) {
-          matchType = 'phone';
-          // Check if name also overlaps — agencies recycle mobile numbers,
-          // so phone match alone is NOT definitive. Phone + name = confirmed.
-          // Phone without name = suggested (flagged for human review).
-          hasNameOverlap = fuzzyNameMatch(matchedCrm.name || '', agent.full_name || '');
+      // Priority 1: REA agent ID match (strongest — unique platform ID)
+      if (reaId) {
+        matchedCrm = crmAgentsList.find((c: any) => c.rea_agent_id === reaId);
+        if (matchedCrm) { matchType = 'rea_id'; hasNameOverlap = true; }
+      }
+
+      // Priority 2: Domain agent ID match
+      if (!matchedCrm && domainId) {
+        matchedCrm = crmAgentsList.find((c: any) => c.domain_agent_id === domainId);
+        if (matchedCrm) { matchType = 'domain_id'; hasNameOverlap = true; }
+      }
+
+      // Priority 3: Phone match
+      if (!matchedCrm) {
+        const agentMobile = normalizeMobile(agent.mobile);
+        if (agentMobile) {
+          matchedCrm = crmAgentsList.find((c: any) => normalizeMobile(c.phone) === agentMobile);
+          if (matchedCrm) {
+            matchType = 'phone';
+            hasNameOverlap = fuzzyNameMatch(matchedCrm.name || '', agent.full_name || '');
+          }
         }
       }
 
-      // Try exact name match (no phone match found)
+      // Priority 4: Exact name match
       if (!matchedCrm) {
         matchedCrm = crmAgentsList.find((c: any) => (c.name || '').toLowerCase().trim() === (agent.full_name || '').toLowerCase().trim());
         if (matchedCrm) { matchType = 'name_exact'; hasNameOverlap = true; }
       }
 
-      // Try fuzzy name match
+      // Priority 5: Fuzzy name match
       if (!matchedCrm) {
         matchedCrm = crmAgentsList.find((c: any) => fuzzyNameMatch(c.name || '', agent.full_name || ''));
         if (matchedCrm) { matchType = 'name_fuzzy'; hasNameOverlap = true; }
       }
 
       if (matchedCrm) {
-        // Check if mapping already exists for this REA ID
         const { data: existMap } = await admin.from('pulse_crm_mappings')
-          .select('id')
-          .eq('rea_id', reaId)
-          .eq('entity_type', 'agent')
+          .select('id').eq('entity_type', 'agent')
+          .or(`rea_id.eq.${reaId || 'NONE'},domain_id.eq.${domainId || 'NONE'}`)
           .limit(1);
 
         if (!existMap || existMap.length === 0) {
-          // Confidence logic:
-          //   phone + name overlap  → "confirmed" (definitive: same phone AND same person)
-          //   phone only (no name)  → "suggested" (could be recycled number — flag for review)
-          //   name only             → "suggested" (names can collide)
-          const confidence = (matchType === 'phone' && hasNameOverlap) ? 'confirmed' : 'suggested';
+          // ID matches are always confirmed; phone+name = confirmed; phone-only or name-only = suggested
+          const confidence = (matchType === 'rea_id' || matchType === 'domain_id' || (matchType === 'phone' && hasNameOverlap)) ? 'confirmed' : 'suggested';
 
           await admin.from('pulse_crm_mappings').insert({
             entity_type: 'agent',
-            rea_id: reaId,
-            domain_id: agent.domain_agent_id || null,
+            rea_id: reaId || null,
+            domain_id: domainId || null,
             crm_entity_id: matchedCrm.id,
             match_type: hasNameOverlap ? `${matchType}+name` : matchType,
             confidence,
           }).then(() => { mappingsCreated++; }).catch(() => {});
 
-          // Only auto-set is_in_crm for confirmed (phone+name) matches
           if (confidence === 'confirmed') {
+            // Write platform IDs back to the CRM record for future matching
+            const crmUpdates: Record<string, any> = { };
+            if (reaId && !matchedCrm.rea_agent_id) crmUpdates.rea_agent_id = reaId;
+            if (domainId && !matchedCrm.domain_agent_id) crmUpdates.domain_agent_id = domainId;
+            if (Object.keys(crmUpdates).length > 0) {
+              admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id).then(() => {}).catch(() => {});
+            }
+
             const { data: freshAgent } = await admin.from('pulse_agents')
-              .select('id')
-              .eq('rea_agent_id', reaId)
-              .limit(1);
+              .select('id').eq('rea_agent_id', reaId || 'NONE').limit(1);
             if (freshAgent?.[0]) {
               await admin.from('pulse_agents').update({ is_in_crm: true, linked_agent_id: matchedCrm.id }).eq('id', freshAgent[0].id);
             }
           }
         }
+      }
+    }
+
+    // 7b: Agency mapping — Domain ID, REA ID, then name
+    for (const agency of mergedAgencies) {
+      const reaAgencyId = agency.rea_agency_id;
+      const domainAgencyId = agency.domain_agency_id;
+      if (!reaAgencyId && !domainAgencyId) continue;
+
+      let matchedCrmAgency: any = null;
+      let agencyMatchType = '';
+
+      // Priority 1: Domain agency ID
+      if (domainAgencyId) {
+        matchedCrmAgency = crmAgenciesList.find((c: any) => c.domain_agency_id === domainAgencyId);
+        if (matchedCrmAgency) agencyMatchType = 'domain_id';
+      }
+
+      // Priority 2: REA agency ID
+      if (!matchedCrmAgency && reaAgencyId) {
+        matchedCrmAgency = crmAgenciesList.find((c: any) => c.rea_agency_id === reaAgencyId);
+        if (matchedCrmAgency) agencyMatchType = 'rea_id';
+      }
+
+      // Priority 3: Normalized name match
+      if (!matchedCrmAgency) {
+        const normName = normalizeAgencyName(agency.name);
+        matchedCrmAgency = crmAgenciesList.find((c: any) => normalizeAgencyName(c.name) === normName);
+        if (matchedCrmAgency) agencyMatchType = 'name';
+      }
+
+      if (matchedCrmAgency) {
+        const { data: existAgencyMap } = await admin.from('pulse_crm_mappings')
+          .select('id').eq('entity_type', 'agency')
+          .eq('crm_entity_id', matchedCrmAgency.id)
+          .limit(1);
+
+        if (!existAgencyMap || existAgencyMap.length === 0) {
+          const agencyConfidence = (agencyMatchType === 'domain_id' || agencyMatchType === 'rea_id') ? 'confirmed' : 'suggested';
+
+          await admin.from('pulse_crm_mappings').insert({
+            entity_type: 'agency',
+            rea_id: reaAgencyId || null,
+            domain_id: domainAgencyId || null,
+            crm_entity_id: matchedCrmAgency.id,
+            match_type: agencyMatchType,
+            confidence: agencyConfidence,
+          }).then(() => { mappingsCreated++; }).catch(() => {});
+
+          // Write platform IDs back to CRM agency
+          if (agencyConfidence === 'confirmed') {
+            const agencyUpdates: Record<string, any> = {};
+            if (reaAgencyId && !matchedCrmAgency.rea_agency_id) agencyUpdates.rea_agency_id = reaAgencyId;
+            if (domainAgencyId && !matchedCrmAgency.domain_agency_id) agencyUpdates.domain_agency_id = domainAgencyId;
+            if (agency.rea_profile_url && !matchedCrmAgency.rea_profile_url) agencyUpdates.rea_profile_url = agency.rea_profile_url;
+            if (agency.domain_profile_url && !matchedCrmAgency.domain_profile_url) agencyUpdates.domain_profile_url = agency.domain_profile_url;
+            if (Object.keys(agencyUpdates).length > 0) {
+              admin.from('agencies').update(agencyUpdates).eq('id', matchedCrmAgency.id).then(() => {}).catch(() => {});
+            }
+          }
+        }
+      }
+
+      // Set is_in_crm on pulse_agency
+      if (matchedCrmAgency) {
+        const normName = normalizeAgencyName(agency.name);
+        admin.from('pulse_agencies').update({ is_in_crm: true })
+          .ilike('name', agency.name.trim()).then(() => {}).catch(() => {});
       }
     }
 
@@ -745,13 +890,14 @@ Deno.serve(async (req) => {
     if (syncLogId) {
       await entities.PulseSyncLog.update(syncLogId, {
         status: 'completed',
-        records_fetched: allReaAgents.length + allDomainAgents.length + allListings.length,
+        records_fetched: allReaAgents.length + allDomainAgents.length + allListings.length + allDomainAgencies.length,
         records_new: agentsInserted + agenciesInserted + listingsInserted,
         completed_at: new Date().toISOString(),
         apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
         raw_payload: {
           rea_agents: allReaAgents,
           domain_agents: allDomainAgents,
+          domain_agencies: allDomainAgencies,
           listings: allListings,
         },
         result_summary: {

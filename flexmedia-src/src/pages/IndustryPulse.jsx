@@ -392,17 +392,19 @@ export default function IndustryPulse() {
         if (preview.existingAgency) {
           agencyId = preview.existingAgency.id;
         } else {
-          // Create new agency from pulse data
+          // Create new agency from pulse data with platform IDs
           const newAgency = await api.entities.Agency.create({
             name: pulseAgent.agency_name,
             relationship_state: "Prospecting",
             source: "industry_pulse",
+            rea_agency_id: pulseAgent.agency_rea_id || null,
+            domain_agency_id: pulseAgent.agency_domain_id || null,
           });
           agencyId = newAgency.id;
         }
       }
 
-      // 2. Create agent
+      // 2. Create agent with platform IDs
       await api.entities.Agent.create({
         name: pulseAgent.full_name,
         email: pulseAgent.email || null,
@@ -410,6 +412,8 @@ export default function IndustryPulse() {
         source: "industry_pulse",
         relationship_state: "Prospecting",
         current_agency_id: agencyId,
+        rea_agent_id: pulseAgent.rea_agent_id || null,
+        domain_agent_id: pulseAgent.domain_agent_id || null,
         notes: [
           pulseAgent.job_title ? `Title: ${pulseAgent.job_title}` : null,
           pulseAgent.years_experience ? `Experience: ${pulseAgent.years_experience} years` : null,
@@ -1114,15 +1118,18 @@ export default function IndustryPulse() {
 
               // ── Source definitions (pull suburbs from shared pool) ──
               const SOURCES = [
-                { source_id: "rea_agents", label: "REA Agent Intelligence", description: "websift/realestateau — Agent profiles, sales data, reviews, awards", icon: Users, color: "text-blue-600",
+                { source_id: "rea_agents", label: "REA Agent Intelligence", description: "websift/realestateau — Agent profiles, sales data, reviews, awards from realestate.com.au", icon: Users, color: "text-blue-600",
                   defaultMax: 30,
-                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipListings: true }) },
-                { source_id: "domain_agents", label: "Domain Agent Data", description: "shahidirfan/domain-com-au — Agent listings, sold data, ratings", icon: Globe, color: "text-purple-600",
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true }) },
+                { source_id: "domain_agents", label: "Domain Agent Data", description: "scrapestorm — Agent profiles, sold data, ratings, agency IDs from domain.com.au", icon: Globe, color: "text-purple-600",
                   defaultMax: 30,
-                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: false, skipListings: true }) },
-                { source_id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana/real-estate-au-scraper-pro — Active listings with agent/agency details", icon: Home, color: "text-green-600",
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: false, skipDomainAgencies: true, skipListings: true }) },
+                { source_id: "domain_agencies", label: "Domain Agency Intelligence", description: "scrapestorm — Agency profiles, agent rosters, listings counts from domain.com.au", icon: Building2, color: "text-indigo-600",
+                  defaultMax: 50,
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxAgenciesPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: false, skipListings: true }) },
+                { source_id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana — Active listings with agent/agency details from realestate.com.au", icon: Home, color: "text-green-600",
                   defaultMax: 20,
-                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: max, skipDomain: true, skipListings: false }) },
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: max, skipDomain: true, skipDomainAgencies: true, skipListings: false }) },
               ].map(s => {
                 const db = sourceConfigs.find(c => c.source_id === s.source_id);
                 return { ...s,
@@ -1524,6 +1531,7 @@ export default function IndustryPulse() {
               const tabs = [
                 { key: "rea_agents", label: "REA Agents", data: payload.rea_agents || [] },
                 { key: "domain_agents", label: "Domain Agents", data: payload.domain_agents || [] },
+                { key: "domain_agencies", label: "Domain Agencies", data: payload.domain_agencies || [] },
                 { key: "listings", label: "Listings", data: payload.listings || [] },
               ].filter(t => t.data.length > 0);
               const activeTab = tabs.find(t => t.key === drillPayloadTab) || tabs[0];
@@ -1657,24 +1665,32 @@ export default function IndustryPulse() {
         <TabsContent value="mappings" className="mt-3">
           <div className="space-y-4">
             {/* Mapping stats */}
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3 text-green-500" />{pulseMappings.filter(m => m.confidence === "confirmed").length} confirmed</span>
-              <span className="flex items-center gap-1"><AlertTriangle className="h-3 w-3 text-amber-500" />{pulseMappings.filter(m => m.confidence === "suggested").length} suggested</span>
-              <span className="flex items-center gap-1"><Users className="h-3 w-3 text-muted-foreground" />{pulseAgents.filter(a => !a.is_in_crm).length} unmapped agents</span>
-            </div>
+            {(() => {
+              const agentMappings = pulseMappings.filter(m => m.entity_type !== "agency");
+              const agencyMappings = pulseMappings.filter(m => m.entity_type === "agency");
+              return (
+                <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+                  <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3 text-green-500" />{pulseMappings.filter(m => m.confidence === "confirmed").length} confirmed</span>
+                  <span className="flex items-center gap-1"><AlertTriangle className="h-3 w-3 text-amber-500" />{pulseMappings.filter(m => m.confidence === "suggested").length} suggested</span>
+                  <span className="flex items-center gap-1"><Users className="h-3 w-3 text-muted-foreground" />{agentMappings.length} agent links</span>
+                  <span className="flex items-center gap-1"><Building2 className="h-3 w-3 text-muted-foreground" />{agencyMappings.length} agency links</span>
+                </div>
+              );
+            })()}
 
-            {/* Mappings list */}
+            {/* Mappings list — agents and agencies */}
             {pulseMappings.length === 0 ? (
               <Card className="border-dashed border-2"><CardContent className="py-12 text-center">
                 <Link2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
-                <p className="text-sm text-muted-foreground">No mappings yet. Run a data sync — the engine auto-detects matches by phone number and name.</p>
+                <p className="text-sm text-muted-foreground">No mappings yet. Run a data sync — the engine auto-detects matches by platform IDs, phone number, and name.</p>
               </CardContent></Card>
             ) : (
               <div className="border rounded-lg overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/30">
                     <tr>
-                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Pulse Agent (REA/Domain)</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground w-14">Type</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Pulse Record</th>
                       <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase text-muted-foreground w-16">Link</th>
                       <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">CRM Record</th>
                       <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Match</th>
@@ -1684,38 +1700,44 @@ export default function IndustryPulse() {
                   </thead>
                   <tbody>
                     {pulseMappings.map(m => {
-                      const pulseAgent = pulseAgents.find(a => a.rea_agent_id === m.rea_id);
-                      const crmAgent = crmAgents.find(a => a.id === m.crm_entity_id);
+                      const isAgency = m.entity_type === "agency";
+                      const pulseRecord = isAgency
+                        ? pulseAgencies.find(a => (a.rea_agency_id && a.rea_agency_id === m.rea_id) || (a.domain_agency_id && a.domain_agency_id === m.domain_id))
+                        : pulseAgents.find(a => a.rea_agent_id === m.rea_id || (m.domain_id && a.domain_agent_id === m.domain_id));
+                      const crmRecord = isAgency
+                        ? crmAgencies.find(a => a.id === m.crm_entity_id)
+                        : crmAgents.find(a => a.id === m.crm_entity_id);
+                      const pulseName = isAgency ? (pulseRecord?.name || `Agency ${m.rea_id || m.domain_id}`) : (pulseRecord?.full_name || `Agent ${m.rea_id || m.domain_id}`);
+                      const pulseDetail = isAgency ? (pulseRecord?.suburb || "—") : `${pulseRecord?.agency_name || "—"} · ${pulseRecord?.mobile || "—"}`;
+                      const crmName = crmRecord?.name || `CRM ${String(m.crm_entity_id).slice(0, 8)}...`;
+                      const crmDetail = isAgency ? (crmRecord?.suburb || crmRecord?.location || "—") : `${crmRecord?.current_agency_name || "—"} · ${crmRecord?.phone || "—"}`;
+
                       return (
                         <tr key={m.id} className="border-t hover:bg-muted/20">
                           <td className="px-3 py-2">
-                            <p className="font-medium text-sm">{pulseAgent?.full_name || `REA ${m.rea_id}`}</p>
-                            <p className="text-[10px] text-muted-foreground">{pulseAgent?.agency_name || "—"} · {pulseAgent?.mobile || "—"}</p>
-                          </td>
-                          <td className="px-3 py-2 text-center">
-                            {m.confidence === "confirmed" ? (
-                              <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
-                            ) : m.confidence === "suggested" ? (
-                              <AlertTriangle className="h-5 w-5 text-amber-500 mx-auto" />
-                            ) : (
-                              <X className="h-5 w-5 text-red-400 mx-auto" />
-                            )}
+                            {isAgency ? <Badge variant="outline" className="text-[9px]"><Building2 className="h-2.5 w-2.5 mr-0.5" />Agency</Badge>
+                             : <Badge variant="outline" className="text-[9px]"><Users className="h-2.5 w-2.5 mr-0.5" />Agent</Badge>}
                           </td>
                           <td className="px-3 py-2">
-                            <p className="font-medium text-sm">{crmAgent?.name || `CRM ${String(m.crm_entity_id).slice(0, 8)}...`}</p>
-                            <p className="text-[10px] text-muted-foreground">{crmAgent?.current_agency_name || "—"} · {crmAgent?.phone || "—"}</p>
+                            <p className="font-medium text-sm">{pulseName}</p>
+                            <p className="text-[10px] text-muted-foreground">{pulseDetail}</p>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            {m.confidence === "confirmed" ? <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
+                             : m.confidence === "suggested" ? <AlertTriangle className="h-5 w-5 text-amber-500 mx-auto" />
+                             : <X className="h-5 w-5 text-red-400 mx-auto" />}
+                          </td>
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-sm">{crmName}</p>
+                            <p className="text-[10px] text-muted-foreground">{crmDetail}</p>
                           </td>
                           <td className="px-3 py-2">
                             <Badge variant="outline" className="text-[9px]">{m.match_type}</Badge>
                           </td>
                           <td className="px-3 py-2">
-                            {m.confidence === "confirmed" ? (
-                              <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">Confirmed</Badge>
-                            ) : m.confidence === "suggested" ? (
-                              <Badge className="text-[9px] bg-amber-100 text-amber-700 border-0 dark:bg-amber-900/30 dark:text-amber-400">Suggested</Badge>
-                            ) : (
-                              <Badge className="text-[9px] bg-red-100 text-red-700 border-0 dark:bg-red-900/30 dark:text-red-400">Rejected</Badge>
-                            )}
+                            {m.confidence === "confirmed" ? <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">Confirmed</Badge>
+                             : m.confidence === "suggested" ? <Badge className="text-[9px] bg-amber-100 text-amber-700 border-0 dark:bg-amber-900/30 dark:text-amber-400">Suggested</Badge>
+                             : <Badge className="text-[9px] bg-red-100 text-red-700 border-0 dark:bg-red-900/30 dark:text-red-400">Rejected</Badge>}
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex gap-1">
@@ -1723,17 +1745,17 @@ export default function IndustryPulse() {
                                 <>
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-green-600" onClick={async () => {
                                     await api.entities.PulseCrmMapping.update(m.id, { confidence: "confirmed", confirmed_at: new Date().toISOString(), confirmed_by_name: user?.full_name });
-                                    if (pulseAgent) await api.entities.PulseAgent.update(pulseAgent.id, { is_in_crm: true, linked_agent_id: m.crm_entity_id });
-                                    api.entities.PulseTimeline.create({ entity_type: "agent", rea_id: m.rea_id, crm_entity_id: m.crm_entity_id, event_type: "crm_mapped", event_category: "system", title: `${pulseAgent?.full_name || "Agent"} mapping confirmed`, description: `Manually confirmed by ${user?.full_name}. Match type: ${m.match_type}.`, source: "manual" }).catch(() => {});
-                                    refetchEntityList("PulseCrmMapping"); refetchEntityList("PulseAgent"); refetchEntityList("PulseTimeline");
+                                    if (!isAgency && pulseRecord) await api.entities.PulseAgent.update(pulseRecord.id, { is_in_crm: true, linked_agent_id: m.crm_entity_id });
+                                    api.entities.PulseTimeline.create({ entity_type: m.entity_type || "agent", rea_id: m.rea_id, crm_entity_id: m.crm_entity_id, event_type: "crm_mapped", event_category: "system", title: `${pulseName} mapping confirmed`, description: `Manually confirmed by ${user?.full_name}. Match type: ${m.match_type}.`, source: "manual" }).catch(() => {});
+                                    refetchEntityList("PulseCrmMapping"); refetchEntityList("PulseAgent"); refetchEntityList("PulseAgency"); refetchEntityList("PulseTimeline");
                                     toast.success("Mapping confirmed");
-                                  }}>✓ Confirm</Button>
+                                  }}>Confirm</Button>
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-red-600" onClick={async () => {
                                     await api.entities.PulseCrmMapping.update(m.id, { confidence: "rejected" });
-                                    api.entities.PulseTimeline.create({ entity_type: "agent", rea_id: m.rea_id, event_type: "crm_mapped", event_category: "system", title: `${pulseAgent?.full_name || "Agent"} mapping rejected`, description: `Rejected by ${user?.full_name}. Was matched via ${m.match_type}.`, source: "manual" }).catch(() => {});
+                                    api.entities.PulseTimeline.create({ entity_type: m.entity_type || "agent", rea_id: m.rea_id, event_type: "crm_mapped", event_category: "system", title: `${pulseName} mapping rejected`, description: `Rejected by ${user?.full_name}. Was matched via ${m.match_type}.`, source: "manual" }).catch(() => {});
                                     refetchEntityList("PulseCrmMapping"); refetchEntityList("PulseTimeline");
                                     toast.success("Mapping rejected");
-                                  }}>✗ Reject</Button>
+                                  }}>Reject</Button>
                                 </>
                               )}
                               {m.confidence === "confirmed" && (
