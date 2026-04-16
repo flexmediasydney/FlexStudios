@@ -693,6 +693,7 @@ Deno.serve(async (req) => {
         source: l._source || 'rea',
         source_url: l.url || null,
         source_listing_id: listingId || null,
+        first_seen_at: isNew ? now : undefined,
         last_synced_at: now,
         // Change detection
         previous_asking_price: (() => {
@@ -839,8 +840,8 @@ Deno.serve(async (req) => {
     // Match by rea_agent_id FIRST (not name) to prevent wrong-agent email assignment.
     {
       // Build enrichment map keyed by rea_agent_id (primary) and name (fallback)
-      const enrichByReaId = new Map<string, { email?: string; photo?: string; phone?: string; jobTitle?: string; listingCount: number }>();
-      const enrichByName = new Map<string, { email?: string; photo?: string; phone?: string; reaId?: string; jobTitle?: string; listingCount: number }>();
+      const enrichByReaId = new Map<string, { email?: string; photo?: string; phone?: string; jobTitle?: string; listingCount: number; allEmails: string[] }>();
+      const enrichByName = new Map<string, { email?: string; photo?: string; phone?: string; reaId?: string; jobTitle?: string; listingCount: number; allEmails: string[] }>();
 
       for (const lr of listingRecords) {
         const agents = lr._allAgents || [];
@@ -849,8 +850,9 @@ Deno.serve(async (req) => {
 
           // Primary: keyed by REA agent ID (strongest match)
           if (la.reaId) {
-            const existing = enrichByReaId.get(la.reaId) || { listingCount: 0 };
+            const existing = enrichByReaId.get(la.reaId) || { listingCount: 0, allEmails: [] };
             if (la.email && !existing.email) existing.email = la.email;
+            if (la.email && !existing.allEmails.includes(la.email)) existing.allEmails.push(la.email);
             if (la.photo && !existing.photo) existing.photo = la.photo;
             if (la.phone && !existing.phone) existing.phone = la.phone;
             if (la.jobTitle && !existing.jobTitle) existing.jobTitle = la.jobTitle;
@@ -860,8 +862,9 @@ Deno.serve(async (req) => {
 
           // Secondary: keyed by normalized name (weaker, for agents without REA ID in listings)
           const nameKey = la.name.toLowerCase().trim();
-          const existingByName = enrichByName.get(nameKey) || { listingCount: 0 };
+          const existingByName = enrichByName.get(nameKey) || { listingCount: 0, allEmails: [] };
           if (la.email && !existingByName.email) existingByName.email = la.email;
+          if (la.email && !existingByName.allEmails.includes(la.email)) existingByName.allEmails.push(la.email);
           if (la.photo && !existingByName.photo) existingByName.photo = la.photo;
           if (la.phone && !existingByName.phone) existingByName.phone = la.phone;
           if (la.reaId && !existingByName.reaId) existingByName.reaId = la.reaId;
@@ -916,6 +919,9 @@ Deno.serve(async (req) => {
           if (enrichData.reaId && !pa.rea_agent_id) updates.rea_agent_id = enrichData.reaId;
           if (enrichData.jobTitle && !pa.job_title) updates.job_title = enrichData.jobTitle;
           if (enrichData.listingCount > 0) updates.total_listings_active = enrichData.listingCount;
+          if (enrichData.allEmails && enrichData.allEmails.length > 0) {
+            updates.all_emails = JSON.stringify(enrichData.allEmails);
+          }
 
           // Recalculate integrity score from scratch (avoids competing Math.max paths)
           if (Object.keys(updates).length > 0) {
@@ -1031,10 +1037,26 @@ Deno.serve(async (req) => {
 
     // ── Step 10: Auto-Mapping (REA ID + Phone + Name) ───────────────────
 
-    const { data: existingMappings = [] } = await admin.from('pulse_crm_mappings').select('rea_id, entity_type, confidence');
+    const { data: existingMappings = [] } = await admin.from('pulse_crm_mappings').select('id, rea_id, entity_type, crm_entity_id, confidence, pulse_entity_id');
     const mappedKeys = new Set(existingMappings.filter((m: any) => m.confidence === 'confirmed').map((m: any) =>
       `${m.entity_type}:${m.rea_id || ''}`
     ));
+
+    // Build lookup maps from existing mappings (eliminates per-agent DB queries)
+    const mappingsByCrmId = new Map<string, any>();
+    existingMappings.forEach((m: any) => {
+      if (m.crm_entity_id) mappingsByCrmId.set(`${m.entity_type}:${m.crm_entity_id}`, m);
+    });
+
+    // Build complete pulse agent ID map (eliminates per-agent pulse_agents.select queries)
+    const { data: allPulseAgentIds = [] } = await admin.from('pulse_agents')
+      .select('id, rea_agent_id').not('rea_agent_id', 'is', null);
+    const pulseAgentIdMap = new Map(allPulseAgentIds.map((a: any) => [a.rea_agent_id, a.id]));
+
+    // Build complete pulse agency ID map (eliminates per-agency pulse_agencies.select queries)
+    const { data: allPulseAgencyIds = [] } = await admin.from('pulse_agencies')
+      .select('id, name').limit(2000);
+    const pulseAgencyIdMap = new Map(allPulseAgencyIds.map((a: any) => [(a.name || '').trim().toLowerCase(), a.id]));
 
     // 10a: Agent mapping
     for (const agent of processedAgents) {
@@ -1079,19 +1101,14 @@ Deno.serve(async (req) => {
       if (matchedCrm) {
         const confidence = (matchType === 'rea_id' || (matchType === 'phone' && hasNameOverlap) || matchType === 'name_exact') ? 'confirmed' : 'suggested';
 
-        const { data: existMap } = await admin.from('pulse_crm_mappings')
-          .select('id, confidence, rea_id').eq('entity_type', 'agent')
-          .eq('crm_entity_id', matchedCrm.id)
-          .limit(1);
+        // Use pre-built lookup maps instead of per-agent DB queries
+        const existMapEntry = mappingsByCrmId.get(`agent:${matchedCrm.id}`);
+        const existMap = existMapEntry ? [existMapEntry] : [];
 
-        // Look up pulse_agent ID
-        let pulseAgentId: string | null = null;
-        if (reaId) {
-          const { data: pa } = await admin.from('pulse_agents').select('id').eq('rea_agent_id', reaId).limit(1);
-          if (pa?.[0]) pulseAgentId = pa[0].id;
-        }
+        // Look up pulse_agent ID from pre-built map
+        const pulseAgentId: string | null = reaId ? (pulseAgentIdMap.get(reaId) || null) : null;
 
-        if (!existMap || existMap.length === 0) {
+        if (existMap.length === 0) {
           await admin.from('pulse_crm_mappings').insert({
             entity_type: 'agent',
             pulse_entity_id: pulseAgentId,
@@ -1143,19 +1160,14 @@ Deno.serve(async (req) => {
       }
 
       if (matchedCrmAgency) {
-        const { data: existAgencyMap } = await admin.from('pulse_crm_mappings')
-          .select('id, confidence, rea_id').eq('entity_type', 'agency')
-          .eq('crm_entity_id', matchedCrmAgency.id)
-          .limit(1);
+        // Use pre-built lookup maps instead of per-agency DB queries
+        const existAgencyMapEntry = mappingsByCrmId.get(`agency:${matchedCrmAgency.id}`);
+        const existAgencyMap = existAgencyMapEntry ? [existAgencyMapEntry] : [];
 
-        // Look up pulse_agency ID
-        let pulseAgencyId: string | null = null;
-        {
-          const { data: pa } = await admin.from('pulse_agencies').select('id').ilike('name', agency.name.trim()).limit(1);
-          if (pa?.[0]) pulseAgencyId = pa[0].id;
-        }
+        // Look up pulse_agency ID from pre-built map
+        const pulseAgencyId: string | null = pulseAgencyIdMap.get(agency.name.trim().toLowerCase()) || null;
 
-        if (!existAgencyMap || existAgencyMap.length === 0) {
+        if (existAgencyMap.length === 0) {
           await admin.from('pulse_crm_mappings').insert({
             entity_type: 'agency',
             pulse_entity_id: pulseAgencyId,

@@ -84,7 +84,7 @@ Deno.serve(async (req) => {
         triggered_by_name: 'Cron',
       };
 
-      fetch(`${SUPABASE_URL}/functions/v1/pulseDataSync`, {
+      const p = fetch(`${SUPABASE_URL}/functions/v1/pulseDataSync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -93,6 +93,7 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(params),
       }).catch((err) => { console.error('Fire-and-forget failed for', source_id, err.message?.substring(0, 100)); });
+      await Promise.race([p, new Promise(r => setTimeout(r, 3000))]);
 
       try {
         await admin.from('pulse_timeline').insert({
@@ -135,7 +136,7 @@ Deno.serve(async (req) => {
         triggered_by_name: 'Cron',
       };
 
-      fetch(`${SUPABASE_URL}/functions/v1/pulseDataSync`, {
+      const sp = fetch(`${SUPABASE_URL}/functions/v1/pulseDataSync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -144,6 +145,7 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify(params),
       }).catch((err) => { console.error('Fire-and-forget failed for', source_id, err.message?.substring(0, 100)); });
+      await Promise.race([sp, new Promise(r => setTimeout(r, 3000))]);
 
       dispatched++;
 
