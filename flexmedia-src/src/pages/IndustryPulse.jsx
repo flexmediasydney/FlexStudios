@@ -1940,19 +1940,36 @@ export default function IndustryPulse() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
+              {/* Source badges */}
+              {(() => {
+                const Src = ({ s }) => <span className={cn("text-[7px] font-bold uppercase px-1 py-0 rounded ml-1 inline-block leading-relaxed",
+                  s === "REA" ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" :
+                  s === "Domain" ? "bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400" :
+                  "bg-gray-100 text-gray-500")}>{s}</span>;
+                const hasDomain = !!ag.domain_agency_id;
+                const hasRea = !!ag.rea_agency_id;
+                return (<>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase">Sources:</span>
+                {hasRea && <Badge variant="outline" className="text-[8px] px-1.5 py-0 bg-red-50 dark:bg-red-950/20 border-red-200 text-red-600">REA</Badge>}
+                {hasDomain && <Badge variant="outline" className="text-[8px] px-1.5 py-0 bg-violet-50 dark:bg-violet-950/20 border-violet-200 text-violet-600">Domain</Badge>}
+                {ag.profile_tier && <Badge variant="outline" className="text-[8px]">Tier: {ag.profile_tier}</Badge>}
+              </div>
+
               {/* Contact */}
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase">Contact</p>
-                {ag.phone && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`tel:${ag.phone}`} className="text-primary hover:underline">{ag.phone}</a></div>}
-                {ag.email && <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`mailto:${ag.email}`} className="text-primary hover:underline">{ag.email}</a></div>}
-                {ag.website && <div className="flex items-center gap-2"><Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={ag.website.startsWith("http") ? ag.website : `https://${ag.website}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline truncate">{ag.website}</a></div>}
+                {ag.phone && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`tel:${ag.phone}`} className="text-primary hover:underline">{ag.phone}</a><Src s={hasDomain ? "Domain" : "REA"} /></div>}
+                {ag.email && <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`mailto:${ag.email}`} className="text-primary hover:underline">{ag.email}</a><Src s="Domain" /></div>}
+                {ag.website && <div className="flex items-center gap-2"><Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={ag.website.startsWith("http") ? ag.website : `https://${ag.website}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline truncate">{ag.website}</a><Src s="REA" /></div>}
               </div>
 
               {/* Location */}
               {ag.address && (
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase">Location</p>
-                  <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><span>{ag.address}</span></div>
+                  <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><span>{ag.address}</span><Src s={hasDomain ? "Domain" : "REA"} /></div>
                 </div>
               )}
 
@@ -1960,12 +1977,12 @@ export default function IndustryPulse() {
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase">Key Metrics</p>
                 <div className="grid grid-cols-3 gap-2">
-                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{ag.live_agent_count}</p><p className="text-[9px] text-muted-foreground">Agents</p></div>
-                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{ag.active_listings || 0}</p><p className="text-[9px] text-muted-foreground">Active Listings</p></div>
-                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{fmtPrice(ag.avg_listing_price)}</p><p className="text-[9px] text-muted-foreground">Avg Price</p></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{ag.live_agent_count}</p><p className="text-[9px] text-muted-foreground">Agents</p><Src s="REA" /></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{ag.active_listings || 0}</p><p className="text-[9px] text-muted-foreground">Active Listings</p><Src s={ag.total_sold_and_auctioned ? "Domain" : "REA"} /></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{fmtPrice(ag.avg_listing_price || ag.avg_sold_price)}</p><p className="text-[9px] text-muted-foreground">Avg Price</p><Src s={ag.avg_listing_price ? "REA" : "REA"} /></div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{totalSold}</p><p className="text-[9px] text-muted-foreground">Total Sold (12m)</p></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{ag.total_sold_and_auctioned || totalSold || 0}</p><p className="text-[9px] text-muted-foreground">Total Sold</p><Src s={ag.total_sold_and_auctioned ? "Domain" : "REA"} /></div>
                   <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{rosterInCrm}/{rosterAgents.length}</p><p className="text-[9px] text-muted-foreground">In Your CRM</p></div>
                 </div>
               </div>
@@ -2038,10 +2055,25 @@ export default function IndustryPulse() {
                 )}
               </div>
 
-              {/* Data Source + Sync */}
+              {/* Profile Links */}
+              {(ag.rea_profile_url || ag.domain_profile_url) && (
+                <div className="space-y-1.5 pt-2 border-t">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Platform Profiles</p>
+                  <div className="flex gap-3">
+                    {ag.rea_profile_url && <a href={ag.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />realestate.com.au<Src s="REA" /></a>}
+                    {ag.domain_profile_url && <a href={ag.domain_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />domain.com.au<Src s="Domain" /></a>}
+                  </div>
+                </div>
+              )}
+
+              {/* Platform IDs + Sync */}
               <div className="space-y-1 pt-2 border-t text-[10px] text-muted-foreground">
                 <p>Source: {ag.source || "rea_listings"} · Synced: {fmtDate(ag.last_synced_at)}</p>
+                {ag.rea_agency_id && <p><Src s="REA" /> Agency ID: {ag.rea_agency_id}</p>}
+                {ag.domain_agency_id && <p><Src s="Domain" /> Agency ID: {ag.domain_agency_id}</p>}
               </div>
+                </>); /* end Src IIFE */
+              })()}
             </div>
           </div>
         );
@@ -2072,34 +2104,83 @@ export default function IndustryPulse() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
+              {/* Source badge helper */}
+              {(() => {
+                const Src = ({ s }) => <span className={cn("text-[7px] font-bold uppercase px-1 py-0 rounded ml-1 inline-block leading-relaxed",
+                  s === "REA" ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" :
+                  s === "Domain" ? "bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400" :
+                  "bg-gray-100 text-gray-500")}>{s}</span>;
+                const hasDual = (a.source || "").includes("+") || (a.rea_agent_id && a.domain_agent_id);
+                return (<>
+
+              {/* Data Sources */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase">Sources:</span>
+                {a.rea_agent_id && <Badge variant="outline" className="text-[8px] px-1.5 py-0 bg-red-50 dark:bg-red-950/20 border-red-200 text-red-600">REA</Badge>}
+                {a.domain_agent_id && <Badge variant="outline" className="text-[8px] px-1.5 py-0 bg-violet-50 dark:bg-violet-950/20 border-violet-200 text-violet-600">Domain</Badge>}
+                {a.data_integrity_score > 0 && <Badge variant="outline" className="text-[8px]">Quality: {a.data_integrity_score}%</Badge>}
+                {hasDual && <Badge variant="outline" className="text-[8px] text-green-600 border-green-200">Dual-verified</Badge>}
+              </div>
+
               {/* Contact */}
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase">Contact</p>
-                {a.mobile && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`tel:${a.mobile}`} className="text-primary hover:underline">{a.mobile}</a>{a.mobile_validated && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">✓ Verified</Badge>}</div>}
-                {a.business_phone && a.business_phone !== a.mobile && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{a.business_phone} <span className="text-[10px] text-muted-foreground">(office)</span></div>}
+                {a.mobile && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`tel:${a.mobile}`} className="text-primary hover:underline">{a.mobile}</a>{a.mobile_validated && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">Dual-verified</Badge>}<Src s="REA" /></div>}
+                {a.business_phone && a.business_phone !== a.mobile && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{a.business_phone} <span className="text-[10px] text-muted-foreground">(office)</span><Src s={a.domain_agent_id ? "Domain" : "REA"} /></div>}
                 {a.email && <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`mailto:${a.email}`} className="text-primary hover:underline">{a.email}</a></div>}
               </div>
 
               {/* Agency */}
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase">Agency</p>
-                {a.agency_name && <div className="flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><span className="font-medium">{a.agency_name}</span>{a.agency_validated && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">✓ Matched</Badge>}</div>}
+                {a.agency_name && <div className="flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><span className="font-medium">{a.agency_name}</span>{a.agency_validated && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">Dual-verified</Badge>}</div>}
                 {a.agency_suburb && <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />{a.agency_suburb}</div>}
+                {(a.agency_rea_id || a.agency_domain_id) && (
+                  <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                    {a.agency_rea_id && <span>REA agency #{a.agency_rea_id}</span>}
+                    {a.agency_domain_id && <span>Domain agency #{a.agency_domain_id}</span>}
+                  </div>
+                )}
               </div>
 
-              {/* Performance Stats */}
+              {/* Performance — side-by-side source comparison */}
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase">Performance</p>
                 <div className="grid grid-cols-3 gap-2">
-                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{a.sales_as_lead || a.total_sold_12m || 0}</p><p className="text-[9px] text-muted-foreground">Sales (Lead)</p></div>
-                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{fmtPrice(a.avg_sold_price)}</p><p className="text-[9px] text-muted-foreground">Median Sold</p></div>
-                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{a.avg_days_on_market || "—"}</p><p className="text-[9px] text-muted-foreground">Avg DOM</p></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+                    <p className="text-lg font-bold">{a.sales_as_lead || a.total_sold_12m || 0}</p>
+                    <p className="text-[9px] text-muted-foreground">Sales (Lead)</p>
+                    <Src s={a.sales_as_lead ? "REA" : a.total_sold_12m ? "Domain" : "REA"} />
+                  </div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+                    <p className="text-lg font-bold">{fmtPrice(a.avg_sold_price)}</p>
+                    <p className="text-[9px] text-muted-foreground">Median Sold</p>
+                    <Src s={a.rea_median_sold_price ? "REA" : "Domain"} />
+                  </div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+                    <p className="text-lg font-bold">{a.avg_days_on_market || "—"}</p>
+                    <p className="text-[9px] text-muted-foreground">Avg DOM</p>
+                    <Src s={a.rea_median_dom ? "REA" : "Domain"} />
+                  </div>
                 </div>
-                {/* Dual source comparison */}
-                {(a.rea_median_sold_price && a.domain_avg_sold_price) && (
-                  <div className="text-[10px] text-muted-foreground bg-muted/20 rounded p-2">
-                    <p className="font-medium mb-1">Dual-source price comparison:</p>
-                    <p>REA median: {fmtPrice(a.rea_median_sold_price)} · Domain avg: {fmtPrice(a.domain_avg_sold_price)}</p>
+                {/* Dual source comparison table */}
+                {hasDual && (a.rea_median_sold_price || a.domain_avg_sold_price || a.rea_median_dom || a.domain_avg_dom) && (
+                  <div className="border rounded-lg overflow-hidden mt-1">
+                    <table className="w-full text-[10px]">
+                      <thead className="bg-muted/30">
+                        <tr>
+                          <th className="px-2 py-1 text-left text-muted-foreground">Metric</th>
+                          <th className="px-2 py-1 text-center"><span className="text-red-600">REA</span></th>
+                          <th className="px-2 py-1 text-center"><span className="text-violet-600">Domain</span></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(a.rea_median_sold_price || a.domain_avg_sold_price) && <tr className="border-t"><td className="px-2 py-1">Sold Price</td><td className="px-2 py-1 text-center tabular-nums">{fmtPrice(a.rea_median_sold_price) || "—"}</td><td className="px-2 py-1 text-center tabular-nums">{fmtPrice(a.domain_avg_sold_price) || "—"}</td></tr>}
+                        {(a.rea_median_dom || a.domain_avg_dom) && <tr className="border-t"><td className="px-2 py-1">Days on Market</td><td className="px-2 py-1 text-center tabular-nums">{a.rea_median_dom || "—"}</td><td className="px-2 py-1 text-center tabular-nums">{a.domain_avg_dom || "—"}</td></tr>}
+                        {(a.rea_rating || a.domain_rating) && <tr className="border-t"><td className="px-2 py-1">Rating</td><td className="px-2 py-1 text-center tabular-nums">{a.rea_rating ? `${a.rea_rating} (${a.rea_review_count || 0})` : "—"}</td><td className="px-2 py-1 text-center tabular-nums">{a.domain_rating ? `${a.domain_rating} (${a.domain_review_count || 0})` : "—"}</td></tr>}
+                        <tr className="border-t"><td className="px-2 py-1">Active Listings</td><td className="px-2 py-1 text-center tabular-nums">{a.total_listings_active || "—"}</td><td className="px-2 py-1 text-center tabular-nums">{a.total_sold_12m || "—"}</td></tr>
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>
@@ -2114,15 +2195,20 @@ export default function IndustryPulse() {
                       <span className="text-xl font-bold">{Number(a.reviews_avg || a.rea_rating).toFixed(1)}</span>
                     </div>
                     <span className="text-xs text-muted-foreground">{a.reviews_count || 0} reviews</span>
-                    {a.rea_rating && a.domain_rating && <span className="text-[10px] text-muted-foreground">(REA: {a.rea_rating} · Domain: {a.domain_rating})</span>}
                   </div>
+                  {(a.rea_rating || a.domain_rating) && (
+                    <div className="flex items-center gap-3 text-[10px]">
+                      {a.rea_rating > 0 && <span className="flex items-center gap-1"><Src s="REA" /><Star className="h-2.5 w-2.5 fill-amber-400 text-amber-400" />{a.rea_rating} ({a.rea_review_count || 0})</span>}
+                      {a.domain_rating > 0 && <span className="flex items-center gap-1"><Src s="Domain" /><Star className="h-2.5 w-2.5 fill-amber-400 text-amber-400" />{a.domain_rating} ({a.domain_review_count || 0})</span>}
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Sales Breakdown by Property Type */}
               {salesBreakdown && Object.keys(salesBreakdown).length > 0 && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Sales by Property Type</p>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1">Sales by Property Type<Src s="REA" /></p>
                   <div className="space-y-1">
                     {Object.entries(salesBreakdown).map(([type, data]) => (
                       <div key={type} className="flex items-center justify-between text-xs bg-muted/30 rounded px-2.5 py-1.5">
@@ -2137,7 +2223,7 @@ export default function IndustryPulse() {
               {/* Awards */}
               {a.awards && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1"><Award className="h-3 w-3" />Awards</p>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1"><Award className="h-3 w-3" />Awards<Src s="REA" /></p>
                   <div className="text-xs text-muted-foreground whitespace-pre-line bg-amber-50/50 dark:bg-amber-950/10 rounded-lg p-2.5 border border-amber-200/50 dark:border-amber-800/30">{a.awards}</div>
                 </div>
               )}
@@ -2145,7 +2231,7 @@ export default function IndustryPulse() {
               {/* Speciality Suburbs */}
               {a.speciality_suburbs && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1"><MapPin className="h-3 w-3" />Speciality Areas</p>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1"><MapPin className="h-3 w-3" />Speciality Areas<Src s="REA" /></p>
                   <p className="text-xs text-muted-foreground">{a.speciality_suburbs}</p>
                 </div>
               )}
@@ -2153,7 +2239,7 @@ export default function IndustryPulse() {
               {/* Community Involvement */}
               {a.community_involvement && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Community</p>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1">Community<Src s="REA" /></p>
                   <p className="text-xs text-muted-foreground whitespace-pre-line">{a.community_involvement}</p>
                 </div>
               )}
@@ -2161,7 +2247,7 @@ export default function IndustryPulse() {
               {/* Social Links */}
               {(a.social_facebook || a.social_instagram || a.social_linkedin) && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Social</p>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1">Social<Src s="REA" /></p>
                   <div className="flex gap-3">
                     {a.social_facebook && <a href={a.social_facebook} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">Facebook</a>}
                     {a.social_instagram && <a href={`https://instagram.com/${a.social_instagram.replace("@","")}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">Instagram</a>}
@@ -2172,17 +2258,17 @@ export default function IndustryPulse() {
 
               {/* Profile Links */}
               <div className="space-y-1.5 pt-2 border-t">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Profiles</p>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Platform Profiles</p>
                 <div className="flex gap-3">
-                  {a.rea_profile_url && <a href={a.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />realestate.com.au</a>}
-                  {a.domain_profile_url && <a href={a.domain_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />domain.com.au</a>}
+                  {a.rea_profile_url && <a href={a.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />realestate.com.au<Src s="REA" /></a>}
+                  {a.domain_profile_url && <a href={a.domain_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />domain.com.au<Src s="Domain" /></a>}
                 </div>
               </div>
 
               {/* Recent Listings */}
               {recentListings && recentListings.length > 0 && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Recent Listings ({recentListings.length})</p>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1">Recent Listings ({recentListings.length})<Src s="REA" /></p>
                   <div className="flex flex-wrap gap-1">
                     {recentListings.slice(0, 5).map((id, i) => (
                       <a key={i} href={`https://www.realestate.com.au/property--nsw--${id}`} target="_blank" rel="noopener noreferrer"
@@ -2192,11 +2278,11 @@ export default function IndustryPulse() {
                 </div>
               )}
 
-              {/* Data Source + Integrity */}
+              {/* Platform IDs + Integrity */}
               <div className="space-y-1 pt-2 border-t text-[10px] text-muted-foreground">
                 <p>Source: {a.source || "manual"} · Synced: {fmtDate(a.last_synced_at)}</p>
-                {a.rea_agent_id && <p>REA ID: {a.rea_agent_id}</p>}
-                {a.domain_agent_id && <p>Domain ID: {a.domain_agent_id}</p>}
+                {a.rea_agent_id && <p><Src s="REA" /> Agent ID: {a.rea_agent_id}</p>}
+                {a.domain_agent_id && <p><Src s="Domain" /> Agent ID: {a.domain_agent_id}</p>}
               </div>
 
               {/* Add to CRM button */}
@@ -2205,6 +2291,8 @@ export default function IndustryPulse() {
                   <UserPlus className="h-4 w-4 mr-2" />Add to CRM Pipeline
                 </Button>
               )}
+                </>); /* end Src IIFE */
+              })()}
             </div>
           </div>
         );
