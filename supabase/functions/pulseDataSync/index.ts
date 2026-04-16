@@ -1184,10 +1184,22 @@ Deno.serve(async (req) => {
           .eq('crm_entity_id', matchedCrm.id)
           .limit(1);
 
+        // Look up the pulse_agent ID for the mapping
+        let pulseAgentIdForMapping: string | null = null;
+        if (reaId) {
+          const { data: pa } = await admin.from('pulse_agents').select('id').eq('rea_agent_id', reaId).limit(1);
+          if (pa?.[0]) pulseAgentIdForMapping = pa[0].id;
+        }
+        if (!pulseAgentIdForMapping && domainId) {
+          const { data: pa } = await admin.from('pulse_agents').select('id').eq('domain_agent_id', domainId).limit(1);
+          if (pa?.[0]) pulseAgentIdForMapping = pa[0].id;
+        }
+
         if (!existMap || existMap.length === 0) {
-          // Create new mapping
+          // Create new mapping with pulse_entity_id
           await admin.from('pulse_crm_mappings').insert({
             entity_type: 'agent',
+            pulse_entity_id: pulseAgentIdForMapping,
             rea_id: reaId || null,
             domain_id: domainId || null,
             crm_entity_id: matchedCrm.id,
@@ -1271,10 +1283,19 @@ Deno.serve(async (req) => {
           .eq('crm_entity_id', matchedCrmAgency.id)
           .limit(1);
 
+        // Look up the pulse_agency ID for the mapping
+        let pulseAgencyIdForMapping: string | null = null;
+        {
+          const normName = normalizeAgencyName(agency.name);
+          const { data: pa } = await admin.from('pulse_agencies').select('id').ilike('name', agency.name.trim()).limit(1);
+          if (pa?.[0]) pulseAgencyIdForMapping = pa[0].id;
+        }
+
         if (!existAgencyMap || existAgencyMap.length === 0) {
-          // Create new mapping
+          // Create new mapping with pulse_entity_id
           await admin.from('pulse_crm_mappings').insert({
             entity_type: 'agency',
+            pulse_entity_id: pulseAgencyIdForMapping,
             rea_id: reaAgencyId || null,
             domain_id: domainAgencyId || null,
             crm_entity_id: matchedCrmAgency.id,
