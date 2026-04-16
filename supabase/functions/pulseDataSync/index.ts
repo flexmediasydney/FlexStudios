@@ -320,7 +320,7 @@ Deno.serve(async (req) => {
       if (!skipDomain && maxAgentsPerSuburb > 0) {
         console.log(`[${suburb}] Running scrapestorm Domain agents...`);
         const domResult = await runApifyActor('scrapestorm/domain-com-au-real-estate-agents-scraper---cheap', {
-          domain_url: `https://www.domain.com.au/real-estate-agents/${suburbSlug}-${state.toLowerCase()}/`,
+          target_url: `https://www.domain.com.au/real-estate-agents/${suburbSlug}-${state.toLowerCase()}/`,
           max_items: maxAgentsPerSuburb,
         }, `domain-agents-${suburb}`, 120);
         domResult.items.forEach(a => { a._suburb = suburb; a._source = 'domain'; });
@@ -332,7 +332,7 @@ Deno.serve(async (req) => {
       if (!skipDomainAgencies && maxAgenciesPerSuburb > 0) {
         console.log(`[${suburb}] Running scrapestorm Domain agencies...`);
         const agencyResult = await runApifyActor('scrapestorm/domain-com-au-real-estate-agencies-scraper---cheap', {
-          domain_url: `https://www.domain.com.au/real-estate-agencies/${suburbSlug}-${state.toLowerCase()}/`,
+          target_url: `https://www.domain.com.au/real-estate-agencies/${suburbSlug}-${state.toLowerCase()}/`,
           max_items: maxAgenciesPerSuburb,
         }, `domain-agencies-${suburb}`, 120);
         agencyResult.items.forEach(a => { a._suburb = suburb; a._source = 'domain_agencies'; });
