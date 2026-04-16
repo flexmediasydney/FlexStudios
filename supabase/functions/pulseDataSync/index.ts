@@ -341,8 +341,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ── Step 3: Extract agencies from listings ──────────────────────────
+    // ── Step 3: Build agencies from listings + agent data ─────────────
 
+    // 3a: Seed agencies from listings data (address, phone, logo, listings count)
     const agencyMap = new Map<string, any>();
     for (const listing of allListings) {
       const agencyName = listing.agencyName;
@@ -360,14 +361,11 @@ Deno.serve(async (req) => {
           postcode: listing.agencyAddress_postcode || null,
           logo_url: listing.agencyLogo || null,
           rea_profile_url: listing.agencyProfileUrl || null,
-          agent_count: 0,
           active_listings: 0,
           listing_prices: [],
           suburbs: new Set<string>(),
-          source: 'rea_listings',
-          data_sources: JSON.stringify(['rea_listings']),
-          last_synced_at: now,
-          is_in_crm: false,
+          sources: new Set<string>(['rea_listings']),
+          rea_agency_ids: new Set<string>(),
         });
       }
       const agency = agencyMap.get(key)!;
@@ -375,26 +373,57 @@ Deno.serve(async (req) => {
       if (listing.suburb) agency.suburbs.add(listing.suburb);
       const price = parseFloat(String(listing.price || '').replace(/[^0-9.]/g, ''));
       if (price > 0) agency.listing_prices.push(price);
+    }
 
-      // Extract agent names for this agency
-      if (listing.agents && Array.isArray(listing.agents)) {
-        for (const agent of listing.agents) {
-          if (agent.name) agency.agent_count++;
-        }
+    // 3b: Enrich agencies from merged agent data (REA IDs, sales, ratings, agent count)
+    // Also discover agencies that appear in agent data but had no listings
+    for (const agent of mergedAgents) {
+      const agencyName = agent.agency_name;
+      if (!agencyName) continue;
+      const key = normalizeAgencyName(agencyName);
+      if (!agencyMap.has(key)) {
+        agencyMap.set(key, {
+          name: agencyName,
+          phone: null, email: null, website: null, address: null,
+          suburb: agent.agency_suburb || null, state: null, postcode: null,
+          logo_url: null, rea_profile_url: null,
+          active_listings: 0, listing_prices: [],
+          suburbs: new Set<string>(),
+          sources: new Set<string>(),
+          rea_agency_ids: new Set<string>(),
+        });
       }
+      const agency = agencyMap.get(key)!;
+      agency.sources.add(agent.source || 'rea');
+      if (agent.agency_rea_id) agency.rea_agency_ids.add(agent.agency_rea_id);
+      if (agent.agency_suburb) agency.suburbs.add(agent.agency_suburb);
     }
 
-    // Count unique agents per agency from merged agents
-    for (const [key, agency] of agencyMap.entries()) {
-      const agentCount = mergedAgents.filter(a =>
-        normalizeAgencyName(a.agency_name || '') === key
-      ).length;
-      if (agentCount > agency.agent_count) agency.agent_count = agentCount;
-    }
-
+    // 3c: Aggregate per-agency stats from agents
     const mergedAgencies: any[] = [];
-    for (const [, agency] of agencyMap.entries()) {
+    for (const [key, agency] of agencyMap.entries()) {
+      const agencyAgents = mergedAgents.filter(a => normalizeAgencyName(a.agency_name || '') === key);
+      const agentCount = agencyAgents.length;
+      const totalSold = agencyAgents.reduce((s, a) => s + (a.sales_as_lead || 0), 0);
+      const avgRating = (() => {
+        const rated = agencyAgents.filter(a => a.reviews_avg > 0 || a.rea_rating > 0);
+        if (rated.length === 0) return null;
+        return Math.round(rated.reduce((s, a) => s + (a.reviews_avg || a.rea_rating || 0), 0) / rated.length * 10) / 10;
+      })();
+      const totalReviews = agencyAgents.reduce((s, a) => s + (a.reviews_count || 0), 0);
+      const avgSoldPrice = (() => {
+        const withPrice = agencyAgents.filter(a => a.avg_sold_price > 0);
+        if (withPrice.length === 0) return null;
+        return Math.round(withPrice.reduce((s, a) => s + a.avg_sold_price, 0) / withPrice.length);
+      })();
+      const avgDom = (() => {
+        const withDom = agencyAgents.filter(a => a.avg_days_on_market > 0);
+        if (withDom.length === 0) return null;
+        return Math.round(withDom.reduce((s, a) => s + a.avg_days_on_market, 0) / withDom.length);
+      })();
       const prices = agency.listing_prices;
+      const reaIds = [...agency.rea_agency_ids];
+
       mergedAgencies.push({
         name: agency.name,
         phone: agency.phone,
@@ -406,13 +435,19 @@ Deno.serve(async (req) => {
         postcode: agency.postcode,
         logo_url: agency.logo_url,
         rea_profile_url: agency.rea_profile_url,
-        agent_count: agency.agent_count,
+        rea_agency_id: reaIds[0] || null,
+        agent_count: agentCount,
         active_listings: agency.active_listings,
         avg_listing_price: prices.length > 0 ? Math.round(prices.reduce((s: number, p: number) => s + p, 0) / prices.length) : null,
+        total_sold_12m: totalSold || null,
+        avg_sold_price: avgSoldPrice,
+        avg_days_on_market: avgDom,
+        avg_agent_rating: avgRating,
+        total_reviews: totalReviews || null,
         suburbs_active: JSON.stringify([...agency.suburbs]),
-        source: agency.source,
-        data_sources: agency.data_sources,
-        last_synced_at: agency.last_synced_at,
+        source: [...agency.sources].join('+') || 'rea_listings',
+        data_sources: JSON.stringify([...agency.sources]),
+        last_synced_at: now,
         is_in_crm: false,
       });
     }
@@ -514,7 +549,7 @@ Deno.serve(async (req) => {
       if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${uniqueAgents.length}...`);
     }
 
-    // Insert agencies
+    // Upsert agencies (dedup by normalized name via unique index)
     let agenciesInserted = 0;
     for (const agency of mergedAgencies) {
       const cleaned = {
@@ -522,9 +557,18 @@ Deno.serve(async (req) => {
         suburbs_active: typeof agency.suburbs_active === 'string' ? JSON.parse(agency.suburbs_active) : (agency.suburbs_active || []),
         data_sources: typeof agency.data_sources === 'string' ? JSON.parse(agency.data_sources) : (agency.data_sources || []),
       };
-      const { error } = await admin.from('pulse_agencies').insert(cleaned);
+      const { error } = await admin.from('pulse_agencies').upsert(cleaned, {
+        onConflict: 'lower(trim(name))',
+        ignoreDuplicates: false,
+      });
       if (error) {
-        if (agenciesInserted < 2) console.error(`Agency insert error:`, error.message?.substring(0, 200));
+        // Fallback: if functional index conflict doesn't work, try name-match update
+        const { error: updateErr } = await admin.from('pulse_agencies')
+          .update(cleaned)
+          .ilike('name', agency.name.trim())
+          .limit(1);
+        if (!updateErr) { agenciesInserted++; }
+        else if (agenciesInserted < 2) console.error(`Agency upsert error:`, error.message?.substring(0, 200));
       } else {
         agenciesInserted++;
       }

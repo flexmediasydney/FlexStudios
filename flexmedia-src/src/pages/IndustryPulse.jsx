@@ -886,14 +886,16 @@ export default function IndustryPulse() {
                         <SortHeader col="name" label="Agency" />
                         <SortHeader col="suburb" label="Suburb" className="hidden md:table-cell" />
                         <SortHeader col="live_agent_count" label="Agents" />
-                        <SortHeader col="active_listings" label="Listings" />
-                        <SortHeader col="avg_listing_price" label="Avg Price" className="hidden lg:table-cell" />
+                        <SortHeader col="total_sold_12m" label="Sold (12m)" />
+                        <SortHeader col="active_listings" label="Listings" className="hidden md:table-cell" />
+                        <SortHeader col="avg_sold_price" label="Avg Sold" className="hidden lg:table-cell" />
+                        <SortHeader col="avg_agent_rating" label="Rating" className="hidden lg:table-cell" />
                         <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredAgencies.length === 0 ? (
-                        <tr><td colSpan={6} className="py-12 text-center text-muted-foreground/50">
+                        <tr><td colSpan={8} className="py-12 text-center text-muted-foreground/50">
                           <Building2 className="h-8 w-8 mx-auto mb-2 opacity-30" />
                           {pulseAgencies.length === 0 ? "No agencies tracked yet — run a listings sync from Data Sources" : "No agencies match filters"}
                         </td></tr>
@@ -917,9 +919,20 @@ export default function IndustryPulse() {
                             <span className="text-xs font-medium tabular-nums">{ag.live_agent_count}</span>
                           </td>
                           <td className="px-3 py-2">
+                            <span className="text-xs font-medium tabular-nums">{ag.total_sold_12m || (ag._agents || []).reduce((s, a) => s + (a.sales_as_lead || 0), 0) || 0}</span>
+                          </td>
+                          <td className="px-3 py-2 hidden md:table-cell">
                             <span className="text-xs font-medium tabular-nums">{ag.active_listings || 0}</span>
                           </td>
-                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{fmtPrice(ag.avg_listing_price)}</td>
+                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{fmtPrice(ag.avg_sold_price || ag.avg_listing_price)}</td>
+                          <td className="px-3 py-2 hidden lg:table-cell">
+                            {(ag.avg_agent_rating || (() => { const r = (ag._agents || []).filter(a => a.reviews_avg > 0 || a.rea_rating > 0); return r.length > 0 ? (r.reduce((s, a) => s + (a.reviews_avg || a.rea_rating || 0), 0) / r.length) : 0; })()) > 0 ? (
+                              <div className="flex items-center gap-0.5">
+                                <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                                <span className="text-xs tabular-nums">{Number(ag.avg_agent_rating || (() => { const r = (ag._agents || []).filter(a => a.reviews_avg > 0 || a.rea_rating > 0); return r.length > 0 ? (r.reduce((s, a) => s + (a.reviews_avg || a.rea_rating || 0), 0) / r.length) : 0; })()).toFixed(1)}</span>
+                              </div>
+                            ) : <span className="text-xs text-muted-foreground/30">—</span>}
+                          </td>
                           <td className="px-3 py-2">
                             {ag.is_in_crm ? (
                               <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">In CRM</Badge>
