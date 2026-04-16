@@ -831,9 +831,14 @@ Deno.serve(async (req) => {
         promo_level: l.promoLevel || l.productDepth || null,
         domain_listing_url: l._source === 'domain_listings' ? (l.url || null) : null,
         domain_listing_id: l._source === 'domain_listings' ? listingId : null,
+        // Agent + agency ID foreign keys (for cross-table linking)
+        agent_rea_id: primaryAgent.agentId ? String(primaryAgent.agentId) : null,
+        agent_domain_id: l._source === 'domain_listings' ? (primaryAgent.agentId ? String(primaryAgent.agentId) : null) : null,
+        agency_rea_id: l.agencyProfileUrl ? l.agencyProfileUrl.replace(/.*\/agency\/[^-]+-/, '') : null,
         source: l._source || 'rea',
         source_url: l.url || null,
         source_listing_id: l._source === 'domain_listings' ? null : listingId,
+        domain_listing_id: l._source === 'domain_listings' ? listingId : null,
         last_synced_at: now,
         _isNew: isNew,
         // Cross-enrichment data (stripped before DB insert, used for agent enrichment)
