@@ -270,11 +270,11 @@ export default function IndustryPulse() {
   const normAgencyKey = (s) => (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
   const filteredAgencies = useMemo(() => {
-    // Build a live agent count map (normalized agency name → count)
+    // Build a live agent count map — keyed by rea_agency_id when available, else normalized name
     const agentCountMap = {};
     const agentsByAgency = {};
     for (const a of pulseAgents) {
-      const key = normAgencyKey(a.agency_name);
+      const key = a.agency_rea_id || normAgencyKey(a.agency_name);
       if (!key) continue;
       agentCountMap[key] = (agentCountMap[key] || 0) + 1;
       if (!agentsByAgency[key]) agentsByAgency[key] = [];
@@ -282,7 +282,7 @@ export default function IndustryPulse() {
     }
 
     let result = pulseAgencies.map(ag => {
-      const key = normAgencyKey(ag.name);
+      const key = ag.rea_agency_id || normAgencyKey(ag.name);
       return { ...ag, live_agent_count: agentCountMap[key] || ag.agent_count || 0, _agents: agentsByAgency[key] || [] };
     });
 
@@ -470,7 +470,7 @@ export default function IndustryPulse() {
       }
 
       // 2. Create agent with platform IDs
-      await api.entities.Agent.create({
+      const newCrmAgent = await api.entities.Agent.create({
         name: pulseAgent.full_name,
         email: pulseAgent.email || null,
         phone: pulseAgent.mobile || pulseAgent.business_phone || null,
@@ -489,8 +489,13 @@ export default function IndustryPulse() {
         ].filter(Boolean).join("\n"),
       });
 
-      // 3. Mark pulse agent as in CRM
-      await api.entities.PulseAgent.update(pulseAgent.id, { is_in_crm: true, is_prospect: true });
+      // 3. Create mapping + mark pulse agent as in CRM
+      await api.entities.PulseAgent.update(pulseAgent.id, { is_in_crm: true, is_prospect: true, linked_agent_id: newCrmAgent.id });
+      await api.entities.PulseCrmMapping.create({
+        entity_type: "agent", crm_entity_id: newCrmAgent.id, pulse_entity_id: pulseAgent.id,
+        rea_id: pulseAgent.rea_agent_id || null, domain_id: pulseAgent.domain_agent_id || null,
+        match_type: "manual_add", confidence: "confirmed", confirmed_at: new Date().toISOString(),
+      }).catch(() => {});
 
       refetchEntityList("Agent");
       refetchEntityList("Agency");
@@ -1984,8 +1989,8 @@ export default function IndustryPulse() {
                     {pulseMappings.map(m => {
                       const isAgency = m.entity_type === "agency";
                       const pulseRecord = isAgency
-                        ? pulseAgencies.find(a => (a.rea_agency_id && a.rea_agency_id === m.rea_id) || (a.domain_agency_id && a.domain_agency_id === m.domain_id))
-                        : pulseAgents.find(a => a.rea_agent_id === m.rea_id || (m.domain_id && a.domain_agent_id === m.domain_id));
+                        ? pulseAgencies.find(a => (m.pulse_entity_id && a.id === m.pulse_entity_id) || (a.rea_agency_id && a.rea_agency_id === m.rea_id) || (a.domain_agency_id && a.domain_agency_id === m.domain_id))
+                        : pulseAgents.find(a => (m.pulse_entity_id && a.id === m.pulse_entity_id) || a.rea_agent_id === m.rea_id || (m.domain_id && a.domain_agent_id === m.domain_id));
                       const crmRecord = isAgency
                         ? crmAgencies.find(a => a.id === m.crm_entity_id)
                         : crmAgents.find(a => a.id === m.crm_entity_id);
@@ -2026,7 +2031,7 @@ export default function IndustryPulse() {
                               {m.confidence === "suggested" && (
                                 <>
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-green-600" onClick={async () => {
-                                    await api.entities.PulseCrmMapping.update(m.id, { confidence: "confirmed", confirmed_at: new Date().toISOString(), confirmed_by_name: user?.full_name });
+                                    await api.entities.PulseCrmMapping.update(m.id, { confidence: "confirmed", confirmed_at: new Date().toISOString(), confirmed_by_name: user?.full_name, pulse_entity_id: pulseRecord?.id || null });
                                     if (!isAgency && pulseRecord) await api.entities.PulseAgent.update(pulseRecord.id, { is_in_crm: true, linked_agent_id: m.crm_entity_id });
                                     if (isAgency && pulseRecord) await api.entities.PulseAgency.update(pulseRecord.id, { is_in_crm: true });
                                     api.entities.PulseTimeline.create({ entity_type: m.entity_type || "agent", rea_id: m.rea_id, crm_entity_id: m.crm_entity_id, event_type: "crm_mapped", event_category: "system", title: `${pulseName} mapping confirmed`, description: `Manually confirmed by ${user?.full_name}. Match type: ${m.match_type}.`, source: "manual" }).catch(() => {});
@@ -2175,9 +2180,17 @@ export default function IndustryPulse() {
       {/* Listing Detail Slide-out */}
       {selectedListing && (() => {
         const l = selectedListing;
-        const agentMatch = pulseAgents.find(a => a.full_name && l.agent_name && a.full_name.toLowerCase() === l.agent_name.toLowerCase());
-        const agencyMatch = pulseAgencies.find(a => a.name && l.agency_name && a.name.toLowerCase().trim() === l.agency_name.toLowerCase().trim());
-        const agentInCrm = l.agent_name && crmAgents.some(c => c.name && c.name.toLowerCase() === l.agent_name.toLowerCase());
+        // ID-first cross-links: agent_pulse_id → pulse_agent, then agent_rea_id, then name fallback
+        const agentMatch = (l.agent_pulse_id && pulseAgents.find(a => a.id === l.agent_pulse_id))
+          || (l.agent_rea_id && pulseAgents.find(a => a.rea_agent_id === l.agent_rea_id))
+          || (l.agent_name && pulseAgents.find(a => a.full_name && a.full_name.toLowerCase() === l.agent_name.toLowerCase()))
+          || null;
+        const agencyMatch = (l.agency_pulse_id && pulseAgencies.find(a => a.id === l.agency_pulse_id))
+          || (l.agency_rea_id && pulseAgencies.find(a => a.rea_agency_id === l.agency_rea_id))
+          || (l.agency_domain_id && pulseAgencies.find(a => a.domain_agency_id === l.agency_domain_id))
+          || (l.agency_name && pulseAgencies.find(a => a.name && normAgencyKey(a.name) === normAgencyKey(l.agency_name)))
+          || null;
+        const agentInCrm = agentMatch?.is_in_crm || (l.agent_name && crmAgents.some(c => c.name && c.name.toLowerCase() === l.agent_name.toLowerCase()));
 
         return (
           <div className="fixed inset-y-0 right-0 w-[420px] bg-background border-l shadow-2xl z-50 flex flex-col overflow-hidden">
@@ -2504,7 +2517,7 @@ export default function IndustryPulse() {
               {!ag.is_in_crm && (
                 <Button className="w-full" onClick={async () => {
                   try {
-                    await api.entities.Agency.create({
+                    const newCrmAgency = await api.entities.Agency.create({
                       name: ag.name,
                       phone: ag.phone || null,
                       email: ag.email || null,
@@ -2517,7 +2530,12 @@ export default function IndustryPulse() {
                       domain_profile_url: ag.domain_profile_url || null,
                     });
                     await api.entities.PulseAgency.update(ag.id, { is_in_crm: true });
-                    refetchEntityList("Agency"); refetchEntityList("PulseAgency");
+                    await api.entities.PulseCrmMapping.create({
+                      entity_type: "agency", crm_entity_id: newCrmAgency.id, pulse_entity_id: ag.id,
+                      rea_id: ag.rea_agency_id || null, domain_id: ag.domain_agency_id || null,
+                      match_type: "manual_add", confidence: "confirmed", confirmed_at: new Date().toISOString(),
+                    }).catch(() => {});
+                    refetchEntityList("Agency"); refetchEntityList("PulseAgency"); refetchEntityList("PulseCrmMapping");
                     toast.success(ag.name + " added to CRM");
                     setSelectedAgency(null);
                   } catch (err) { toast.error("Failed: " + (err?.message || "unknown")); }
