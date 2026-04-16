@@ -25,7 +25,9 @@ import { CheckCircle2, XCircle, Link2, Users, Building2, ExternalLink, Search, X
 function fmtDate(d) {
   if (!d) return "—";
   try {
-    return new Date(d).toLocaleDateString("en-AU", {
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return "—";
+    return dt.toLocaleDateString("en-AU", {
       day: "numeric",
       month: "short",
       year: "numeric",

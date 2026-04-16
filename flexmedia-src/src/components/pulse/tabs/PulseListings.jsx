@@ -44,7 +44,9 @@ function fmtPrice(v) {
 function fmtDate(d) {
   if (!d) return "—";
   try {
-    return new Date(d).toLocaleDateString("en-AU", {
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return "—";
+    return dt.toLocaleDateString("en-AU", {
       day: "numeric",
       month: "short",
       year: "numeric",

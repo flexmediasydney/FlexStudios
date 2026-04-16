@@ -35,7 +35,9 @@ import PulseSignals from "@/components/pulse/tabs/PulseSignals";
 export function fmtDate(d) {
   if (!d) return "—";
   try {
-    return new Date(d).toLocaleDateString("en-AU", {
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return "—";
+    return dt.toLocaleDateString("en-AU", {
       day: "numeric",
       month: "short",
       year: "numeric",
@@ -48,7 +50,9 @@ export function fmtDate(d) {
 export function fmtShortDate(d) {
   if (!d) return "—";
   try {
-    return new Date(d).toLocaleDateString("en-AU", {
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return "—";
+    return dt.toLocaleDateString("en-AU", {
       day: "numeric",
       month: "short",
     });
