@@ -68,13 +68,18 @@ export default function TaskDeadlineDashboard() {
     red_threshold: 6
   };
 
-  const { data: tasks = [] } = useEntityList("ProjectTask", "due_date", 500, (t) => t.due_date && !t.is_completed);
+  const { data: tasks = [] } = useEntityList("ProjectTask", "due_date", 500, (t) => t.due_date && !t.is_completed && !t.is_deleted);
   const { data: projects = [] } = useEntityList("Project", "-created_date", 200);
 
   const projectMap = new Map(projects.map(p => [p.id, p]));
 
-  // Sort tasks by due date
-  const sortedTasks = [...tasks].sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+  // Sort tasks by due date — exclude tasks from archived/cancelled projects
+  const sortedTasks = [...tasks]
+    .filter(t => {
+      const proj = projectMap.get(t.project_id);
+      return !proj?.is_archived && proj?.status !== 'cancelled';
+    })
+    .sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
 
   // Group by urgency
   const urgentTasks = [];

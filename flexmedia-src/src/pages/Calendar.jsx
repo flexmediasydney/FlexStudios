@@ -371,9 +371,13 @@ export default function CalendarPage() {
       // Scope to visible date range (same as calendar events)
       const rangeStart = subMonths(startOfDay(currentDate), 1);
       const rangeEnd = addMonths(startOfDay(currentDate), 2);
-      const tasks = await api.entities.ProjectTask.filter({}, null, 2000);
+      const [tasks, allProjects] = await Promise.all([
+        api.entities.ProjectTask.filter({}, null, 2000),
+        api.entities.Project.filter({}, null, 500),
+      ]);
+      const archivedProjectIds = new Set(allProjects.filter(p => p.is_archived || p.status === 'cancelled').map(p => p.id));
       return (tasks || []).filter(t =>
-        t.due_date && !t.is_deleted &&
+        t.due_date && !t.is_deleted && !archivedProjectIds.has(t.project_id) &&
         t.due_date >= rangeStart.toISOString() &&
         t.due_date <= rangeEnd.toISOString()
       );

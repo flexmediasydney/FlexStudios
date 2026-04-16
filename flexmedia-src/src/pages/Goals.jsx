@@ -493,8 +493,11 @@ export default function Goals() {
     [allGoalsRaw]
   );
 
-  const { data: allTasks = [] } = useEntityList("ProjectTask", null, 2000);
+  const { data: allTasksRaw = [] } = useEntityList("ProjectTask", null, 2000);
   const { data: users = [] } = useEntityList("User", "full_name", 100);
+
+  // Filter out deleted tasks (archived project filtering handled at goal level)
+  const allTasks = useMemo(() => allTasksRaw.filter(t => !t.is_deleted), [allTasksRaw]);
 
   // Pre-compute tasks keyed by project/goal id for O(1) lookup
   const tasksByGoal = useMemo(() => {

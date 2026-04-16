@@ -44,11 +44,19 @@ const criticalityColors = {
 export default function TaskReportingDashboard() {
   const [breakdownDialog, setBreakdownDialog] = useState({ open: false, title: '', tasks: [] });
 
-  const { data: tasks = [], loading: tasksLoading } = useEntityList("ProjectTask", "-created_date", 500);
+  const { data: allTasks = [], loading: tasksLoading } = useEntityList("ProjectTask", "-created_date", 500);
   const { data: projects = [] } = useEntityList("Project");
   const { data: deliverySettingsList = [] } = useEntityList("DeliverySettings");
   const deliverySettings = deliverySettingsList[0] || null;
   const { data: activities = [], loading: activitiesLoading } = useEntityList("ProjectActivity", "-created_date", 50);
+
+  // Exclude tasks from archived/cancelled projects + deleted tasks
+  const projectMap = new Map(projects.map(p => [p.id, p]));
+  const tasks = allTasks.filter(t => {
+    if (t.is_deleted) return false;
+    const proj = projectMap.get(t.project_id);
+    return !proj?.is_archived && proj?.status !== 'cancelled';
+  });
 
   if (tasksLoading) {
     return (

@@ -603,10 +603,23 @@ export default function Tasks() {
     return m;
   }, [timeLogs]);
 
-  // Enriched tasks
+  // State — archive toggle
+  const [showArchived, setShowArchived] = useState(false);
+
+  // Enriched tasks — exclude tasks from archived/cancelled projects by default
   const enrichedTasks = useMemo(() => {
     return allTasks
-      .filter(t => !t.is_deleted && !t.is_archived)
+      .filter(t => {
+        if (t.is_deleted) return false;
+        if (t.is_archived) return false;
+        // Exclude tasks from archived or cancelled projects unless toggle is on
+        if (!showArchived) {
+          const proj = projectMap.get(t.project_id);
+          if (proj?.is_archived) return false;
+          if (proj?.status === "cancelled") return false;
+        }
+        return true;
+      })
       .map(t => ({
         ...t,
         _status: getTaskStatus(t, timerSet, effortByTask),
@@ -618,7 +631,7 @@ export default function Tasks() {
         _isTeam: !t.assigned_to_name && !!t.assigned_to_team_name,
         _overdue: !t.is_completed && !t.is_blocked && isOverdue(t.due_date),
       }));
-  }, [allTasks, timerSet, effortByTask, projectMap, productMap, packageMap]);
+  }, [allTasks, timerSet, effortByTask, projectMap, productMap, packageMap, showArchived]);
 
   // Visible tasks (contractor filter)
   const visibleTasks = useMemo(() => {
@@ -1316,6 +1329,16 @@ export default function Tasks() {
             {p.count > 0 && <span className="ml-0.5 tabular-nums">{String(p.count)}</span>}
           </button>
         ))}
+        {/* Archive toggle */}
+        <button
+          onClick={() => setShowArchived(!showArchived)}
+          className={cn(
+            "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border",
+            showArchived ? "bg-orange-500 text-white border-orange-500" : "bg-muted/60 text-muted-foreground border-transparent hover:bg-muted"
+          )}
+        >
+          {showArchived ? "Showing Archived" : "Hide Archived"}
+        </button>
         {hasFilters && (
           <button className="text-xs text-muted-foreground hover:text-foreground underline ml-1" onClick={clearAllFilters}>
             Clear filters
