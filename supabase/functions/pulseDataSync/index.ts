@@ -22,7 +22,13 @@ const APIFY_BASE = 'https://api.apify.com/v2';
 
 // ── Apify actor runner ──────────────────────────────────────────────────────
 
-async function runApifyActor(actorSlug: string, input: any, label: string, timeoutSecs = 180): Promise<any[]> {
+interface ApifyRunResult {
+  items: any[];
+  runId: string | null;
+  datasetId: string | null;
+}
+
+async function runApifyActor(actorSlug: string, input: any, label: string, timeoutSecs = 180): Promise<ApifyRunResult> {
   if (!APIFY_TOKEN) throw new Error('APIFY_TOKEN not set in environment');
 
   const safeId = actorSlug.replace('/', '~');
@@ -37,13 +43,13 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
   if (!resp.ok) {
     const body = await resp.text();
     console.error(`Apify ${label} failed: ${resp.status} — ${body.substring(0, 200)}`);
-    return [];
+    return { items: [], runId: null, datasetId: null };
   }
 
   const runData = await resp.json();
-  let runId = runData?.data?.id;
+  let runId = runData?.data?.id || null;
   let status = runData?.data?.status;
-  let datasetId = runData?.data?.defaultDatasetId;
+  let datasetId = runData?.data?.defaultDatasetId || null;
 
   // Poll if still running
   if (status === 'RUNNING' || status === 'READY') {
@@ -61,7 +67,7 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
 
   if (status !== 'SUCCEEDED') {
     console.error(`Apify ${label}: status=${status}`);
-    return [];
+    return { items: [], runId, datasetId };
   }
 
   // Fetch results
@@ -70,7 +76,7 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
   });
   const items = await itemsResp.json();
   console.log(`Apify ${label}: ${items.length} results`);
-  return items;
+  return { items, runId, datasetId };
 }
 
 // ── Normalize helpers ───────────────────────────────────────────────────────
@@ -123,17 +129,27 @@ Deno.serve(async (req) => {
       skipDomain = false,
       skipListings = false,
       dryRun = false,
+      source_id = null,
+      source_label = null,
+      triggered_by = null,
+      triggered_by_name = null,
     } = body;
 
     const now = new Date().toISOString();
+    const apifyRunIds: Record<string, string | null> = {};
 
     // Log sync start
     let syncLogId: string | null = null;
     if (!dryRun) {
       const log = await entities.PulseSyncLog.create({
-        sync_type: 'full_sweep',
+        sync_type: source_id || 'full_sweep',
+        source_id: source_id || null,
+        source_label: source_label || null,
         status: 'running',
         started_at: now,
+        input_config: { suburbs, state, maxAgentsPerSuburb, maxListingsPerSuburb, skipDomain, skipListings },
+        triggered_by: triggered_by || null,
+        triggered_by_name: triggered_by_name || null,
       });
       syncLogId = log.id;
     }
@@ -149,36 +165,41 @@ Deno.serve(async (req) => {
       const postcodeGuess = ''; // Apify handles suburb name matching
 
       // 1A: websift REA agent collector
-      console.log(`[${suburb}] Running websift REA agents...`);
-      const reaAgents = await runApifyActor('websift/realestateau', {
-        location: `${suburb} ${state}`,
-        maxResults: maxAgentsPerSuburb,
-        sortBy: 'SUBURB_SALES_PERFORMANCE',
-        contactFilter: 'any',
-      }, `websift-${suburb}`, 180);
-      reaAgents.forEach(a => { a._suburb = suburb; a._source = 'rea'; });
-      allReaAgents.push(...reaAgents);
+      if (maxAgentsPerSuburb > 0) {
+        console.log(`[${suburb}] Running websift REA agents...`);
+        const reaResult = await runApifyActor('websift/realestateau', {
+          location: `${suburb} ${state}`,
+          maxResults: maxAgentsPerSuburb,
+          sortBy: 'SUBURB_SALES_PERFORMANCE',
+          contactFilter: 'any',
+        }, `websift-${suburb}`, 180);
+        reaResult.items.forEach(a => { a._suburb = suburb; a._source = 'rea'; });
+        allReaAgents.push(...reaResult.items);
+        if (reaResult.runId) apifyRunIds[`websift-${suburb}`] = reaResult.runId;
+      }
 
       // 1B: shahidirfan Domain agent scraper
-      if (!skipDomain) {
+      if (!skipDomain && maxAgentsPerSuburb > 0) {
         console.log(`[${suburb}] Running shahidirfan Domain agents...`);
-        const domainAgents = await runApifyActor('shahidirfan/domain-com-au-real-estate-agents-scraper', {
+        const domResult = await runApifyActor('shahidirfan/domain-com-au-real-estate-agents-scraper', {
           startUrls: [{ url: `https://www.domain.com.au/real-estate-agents/${suburbSlug}-${state.toLowerCase()}/` }],
           maxItems: maxAgentsPerSuburb,
         }, `domain-${suburb}`, 120);
-        domainAgents.forEach(a => { a._suburb = suburb; a._source = 'domain'; });
-        allDomainAgents.push(...domainAgents);
+        domResult.items.forEach(a => { a._suburb = suburb; a._source = 'domain'; });
+        allDomainAgents.push(...domResult.items);
+        if (domResult.runId) apifyRunIds[`domain-${suburb}`] = domResult.runId;
       }
 
       // 1C: azzouzana REA listings
-      if (!skipListings) {
+      if (!skipListings && maxListingsPerSuburb > 0) {
         console.log(`[${suburb}] Running azzouzana REA listings...`);
-        const listings = await runApifyActor('azzouzana/real-estate-au-scraper-pro', {
+        const listResult = await runApifyActor('azzouzana/real-estate-au-scraper-pro', {
           startUrl: `https://www.realestate.com.au/buy/in-${suburbSlug},+${state.toLowerCase()}/list-1`,
           maxItems: maxListingsPerSuburb,
         }, `listings-${suburb}`, 120);
-        listings.forEach(l => { l._suburb = suburb; });
-        allListings.push(...listings);
+        listResult.items.forEach(l => { l._suburb = suburb; });
+        allListings.push(...listResult.items);
+        if (listResult.runId) apifyRunIds[`listings-${suburb}`] = listResult.runId;
       }
     }
 
@@ -676,13 +697,36 @@ Deno.serve(async (req) => {
 
     console.log(`Post-sync: ${movementsDetected} movements, ${timelineEntries} timeline entries, ${mappingsCreated} mappings`);
 
-    // Update sync log
+    // Update sync log with full results + raw payload
     if (syncLogId) {
       await entities.PulseSyncLog.update(syncLogId, {
         status: 'completed',
         records_fetched: allReaAgents.length + allDomainAgents.length + allListings.length,
         records_new: agentsInserted + agenciesInserted + listingsInserted,
         completed_at: new Date().toISOString(),
+        apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
+        raw_payload: {
+          rea_agents: allReaAgents,
+          domain_agents: allDomainAgents,
+          listings: allListings,
+        },
+        result_summary: {
+          agents_merged: agentsInserted,
+          agencies_extracted: agenciesInserted,
+          listings_stored: listingsInserted,
+          movements_detected: movementsDetected,
+          timeline_entries: timelineEntries,
+          mappings_created: mappingsCreated,
+          dual_source: mergedAgents.filter(a => (a.data_sources || '').includes('domain')).length,
+          in_crm_agents: mergedAgents.filter(a => a.is_in_crm).length,
+          agent_errors: agentErrors,
+        },
+        records_detail: {
+          rea_agents: { fetched: allReaAgents.length, inserted: agentsInserted, errors: agentErrors },
+          domain_agents: { fetched: allDomainAgents.length },
+          listings: { fetched: allListings.length, inserted: listingsInserted },
+          agencies: { extracted: agenciesInserted },
+        },
       });
     }
 
@@ -706,6 +750,8 @@ Deno.serve(async (req) => {
       dual_source_agents: mergedAgents.filter(a => (a.data_sources || '').includes('domain')).length,
       in_crm_agents: mergedAgents.filter(a => a.is_in_crm).length,
       in_crm_agencies: mergedAgencies.filter(a => a.is_in_crm).length,
+      sync_log_id: syncLogId,
+      apify_run_ids: apifyRunIds,
     });
 
   } catch (error: any) {

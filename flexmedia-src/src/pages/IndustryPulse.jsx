@@ -26,7 +26,8 @@ import {
   Rss, Plus, Search, TrendingUp, Users, Building2, MapPin, Calendar, Star, Globe,
   ExternalLink, ChevronLeft, ChevronRight, UserPlus, ArrowRight, Activity, AlertTriangle,
   CheckCircle2, Eye, Sparkles, Briefcase, BarChart3, Phone, Mail, X, Filter,
-  Clock, Award, Zap, Target, Hash, Home, DollarSign, Link2, Loader2
+  Clock, Award, Zap, Target, Hash, Home, DollarSign, Link2, Loader2,
+  ChevronDown, ChevronUp, Settings2, Trash2, Save, ToggleLeft, ToggleRight, Database
 } from "lucide-react";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -95,7 +96,8 @@ export default function IndustryPulse() {
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
   const { data: pulseMappings = [] } = useEntityList("PulseCrmMapping", "-created_at");
   const { data: pulseTimelineEntries = [] } = useEntityList("PulseTimeline", "-created_at", 500);
-  const { data: syncLogs = [] } = useEntityList("PulseSyncLog", "-started_at", 50);
+  const { data: syncLogs = [] } = useEntityList("PulseSyncLog", "-started_at", 100);
+  const { data: sourceConfigs = [] } = useEntityList("PulseSourceConfig", "label");
   const { data: user } = useCurrentUser();
 
   const [tab, setTab] = useState("command");
@@ -111,6 +113,14 @@ export default function IndustryPulse() {
   const [addToCrmCandidate, setAddToCrmCandidate] = useState(null); // for double-confirm dialog
   const [addToCrmStep, setAddToCrmStep] = useState(1); // 1=preview, 2=confirm
   const [runningSources, setRunningSources] = useState(new Set());
+  const [expandedSource, setExpandedSource] = useState(null);
+  const [drillLog, setDrillLog] = useState(null); // sync log for payload modal
+  const [drillPayloadTab, setDrillPayloadTab] = useState("rea_agents");
+  const [drillPage, setDrillPage] = useState(0);
+  const [editingSource, setEditingSource] = useState(null); // source_id being edited
+  const [editDraft, setEditDraft] = useState({}); // { suburbs: [], max_results: N }
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [newSuburb, setNewSuburb] = useState("");
   const [eventStatus, setEventStatus] = useState("all");
   const [marketTimeRange, setMarketTimeRange] = useState("30");
   const [signalLevel, setSignalLevel] = useState("all");
@@ -920,25 +930,62 @@ export default function IndustryPulse() {
         {/* ═══ DATA SOURCES TAB ═══ */}
         <TabsContent value="datasources" className="mt-3">
           <div className="space-y-4">
-            {/* Data source cards */}
             {(() => {
-              const sources = [
-                { id: "rea_agents", label: "REA Agent Intelligence", description: "websift/realestateau — Agent profiles, sales data, reviews, awards from realestate.com.au", icon: Users, color: "text-blue-600",
+              // Hardcoded fallbacks — used when pulse_source_configs table is empty
+              const FALLBACK_SOURCES = [
+                { source_id: "rea_agents", label: "REA Agent Intelligence", description: "websift/realestateau — Agent profiles, sales data, reviews, awards from realestate.com.au", icon: "Users", color: "text-blue-600",
+                  actor_slug: "websift/realestateau",
                   suburbs: ["Strathfield","Burwood","Homebush","Croydon Park","Bankstown","Punchbowl","Lakemba","Canterbury","Campsie"],
-                  runParams: (subs) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: true, skipListings: true }) },
-                { id: "domain_agents", label: "Domain Agent Data", description: "shahidirfan/domain-com-au — Agent listings, sold data, ratings from domain.com.au", icon: Globe, color: "text-purple-600",
+                  max_results_per_suburb: 30, state: "NSW", is_enabled: true,
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipListings: true }) },
+                { source_id: "domain_agents", label: "Domain Agent Data", description: "shahidirfan/domain-com-au — Agent listings, sold data, ratings from domain.com.au", icon: "Globe", color: "text-purple-600",
+                  actor_slug: "shahidirfan/domain-com-au-real-estate-agents-scraper",
                   suburbs: ["Strathfield","Burwood","Homebush"],
-                  runParams: (subs) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: false, skipListings: true }) },
-                { id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana/real-estate-au-scraper-pro — Active listings with agent/agency details from realestate.com.au", icon: Home, color: "text-green-600",
+                  max_results_per_suburb: 30, state: "NSW", is_enabled: true,
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: false, skipListings: true }) },
+                { source_id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana/real-estate-au-scraper-pro — Active listings with agent/agency details from realestate.com.au", icon: "Home", color: "text-green-600",
+                  actor_slug: "azzouzana/real-estate-au-scraper-pro",
                   suburbs: ["Strathfield","Burwood","Bankstown","Punchbowl","Canterbury"],
-                  runParams: (subs) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipDomain: true, skipListings: false }) },
+                  max_results_per_suburb: 20, state: "NSW", is_enabled: true,
+                  runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: max, skipDomain: true, skipListings: false }) },
               ];
 
+              // Merge DB configs over fallbacks
+              const sources = FALLBACK_SOURCES.map(fb => {
+                const db = sourceConfigs.find(c => c.source_id === fb.source_id);
+                if (db) {
+                  return {
+                    ...fb,
+                    label: db.label || fb.label,
+                    description: db.description || fb.description,
+                    suburbs: Array.isArray(db.suburbs) ? db.suburbs : fb.suburbs,
+                    max_results_per_suburb: db.max_results_per_suburb ?? fb.max_results_per_suburb,
+                    state: db.state || fb.state,
+                    is_enabled: db.is_enabled ?? true,
+                    schedule_cron: db.schedule_cron || null,
+                    last_run_at: db.last_run_at || null,
+                    next_run_at: db.next_run_at || null,
+                    _dbId: db.id,
+                  };
+                }
+                return fb;
+              });
+
+              const ICONS = { Users, Globe, Home };
+
               const runSource = async (source) => {
-                setRunningSources(prev => new Set([...prev, source.id]));
+                if (!source.is_enabled) return;
+                setRunningSources(prev => new Set([...prev, source.source_id]));
                 try {
                   toast.info(`Running ${source.label}...`);
-                  const result = await api.functions.invoke("pulseDataSync", source.runParams(source.suburbs));
+                  const params = {
+                    ...source.runParams(source.suburbs, source.max_results_per_suburb),
+                    source_id: source.source_id,
+                    source_label: source.label,
+                    triggered_by: user?.id || null,
+                    triggered_by_name: user?.full_name || null,
+                  };
+                  const result = await api.functions.invoke("pulseDataSync", params);
                   refetchEntityList("PulseAgent"); refetchEntityList("PulseListing"); refetchEntityList("PulseAgency");
                   refetchEntityList("PulseSyncLog"); refetchEntityList("PulseTimeline"); refetchEntityList("PulseCrmMapping");
                   const d = result.data || {};
@@ -946,65 +993,221 @@ export default function IndustryPulse() {
                 } catch (err) {
                   toast.error(`${source.label} failed: ${err?.message || "unknown"}`);
                 } finally {
-                  setRunningSources(prev => { const next = new Set(prev); next.delete(source.id); return next; });
+                  setRunningSources(prev => { const next = new Set(prev); next.delete(source.source_id); return next; });
                 }
               };
 
-              // Find last sync per source type
-              const lastSyncByType = {};
+              const saveSourceConfig = async (source) => {
+                setSavingConfig(true);
+                try {
+                  const payload = {
+                    source_id: source.source_id,
+                    label: source.label,
+                    description: source.description,
+                    actor_slug: source.actor_slug,
+                    suburbs: editDraft.suburbs || source.suburbs,
+                    state: source.state,
+                    max_results_per_suburb: editDraft.max_results ?? source.max_results_per_suburb,
+                    is_enabled: editDraft.is_enabled ?? source.is_enabled,
+                  };
+                  if (source._dbId) {
+                    await api.entities.PulseSourceConfig.update(source._dbId, payload);
+                  } else {
+                    await api.entities.PulseSourceConfig.create(payload);
+                  }
+                  refetchEntityList("PulseSourceConfig");
+                  toast.success(`${source.label} config saved`);
+                  setEditingSource(null);
+                  setEditDraft({});
+                  setNewSuburb("");
+                } catch (err) {
+                  toast.error(`Save failed: ${err?.message || "unknown"}`);
+                } finally {
+                  setSavingConfig(false);
+                }
+              };
+
+              // Sync logs grouped by source
+              const logsBySource = {};
               for (const log of syncLogs) {
-                if (!lastSyncByType[log.sync_type]) lastSyncByType[log.sync_type] = log;
+                const sid = log.source_id || log.sync_type || "full_sweep";
+                if (!logsBySource[sid]) logsBySource[sid] = [];
+                logsBySource[sid].push(log);
               }
+
+              const DRILL_PAGE_SIZE = 25;
 
               return (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold">Data Sources</h3>
+                    <h3 className="text-sm font-semibold flex items-center gap-2"><Database className="h-4 w-4 text-primary" />Data Sources</h3>
                     <Button size="sm" variant="outline" onClick={async () => {
-                      for (const s of sources) await runSource(s);
+                      for (const s of sources.filter(s => s.is_enabled)) await runSource(s);
                     }} disabled={runningSources.size > 0}>
                       {runningSources.size > 0 ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Running...</> : <><Zap className="h-3.5 w-3.5 mr-1.5" />Run All Sources</>}
                     </Button>
                   </div>
 
                   {sources.map(source => {
-                    const isRunning = runningSources.has(source.id);
-                    const Icon = source.icon;
-                    const lastSync = lastSyncByType.full_sweep; // All go through full_sweep currently
+                    const isRunning = runningSources.has(source.source_id);
+                    const isExpanded = expandedSource === source.source_id;
+                    const isEditing = editingSource === source.source_id;
+                    const Icon = ICONS[source.icon] || Rss;
+                    const sourceLogs = logsBySource[source.source_id] || logsBySource.full_sweep || [];
+                    const lastSync = sourceLogs[0];
+                    const currentSuburbs = isEditing ? (editDraft.suburbs || source.suburbs) : source.suburbs;
+                    const currentMax = isEditing ? (editDraft.max_results ?? source.max_results_per_suburb) : source.max_results_per_suburb;
+                    const currentEnabled = isEditing ? (editDraft.is_enabled ?? source.is_enabled) : source.is_enabled;
+
                     return (
-                      <Card key={source.id}>
+                      <Card key={source.source_id} className={cn(!currentEnabled && "opacity-60")}>
                         <CardContent className="p-4">
+                          {/* ── Source header ── */}
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0 flex-1">
-                              <div className={cn("p-2 rounded-lg bg-muted/60 shrink-0")}>
+                              <div className="p-2 rounded-lg bg-muted/60 shrink-0">
                                 <Icon className={cn("h-5 w-5", source.color)} />
                               </div>
-                              <div className="min-w-0">
-                                <h4 className="text-sm font-semibold">{source.label}</h4>
-                                <p className="text-xs text-muted-foreground mt-0.5">{source.description}</p>
-                                <div className="flex items-center gap-2 mt-2 flex-wrap">
-                                  <span className="text-[10px] text-muted-foreground">Suburbs:</span>
-                                  {source.suburbs.map(s => <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0">{s}</Badge>)}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="text-sm font-semibold">{source.label}</h4>
+                                  {!currentEnabled && <Badge variant="outline" className="text-[9px] text-muted-foreground border-muted">Disabled</Badge>}
                                 </div>
+                                <p className="text-xs text-muted-foreground mt-0.5">{source.description}</p>
+
+                                {/* Suburbs row (view or edit) */}
+                                {isEditing ? (
+                                  <div className="mt-2 space-y-2">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-[10px] text-muted-foreground font-medium">Suburbs:</span>
+                                      {currentSuburbs.map(s => (
+                                        <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0 gap-1">
+                                          {s}
+                                          <button className="ml-0.5 hover:text-red-500" onClick={() => setEditDraft(d => ({ ...d, suburbs: (d.suburbs || source.suburbs).filter(x => x !== s) }))}>
+                                            <X className="h-2.5 w-2.5" />
+                                          </button>
+                                        </Badge>
+                                      ))}
+                                      <form className="inline-flex" onSubmit={(e) => { e.preventDefault(); if (newSuburb.trim()) { setEditDraft(d => ({ ...d, suburbs: [...(d.suburbs || source.suburbs), newSuburb.trim()] })); setNewSuburb(""); } }}>
+                                        <Input className="h-5 w-24 text-[10px] px-1.5" placeholder="+ suburb" value={newSuburb} onChange={e => setNewSuburb(e.target.value)} />
+                                      </form>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                      <label className="text-[10px] text-muted-foreground font-medium">Max per suburb:</label>
+                                      <Input type="number" min={1} max={100} className="h-6 w-16 text-xs px-1.5" value={currentMax} onChange={e => setEditDraft(d => ({ ...d, max_results: parseInt(e.target.value) || 1 }))} />
+                                      <button className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setEditDraft(d => ({ ...d, is_enabled: !currentEnabled }))}>
+                                        {currentEnabled ? <ToggleRight className="h-4 w-4 text-green-500" /> : <ToggleLeft className="h-4 w-4" />}
+                                        {currentEnabled ? "Enabled" : "Disabled"}
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                    <span className="text-[10px] text-muted-foreground">Suburbs:</span>
+                                    {source.suburbs.map(s => <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0">{s}</Badge>)}
+                                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">Max {source.max_results_per_suburb}/suburb</Badge>
+                                  </div>
+                                )}
                               </div>
                             </div>
                             <div className="flex flex-col items-end gap-1.5 shrink-0">
-                              <Button size="sm" variant={isRunning ? "default" : "outline"} className="h-7" onClick={() => runSource(source)} disabled={isRunning}>
-                                {isRunning ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Running</> : <><Zap className="h-3 w-3 mr-1" />Run Now</>}
-                              </Button>
+                              <div className="flex items-center gap-1">
+                                {isEditing ? (
+                                  <>
+                                    <Button size="sm" variant="default" className="h-7 text-xs" onClick={() => saveSourceConfig(source)} disabled={savingConfig}>
+                                      {savingConfig ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Save className="h-3 w-3 mr-1" />}Save
+                                    </Button>
+                                    <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setEditingSource(null); setEditDraft({}); setNewSuburb(""); }}>
+                                      <X className="h-3 w-3" />
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingSource(source.source_id); setEditDraft({ suburbs: [...source.suburbs], max_results: source.max_results_per_suburb, is_enabled: source.is_enabled }); }}>
+                                      <Settings2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button size="sm" variant={isRunning ? "default" : "outline"} className="h-7" onClick={() => runSource(source)} disabled={isRunning || !currentEnabled}>
+                                      {isRunning ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Running</> : <><Zap className="h-3 w-3 mr-1" />Run Now</>}
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
                               {lastSync && (
                                 <span className="text-[9px] text-muted-foreground">
                                   Last: {new Date(lastSync.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                                 </span>
                               )}
+                              {sourceLogs.length > 0 && (
+                                <button className="text-[9px] text-primary flex items-center gap-0.5 hover:underline" onClick={() => setExpandedSource(isExpanded ? null : source.source_id)}>
+                                  {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                                  {sourceLogs.length} run{sourceLogs.length !== 1 ? "s" : ""}
+                                </button>
+                              )}
                             </div>
                           </div>
+
+                          {/* ── Expandable run history ── */}
+                          {isExpanded && sourceLogs.length > 0 && (
+                            <div className="mt-3 pt-3 border-t">
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-muted/30">
+                                    <tr>
+                                      <th className="px-2 py-1 text-left font-semibold text-muted-foreground">Status</th>
+                                      <th className="px-2 py-1 text-left font-semibold text-muted-foreground">Records</th>
+                                      <th className="px-2 py-1 text-left font-semibold text-muted-foreground">Config</th>
+                                      <th className="px-2 py-1 text-left font-semibold text-muted-foreground">Started</th>
+                                      <th className="px-2 py-1 text-left font-semibold text-muted-foreground">Duration</th>
+                                      <th className="px-2 py-1 text-left font-semibold text-muted-foreground">By</th>
+                                      <th className="px-2 py-1 w-16"></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {sourceLogs.slice(0, 10).map(log => {
+                                      const duration = log.completed_at && log.started_at
+                                        ? Math.round((new Date(log.completed_at) - new Date(log.started_at)) / 1000)
+                                        : null;
+                                      const cfg = log.input_config;
+                                      const hasPayload = log.raw_payload && (log.raw_payload.rea_agents?.length || log.raw_payload.domain_agents?.length || log.raw_payload.listings?.length);
+                                      return (
+                                        <tr key={log.id} className="border-t hover:bg-muted/20">
+                                          <td className="px-2 py-1.5">
+                                            <Badge variant="outline" className={cn("text-[9px]",
+                                              log.status === "completed" ? "text-green-600 border-green-200" :
+                                              log.status === "running" ? "text-blue-600 border-blue-200" :
+                                              "text-red-600 border-red-200"
+                                            )}>{log.status}</Badge>
+                                          </td>
+                                          <td className="px-2 py-1.5 tabular-nums">{log.records_new || 0} new / {log.records_fetched || 0}</td>
+                                          <td className="px-2 py-1.5 text-muted-foreground">
+                                            {cfg ? (
+                                              <span className="text-[9px]">{(cfg.suburbs || []).length} suburbs, max {cfg.maxAgentsPerSuburb || cfg.maxListingsPerSuburb || "?"}</span>
+                                            ) : "—"}
+                                          </td>
+                                          <td className="px-2 py-1.5">{new Date(log.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                                          <td className="px-2 py-1.5 tabular-nums">{duration != null ? `${duration}s` : "—"}</td>
+                                          <td className="px-2 py-1.5 text-muted-foreground">{log.triggered_by_name || "—"}</td>
+                                          <td className="px-2 py-1.5">
+                                            {hasPayload ? (
+                                              <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5" onClick={() => { setDrillLog(log); setDrillPayloadTab("rea_agents"); setDrillPage(0); }}>
+                                                <Eye className="h-3 w-3 mr-0.5" />Data
+                                              </Button>
+                                            ) : null}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     );
                   })}
 
-                  {/* Sync History */}
+                  {/* ── Full Sync History ── */}
                   <Card>
                     <CardContent className="p-4">
                       <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Clock className="h-4 w-4 text-primary" />Sync History</h3>
@@ -1015,21 +1218,26 @@ export default function IndustryPulse() {
                           <table className="w-full text-xs">
                             <thead className="bg-muted/30">
                               <tr>
-                                <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Type</th>
+                                <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Source</th>
                                 <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Status</th>
                                 <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Records</th>
                                 <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Started</th>
                                 <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">Duration</th>
+                                <th className="px-3 py-1.5 text-left font-semibold text-muted-foreground">By</th>
+                                <th className="px-3 py-1.5 w-16"></th>
                               </tr>
                             </thead>
                             <tbody>
-                              {syncLogs.slice(0, 20).map(log => {
+                              {syncLogs.slice(0, 30).map(log => {
                                 const duration = log.completed_at && log.started_at
                                   ? Math.round((new Date(log.completed_at) - new Date(log.started_at)) / 1000)
                                   : null;
+                                const hasPayload = log.raw_payload && (log.raw_payload.rea_agents?.length || log.raw_payload.domain_agents?.length || log.raw_payload.listings?.length);
                                 return (
-                                  <tr key={log.id} className="border-t">
-                                    <td className="px-3 py-1.5">{log.sync_type}</td>
+                                  <tr key={log.id} className="border-t hover:bg-muted/20">
+                                    <td className="px-3 py-1.5">
+                                      <span className="font-medium">{log.source_label || log.sync_type || "full_sweep"}</span>
+                                    </td>
                                     <td className="px-3 py-1.5">
                                       <Badge variant="outline" className={cn("text-[9px]",
                                         log.status === "completed" ? "text-green-600 border-green-200" :
@@ -1037,9 +1245,17 @@ export default function IndustryPulse() {
                                         "text-red-600 border-red-200"
                                       )}>{log.status}</Badge>
                                     </td>
-                                    <td className="px-3 py-1.5 tabular-nums">{log.records_new || 0} new / {log.records_fetched || 0} fetched</td>
+                                    <td className="px-3 py-1.5 tabular-nums">{log.records_new || 0} new / {log.records_fetched || 0}</td>
                                     <td className="px-3 py-1.5">{new Date(log.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
                                     <td className="px-3 py-1.5 tabular-nums">{duration != null ? `${duration}s` : "—"}</td>
+                                    <td className="px-3 py-1.5 text-muted-foreground">{log.triggered_by_name || "—"}</td>
+                                    <td className="px-3 py-1.5">
+                                      {hasPayload ? (
+                                        <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5" onClick={() => { setDrillLog(log); setDrillPayloadTab("rea_agents"); setDrillPage(0); }}>
+                                          <Eye className="h-3 w-3 mr-0.5" />View
+                                        </Button>
+                                      ) : null}
+                                    </td>
                                   </tr>
                                 );
                               })}
@@ -1050,6 +1266,139 @@ export default function IndustryPulse() {
                     </CardContent>
                   </Card>
                 </div>
+              );
+            })()}
+
+            {/* ═══ RAW PAYLOAD DRILL-THROUGH MODAL ═══ */}
+            {drillLog && (() => {
+              const payload = drillLog.raw_payload || {};
+              const tabs = [
+                { key: "rea_agents", label: "REA Agents", data: payload.rea_agents || [] },
+                { key: "domain_agents", label: "Domain Agents", data: payload.domain_agents || [] },
+                { key: "listings", label: "Listings", data: payload.listings || [] },
+              ].filter(t => t.data.length > 0);
+              const activeTab = tabs.find(t => t.key === drillPayloadTab) || tabs[0];
+              const pageData = activeTab ? activeTab.data.slice(drillPage * 25, (drillPage + 1) * 25) : [];
+              const totalPages = activeTab ? Math.ceil(activeTab.data.length / 25) : 0;
+
+              // Extract column keys from first few records (union of all keys)
+              const allKeys = new Set();
+              (activeTab?.data || []).slice(0, 10).forEach(r => Object.keys(r).forEach(k => allKeys.add(k)));
+              // Prioritize useful columns, filter out internal ones
+              const SKIP_KEYS = new Set(["_suburb", "_source"]);
+              const PRIORITY_KEYS = ["name", "full_name", "agency", "agency_name", "agencyName", "mobile", "phone", "suburb", "address", "email", "rating", "reviewCount", "propertiesForSale", "propertiesSold", "averageSoldPrice", "price", "propertyType", "bedrooms"];
+              const cols = [...PRIORITY_KEYS.filter(k => allKeys.has(k)), ...[...allKeys].filter(k => !PRIORITY_KEYS.includes(k) && !SKIP_KEYS.has(k)).sort()];
+
+              const cfg = drillLog.input_config;
+              const summary = drillLog.result_summary;
+              const duration = drillLog.completed_at && drillLog.started_at
+                ? Math.round((new Date(drillLog.completed_at) - new Date(drillLog.started_at)) / 1000)
+                : null;
+
+              return (
+                <Dialog open onOpenChange={() => setDrillLog(null)}>
+                  <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col">
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2 text-sm">
+                        <Database className="h-4 w-4 text-primary" />
+                        {drillLog.source_label || drillLog.sync_type} — Raw Data
+                        <Badge variant="outline" className={cn("text-[9px] ml-2",
+                          drillLog.status === "completed" ? "text-green-600 border-green-200" : "text-red-600 border-red-200"
+                        )}>{drillLog.status}</Badge>
+                      </DialogTitle>
+                    </DialogHeader>
+
+                    {/* Summary row */}
+                    <div className="flex items-center gap-4 text-xs border rounded-lg px-3 py-2 bg-muted/20">
+                      <span><strong>{drillLog.records_fetched || 0}</strong> fetched</span>
+                      <span><strong>{drillLog.records_new || 0}</strong> new</span>
+                      {duration != null && <span>{duration}s</span>}
+                      {drillLog.triggered_by_name && <span className="text-muted-foreground">by {drillLog.triggered_by_name}</span>}
+                      <span className="text-muted-foreground">{new Date(drillLog.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                      {drillLog.apify_run_id && <span className="text-muted-foreground text-[9px] ml-auto font-mono">Run: {drillLog.apify_run_id.substring(0, 20)}{drillLog.apify_run_id.length > 20 ? "..." : ""}</span>}
+                    </div>
+
+                    {/* Input config */}
+                    {cfg && (
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
+                        <span className="font-medium">Input:</span>
+                        <span>Suburbs: {(cfg.suburbs || []).join(", ")}</span>
+                        {cfg.maxAgentsPerSuburb > 0 && <span>| Max agents: {cfg.maxAgentsPerSuburb}</span>}
+                        {cfg.maxListingsPerSuburb > 0 && <span>| Max listings: {cfg.maxListingsPerSuburb}</span>}
+                        <span>| State: {cfg.state || "NSW"}</span>
+                      </div>
+                    )}
+
+                    {/* Result summary */}
+                    {summary && (
+                      <div className="flex items-center gap-3 text-[10px] text-muted-foreground flex-wrap">
+                        <span className="font-medium">Results:</span>
+                        {summary.agents_merged > 0 && <Badge variant="outline" className="text-[9px] py-0">{summary.agents_merged} agents</Badge>}
+                        {summary.agencies_extracted > 0 && <Badge variant="outline" className="text-[9px] py-0">{summary.agencies_extracted} agencies</Badge>}
+                        {summary.listings_stored > 0 && <Badge variant="outline" className="text-[9px] py-0">{summary.listings_stored} listings</Badge>}
+                        {summary.movements_detected > 0 && <Badge variant="outline" className="text-[9px] py-0 text-amber-600">{summary.movements_detected} movements</Badge>}
+                        {summary.mappings_created > 0 && <Badge variant="outline" className="text-[9px] py-0 text-blue-600">{summary.mappings_created} mappings</Badge>}
+                      </div>
+                    )}
+
+                    {/* Dataset tabs */}
+                    {tabs.length > 0 && (
+                      <div className="flex-1 min-h-0 flex flex-col">
+                        <div className="flex items-center gap-1 border-b pb-1 mb-2">
+                          {tabs.map(t => (
+                            <button key={t.key} className={cn("px-2 py-1 text-xs rounded-t", drillPayloadTab === t.key ? "bg-primary text-primary-foreground font-medium" : "text-muted-foreground hover:bg-muted/50")}
+                              onClick={() => { setDrillPayloadTab(t.key); setDrillPage(0); }}>
+                              {t.label} ({t.data.length})
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Data table */}
+                        <div className="flex-1 overflow-auto border rounded">
+                          <table className="w-full text-[10px]">
+                            <thead className="bg-muted/30 sticky top-0">
+                              <tr>
+                                <th className="px-1.5 py-1 text-left font-semibold text-muted-foreground w-8">#</th>
+                                {cols.slice(0, 12).map(k => (
+                                  <th key={k} className="px-1.5 py-1 text-left font-semibold text-muted-foreground whitespace-nowrap">{k}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pageData.map((row, i) => (
+                                <tr key={i} className="border-t hover:bg-muted/10">
+                                  <td className="px-1.5 py-1 tabular-nums text-muted-foreground">{drillPage * 25 + i + 1}</td>
+                                  {cols.slice(0, 12).map(k => {
+                                    let val = row[k];
+                                    if (val == null) val = "";
+                                    if (typeof val === "object") val = JSON.stringify(val).substring(0, 60);
+                                    if (typeof val === "string" && val.length > 50) val = val.substring(0, 50) + "...";
+                                    return <td key={k} className="px-1.5 py-1 whitespace-nowrap max-w-[150px] truncate">{String(val)}</td>;
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Pagination */}
+                        {totalPages > 1 && (
+                          <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
+                            <span>Page {drillPage + 1} of {totalPages} ({activeTab.data.length} records)</span>
+                            <div className="flex gap-1">
+                              <Button size="sm" variant="outline" className="h-6 text-[10px]" disabled={drillPage === 0} onClick={() => setDrillPage(p => p - 1)}>
+                                <ChevronLeft className="h-3 w-3" />Prev
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-6 text-[10px]" disabled={drillPage >= totalPages - 1} onClick={() => setDrillPage(p => p + 1)}>
+                                Next<ChevronRight className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </DialogContent>
+                </Dialog>
               );
             })()}
           </div>
