@@ -46,6 +46,7 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
   const { data: pulseAgencies = [] } = useEntityList("PulseAgency", "name");
   const { data: pulseListings = [] } = useEntityList("PulseListing", "-created_at", 5000);
   const { data: timeline = [] } = useEntityList("PulseTimeline", "-created_at", 2000);
+  const { data: crmProjects = [] } = useEntityList("Project", "-shoot_date");
 
   // ── Find mapping ──
   const mapping = useMemo(() =>
@@ -117,8 +118,23 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
     }
   }, [entityType, pulseData, pulseListings]);
 
-  const activeListings = entityListings.filter(l => l.listing_type === "for_sale" || l.listing_type === "for_rent");
+  const forSaleListings = entityListings.filter(l => l.listing_type === "for_sale");
+  const forRentListings = entityListings.filter(l => l.listing_type === "for_rent");
   const soldListings = entityListings.filter(l => l.listing_type === "sold");
+
+  // CRM projects for this entity (our photography jobs)
+  const entityProjects = useMemo(() => {
+    if (entityType === "agent") {
+      return crmProjects.filter(p => p.agent_id === crmEntityId || p.client_id === crmEntityId);
+    } else {
+      return crmProjects.filter(p => p.agency_id === crmEntityId);
+    }
+  }, [crmProjects, crmEntityId, entityType]);
+
+  // Cross-reference: find pulse listings that match CRM projects by address
+  const normAddr = (s) => (s || "").replace(/[,\s]+/g, " ").replace(/\b(nsw|vic|qld|sa|wa|tas|nt|act)\b/gi, "").replace(/\d{4}/, "").replace(/australia/gi, "").trim().toLowerCase();
+  const projectAddresses = new Set(entityProjects.map(p => normAddr(p.property_address)));
+  const crossLinked = entityListings.filter(l => projectAddresses.has(normAddr(l.address)));
 
   // ── Agency agents ──
   const agencyAgents = useMemo(() => {
@@ -254,23 +270,52 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
           </CardContent>
         </Card>
 
-        {/* Current Listings */}
-        {activeListings.length > 0 && (
+        {/* Our Projects (CRM) */}
+        {entityProjects.length > 0 && (
           <Card>
             <CardContent className="p-4">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Home className="h-3.5 w-3.5" />Active Listings ({activeListings.length})</h3>
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Briefcase className="h-3.5 w-3.5 text-primary" />Our Projects ({entityProjects.length})</h3>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {entityProjects.slice(0, 15).map(p => {
+                  const isCrossLinked = crossLinked.some(l => normAddr(l.address) === normAddr(p.property_address));
+                  return (
+                    <div key={p.id} className="flex items-center justify-between text-xs p-1.5 rounded bg-muted/20">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium truncate">{p.title || p.property_address}</p>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Badge variant="outline" className={cn("text-[7px] py-0",
+                            p.status === "delivered" ? "text-green-600 border-green-200" :
+                            p.status === "scheduled" ? "text-blue-600 border-blue-200" :
+                            "text-muted-foreground")}>{p.status}</Badge>
+                          {p.shoot_date && <span>{fmtDate(p.shoot_date)}</span>}
+                        </div>
+                      </div>
+                      {isCrossLinked && <Badge className="text-[7px] bg-indigo-100 text-indigo-700 border-0 shrink-0 ml-2">Pulse Match</Badge>}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* For Sale Listings (from pulse — properties currently on market) */}
+        {forSaleListings.length > 0 && (
+          <Card>
+            <CardContent className="p-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Home className="h-3.5 w-3.5" />For Sale ({forSaleListings.length})</h3>
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                {activeListings.slice(0, 20).map(l => (
+                {forSaleListings.slice(0, 20).map(l => (
                   <a key={l.id} href={l.source_url || l.domain_listing_url || "#"} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-2 text-xs p-1.5 rounded hover:bg-muted/30 transition-colors">
                     {l.image_url && <img src={l.image_url} alt="" className="h-10 w-14 object-cover rounded shrink-0" />}
                     <div className="flex-1 min-w-0">
                       <p className="font-medium truncate">{l.address || l.suburb || "—"}</p>
                       <div className="flex items-center gap-2 text-muted-foreground">
-                        <span>{l.suburb}</span>
+                        {l.suburb && <span>{l.suburb}</span>}
                         {l.bedrooms && <span>{l.bedrooms} bed</span>}
                         {l.asking_price > 0 && <span className="font-medium text-foreground">{fmtPrice(l.asking_price)}</span>}
-                        <Badge variant="outline" className="text-[7px] py-0">{l.listing_type === "for_sale" ? "Sale" : "Rent"}</Badge>
+                        {l.first_seen_at && <span className="text-[9px]">Detected {fmtDate(l.first_seen_at)}</span>}
                       </div>
                     </div>
                     <ExternalLink className="h-3 w-3 text-primary shrink-0" />
@@ -281,20 +326,41 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
           </Card>
         )}
 
-        {/* Sold Listings */}
+        {/* For Rent Listings */}
+        {forRentListings.length > 0 && (
+          <Card>
+            <CardContent className="p-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Home className="h-3.5 w-3.5" />For Rent ({forRentListings.length})</h3>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {forRentListings.slice(0, 15).map(l => (
+                  <a key={l.id} href={l.source_url || l.domain_listing_url || "#"} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs p-1.5 rounded hover:bg-muted/30">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{l.address || l.suburb}</p>
+                      <span className="text-muted-foreground">{l.suburb}{l.asking_price > 0 ? ` · ${fmtPrice(l.asking_price)}/wk` : ""}</span>
+                    </div>
+                    <Badge variant="outline" className="text-[7px] py-0 text-purple-600 border-purple-200 shrink-0">Rent</Badge>
+                  </a>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Sold Properties (from pulse sold listings) */}
         {soldListings.length > 0 && (
           <Card>
             <CardContent className="p-4">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><DollarSign className="h-3.5 w-3.5" />Recently Sold ({soldListings.length})</h3>
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><DollarSign className="h-3.5 w-3.5" />Sold Properties ({soldListings.length})</h3>
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
                 {soldListings.slice(0, 15).map(l => (
                   <a key={l.id} href={l.source_url || "#"} target="_blank" rel="noopener noreferrer"
                     className="flex items-center justify-between text-xs p-1.5 rounded hover:bg-muted/30">
                     <div className="min-w-0">
                       <p className="font-medium truncate">{l.address || l.suburb}</p>
-                      <span className="text-muted-foreground">{l.suburb}{l.sold_price > 0 ? ` · ${fmtPrice(l.sold_price)}` : ""}{l.sold_date ? ` · ${fmtDate(l.sold_date)}` : ""}</span>
+                      <span className="text-muted-foreground">{l.suburb}{l.sold_price > 0 ? ` · ${fmtPrice(l.sold_price)}` : ""}{l.sold_date ? ` · Sold ${fmtDate(l.sold_date)}` : ""}</span>
                     </div>
-                    <Badge className="text-[7px] bg-blue-100 text-blue-700 border-0 shrink-0">Sold</Badge>
+                    <Badge className="text-[7px] bg-emerald-100 text-emerald-700 border-0 shrink-0">Sold</Badge>
                   </a>
                 ))}
               </div>
@@ -461,13 +527,31 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
           </Card>
         )}
 
-        {/* Agency Listings */}
-        {activeListings.length > 0 && (
+        {/* Our Projects (CRM) */}
+        {entityProjects.length > 0 && (
           <Card>
             <CardContent className="p-4">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Home className="h-3.5 w-3.5" />Agency Listings ({activeListings.length})</h3>
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Briefcase className="h-3.5 w-3.5 text-primary" />Our Projects ({entityProjects.length})</h3>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {entityProjects.slice(0, 15).map(p => (
+                  <div key={p.id} className="flex items-center justify-between text-xs p-1.5 rounded bg-muted/20">
+                    <div className="min-w-0"><p className="font-medium truncate">{p.title || p.property_address}</p>
+                      <Badge variant="outline" className="text-[7px] py-0">{p.status}</Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Agency For Sale Listings */}
+        {forSaleListings.length > 0 && (
+          <Card>
+            <CardContent className="p-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Home className="h-3.5 w-3.5" />For Sale ({forSaleListings.length})</h3>
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                {activeListings.slice(0, 20).map(l => (
+                {forSaleListings.slice(0, 20).map(l => (
                   <a key={l.id} href={l.source_url || l.domain_listing_url || "#"} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-2 text-xs p-1.5 rounded hover:bg-muted/30 transition-colors">
                     {l.image_url && <img src={l.image_url} alt="" className="h-10 w-14 object-cover rounded shrink-0" />}
@@ -476,6 +560,27 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
                       <span className="text-muted-foreground">{l.suburb}{l.asking_price > 0 ? ` · ${fmtPrice(l.asking_price)}` : ""}{l.agent_name ? ` · ${l.agent_name}` : ""}</span>
                     </div>
                     <ExternalLink className="h-3 w-3 text-primary shrink-0" />
+                  </a>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Agency Rental Listings */}
+        {forRentListings.length > 0 && (
+          <Card>
+            <CardContent className="p-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Home className="h-3.5 w-3.5" />For Rent ({forRentListings.length})</h3>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {forRentListings.slice(0, 15).map(l => (
+                  <a key={l.id} href={l.source_url || "#"} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-xs p-1.5 rounded hover:bg-muted/30">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{l.address || l.suburb}</p>
+                      <span className="text-muted-foreground">{l.suburb}{l.asking_price > 0 ? ` · ${fmtPrice(l.asking_price)}/wk` : ""}{l.agent_name ? ` · ${l.agent_name}` : ""}</span>
+                    </div>
+                    <Badge variant="outline" className="text-[7px] py-0 text-purple-600 shrink-0">Rent</Badge>
                   </a>
                 ))}
               </div>
