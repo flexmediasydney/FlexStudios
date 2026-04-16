@@ -135,6 +135,9 @@ Deno.serve(async (req) => {
       source_label = null,
       triggered_by = null,
       triggered_by_name = null,
+      // Bounding box mode: single URL covers entire region (no per-suburb loop)
+      listingsStartUrl = null,
+      maxListingsTotal = 0,
     } = body;
 
     const now = new Date().toISOString();
@@ -160,6 +163,19 @@ Deno.serve(async (req) => {
     const allDomainAgents: any[] = [];
     const allListings: any[] = [];
     const allDomainAgencies: any[] = [];
+
+    // ── Step 0: Bounding box listings (single-URL mode, no per-suburb loop) ──
+    if (listingsStartUrl && maxListingsTotal > 0) {
+      console.log(`[bounding-box] Running azzouzana with custom URL, max ${maxListingsTotal}...`);
+      const bbResult = await runApifyActor('azzouzana/real-estate-au-scraper-pro', {
+        startUrl: listingsStartUrl,
+        maxItems: maxListingsTotal,
+      }, 'listings-boundingbox', 300);
+      bbResult.items.forEach(l => { l._suburb = l.suburb || 'Greater Sydney'; l._source = 'rea_boundingbox'; });
+      allListings.push(...bbResult.items);
+      if (bbResult.runId) apifyRunIds['listings-boundingbox'] = bbResult.runId;
+      console.log(`[bounding-box] ${bbResult.items.length} listings from bounding box`);
+    }
 
     // ── Step 1: Run Apify actors per suburb ─────────────────────────────
 
@@ -635,34 +651,81 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Insert listings
+    // Upsert listings + detect new listings
     let listingsInserted = 0;
-    const listingRecords = allListings.map(l => ({
-      address: l.address || null,
-      suburb: l.suburb || l._suburb || null,
-      postcode: l.postcode || null,
-      property_type: l.propertyType || null,
-      bedrooms: l.bedrooms || null,
-      bathrooms: l.bathrooms || null,
-      listing_type: l.isSold ? 'sold' : l.isBuy ? 'for_sale' : 'other',
-      asking_price: parseFloat(String(l.price || '').replace(/[^0-9.]/g, '')) || null,
-      agent_name: (l.agents && l.agents[0]) ? l.agents[0].name : null,
-      agent_phone: (l.agents && l.agents[0]) ? l.agents[0].phoneNumber : null,
-      agency_name: l.agencyName || null,
-      source: 'rea',
-      source_url: l.url || null,
-      source_listing_id: l.listingId ? String(l.listingId) : null,
-      last_synced_at: now,
-    }));
+    let newListingsDetected = 0;
+
+    // Load existing listing IDs for new-listing detection
+    const existingListingIds = new Set<string>();
+    if (allListings.length > 0) {
+      const { data: existingListings = [] } = await admin.from('pulse_listings')
+        .select('source_listing_id')
+        .not('source_listing_id', 'is', null);
+      existingListings.forEach((l: any) => { if (l.source_listing_id) existingListingIds.add(l.source_listing_id); });
+    }
+
+    const listingRecords = allListings.map(l => {
+      const listingId = l.listingId ? String(l.listingId) : null;
+      const isNew = listingId && !existingListingIds.has(listingId);
+      return {
+        address: l.address || null,
+        suburb: l.suburb || l._suburb || null,
+        postcode: l.postcode || null,
+        property_type: l.propertyType || null,
+        bedrooms: l.bedrooms || null,
+        bathrooms: l.bathrooms || null,
+        parking: l.parking || l.carSpaces || null,
+        land_size: l.landSize || null,
+        listing_type: l.isSold ? 'sold' : l.isBuy ? 'for_sale' : l.isRent ? 'for_rent' : 'other',
+        asking_price: parseFloat(String(l.price || '').replace(/[^0-9.]/g, '')) || null,
+        sold_price: l.soldPrice ? parseFloat(String(l.soldPrice).replace(/[^0-9.]/g, '')) : null,
+        listed_date: l.listedDate || l.dateAvailable || null,
+        sold_date: l.soldDate || null,
+        days_on_market: l.daysOnMarket || null,
+        agent_name: (l.agents && l.agents[0]) ? l.agents[0].name : null,
+        agent_phone: (l.agents && l.agents[0]) ? l.agents[0].phoneNumber : null,
+        agency_name: l.agencyName || null,
+        description: l.description ? String(l.description).substring(0, 500) : null,
+        image_url: l.mainImage || (l.images && l.images[0]) || null,
+        source: l._source === 'rea_boundingbox' ? 'rea_boundingbox' : 'rea',
+        source_url: l.url || null,
+        source_listing_id: listingId,
+        last_synced_at: now,
+        _isNew: isNew,
+      };
+    });
 
     for (let i = 0; i < listingRecords.length; i += BATCH) {
       const batch = listingRecords.slice(i, i + BATCH);
-      const { error } = await admin.from('pulse_listings').insert(batch);
+      const cleanBatch = batch.map(({ _isNew, ...rest }) => rest);
+      const { error } = await admin.from('pulse_listings').upsert(cleanBatch, {
+        onConflict: 'source_listing_id',
+        ignoreDuplicates: false,
+      });
       if (error) {
-        if (listingsInserted < 2) console.error(`Listing insert error:`, error.message?.substring(0, 200));
+        // Fallback: insert ignoring conflicts
+        const { error: insertErr } = await admin.from('pulse_listings').insert(cleanBatch).select();
+        if (!insertErr) listingsInserted += cleanBatch.length;
+        else if (listingsInserted < 2) console.error(`Listing upsert error:`, error.message?.substring(0, 200));
       } else {
-        listingsInserted += batch.length;
+        listingsInserted += cleanBatch.length;
       }
+      // Count new listings in this batch
+      newListingsDetected += batch.filter(l => l._isNew).length;
+    }
+
+    // Log new listings to timeline
+    if (newListingsDetected > 0) {
+      const sampleNew = listingRecords.filter(l => l._isNew).slice(0, 5);
+      await admin.from('pulse_timeline').insert({
+        entity_type: 'listing',
+        event_type: 'new_listings_detected',
+        event_category: 'market',
+        title: `${newListingsDetected} new listing${newListingsDetected !== 1 ? 's' : ''} detected`,
+        description: sampleNew.map(l => `${l.address || l.suburb || '?'} — ${l.agency_name || '?'}`).join('; '),
+        new_value: { count: newListingsDetected, sample: sampleNew.map(l => ({ address: l.address, suburb: l.suburb, price: l.asking_price, agency: l.agency_name, agent: l.agent_name })) },
+        source: source_id || 'rea_sync',
+      }).catch(() => {});
     }
 
     // ── Step 6: Movement Detection + Timeline Logging ──────────────────

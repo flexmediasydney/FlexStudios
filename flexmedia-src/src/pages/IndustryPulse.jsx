@@ -130,6 +130,10 @@ export default function IndustryPulse() {
   const [suburbSearch, setSuburbSearch] = useState("");
   const [expandedRegions, setExpandedRegions] = useState(new Set());
   const [addingSuburb, setAddingSuburb] = useState(false);
+  const [selectedListing, setSelectedListing] = useState(null);
+  const [listingFilter, setListingFilter] = useState("all"); // all, for_sale, sold, for_rent
+  const [listingSort, setListingSort] = useState({ col: "listed_date", dir: "desc" });
+  const [listingColFilter, setListingColFilter] = useState("");
   const [eventStatus, setEventStatus] = useState("all");
   const [marketTimeRange, setMarketTimeRange] = useState("30");
   const [signalLevel, setSignalLevel] = useState("all");
@@ -290,6 +294,35 @@ export default function IndustryPulse() {
     });
     return result;
   }, [pulseAgencies, pulseAgents, agencyFilter, agencyColFilter, search, agencySort]);
+
+  // Filtered + sorted listings for Listings Intelligence tab
+  const filteredListings = useMemo(() => {
+    let result = pulseListings.filter(l => {
+      if (listingFilter === "for_sale" && l.listing_type !== "for_sale") return false;
+      if (listingFilter === "sold" && l.listing_type !== "sold") return false;
+      if (listingFilter === "for_rent" && l.listing_type !== "for_rent") return false;
+      if (listingColFilter) {
+        const q = listingColFilter.toLowerCase();
+        return (l.suburb || "").toLowerCase().includes(q) || (l.agency_name || "").toLowerCase().includes(q) || (l.agent_name || "").toLowerCase().includes(q) || (l.address || "").toLowerCase().includes(q);
+      }
+      if (search) {
+        const q = search.toLowerCase();
+        return (l.address || "").toLowerCase().includes(q) || (l.suburb || "").toLowerCase().includes(q) || (l.agency_name || "").toLowerCase().includes(q) || (l.agent_name || "").toLowerCase().includes(q);
+      }
+      return true;
+    });
+    const { col, dir } = listingSort;
+    result.sort((a, b) => {
+      let va = a[col], vb = b[col];
+      if (col === "asking_price" || col === "days_on_market" || col === "bedrooms") {
+        va = Number(va) || 0; vb = Number(vb) || 0;
+        return dir === "desc" ? vb - va : va - vb;
+      }
+      va = String(va || ""); vb = String(vb || "");
+      return dir === "desc" ? vb.localeCompare(va) : va.localeCompare(vb);
+    });
+    return result;
+  }, [pulseListings, listingFilter, listingColFilter, search, listingSort]);
 
   // Filtered events
   const filteredEvents = useMemo(() => {
@@ -496,6 +529,7 @@ export default function IndustryPulse() {
           <TabsTrigger value="command">Command Center</TabsTrigger>
           <TabsTrigger value="agents">Agent Intelligence{stats.notInCrm > 0 && <Badge className="ml-1.5 text-[9px] bg-amber-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.notInCrm}</Badge>}</TabsTrigger>
           <TabsTrigger value="agencies">Agency Intelligence{stats.agenciesNotInCrm > 0 && <Badge className="ml-1.5 text-[9px] bg-blue-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.agenciesNotInCrm}</Badge>}</TabsTrigger>
+          <TabsTrigger value="listings">Listings{pulseListings.length > 0 && <Badge className="ml-1.5 text-[9px] bg-green-500 text-white border-0 px-1.5 py-0 rounded-full">{pulseListings.length}</Badge>}</TabsTrigger>
           <TabsTrigger value="events">Events{stats.upcomingEvents > 0 && <Badge className="ml-1.5 text-[9px] bg-purple-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.upcomingEvents}</Badge>}</TabsTrigger>
           <TabsTrigger value="market">Market Data</TabsTrigger>
           <TabsTrigger value="datasources">Data Sources</TabsTrigger>
@@ -917,6 +951,105 @@ export default function IndustryPulse() {
           </div>
         </TabsContent>
 
+        {/* ═══ LISTINGS INTELLIGENCE TAB ═══ */}
+        <TabsContent value="listings" className="mt-3">
+          <div className="space-y-3">
+            {/* Stats banner */}
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1"><Home className="h-3 w-3 text-green-500" />{pulseListings.filter(l => l.listing_type === "for_sale").length} for sale</span>
+              <span className="flex items-center gap-1"><DollarSign className="h-3 w-3 text-blue-500" />{pulseListings.filter(l => l.listing_type === "sold").length} sold</span>
+              <span>{filteredListings.length} showing</span>
+            </div>
+
+            {/* Filters */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {[
+                { key: "all", label: "All", count: pulseListings.length },
+                { key: "for_sale", label: "For Sale", count: pulseListings.filter(l => l.listing_type === "for_sale").length },
+                { key: "sold", label: "Sold", count: pulseListings.filter(l => l.listing_type === "sold").length },
+                { key: "for_rent", label: "For Rent", count: pulseListings.filter(l => l.listing_type === "for_rent").length },
+              ].map(f => (
+                <button key={f.key} onClick={() => setListingFilter(f.key)}
+                  className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors",
+                    listingFilter === f.key ? "bg-primary text-primary-foreground border-primary" : "bg-muted/60 text-muted-foreground border-transparent hover:bg-muted"
+                  )}>
+                  {f.label} <span className="tabular-nums">{f.count}</span>
+                </button>
+              ))}
+              <Input placeholder="Filter address/suburb/agent..." className="h-7 w-48 text-xs" value={listingColFilter} onChange={e => setListingColFilter(e.target.value)} />
+              {listingColFilter && <button className="text-[10px] text-muted-foreground hover:text-foreground underline" onClick={() => setListingColFilter("")}>Clear</button>}
+            </div>
+
+            {/* Sortable listings table */}
+            {(() => {
+              const SortHeader = ({ col, label, className: cls }) => (
+                <th className={cn("px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground cursor-pointer hover:text-foreground select-none", cls)}
+                    onClick={() => setListingSort(prev => prev.col === col ? { col, dir: prev.dir === "asc" ? "desc" : "asc" } : { col, dir: "desc" })}>
+                  <span className="flex items-center gap-1">
+                    {label}
+                    {listingSort.col === col && <span className="text-primary">{listingSort.dir === "asc" ? "↑" : "↓"}</span>}
+                  </span>
+                </th>
+              );
+              return (
+                <div className="overflow-x-auto border rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/30">
+                      <tr>
+                        <SortHeader col="address" label="Address" />
+                        <SortHeader col="suburb" label="Suburb" />
+                        <SortHeader col="asking_price" label="Price" />
+                        <SortHeader col="property_type" label="Type" className="hidden md:table-cell" />
+                        <SortHeader col="bedrooms" label="Bed" className="hidden lg:table-cell" />
+                        <SortHeader col="agent_name" label="Agent" className="hidden md:table-cell" />
+                        <SortHeader col="agency_name" label="Agency" className="hidden lg:table-cell" />
+                        <SortHeader col="listed_date" label="Listed" />
+                        <SortHeader col="days_on_market" label="DOM" className="hidden md:table-cell" />
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Type</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredListings.length === 0 ? (
+                        <tr><td colSpan={10} className="py-12 text-center text-muted-foreground/50">
+                          <Home className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                          {pulseListings.length === 0 ? "No listings tracked yet — run REA Listings from Data Sources" : "No listings match filters"}
+                        </td></tr>
+                      ) : filteredListings.slice(0, 200).map(l => {
+                        const agentInCrm = l.agent_name && crmAgents.some(c => c.name && c.name.toLowerCase() === l.agent_name.toLowerCase());
+                        return (
+                        <tr key={l.id} className="hover:bg-muted/30 border-t cursor-pointer" onClick={() => setSelectedListing(l)}>
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-sm truncate max-w-[200px]">{l.address || "—"}</p>
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">{l.suburb || "—"}</td>
+                          <td className="px-3 py-2 text-xs font-medium tabular-nums">{fmtPrice(l.asking_price || l.sold_price)}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">{l.property_type || "—"}</td>
+                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{l.bedrooms || "—"}</td>
+                          <td className="px-3 py-2 hidden md:table-cell">
+                            <span className="text-xs">{l.agent_name || "—"}</span>
+                            {agentInCrm && <Badge className="ml-1 text-[7px] bg-green-100 text-green-700 border-0 px-1 py-0">Client</Badge>}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">{l.agency_name || "—"}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground">{fmtShortDate(l.listed_date)}</td>
+                          <td className="px-3 py-2 text-xs tabular-nums hidden md:table-cell">{l.days_on_market || "—"}</td>
+                          <td className="px-3 py-2">
+                            {l.listing_type === "for_sale" ? <Badge className="text-[9px] bg-green-100 text-green-700 border-0">Sale</Badge>
+                             : l.listing_type === "sold" ? <Badge className="text-[9px] bg-blue-100 text-blue-700 border-0">Sold</Badge>
+                             : l.listing_type === "for_rent" ? <Badge className="text-[9px] bg-purple-100 text-purple-700 border-0">Rent</Badge>
+                             : <Badge variant="outline" className="text-[9px]">{l.listing_type}</Badge>}
+                          </td>
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {filteredListings.length > 200 && <div className="text-center text-xs text-muted-foreground py-2 border-t">Showing 200 of {filteredListings.length} — use filters to narrow</div>}
+                </div>
+              );
+            })()}
+          </div>
+        </TabsContent>
+
         {/* ═══ TAB 3: EVENTS ═══ */}
         <TabsContent value="events" className="mt-3">
           <div className="space-y-3">
@@ -1089,9 +1222,12 @@ export default function IndustryPulse() {
                 { source_id: "domain_agencies", label: "Domain Agency Intelligence", description: "scrapestorm — Agency profiles, agent rosters, listings counts from domain.com.au", icon: Building2, color: "text-indigo-600",
                   defaultMax: 50, schedule: "Bi-weekly (1st & 15th)", scheduleDetail: "All suburbs",
                   runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxAgenciesPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: false, skipListings: true }) },
-                { source_id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana — Active listings with agent/agency details from realestate.com.au", icon: Home, color: "text-green-600",
-                  defaultMax: 20, schedule: "2x daily (6am, 2pm)", scheduleDetail: "High-priority suburbs + weekly full sweep",
+                { source_id: "rea_listings", label: "REA Listings (per suburb)", description: "azzouzana — Active listings per suburb from realestate.com.au", icon: Home, color: "text-green-600",
+                  defaultMax: 20, schedule: "Weekly (Sun 3am)", scheduleDetail: "Full suburb sweep",
                   runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: max, skipDomain: true, skipDomainAgencies: true, skipListings: false }) },
+                { source_id: "rea_listings_bb", label: "REA New Listings (Greater Sydney)", description: "azzouzana — Newest listings across Greater Sydney via bounding box, sorted by list date", icon: Zap, color: "text-orange-600",
+                  defaultMax: 500, schedule: "2x daily (6am, 2pm)", scheduleDetail: "Single bounding box covers all of Greater Sydney",
+                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: "https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers", maxListingsTotal: max }) },
               ].map(s => {
                 const db = sourceConfigs.find(c => c.source_id === s.source_id);
                 return { ...s,
@@ -1869,6 +2005,125 @@ export default function IndustryPulse() {
           onClose={() => setShowAddSignal(false)}
         />
       )}
+
+      {/* Listing Detail Slide-out */}
+      {selectedListing && (() => {
+        const l = selectedListing;
+        const agentMatch = pulseAgents.find(a => a.full_name && l.agent_name && a.full_name.toLowerCase() === l.agent_name.toLowerCase());
+        const agencyMatch = pulseAgencies.find(a => a.name && l.agency_name && a.name.toLowerCase().trim() === l.agency_name.toLowerCase().trim());
+        const agentInCrm = l.agent_name && crmAgents.some(c => c.name && c.name.toLowerCase() === l.agent_name.toLowerCase());
+
+        return (
+          <div className="fixed inset-y-0 right-0 w-[420px] bg-background border-l shadow-2xl z-50 flex flex-col overflow-hidden">
+            <div className="p-4 border-b bg-muted/30">
+              <div className="flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-bold text-base truncate">{l.address || "Listing"}</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">{l.suburb}{l.postcode ? `, ${l.postcode}` : ""}</p>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    {l.listing_type === "for_sale" ? <Badge className="text-[9px] bg-green-100 text-green-700 border-0">For Sale</Badge>
+                     : l.listing_type === "sold" ? <Badge className="text-[9px] bg-blue-100 text-blue-700 border-0">Sold</Badge>
+                     : l.listing_type === "for_rent" ? <Badge className="text-[9px] bg-purple-100 text-purple-700 border-0">For Rent</Badge>
+                     : <Badge variant="outline" className="text-[9px]">{l.listing_type}</Badge>}
+                    {l.property_type && <Badge variant="outline" className="text-[9px]">{l.property_type}</Badge>}
+                    {l.asking_price > 0 && <span className="text-sm font-bold">{fmtPrice(l.asking_price)}</span>}
+                  </div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setSelectedListing(null)}><X className="h-4 w-4" /></Button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
+              {/* Image */}
+              {l.image_url && <img src={l.image_url} alt="" className="w-full h-40 object-cover rounded-lg" />}
+
+              {/* Property Details */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Property Details</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {l.bedrooms && <div className="bg-muted/40 rounded-lg p-2 text-center"><p className="text-lg font-bold">{l.bedrooms}</p><p className="text-[9px] text-muted-foreground">Beds</p></div>}
+                  {l.bathrooms && <div className="bg-muted/40 rounded-lg p-2 text-center"><p className="text-lg font-bold">{l.bathrooms}</p><p className="text-[9px] text-muted-foreground">Baths</p></div>}
+                  {l.parking && <div className="bg-muted/40 rounded-lg p-2 text-center"><p className="text-lg font-bold">{l.parking}</p><p className="text-[9px] text-muted-foreground">Parking</p></div>}
+                </div>
+                {l.land_size && <p className="text-xs text-muted-foreground">Land: {l.land_size}</p>}
+              </div>
+
+              {/* Pricing */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Pricing</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {l.asking_price > 0 && <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{fmtPrice(l.asking_price)}</p><p className="text-[9px] text-muted-foreground">Asking Price</p></div>}
+                  {l.sold_price > 0 && <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{fmtPrice(l.sold_price)}</p><p className="text-[9px] text-muted-foreground">Sold Price</p></div>}
+                </div>
+              </div>
+
+              {/* Timeline */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Timeline</p>
+                <div className="space-y-1 text-xs">
+                  {l.listed_date && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Listed</span><span className="text-muted-foreground">{fmtDate(l.listed_date)}</span></div>}
+                  {l.sold_date && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Sold</span><span className="text-muted-foreground">{fmtDate(l.sold_date)}</span></div>}
+                  {l.days_on_market > 0 && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Days on Market</span><span className="font-medium tabular-nums">{l.days_on_market}</span></div>}
+                </div>
+              </div>
+
+              {/* Agent */}
+              {l.agent_name && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Listing Agent</p>
+                  <div className="border rounded-lg p-3 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{l.agent_name}</span>
+                      {agentInCrm && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">In CRM</Badge>}
+                    </div>
+                    {l.agent_phone && <div className="flex items-center gap-2 text-xs"><Phone className="h-3 w-3 text-muted-foreground" /><a href={`tel:${l.agent_phone}`} className="text-primary hover:underline">{l.agent_phone}</a></div>}
+                    {agentMatch && (
+                      <button className="text-[10px] text-primary hover:underline mt-1" onClick={() => { setSelectedListing(null); setSelectedAgent(agentMatch); }}>
+                        View full agent dossier →
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Agency */}
+              {l.agency_name && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Agency</p>
+                  <div className="border rounded-lg p-3">
+                    <span className="font-medium text-xs">{l.agency_name}</span>
+                    {agencyMatch && (
+                      <button className="text-[10px] text-primary hover:underline ml-2" onClick={() => { setSelectedListing(null); setSelectedAgency(agencyMatch); }}>
+                        View agency profile →
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Description */}
+              {l.description && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Description</p>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{l.description}</p>
+                </div>
+              )}
+
+              {/* Links */}
+              <div className="space-y-1.5 pt-2 border-t">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Links</p>
+                {l.source_url && <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />View on realestate.com.au</a>}
+              </div>
+
+              {/* Metadata */}
+              <div className="space-y-1 pt-2 border-t text-[10px] text-muted-foreground">
+                <p>Source: {l.source || "rea"} · Synced: {fmtDate(l.last_synced_at)}</p>
+                {l.source_listing_id && <p>REA Listing ID: {l.source_listing_id}</p>}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Agency Detail Slide-out */}
       {selectedAgency && (() => {

@@ -48,14 +48,17 @@ Deno.serve(async (req) => {
       query = query.gte('priority', min_priority);
     }
 
+    // Bounding box sources don't need suburbs — single call
+    const isBoundingBox = source_id === 'rea_listings_bb';
+
     const { data: suburbs, error: suburbErr } = await query;
     if (suburbErr) throw new Error(`Failed to load suburbs: ${suburbErr.message}`);
-    if (!suburbs || suburbs.length === 0) {
+    if (!isBoundingBox && (!suburbs || suburbs.length === 0)) {
       return jsonResponse({ success: true, message: 'No active suburbs found', suburbs: 0 });
     }
 
-    const suburbNames = suburbs.map(s => s.name);
-    console.log(`[pulseScheduledScrape] source=${source_id} priority>=${min_priority} suburbs=${suburbNames.length}`);
+    const suburbNames = isBoundingBox ? [] : suburbs!.map(s => s.name);
+    console.log(`[pulseScheduledScrape] source=${source_id} priority>=${min_priority} suburbs=${isBoundingBox ? 'bounding-box' : suburbNames.length}`);
 
     // ── Build run params based on source type ──
     const SOURCE_PARAMS: Record<string, (subs: string[]) => Record<string, any>> = {
@@ -63,6 +66,7 @@ Deno.serve(async (req) => {
       domain_agents: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: false, skipDomainAgencies: true, skipListings: true }),
       domain_agencies: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 0, maxAgenciesPerSuburb: 50, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: false, skipListings: true }),
       rea_listings: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipDomain: true, skipDomainAgencies: true, skipListings: false }),
+      rea_listings_bb: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers', maxListingsTotal: 500 }),
     };
 
     const paramBuilder = SOURCE_PARAMS[source_id];
@@ -75,6 +79,7 @@ Deno.serve(async (req) => {
       domain_agents: 'Domain Agent Data',
       domain_agencies: 'Domain Agency Intelligence',
       rea_listings: 'REA Listings Market Data',
+      rea_listings_bb: 'REA New Listings (Greater Sydney)',
     };
 
     // ── Log audit trail: scheduled run started ──
@@ -90,8 +95,12 @@ Deno.serve(async (req) => {
 
     // ── Batch suburbs and call pulseDataSync for each ──
     const batches: string[][] = [];
-    for (let i = 0; i < suburbNames.length && batches.length < max_batches; i += batch_size) {
-      batches.push(suburbNames.slice(i, i + batch_size));
+    if (isBoundingBox) {
+      batches.push([]); // single empty batch — bounding box doesn't need suburbs
+    } else {
+      for (let i = 0; i < suburbNames.length && batches.length < max_batches; i += batch_size) {
+        batches.push(suburbNames.slice(i, i + batch_size));
+      }
     }
 
     let totalAgents = 0, totalAgencies = 0, totalListings = 0, totalMovements = 0, totalMappings = 0;
