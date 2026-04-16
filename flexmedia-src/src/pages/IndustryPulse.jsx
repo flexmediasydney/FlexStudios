@@ -114,6 +114,10 @@ export default function IndustryPulse() {
   const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: "" });
   const [addToCrmCandidate, setAddToCrmCandidate] = useState(null); // for double-confirm dialog
   const [addToCrmStep, setAddToCrmStep] = useState(1); // 1=preview, 2=confirm
+  const [agentPage, setAgentPage] = useState(0);
+  const [agencyPage, setAgencyPage] = useState(0);
+  const [listingPage, setListingPage] = useState(0);
+  const PAGE_SIZE = 50;
   const [selectedAgency, setSelectedAgency] = useState(null);
   const [agencyFilter, setAgencyFilter] = useState("all");
   const [agencySort, setAgencySort] = useState({ col: "live_agent_count", dir: "desc" });
@@ -770,7 +774,7 @@ export default function IndustryPulse() {
                 { key: "in_crm", label: "In CRM", count: pulseAgents.filter(a => a.is_in_crm).length },
                 { key: "reinsw", label: "REINSW Members", count: pulseAgents.filter(a => a.reinsw_member).length },
               ].map(f => (
-                <button key={f.key} onClick={() => setAgentFilter(f.key)}
+                <button key={f.key} onClick={() => { setAgentFilter(f.key); setAgentPage(0); }}
                   className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors",
                     agentFilter === f.key ? "bg-primary text-primary-foreground border-primary" : "bg-muted/60 text-muted-foreground border-transparent hover:bg-muted"
                   )}>
@@ -820,7 +824,7 @@ export default function IndustryPulse() {
                           <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
                           {pulseAgents.length === 0 ? "No agents tracked yet — run a data sync from the Data Sources tab" : "No agents match filters"}
                         </td></tr>
-                      ) : filteredAgents.slice(0, 150).map(a => {
+                      ) : filteredAgents.slice(agentPage * PAGE_SIZE, (agentPage + 1) * PAGE_SIZE).map(a => {
                         const mappedPosition = a._position || "Junior";
                         return (
                         <tr key={a.id} className="hover:bg-muted/30 border-t cursor-pointer" onClick={() => setSelectedAgent(a)}>
@@ -861,7 +865,20 @@ export default function IndustryPulse() {
                       })}
                     </tbody>
                   </table>
-                  {filteredAgents.length > 150 && <div className="text-center text-xs text-muted-foreground py-2 border-t">Showing 150 of {filteredAgents.length} — use filters to narrow</div>}
+                  {filteredAgents.length > PAGE_SIZE && (
+                    <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-muted-foreground">
+                      <span>Showing {agentPage * PAGE_SIZE + 1}–{Math.min((agentPage + 1) * PAGE_SIZE, filteredAgents.length)} of {filteredAgents.length}</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" disabled={agentPage === 0} onClick={() => setAgentPage(p => p - 1)}>
+                          <ChevronLeft className="h-3 w-3" />Prev
+                        </Button>
+                        <span className="px-2 tabular-nums">Page {agentPage + 1} of {Math.ceil(filteredAgents.length / PAGE_SIZE)}</span>
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" disabled={(agentPage + 1) * PAGE_SIZE >= filteredAgents.length} onClick={() => setAgentPage(p => p + 1)}>
+                          Next<ChevronRight className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -886,7 +903,7 @@ export default function IndustryPulse() {
                 { key: "not_in_crm", label: "Not In CRM", count: stats.agenciesNotInCrm },
                 { key: "in_crm", label: "In CRM", count: pulseAgencies.filter(a => a.is_in_crm).length },
               ].map(f => (
-                <button key={f.key} onClick={() => setAgencyFilter(f.key)}
+                <button key={f.key} onClick={() => { setAgencyFilter(f.key); setAgencyPage(0); }}
                   className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors",
                     agencyFilter === f.key ? "bg-primary text-primary-foreground border-primary" : "bg-muted/60 text-muted-foreground border-transparent hover:bg-muted"
                   )}>
@@ -929,7 +946,7 @@ export default function IndustryPulse() {
                           <Building2 className="h-8 w-8 mx-auto mb-2 opacity-30" />
                           {pulseAgencies.length === 0 ? "No agencies tracked yet — run a listings sync from Data Sources" : "No agencies match filters"}
                         </td></tr>
-                      ) : filteredAgencies.slice(0, 150).map(ag => (
+                      ) : filteredAgencies.slice(agencyPage * PAGE_SIZE, (agencyPage + 1) * PAGE_SIZE).map(ag => (
                         <tr key={ag.id} className="hover:bg-muted/30 border-t cursor-pointer" onClick={() => setSelectedAgency(ag)}>
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2.5">
@@ -965,7 +982,20 @@ export default function IndustryPulse() {
                       ))}
                     </tbody>
                   </table>
-                  {filteredAgencies.length > 150 && <div className="text-center text-xs text-muted-foreground py-2 border-t">Showing 150 of {filteredAgencies.length} — use filters to narrow</div>}
+                  {filteredAgencies.length > PAGE_SIZE && (
+                    <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-muted-foreground">
+                      <span>Showing {agencyPage * PAGE_SIZE + 1}–{Math.min((agencyPage + 1) * PAGE_SIZE, filteredAgencies.length)} of {filteredAgencies.length}</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" disabled={agencyPage === 0} onClick={() => setAgencyPage(p => p - 1)}>
+                          <ChevronLeft className="h-3 w-3" />Prev
+                        </Button>
+                        <span className="px-2 tabular-nums">Page {agencyPage + 1} of {Math.ceil(filteredAgencies.length / PAGE_SIZE)}</span>
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" disabled={(agencyPage + 1) * PAGE_SIZE >= filteredAgencies.length} onClick={() => setAgencyPage(p => p + 1)}>
+                          Next<ChevronRight className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -990,7 +1020,7 @@ export default function IndustryPulse() {
                 { key: "sold", label: "Sold", count: pulseListings.filter(l => l.listing_type === "sold").length },
                 { key: "for_rent", label: "For Rent", count: pulseListings.filter(l => l.listing_type === "for_rent").length },
               ].map(f => (
-                <button key={f.key} onClick={() => setListingFilter(f.key)}
+                <button key={f.key} onClick={() => { setListingFilter(f.key); setListingPage(0); }}
                   className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors",
                     listingFilter === f.key ? "bg-primary text-primary-foreground border-primary" : "bg-muted/60 text-muted-foreground border-transparent hover:bg-muted"
                   )}>
@@ -1036,7 +1066,7 @@ export default function IndustryPulse() {
                           <Home className="h-8 w-8 mx-auto mb-2 opacity-30" />
                           {pulseListings.length === 0 ? "No listings tracked yet — run REA Listings from Data Sources" : "No listings match filters"}
                         </td></tr>
-                      ) : filteredListings.slice(0, 200).map(l => {
+                      ) : filteredListings.slice(listingPage * PAGE_SIZE, (listingPage + 1) * PAGE_SIZE).map(l => {
                         const agentInCrm = l.agent_name && crmAgents.some(c => c.name && c.name.toLowerCase() === l.agent_name.toLowerCase());
                         return (
                         <tr key={l.id} className="hover:bg-muted/30 border-t cursor-pointer" onClick={() => setSelectedListing(l)}>
@@ -1068,7 +1098,20 @@ export default function IndustryPulse() {
                       })}
                     </tbody>
                   </table>
-                  {filteredListings.length > 200 && <div className="text-center text-xs text-muted-foreground py-2 border-t">Showing 200 of {filteredListings.length} — use filters to narrow</div>}
+                  {filteredListings.length > PAGE_SIZE && (
+                    <div className="flex items-center justify-between px-3 py-2 border-t text-xs text-muted-foreground">
+                      <span>Showing {listingPage * PAGE_SIZE + 1}–{Math.min((listingPage + 1) * PAGE_SIZE, filteredListings.length)} of {filteredListings.length}</span>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" disabled={listingPage === 0} onClick={() => setListingPage(p => p - 1)}>
+                          <ChevronLeft className="h-3 w-3" />Prev
+                        </Button>
+                        <span className="px-2 tabular-nums">Page {listingPage + 1} of {Math.ceil(filteredListings.length / PAGE_SIZE)}</span>
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" disabled={(listingPage + 1) * PAGE_SIZE >= filteredListings.length} onClick={() => setListingPage(p => p + 1)}>
+                          Next<ChevronRight className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
