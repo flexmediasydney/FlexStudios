@@ -288,11 +288,14 @@ Deno.serve(async (req) => {
           url: prop.canonical_url || null,
           listingId: dl.listing_id ? String(dl.listing_id) : null,
           agencyName: contacts.agency_name || null,
+          // Pass Domain agency ID through for listing FK linking
+          _domainAgencyId: contacts.agency_id ? String(contacts.agency_id) : null,
           agents: contactAgents.map((a: any) => ({
             name: a.name || null,
             phoneNumber: a.mobile || a.phone || null,
             image: a.photo || null,
             emails: a.email ? [a.email] : [],
+            // No agentId available from fatihtahta contacts — Domain doesn't expose it in search results
           })),
           images: imageUrls,
           mainImage: imageUrls[0] || (gallery[0]?.images?.original?.url) || null,
@@ -596,6 +599,8 @@ Deno.serve(async (req) => {
       const agency = agencyMap.get(key)!;
       agency.sources.add(agent.source || 'rea');
       if (agent.agency_rea_id) agency.rea_agency_ids.add(agent.agency_rea_id);
+      // Propagate domain agency ID from agents (not just from ScrapStorm agency scraper)
+      if (agent.agency_domain_id && !agency.domain_agency_id) agency.domain_agency_id = agent.agency_domain_id;
       if (agent.agency_suburb) agency.suburbs.add(agent.agency_suburb);
     }
 
@@ -763,7 +768,7 @@ Deno.serve(async (req) => {
     // Deduplicate merged agents by REA ID (same agent appears in multiple suburb searches)
     const deduped = new Map<string, any>();
     for (const agent of mergedAgents) {
-      const key = agent.rea_agent_id || `name:${(agent.full_name || '').toLowerCase()}`;
+      const key = agent.rea_agent_id || `name:${(agent.full_name || '').toLowerCase()}@${normalizeAgencyName(agent.agency_name || '')}`;
       if (!deduped.has(key)) {
         deduped.set(key, agent);
       } else {
@@ -911,8 +916,10 @@ Deno.serve(async (req) => {
         domain_listing_id: l._source === 'domain_listings' ? listingId : null,
         // Agent + agency ID foreign keys (for cross-table linking)
         agent_rea_id: primaryAgent.agentId ? String(primaryAgent.agentId) : null,
-        agent_domain_id: l._source === 'domain_listings' ? (primaryAgent.agentId ? String(primaryAgent.agentId) : null) : null,
+        agent_domain_id: null, // Domain listings (fatihtahta) don't expose individual agent IDs
         agency_rea_id: l.agencyProfileUrl ? l.agencyProfileUrl.replace(/.*\/agency\/[^-]+-/, '') : null,
+        // For Domain listings: use contacts.agency_id as the agency link
+        agency_domain_id: l._domainAgencyId || null,
         source: l._source || 'rea',
         source_url: l.url || null,
         source_listing_id: listingId ? (l._source === 'domain_listings' ? `domain_${listingId}` : listingId) : null,
@@ -933,7 +940,7 @@ Deno.serve(async (req) => {
 
     for (let i = 0; i < listingRecords.length; i += BATCH) {
       const batch = listingRecords.slice(i, i + BATCH);
-      const cleanBatch = batch.map(({ _isNew, _agentEmail, _agentPhoto, _agentReaId, _agentJobTitle, _allAgents, ...rest }) => rest);
+      const cleanBatch = batch.map(({ _isNew, _agentEmail, _agentPhoto, _agentReaId, _agentJobTitle, _allAgents, _domainAgencyId, ...rest }) => rest);
       const { error } = await admin.from('pulse_listings').upsert(cleanBatch, {
         onConflict: 'source_listing_id',
         ignoreDuplicates: false,
