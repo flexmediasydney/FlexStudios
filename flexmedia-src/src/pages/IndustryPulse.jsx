@@ -91,6 +91,7 @@ export default function IndustryPulse() {
   const { data: pulseAgents = [], loading: agentsLoading } = useEntityList("PulseAgent", "-total_listings_active", 5000);
   const { data: pulseEvents = [] } = useEntityList("PulseEvent", "event_date", 200);
   const { data: pulseListings = [] } = useEntityList("PulseListing", "-listed_date", 5000);
+  const { data: pulseAgencies = [] } = useEntityList("PulseAgency", "-active_listings", 500);
   const { data: crmAgents = [] } = useEntityList("Agent", "name");
   const { data: crmAgencies = [] } = useEntityList("Agency", "name");
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
@@ -113,6 +114,10 @@ export default function IndustryPulse() {
   const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: "" });
   const [addToCrmCandidate, setAddToCrmCandidate] = useState(null); // for double-confirm dialog
   const [addToCrmStep, setAddToCrmStep] = useState(1); // 1=preview, 2=confirm
+  const [selectedAgency, setSelectedAgency] = useState(null);
+  const [agencyFilter, setAgencyFilter] = useState("all");
+  const [agencySort, setAgencySort] = useState({ col: "live_agent_count", dir: "desc" });
+  const [agencyColFilter, setAgencyColFilter] = useState("");
   const [runningSources, setRunningSources] = useState(new Set());
   const [expandedSource, setExpandedSource] = useState(null);
   const [drillLog, setDrillLog] = useState(null); // sync log for payload modal
@@ -150,8 +155,11 @@ export default function IndustryPulse() {
     const recentListings = pulseListings.filter(l => l.listed_date && new Date(l.listed_date) > d30).length;
     const marketShare = recentListings > 0 ? Math.round((recentProjects / recentListings) * 100) : 0;
 
-    return { totalAgents, notInCrm, activeListings, avgDom, upcomingEvents, newSignals, agentMovements, marketShare, recentProjects, recentListings };
-  }, [pulseAgents, pulseListings, pulseEvents, pulseSignals, projects]);
+    const totalAgencies = pulseAgencies.length;
+    const agenciesNotInCrm = pulseAgencies.filter(a => !a.is_in_crm).length;
+
+    return { totalAgents, notInCrm, activeListings, avgDom, upcomingEvents, newSignals, agentMovements, marketShare, recentProjects, recentListings, totalAgencies, agenciesNotInCrm };
+  }, [pulseAgents, pulseAgencies, pulseListings, pulseEvents, pulseSignals, projects]);
 
   // ── Derived data ────────────────────────────────────────────────────────
 
@@ -236,6 +244,45 @@ export default function IndustryPulse() {
     });
     return result;
   }, [pulseAgents, agentFilter, agentColFilters, search, agentSort]);
+
+  // Filtered + sorted agencies for Agency Intelligence tab
+  const filteredAgencies = useMemo(() => {
+    // Build a live agent count map (agency name → count) for accurate aggregation
+    const agentCountMap = {};
+    const agentsByAgency = {};
+    for (const a of pulseAgents) {
+      const key = (a.agency_name || "").toLowerCase().trim();
+      if (!key) continue;
+      agentCountMap[key] = (agentCountMap[key] || 0) + 1;
+      if (!agentsByAgency[key]) agentsByAgency[key] = [];
+      agentsByAgency[key].push(a);
+    }
+
+    let result = pulseAgencies.map(ag => {
+      const key = (ag.name || "").toLowerCase().trim();
+      return { ...ag, live_agent_count: agentCountMap[key] || ag.agent_count || 0, _agents: agentsByAgency[key] || [] };
+    });
+
+    result = result.filter(ag => {
+      if (agencyFilter === "not_in_crm" && ag.is_in_crm) return false;
+      if (agencyFilter === "in_crm" && !ag.is_in_crm) return false;
+      if (agencyColFilter && !(ag.suburb || "").toLowerCase().includes(agencyColFilter.toLowerCase())) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        return (ag.name || "").toLowerCase().includes(q) || (ag.suburb || "").toLowerCase().includes(q);
+      }
+      return true;
+    });
+
+    const { col, dir } = agencySort;
+    result.sort((a, b) => {
+      let va = a[col], vb = b[col];
+      if (typeof va === "number" && typeof vb === "number") return dir === "desc" ? vb - va : va - vb;
+      va = String(va || ""); vb = String(vb || "");
+      return dir === "desc" ? vb.localeCompare(va) : va.localeCompare(vb);
+    });
+    return result;
+  }, [pulseAgencies, pulseAgents, agencyFilter, agencyColFilter, search, agencySort]);
 
   // Filtered events
   const filteredEvents = useMemo(() => {
@@ -437,6 +484,7 @@ export default function IndustryPulse() {
         <TabsList className="bg-muted/40">
           <TabsTrigger value="command">Command Center</TabsTrigger>
           <TabsTrigger value="agents">Agent Intelligence{stats.notInCrm > 0 && <Badge className="ml-1.5 text-[9px] bg-amber-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.notInCrm}</Badge>}</TabsTrigger>
+          <TabsTrigger value="agencies">Agency Intelligence{stats.agenciesNotInCrm > 0 && <Badge className="ml-1.5 text-[9px] bg-blue-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.agenciesNotInCrm}</Badge>}</TabsTrigger>
           <TabsTrigger value="events">Events{stats.upcomingEvents > 0 && <Badge className="ml-1.5 text-[9px] bg-purple-500 text-white border-0 px-1.5 py-0 rounded-full">{stats.upcomingEvents}</Badge>}</TabsTrigger>
           <TabsTrigger value="market">Market Data</TabsTrigger>
           <TabsTrigger value="datasources">Data Sources</TabsTrigger>
@@ -782,6 +830,108 @@ export default function IndustryPulse() {
                     </tbody>
                   </table>
                   {filteredAgents.length > 150 && <div className="text-center text-xs text-muted-foreground py-2 border-t">Showing 150 of {filteredAgents.length} — use filters to narrow</div>}
+                </div>
+              );
+            })()}
+          </div>
+        </TabsContent>
+
+        {/* ═══ AGENCY INTELLIGENCE TAB ═══ */}
+        <TabsContent value="agencies" className="mt-3">
+          <div className="space-y-3">
+            {/* Insight banner */}
+            {stats.agenciesNotInCrm > 0 && (
+              <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 flex items-center gap-3">
+                <Building2 className="h-5 w-5 text-blue-600 shrink-0" />
+                <p className="text-sm"><span className="font-semibold text-blue-700 dark:text-blue-400">{stats.agenciesNotInCrm} agencies</span> in your territory you don't work with — {filteredAgencies.length} showing</p>
+              </div>
+            )}
+
+            {/* Filters */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {[
+                { key: "all", label: "All", count: pulseAgencies.length },
+                { key: "not_in_crm", label: "Not In CRM", count: stats.agenciesNotInCrm },
+                { key: "in_crm", label: "In CRM", count: pulseAgencies.filter(a => a.is_in_crm).length },
+              ].map(f => (
+                <button key={f.key} onClick={() => setAgencyFilter(f.key)}
+                  className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors",
+                    agencyFilter === f.key ? "bg-primary text-primary-foreground border-primary" : "bg-muted/60 text-muted-foreground border-transparent hover:bg-muted"
+                  )}>
+                  {f.label} <span className="tabular-nums">{f.count}</span>
+                </button>
+              ))}
+              <Input placeholder="Filter suburb..." className="h-7 w-32 text-xs" value={agencyColFilter} onChange={e => setAgencyColFilter(e.target.value)} />
+              {agencyColFilter && (
+                <button className="text-[10px] text-muted-foreground hover:text-foreground underline" onClick={() => setAgencyColFilter("")}>Clear</button>
+              )}
+            </div>
+
+            {/* Sortable agency table */}
+            {(() => {
+              const SortHeader = ({ col, label, className: cls }) => (
+                <th className={cn("px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground cursor-pointer hover:text-foreground select-none", cls)}
+                    onClick={() => setAgencySort(prev => prev.col === col ? { col, dir: prev.dir === "asc" ? "desc" : "asc" } : { col, dir: "desc" })}>
+                  <span className="flex items-center gap-1">
+                    {label}
+                    {agencySort.col === col && <span className="text-primary">{agencySort.dir === "asc" ? "↑" : "↓"}</span>}
+                  </span>
+                </th>
+              );
+              return (
+                <div className="overflow-x-auto border rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/30">
+                      <tr>
+                        <SortHeader col="name" label="Agency" />
+                        <SortHeader col="suburb" label="Suburb" className="hidden md:table-cell" />
+                        <SortHeader col="live_agent_count" label="Agents" />
+                        <SortHeader col="active_listings" label="Listings" />
+                        <SortHeader col="avg_listing_price" label="Avg Price" className="hidden lg:table-cell" />
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAgencies.length === 0 ? (
+                        <tr><td colSpan={6} className="py-12 text-center text-muted-foreground/50">
+                          <Building2 className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                          {pulseAgencies.length === 0 ? "No agencies tracked yet — run a listings sync from Data Sources" : "No agencies match filters"}
+                        </td></tr>
+                      ) : filteredAgencies.slice(0, 150).map(ag => (
+                        <tr key={ag.id} className="hover:bg-muted/30 border-t cursor-pointer" onClick={() => setSelectedAgency(ag)}>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2.5">
+                              {ag.logo_url ? (
+                                <img src={ag.logo_url} alt="" className="h-7 w-7 rounded object-contain bg-white border shrink-0" />
+                              ) : (
+                                <div className="h-7 w-7 rounded bg-muted/60 flex items-center justify-center shrink-0"><Building2 className="h-3.5 w-3.5 text-muted-foreground" /></div>
+                              )}
+                              <div className="min-w-0">
+                                <p className="font-medium text-sm truncate">{ag.name}</p>
+                                {ag.phone && <p className="text-[10px] text-muted-foreground">{ag.phone}</p>}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">{ag.suburb || "—"}</td>
+                          <td className="px-3 py-2">
+                            <span className="text-xs font-medium tabular-nums">{ag.live_agent_count}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className="text-xs font-medium tabular-nums">{ag.active_listings || 0}</span>
+                          </td>
+                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{fmtPrice(ag.avg_listing_price)}</td>
+                          <td className="px-3 py-2">
+                            {ag.is_in_crm ? (
+                              <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">In CRM</Badge>
+                            ) : (
+                              <Badge className="text-[9px] bg-blue-100 text-blue-700 border-0 dark:bg-blue-900/30 dark:text-blue-400">Prospect</Badge>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {filteredAgencies.length > 150 && <div className="text-center text-xs text-muted-foreground py-2 border-t">Showing 150 of {filteredAgencies.length} — use filters to narrow</div>}
                 </div>
               );
             })()}
@@ -1703,6 +1853,147 @@ export default function IndustryPulse() {
           onClose={() => setShowAddSignal(false)}
         />
       )}
+
+      {/* Agency Detail Slide-out */}
+      {selectedAgency && (() => {
+        const ag = selectedAgency;
+        const suburbsActive = (() => { try { return typeof ag.suburbs_active === "string" ? JSON.parse(ag.suburbs_active) : (ag.suburbs_active || []); } catch { return []; } })();
+        const rosterAgents = (ag._agents || []).sort((a, b) => (b.sales_as_lead || b.total_sold_12m || 0) - (a.sales_as_lead || a.total_sold_12m || 0));
+        const rosterInCrm = rosterAgents.filter(a => a.is_in_crm).length;
+        const totalSold = rosterAgents.reduce((s, a) => s + (a.sales_as_lead || a.total_sold_12m || 0), 0);
+
+        return (
+          <div className="fixed inset-y-0 right-0 w-[440px] bg-background border-l shadow-2xl z-50 flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="p-4 border-b bg-muted/30">
+              <div className="flex items-start justify-between">
+                <div className="flex items-start gap-3 min-w-0 flex-1">
+                  {ag.logo_url ? (
+                    <img src={ag.logo_url} alt="" className="h-10 w-10 rounded object-contain bg-white border shrink-0" />
+                  ) : (
+                    <div className="h-10 w-10 rounded bg-muted/60 flex items-center justify-center shrink-0"><Building2 className="h-5 w-5 text-muted-foreground" /></div>
+                  )}
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-lg truncate">{ag.name}</h3>
+                    {ag.suburb && <p className="text-xs text-muted-foreground mt-0.5">{ag.suburb}{ag.state ? `, ${ag.state}` : ""}{ag.postcode ? ` ${ag.postcode}` : ""}</p>}
+                    <div className="flex items-center gap-2 mt-1.5">
+                      {ag.is_in_crm ? <Badge className="text-[9px] bg-green-100 text-green-700 border-0 dark:bg-green-900/30 dark:text-green-400">In CRM</Badge>
+                       : <Badge className="text-[9px] bg-blue-100 text-blue-700 border-0 dark:bg-blue-900/30 dark:text-blue-400">Prospect</Badge>}
+                      <Badge variant="outline" className="text-[9px]">{ag.live_agent_count} agents tracked</Badge>
+                    </div>
+                  </div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setSelectedAgency(null)}><X className="h-4 w-4" /></Button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
+              {/* Contact */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Contact</p>
+                {ag.phone && <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`tel:${ag.phone}`} className="text-primary hover:underline">{ag.phone}</a></div>}
+                {ag.email && <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={`mailto:${ag.email}`} className="text-primary hover:underline">{ag.email}</a></div>}
+                {ag.website && <div className="flex items-center gap-2"><Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><a href={ag.website.startsWith("http") ? ag.website : `https://${ag.website}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline truncate">{ag.website}</a></div>}
+              </div>
+
+              {/* Location */}
+              {ag.address && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Location</p>
+                  <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" /><span>{ag.address}</span></div>
+                </div>
+              )}
+
+              {/* Key Stats */}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Key Metrics</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{ag.live_agent_count}</p><p className="text-[9px] text-muted-foreground">Agents</p></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{ag.active_listings || 0}</p><p className="text-[9px] text-muted-foreground">Active Listings</p></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{fmtPrice(ag.avg_listing_price)}</p><p className="text-[9px] text-muted-foreground">Avg Price</p></div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{totalSold}</p><p className="text-[9px] text-muted-foreground">Total Sold (12m)</p></div>
+                  <div className="bg-muted/40 rounded-lg p-2.5 text-center"><p className="text-lg font-bold">{rosterInCrm}/{rosterAgents.length}</p><p className="text-[9px] text-muted-foreground">In Your CRM</p></div>
+                </div>
+              </div>
+
+              {/* Active Suburbs */}
+              {suburbsActive.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1"><MapPin className="h-3 w-3" />Active Suburbs</p>
+                  <div className="flex flex-wrap gap-1">
+                    {suburbsActive.map(s => <Badge key={s} variant="outline" className="text-[9px] px-1.5 py-0">{s}</Badge>)}
+                  </div>
+                </div>
+              )}
+
+              {/* Profile Link */}
+              {ag.rea_profile_url && (
+                <div className="space-y-1.5 pt-2 border-t">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Profile</p>
+                  <a href={ag.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />realestate.com.au</a>
+                </div>
+              )}
+
+              {/* Agent Roster */}
+              <div className="space-y-2 pt-2 border-t">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1"><Users className="h-3 w-3" />Agent Roster ({rosterAgents.length})</p>
+                {rosterAgents.length === 0 ? (
+                  <p className="text-xs text-muted-foreground/50 py-3 text-center">No agents tracked at this agency</p>
+                ) : (
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-muted/30">
+                        <tr>
+                          <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground">Agent</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground">Sold</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground">Avg Price</th>
+                          <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground">Rating</th>
+                          <th className="px-2 py-1.5 w-14"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rosterAgents.slice(0, 50).map(a => (
+                          <tr key={a.id} className="border-t hover:bg-muted/20 cursor-pointer" onClick={() => { setSelectedAgency(null); setSelectedAgent(a); }}>
+                            <td className="px-2 py-1.5">
+                              <p className="font-medium">{a.full_name}</p>
+                              {a.job_title && <p className="text-[9px] text-muted-foreground">{a.job_title}</p>}
+                            </td>
+                            <td className="px-2 py-1.5 tabular-nums">{a.sales_as_lead || a.total_sold_12m || 0}</td>
+                            <td className="px-2 py-1.5 tabular-nums">{fmtPrice(a.avg_sold_price)}</td>
+                            <td className="px-2 py-1.5">
+                              {(a.reviews_avg || a.rea_rating) > 0 ? (
+                                <div className="flex items-center gap-0.5">
+                                  <Star className="h-2.5 w-2.5 fill-amber-400 text-amber-400" />
+                                  <span className="tabular-nums">{Number(a.reviews_avg || a.rea_rating).toFixed(1)}</span>
+                                </div>
+                              ) : <span className="text-muted-foreground/30">—</span>}
+                            </td>
+                            <td className="px-2 py-1.5">
+                              {a.is_in_crm ? (
+                                <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">CRM</Badge>
+                              ) : (
+                                <span className="text-[8px] text-muted-foreground">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {rosterAgents.length > 50 && <div className="text-center text-[10px] text-muted-foreground py-1 border-t">Showing 50 of {rosterAgents.length}</div>}
+                  </div>
+                )}
+              </div>
+
+              {/* Data Source + Sync */}
+              <div className="space-y-1 pt-2 border-t text-[10px] text-muted-foreground">
+                <p>Source: {ag.source || "rea_listings"} · Synced: {fmtDate(ag.last_synced_at)}</p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Agent Detail Slide-out — Rich Intelligence Panel */}
       {selectedAgent && (() => {
