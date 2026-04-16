@@ -150,28 +150,20 @@ function ReaBadge() {
 }
 
 function AgentAvatar({ agent, size = 32 }) {
-  const initials = (agent.full_name || "?")
-    .split(" ")
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  const [imgError, setImgError] = React.useState(false);
+  const initials = (agent.full_name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
 
-  if (agent.profile_image) {
+  if (agent.profile_image && !imgError) {
     return (
       <img
         src={agent.profile_image}
         alt={agent.full_name}
         className="rounded-full object-cover flex-shrink-0"
         style={{ width: size, height: size }}
-        onError={(e) => {
-          e.target.style.display = "none";
-          e.target.nextSibling && (e.target.nextSibling.style.display = "flex");
-        }}
+        onError={() => setImgError(true)}
       />
     );
   }
-
   return (
     <div
       className="rounded-full bg-muted flex items-center justify-center flex-shrink-0 text-muted-foreground font-semibold"
@@ -344,7 +336,7 @@ function AddToCrmDialog({ agent, crmAgents, crmAgencies, pulseMappings, onClose,
                 <p className="font-semibold text-sm leading-tight">{agent.full_name}</p>
                 <p className="text-xs text-muted-foreground truncate">
                   {agent.agency_name}
-                  {agent.suburb ? ` · ${agent.suburb}` : ""}
+                  {agent.agency_suburb ? ` · ${agent.agency_suburb}` : ""}
                 </p>
                 {agent.mobile && (
                   <p className="text-xs text-muted-foreground">{agent.mobile}</p>
@@ -582,10 +574,10 @@ function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgen
                 <Building2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                 <span className="font-medium">{agent.agency_name || "—"}</span>
               </div>
-              {agent.suburb && (
+              {agent.agency_suburb && (
                 <div className="flex items-center gap-1">
                   <MapPin className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                  <span className="text-muted-foreground">{agent.suburb}</span>
+                  <span className="text-muted-foreground">{agent.agency_suburb}</span>
                 </div>
               )}
               {agent.agency_rea_id && (
@@ -829,7 +821,7 @@ const SORT_COLS = {
   rea_rating: (a) => a.rea_rating ?? -1,
   name: (a) => (a.full_name || "").toLowerCase(),
   agency: (a) => (a.agency_name || "").toLowerCase(),
-  suburb: (a) => (a.suburb || "").toLowerCase(),
+  suburb: (a) => (a.agency_suburb || "").toLowerCase(),
 };
 
 export default function PulseAgentIntel({
@@ -901,7 +893,7 @@ export default function PulseAgentIntel({
     }
     if (suburbQ) {
       list = list.filter((a) =>
-        (a.suburb || "").toLowerCase().includes(suburbQ)
+        (a.agency_suburb || "").toLowerCase().includes(suburbQ)
       );
     }
 
@@ -913,7 +905,7 @@ export default function PulseAgentIntel({
           a.agency_name,
           a.email,
           a.mobile,
-          a.suburb,
+          a.agency_suburb,
           a.job_title,
         ]
           .filter(Boolean)
@@ -1170,9 +1162,9 @@ export default function PulseAgentIntel({
                         <span className="text-foreground truncate max-w-[160px]">
                           {agent.agency_name || "—"}
                         </span>
-                        {agent.suburb && (
+                        {agent.agency_suburb && (
                           <span className="text-[10px] text-muted-foreground truncate max-w-[160px]">
-                            {agent.suburb}
+                            {agent.agency_suburb}
                           </span>
                         )}
                       </div>

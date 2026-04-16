@@ -502,7 +502,7 @@ function DrillDialog({ log, onClose }) {
   const [listingsPage, setListingsPage] = useState(0);
 
   const payload = log?.raw_payload ?? {};
-  const agents   = useMemo(() => Array.isArray(payload?.agents)   ? payload.agents   : [], [payload]);
+  const agents   = useMemo(() => Array.isArray(payload?.rea_agents) ? payload.rea_agents : Array.isArray(payload?.agents) ? payload.agents : [], [payload]);
   const listings = useMemo(() => Array.isArray(payload?.listings) ? payload.listings : [], [payload]);
   const hasAgents   = agents.length > 0;
   const hasListings = listings.length > 0;

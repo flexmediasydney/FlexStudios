@@ -639,6 +639,20 @@ Deno.serve(async (req) => {
       existingListings.forEach((l: any) => { if (l.source_listing_id) existingListingIds.add(l.source_listing_id); });
     }
 
+    // Load existing listing prices + types for change detection (MUST be before listingRecords mapping)
+    const existingListingData = new Map<string, { asking_price: number | null; listing_type: string | null }>();
+    if (allListings.length > 0) {
+      const listingIds = allListings.map(l => l.listingId ? String(l.listingId) : null).filter(Boolean) as string[];
+      if (listingIds.length > 0) {
+        const { data: existingPriceData = [] } = await admin.from('pulse_listings')
+          .select('source_listing_id, asking_price, listing_type')
+          .in('source_listing_id', listingIds.slice(0, 1000));
+        existingPriceData.forEach((l: any) => {
+          existingListingData.set(l.source_listing_id, { asking_price: l.asking_price, listing_type: l.listing_type });
+        });
+      }
+    }
+
     const listingRecords = allListings.map(l => {
       const listingId = l.listingId ? String(l.listingId) : null;
       const isNew = listingId && !existingListingIds.has(listingId);
@@ -750,20 +764,6 @@ Deno.serve(async (req) => {
       return true;
     });
     console.log(`Listings: ${listingRecords.length} total, ${filteredListingRecords.length} after state filter (removed ${listingRecords.length - filteredListingRecords.length} out-of-state)`);
-
-    // Load existing listing prices + types for change detection
-    const existingListingData = new Map<string, { asking_price: number | null; listing_type: string | null }>();
-    if (allListings.length > 0) {
-      const listingIds = allListings.map(l => l.listingId ? String(l.listingId) : null).filter(Boolean) as string[];
-      if (listingIds.length > 0) {
-        const { data: existingPriceData = [] } = await admin.from('pulse_listings')
-          .select('source_listing_id, asking_price, listing_type')
-          .in('source_listing_id', listingIds.slice(0, 1000));
-        existingPriceData.forEach((l: any) => {
-          existingListingData.set(l.source_listing_id, { asking_price: l.asking_price, listing_type: l.listing_type });
-        });
-      }
-    }
 
     for (let i = 0; i < filteredListingRecords.length; i += BATCH) {
       const batch = filteredListingRecords.slice(i, i + BATCH);

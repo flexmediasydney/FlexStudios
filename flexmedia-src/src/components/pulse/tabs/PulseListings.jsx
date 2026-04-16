@@ -202,7 +202,7 @@ function ListingSlideout({ listing, pulseAgents, onClose }) {
                 <span>{listing.property_type}</span>
               </div>
             )}
-            {(listing.bedrooms > 0 || listing.bathrooms > 0 || listing.car_spaces > 0) && (
+            {(listing.bedrooms > 0 || listing.bathrooms > 0 || listing.parking > 0) && (
               <div className="flex items-center gap-3">
                 {listing.bedrooms > 0 && (
                   <span className="flex items-center gap-1 text-muted-foreground">
@@ -216,17 +216,17 @@ function ListingSlideout({ listing, pulseAgents, onClose }) {
                     {listing.bathrooms}
                   </span>
                 )}
-                {listing.car_spaces > 0 && (
+                {listing.parking > 0 && (
                   <span className="flex items-center gap-1 text-muted-foreground">
                     <Car className="h-3.5 w-3.5" />
-                    {listing.car_spaces}
+                    {listing.parking}
                   </span>
                 )}
               </div>
             )}
             {listing.land_size > 0 && (
               <div className="text-muted-foreground text-xs">
-                Land: {listing.land_size.toLocaleString()} m²
+                Land: {Number(listing.land_size).toLocaleString()} m²
               </div>
             )}
           </div>
@@ -452,7 +452,7 @@ export default function PulseListingsTab({
 
     // Sort
     const { col, dir } = listingSort;
-    const numericCols = new Set(["asking_price", "sold_price", "bedrooms", "bathrooms", "car_spaces", "land_size", "days_on_market"]);
+    const numericCols = new Set(["asking_price", "sold_price", "bedrooms", "bathrooms", "parking", "land_size", "days_on_market"]);
     const dateCols = new Set(["listed_date", "sold_date", "auction_date", "created_at"]);
     const mult = dir === "asc" ? 1 : -1;
 
@@ -623,9 +623,9 @@ export default function PulseListingsTab({
 
                       {/* Beds / Bath / Car */}
                       <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap hidden md:table-cell">
-                        {[l.bedrooms, l.bathrooms, l.car_spaces].every((x) => !x)
+                        {[l.bedrooms, l.bathrooms, l.parking].every((x) => !x)
                           ? "—"
-                          : [l.bedrooms || "–", l.bathrooms || "–", l.car_spaces || "–"].join(" / ")}
+                          : [l.bedrooms || "–", l.bathrooms || "–", l.parking || "–"].join(" / ")}
                       </td>
 
                       {/* Days on Market */}

@@ -543,8 +543,7 @@ export default function PulseEventsTab({ pulseEvents = [], search = "" }) {
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {filtered
-              .slice(eventPage * EVENTS_PAGE_SIZE, (eventPage + 1) * EVENTS_PAGE_SIZE)
+            {(() => { const totalPages = Math.ceil(filtered.length / EVENTS_PAGE_SIZE); const safePage = Math.min(Math.max(0, eventPage), Math.max(0, totalPages - 1)); return filtered.slice(safePage * EVENTS_PAGE_SIZE, (safePage + 1) * EVENTS_PAGE_SIZE); })()
               .map((event) => (
                 <EventCard
                   key={event.id}
