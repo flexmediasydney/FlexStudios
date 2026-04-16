@@ -745,7 +745,7 @@ Deno.serve(async (req) => {
       if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${uniqueAgents.length}...`);
     }
 
-    // Upsert agencies (dedup by normalized name via unique index)
+    // Upsert agencies — check-then-insert/update (functional index can't be used as onConflict in JS client)
     let agenciesInserted = 0;
     for (const agency of mergedAgencies) {
       const cleaned = {
@@ -753,20 +753,23 @@ Deno.serve(async (req) => {
         suburbs_active: typeof agency.suburbs_active === 'string' ? JSON.parse(agency.suburbs_active) : (agency.suburbs_active || []),
         data_sources: typeof agency.data_sources === 'string' ? JSON.parse(agency.data_sources) : (agency.data_sources || []),
       };
-      const { error } = await admin.from('pulse_agencies').upsert(cleaned, {
-        onConflict: 'lower(trim(name))',
-        ignoreDuplicates: false,
-      });
-      if (error) {
-        // Fallback: if functional index conflict doesn't work, try name-match update
-        const { error: updateErr } = await admin.from('pulse_agencies')
-          .update(cleaned)
+      try {
+        // Check if agency already exists by normalized name
+        const { data: existing } = await admin.from('pulse_agencies')
+          .select('id')
           .ilike('name', agency.name.trim())
           .limit(1);
-        if (!updateErr) { agenciesInserted++; }
-        else if (agenciesInserted < 2) console.error(`Agency upsert error:`, error.message?.substring(0, 200));
-      } else {
+
+        if (existing && existing.length > 0) {
+          // Update existing
+          await admin.from('pulse_agencies').update(cleaned).eq('id', existing[0].id);
+        } else {
+          // Insert new
+          await admin.from('pulse_agencies').insert(cleaned);
+        }
         agenciesInserted++;
+      } catch (err: any) {
+        if (agenciesInserted < 3) console.error(`Agency upsert error for ${agency.name}:`, err.message?.substring(0, 200));
       }
     }
 
