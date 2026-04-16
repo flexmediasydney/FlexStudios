@@ -629,6 +629,7 @@ Deno.serve(async (req) => {
     // Upsert listings + detect new listings + parse status from price text
     let listingsInserted = 0;
     let newListingsDetected = 0;
+    const _listingErrorMsgs: string[] = [];
 
     // Load existing listing IDs for new-listing detection
     const existingListingIds = new Set<string>();
@@ -781,9 +782,11 @@ Deno.serve(async (req) => {
       });
       if (error) {
         console.error(`Listing upsert error (batch ${i / BATCH}):`, error.message?.substring(0, 300));
+        _listingErrorMsgs.push(`batch:${error.message?.substring(0, 300)}`);
         for (const rec of cleanBatch) {
           const { error: singleErr } = await admin.from('pulse_listings').upsert(rec, { onConflict: 'source_listing_id', ignoreDuplicates: false });
           if (!singleErr) listingsInserted++;
+          else _listingErrorMsgs.push(`single(${rec.source_listing_id}):${singleErr.message?.substring(0, 200)}`);
         }
       } else {
         listingsInserted += cleanBatch.length;
@@ -1260,6 +1263,10 @@ Deno.serve(async (req) => {
         unique_agents: uniqueAgents.length,
         agent_errors: agentErrors,
         error_msgs: _agentErrorMsgs.slice(0, 3),
+        listings_raw: allListings.length,
+        listing_records: listingRecords.length,
+        listings_filtered: filteredListingRecords.length,
+        listing_errors: _listingErrorMsgs.slice(0, 5),
       },
     });
 
