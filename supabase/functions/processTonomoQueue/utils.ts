@@ -280,27 +280,27 @@ export function deduplicateProjectItems(autoProducts: any[], autoPackages: any[]
     }
   }
 
-  // Remove standalone products already covered by a package
+  // Remove standalone products already covered by a package.
+  // ALWAYS add the product to the package's project-level products array so that
+  // downstream task generation (syncProjectTasksFromProducts) can see every product
+  // in the package. Use the higher of standalone vs package-definition quantity.
   for (const [productId, standaloneItem] of seenProducts) {
     if (packageProductQty.has(productId)) {
       const standaloneQty = standaloneItem.quantity || 1;
       const packageQty = packageProductQty.get(productId)!;
-      // If standalone has a higher qty, bump the package's nested product qty
-      if (standaloneQty > packageQty) {
-        for (const ap of seenPackages.values()) {
-          const pkgDef = allPackages.find((pk: any) => pk.id === ap.package_id);
-          const nestedMatch = (pkgDef?.products || []).find((n: any) => n.product_id === productId);
-          if (nestedMatch) {
-            // Store the higher qty as an override on the project-level package entry
-            if (!ap.products) ap.products = [];
-            const existingOverride = ap.products.find((p: any) => p.product_id === productId);
-            if (existingOverride) {
-              existingOverride.quantity = Math.max(existingOverride.quantity || 1, standaloneQty);
-            } else {
-              ap.products.push({ product_id: productId, quantity: standaloneQty });
-            }
-            break;
+      const finalQty = Math.max(standaloneQty, packageQty);
+      for (const ap of seenPackages.values()) {
+        const pkgDef = allPackages.find((pk: any) => pk.id === ap.package_id);
+        const nestedMatch = (pkgDef?.products || []).find((n: any) => n.product_id === productId);
+        if (nestedMatch) {
+          if (!ap.products) ap.products = [];
+          const existingOverride = ap.products.find((p: any) => p.product_id === productId);
+          if (existingOverride) {
+            existingOverride.quantity = Math.max(existingOverride.quantity || 1, finalQty);
+          } else {
+            ap.products.push({ product_id: productId, quantity: finalQty });
           }
+          break;
         }
       }
       seenProducts.delete(productId);

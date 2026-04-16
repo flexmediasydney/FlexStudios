@@ -91,16 +91,16 @@ Deno.serve(async (req) => {
             has_pricing_mismatch: true,
             pricing_mismatch_amount: mismatch,
             pricing_mismatch_details: `Tonomo: $${tqp.toFixed(2)} vs Matrix: $${newPrice.toFixed(2)} (${mismatch > 0 ? '+' : ''}$${mismatch.toFixed(2)})`,
+            // HARD RULE: Price mismatch ALWAYS downgrades confidence to partial.
+            mapping_confidence: 'partial',
+            pending_review_type: 'pricing_mismatch',
+            pending_review_reason: `Price mismatch detected: Tonomo quoted $${tqp.toFixed(2)} but our price matrix calculates $${newPrice.toFixed(2)} (difference: $${Math.abs(mismatch).toFixed(2)}). Please review pricing before proceeding.`,
           };
-          // HARD RULE: Price mismatch downgrades confidence and blocks auto-approve.
-          // If the project was auto-approved (not in pending_review), push it back.
+          // If the project was auto-approved past pending_review, pull it back.
           const AUTO_APPROVED_STAGES = ['to_be_scheduled', 'scheduled'];
           if (project.auto_approved && AUTO_APPROVED_STAGES.includes(project.status)) {
             mismatchUpdates.status = 'pending_review';
             mismatchUpdates.pre_revision_stage = project.status;
-            mismatchUpdates.pending_review_type = 'pricing_mismatch';
-            mismatchUpdates.pending_review_reason = `Price mismatch detected: Tonomo quoted $${tqp.toFixed(2)} but our price matrix calculates $${newPrice.toFixed(2)} (difference: $${Math.abs(mismatch).toFixed(2)}). Please review pricing before proceeding.`;
-            mismatchUpdates.mapping_confidence = 'partial';
             mismatchUpdates.auto_approved = false;
             console.log(`Price mismatch for ${project_id}: reverting auto-approve → pending_review`);
           }
