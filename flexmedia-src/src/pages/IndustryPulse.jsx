@@ -1119,16 +1119,16 @@ export default function IndustryPulse() {
               // ── Source definitions (pull suburbs from shared pool) ──
               const SOURCES = [
                 { source_id: "rea_agents", label: "REA Agent Intelligence", description: "websift/realestateau — Agent profiles, sales data, reviews, awards from realestate.com.au", icon: Users, color: "text-blue-600",
-                  defaultMax: 30,
+                  defaultMax: 30, schedule: "Weekly (Mon 4am)", scheduleDetail: "All suburbs",
                   runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true }) },
                 { source_id: "domain_agents", label: "Domain Agent Data", description: "scrapestorm — Agent profiles, sold data, ratings, agency IDs from domain.com.au", icon: Globe, color: "text-purple-600",
-                  defaultMax: 30,
+                  defaultMax: 30, schedule: "Weekly (Wed 4am)", scheduleDetail: "All suburbs",
                   runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: false, skipDomainAgencies: true, skipListings: true }) },
                 { source_id: "domain_agencies", label: "Domain Agency Intelligence", description: "scrapestorm — Agency profiles, agent rosters, listings counts from domain.com.au", icon: Building2, color: "text-indigo-600",
-                  defaultMax: 50,
+                  defaultMax: 50, schedule: "Bi-weekly (1st & 15th)", scheduleDetail: "All suburbs",
                   runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxAgenciesPerSuburb: max, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: false, skipListings: true }) },
                 { source_id: "rea_listings", label: "REA Listings Market Data", description: "azzouzana — Active listings with agent/agency details from realestate.com.au", icon: Home, color: "text-green-600",
-                  defaultMax: 20,
+                  defaultMax: 20, schedule: "2x daily (6am, 2pm)", scheduleDetail: "High-priority suburbs + weekly full sweep",
                   runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: max, skipDomain: true, skipDomainAgencies: true, skipListings: false }) },
               ].map(s => {
                 const db = sourceConfigs.find(c => c.source_id === s.source_id);
@@ -1384,7 +1384,9 @@ export default function IndustryPulse() {
                                   ) : (
                                     <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">Max {source.max_results_per_suburb}/suburb</Badge>
                                   )}
+                                  {source.schedule && <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-emerald-600 border-emerald-200 dark:text-emerald-400 dark:border-emerald-800"><Clock className="h-2.5 w-2.5 mr-0.5" />{source.schedule}</Badge>}
                                 </div>
+                                {source.scheduleDetail && <p className="text-[9px] text-muted-foreground/60 mt-0.5">Auto: {source.scheduleDetail}</p>}
                               </div>
                             </div>
                             <div className="flex flex-col items-end gap-1.5 shrink-0">
