@@ -234,6 +234,13 @@ export default function IndustryPulse() {
       }
       return true;
     });
+    // Compute mapped position for each agent
+    result = result.map(a => {
+      const jt = (a.job_title || "").toLowerCase();
+      const _position = (jt.includes("principal") || jt.includes("director") || jt.includes("managing")) ? "Partner"
+        : (jt.includes("senior") || jt.includes("manager") || jt.includes("head of")) ? "Senior" : "Junior";
+      return { ...a, _position };
+    });
     // Sort
     const { col, dir } = agentSort;
     result.sort((a, b) => {
@@ -745,10 +752,9 @@ export default function IndustryPulse() {
                         <SortHeader col="full_name" label="Agent" />
                         <SortHeader col="agency_name" label="Agency" />
                         <SortHeader col="agency_suburb" label="Suburb" className="hidden md:table-cell" />
-                        <SortHeader col="mobile" label="Mobile" className="hidden lg:table-cell" />
+                        <SortHeader col="_position" label="Position" className="hidden md:table-cell" />
                         <SortHeader col="sales_as_lead" label="Sold (12m)" />
-                        <SortHeader col="avg_sold_price" label="Avg Price" className="hidden lg:table-cell" />
-                        <SortHeader col="reviews_avg" label="Rating" className="hidden md:table-cell" />
+                        <SortHeader col="total_listings_active" label="Listings" />
                         <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Status</th>
                         <th className="px-3 py-2 w-24"></th>
                       </tr>
@@ -759,7 +765,9 @@ export default function IndustryPulse() {
                           <Users className="h-8 w-8 mx-auto mb-2 opacity-30" />
                           {pulseAgents.length === 0 ? "No agents tracked yet — run a data sync from the Data Sources tab" : "No agents match filters"}
                         </td></tr>
-                      ) : filteredAgents.slice(0, 150).map(a => (
+                      ) : filteredAgents.slice(0, 150).map(a => {
+                        const mappedPosition = a._position || "Junior";
+                        return (
                         <tr key={a.id} className="hover:bg-muted/30 border-t cursor-pointer" onClick={() => setSelectedAgent(a)}>
                           <td className="px-3 py-2">
                             <p className="font-medium text-sm">{a.full_name}</p>
@@ -767,53 +775,17 @@ export default function IndustryPulse() {
                           </td>
                           <td className="px-3 py-2 text-xs text-muted-foreground">{a.agency_name || "—"}</td>
                           <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">{a.agency_suburb || "—"}</td>
-                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{a.mobile || "—"}</td>
-                          {/* Sold (12m) with recent sales popover */}
-                          <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
-                            {(() => {
-                              const soldCount = a.sales_as_lead || a.total_sold_12m || 0;
-                              const recentIds = (() => { try { return typeof a.recent_listing_ids === "string" ? JSON.parse(a.recent_listing_ids) : (a.recent_listing_ids || []); } catch { return []; } })();
-                              if (soldCount === 0 && recentIds.length === 0) return <span className="text-xs text-muted-foreground/30">0</span>;
-                              return (
-                                <Popover>
-                                  <PopoverTrigger asChild>
-                                    <button className="text-xs font-medium tabular-nums text-primary hover:underline cursor-pointer">{soldCount}</button>
-                                  </PopoverTrigger>
-                                  <PopoverContent side="bottom" align="start" className="w-80 p-3">
-                                    <p className="text-xs font-semibold mb-2">{a.full_name} — {soldCount} Sales (12m)</p>
-                                    {recentIds.length > 0 && (
-                                      <>
-                                        <p className="text-[10px] text-muted-foreground mb-1.5">Recent sold properties:</p>
-                                        <div className="space-y-1 max-h-48 overflow-y-auto">
-                                          {recentIds.map((id, i) => (
-                                            <a key={i} href={`https://www.realestate.com.au/property--nsw--${id}`} target="_blank" rel="noopener noreferrer"
-                                              className="flex items-center justify-between text-xs p-1.5 rounded hover:bg-muted/50 transition-colors">
-                                              <span className="font-mono text-muted-foreground">Listing #{id}</span>
-                                              <ExternalLink className="h-3 w-3 text-primary" />
-                                            </a>
-                                          ))}
-                                        </div>
-                                      </>
-                                    )}
-                                    {a.avg_sold_price > 0 && <p className="text-[10px] text-muted-foreground mt-2">Median sold: {fmtPrice(a.avg_sold_price)}</p>}
-                                    {a.avg_days_on_market > 0 && <p className="text-[10px] text-muted-foreground">Avg days on market: {a.avg_days_on_market}</p>}
-                                    {a.rea_profile_url && (
-                                      <a href={a.rea_profile_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary hover:underline mt-2 block">View full profile on realestate.com.au →</a>
-                                    )}
-                                  </PopoverContent>
-                                </Popover>
-                              );
-                            })()}
-                          </td>
-                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{fmtPrice(a.avg_sold_price)}</td>
                           <td className="px-3 py-2 hidden md:table-cell">
-                            {(a.reviews_avg || a.rea_rating) > 0 ? (
-                              <div className="flex items-center gap-0.5">
-                                <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                                <span className="text-xs tabular-nums">{Number(a.reviews_avg || a.rea_rating).toFixed(1)}</span>
-                                {a.reviews_count > 0 && <span className="text-[9px] text-muted-foreground">({a.reviews_count})</span>}
-                              </div>
-                            ) : <span className="text-xs text-muted-foreground/30">—</span>}
+                            <Badge variant="outline" className={cn("text-[9px]",
+                              mappedPosition === "Partner" ? "text-purple-600 border-purple-200" :
+                              mappedPosition === "Senior" ? "text-blue-600 border-blue-200" :
+                              "text-muted-foreground")}>{mappedPosition}</Badge>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className="text-xs font-medium tabular-nums">{a.sales_as_lead || a.total_sold_12m || 0}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className="text-xs font-medium tabular-nums">{a.total_listings_active || 0}</span>
                           </td>
                           <td className="px-3 py-2">
                             {a.is_in_crm ? (
@@ -830,7 +802,8 @@ export default function IndustryPulse() {
                             )}
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                   {filteredAgents.length > 150 && <div className="text-center text-xs text-muted-foreground py-2 border-t">Showing 150 of {filteredAgents.length} — use filters to narrow</div>}
@@ -891,9 +864,7 @@ export default function IndustryPulse() {
                         <SortHeader col="suburb" label="Suburb" className="hidden md:table-cell" />
                         <SortHeader col="live_agent_count" label="Agents" />
                         <SortHeader col="total_sold_12m" label="Sold (12m)" />
-                        <SortHeader col="active_listings" label="Listings" className="hidden md:table-cell" />
-                        <SortHeader col="avg_sold_price" label="Avg Sold" className="hidden lg:table-cell" />
-                        <SortHeader col="avg_agent_rating" label="Rating" className="hidden lg:table-cell" />
+                        <SortHeader col="active_listings" label="Active Listings" />
                         <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase text-muted-foreground">Status</th>
                       </tr>
                     </thead>
@@ -925,17 +896,8 @@ export default function IndustryPulse() {
                           <td className="px-3 py-2">
                             <span className="text-xs font-medium tabular-nums">{ag.total_sold_12m || (ag._agents || []).reduce((s, a) => s + (a.sales_as_lead || 0), 0) || 0}</span>
                           </td>
-                          <td className="px-3 py-2 hidden md:table-cell">
+                          <td className="px-3 py-2">
                             <span className="text-xs font-medium tabular-nums">{ag.active_listings || 0}</span>
-                          </td>
-                          <td className="px-3 py-2 text-xs tabular-nums hidden lg:table-cell">{fmtPrice(ag.avg_sold_price || ag.avg_listing_price)}</td>
-                          <td className="px-3 py-2 hidden lg:table-cell">
-                            {(ag.avg_agent_rating || (() => { const r = (ag._agents || []).filter(a => a.reviews_avg > 0 || a.rea_rating > 0); return r.length > 0 ? (r.reduce((s, a) => s + (a.reviews_avg || a.rea_rating || 0), 0) / r.length) : 0; })()) > 0 ? (
-                              <div className="flex items-center gap-0.5">
-                                <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                                <span className="text-xs tabular-nums">{Number(ag.avg_agent_rating || (() => { const r = (ag._agents || []).filter(a => a.reviews_avg > 0 || a.rea_rating > 0); return r.length > 0 ? (r.reduce((s, a) => s + (a.reviews_avg || a.rea_rating || 0), 0) / r.length) : 0; })()).toFixed(1)}</span>
-                              </div>
-                            ) : <span className="text-xs text-muted-foreground/30">—</span>}
                           </td>
                           <td className="px-3 py-2">
                             {ag.is_in_crm ? (
@@ -2267,15 +2229,31 @@ export default function IndustryPulse() {
                 </div>
               </div>
 
-              {/* Recent Listings */}
+              {/* Recently Sold — cross-reference with pulse_listings for addresses */}
               {recentListings && recentListings.length > 0 && (
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1">Recent Listings ({recentListings.length})<Src s="REA" /></p>
-                  <div className="flex flex-wrap gap-1">
-                    {recentListings.slice(0, 5).map((id, i) => (
-                      <a key={i} href={`https://www.realestate.com.au/property--nsw--${id}`} target="_blank" rel="noopener noreferrer"
-                        className="text-[10px] px-2 py-0.5 rounded bg-muted hover:bg-muted/80 text-primary">#{id}</a>
-                    ))}
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase flex items-center gap-1">Recently Sold ({recentListings.length})<Src s="REA" /></p>
+                  <div className="space-y-1">
+                    {recentListings.slice(0, 8).map((id, i) => {
+                      const listing = pulseListings.find(l => l.source_listing_id === String(id));
+                      return (
+                        <a key={i} href={`https://www.realestate.com.au/property/-${id}`} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center justify-between text-[10px] px-2 py-1 rounded bg-muted/50 hover:bg-muted transition-colors">
+                          <div className="min-w-0 flex-1">
+                            {listing ? (
+                              <>
+                                <span className="font-medium">{listing.address || listing.suburb || `Property #${id}`}</span>
+                                <span className="text-muted-foreground ml-1.5">{listing.suburb ? `· ${listing.suburb}` : ""}{listing.asking_price ? ` · ${fmtPrice(listing.asking_price)}` : ""}</span>
+                                {listing.listed_date && <span className="text-muted-foreground ml-1.5">· {fmtShortDate(listing.listed_date)}</span>}
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground">REA #{id}</span>
+                            )}
+                          </div>
+                          <ExternalLink className="h-3 w-3 text-primary shrink-0 ml-2" />
+                        </a>
+                      );
+                    })}
                   </div>
                 </div>
               )}
