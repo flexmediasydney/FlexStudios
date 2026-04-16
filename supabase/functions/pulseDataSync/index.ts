@@ -1147,15 +1147,16 @@ Deno.serve(async (req) => {
       }
 
       if (matchedCrm) {
+        // Confidence: ID match or phone+name = confirmed; phone-only or name-only with fuzzy overlap = confirmed; pure name-only = suggested
+        const confidence = (matchType === 'rea_id' || matchType === 'domain_id' || (matchType === 'phone' && hasNameOverlap) || hasNameOverlap) ? 'confirmed' : 'suggested';
+
         const { data: existMap } = await admin.from('pulse_crm_mappings')
-          .select('id').eq('entity_type', 'agent')
-          .or(`rea_id.eq.${reaId || 'NONE'},domain_id.eq.${domainId || 'NONE'}`)
+          .select('id, confidence, rea_id, domain_id').eq('entity_type', 'agent')
+          .eq('crm_entity_id', matchedCrm.id)
           .limit(1);
 
         if (!existMap || existMap.length === 0) {
-          // ID matches are always confirmed; phone+name = confirmed; phone-only or name-only = suggested
-          const confidence = (matchType === 'rea_id' || matchType === 'domain_id' || (matchType === 'phone' && hasNameOverlap)) ? 'confirmed' : 'suggested';
-
+          // Create new mapping
           await admin.from('pulse_crm_mappings').insert({
             entity_type: 'agent',
             rea_id: reaId || null,
@@ -1165,21 +1166,39 @@ Deno.serve(async (req) => {
             confidence,
           });
           mappingsCreated++;
+        } else if (existMap[0].confidence === 'suggested' && confidence === 'confirmed') {
+          // Upgrade existing suggested → confirmed + backfill IDs
+          const updates: Record<string, any> = { confidence: 'confirmed' };
+          if (reaId && !existMap[0].rea_id) updates.rea_id = reaId;
+          if (domainId && !existMap[0].domain_id) updates.domain_id = domainId;
+          await admin.from('pulse_crm_mappings').update(updates).eq('id', existMap[0].id);
+        }
 
-          if (confidence === 'confirmed') {
-            // Write platform IDs back to the CRM record for future matching
-            const crmUpdates: Record<string, any> = { };
-            if (reaId && !matchedCrm.rea_agent_id) crmUpdates.rea_agent_id = reaId;
-            if (domainId && !matchedCrm.domain_agent_id) crmUpdates.domain_agent_id = domainId;
-            if (Object.keys(crmUpdates).length > 0) {
-              await admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id);
-            }
+        // ALWAYS write platform IDs to CRM record (not just on confirmed)
+        const crmUpdates: Record<string, any> = {};
+        if (reaId && !matchedCrm.rea_agent_id) crmUpdates.rea_agent_id = reaId;
+        if (domainId && !matchedCrm.domain_agent_id) crmUpdates.domain_agent_id = domainId;
+        if (Object.keys(crmUpdates).length > 0) {
+          await admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id);
+        }
 
-            const { data: freshAgent } = await admin.from('pulse_agents')
-              .select('id').eq('rea_agent_id', reaId || 'NONE').limit(1);
-            if (freshAgent?.[0]) {
-              await admin.from('pulse_agents').update({ is_in_crm: true, linked_agent_id: matchedCrm.id }).eq('id', freshAgent[0].id);
-            }
+        // Set is_in_crm on pulse_agent — search by BOTH rea_agent_id and domain_agent_id
+        if (confidence === 'confirmed') {
+          let pulseAgentId: string | null = null;
+          if (reaId) {
+            const { data: byRea } = await admin.from('pulse_agents').select('id').eq('rea_agent_id', reaId).limit(1);
+            if (byRea?.[0]) pulseAgentId = byRea[0].id;
+          }
+          if (!pulseAgentId && domainId) {
+            const { data: byDomain } = await admin.from('pulse_agents').select('id').eq('domain_agent_id', domainId).limit(1);
+            if (byDomain?.[0]) pulseAgentId = byDomain[0].id;
+          }
+          if (!pulseAgentId && agent.full_name) {
+            const { data: byName } = await admin.from('pulse_agents').select('id').ilike('full_name', agent.full_name.trim()).limit(1);
+            if (byName?.[0]) pulseAgentId = byName[0].id;
+          }
+          if (pulseAgentId) {
+            await admin.from('pulse_agents').update({ is_in_crm: true, linked_agent_id: matchedCrm.id }).eq('id', pulseAgentId);
           }
         }
       }
@@ -1251,9 +1270,14 @@ Deno.serve(async (req) => {
           await admin.from('agencies').update(agencyUpdates).eq('id', matchedCrmAgency.id);
         }
 
-        // Set is_in_crm on pulse_agency
-        await admin.from('pulse_agencies').update({ is_in_crm: true })
-          .ilike('name', agency.name.trim());
+        // Set is_in_crm on pulse_agency — try by REA ID first, then by name
+        if (agency.rea_agency_id) {
+          await admin.from('pulse_agencies').update({ is_in_crm: true }).eq('rea_agency_id', agency.rea_agency_id);
+        } else if (agency.domain_agency_id) {
+          await admin.from('pulse_agencies').update({ is_in_crm: true }).eq('domain_agency_id', agency.domain_agency_id);
+        } else {
+          await admin.from('pulse_agencies').update({ is_in_crm: true }).ilike('name', agency.name.trim());
+        }
       }
     }
 
