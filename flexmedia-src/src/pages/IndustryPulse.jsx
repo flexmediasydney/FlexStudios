@@ -1369,8 +1369,85 @@ export default function IndustryPulse() {
                 logsBySource[sid].push(log);
               }
 
+              // Compute sync stats
+              const now = new Date();
+              const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+              const todaysLogs = syncLogs.filter(l => l.started_at && new Date(l.started_at) >= today);
+              const runningLogs = syncLogs.filter(l => l.status === "running");
+              const failedToday = todaysLogs.filter(l => l.status === "failed");
+              const completedToday = todaysLogs.filter(l => l.status === "completed");
+              const totalRecordsToday = completedToday.reduce((s, l) => s + (l.records_fetched || 0), 0);
+              const lastSyncTime = syncLogs[0]?.started_at ? new Date(syncLogs[0].started_at) : null;
+
+              // Cron schedule info
+              const CRON_SCHEDULE = [
+                { label: "REA New Sales", schedule: "6am & 2pm daily", next: "Next: " + (now.getHours() < 6 ? "Today 6am" : now.getHours() < 14 ? "Today 2pm" : "Tomorrow 6am") },
+                { label: "REA New Rentals", schedule: "7am & 3pm daily", next: "Next: " + (now.getHours() < 7 ? "Today 7am" : now.getHours() < 15 ? "Today 3pm" : "Tomorrow 7am") },
+                { label: "REA Recently Sold", schedule: "8am daily", next: "Next: " + (now.getHours() < 8 ? "Today 8am" : "Tomorrow 8am") },
+                { label: "REA Agents", schedule: "Mon 4am", next: "Next: Monday" },
+                { label: "Domain Agents", schedule: "Wed 4am", next: "Next: Wednesday" },
+                { label: "Domain Agencies", schedule: "1st & 15th", next: now.getDate() < 15 ? "Next: 15th" : "Next: 1st" },
+                { label: "REA Listings (full)", schedule: "Sun 3am", next: "Next: Sunday" },
+                { label: "Domain Sales", schedule: "Daily 7am", next: now.getHours() < 7 ? "Today" : "Tomorrow" },
+                { label: "Domain Rentals", schedule: "Daily 8am", next: now.getHours() < 8 ? "Today" : "Tomorrow" },
+              ];
+
               return (
                 <div className="space-y-3">
+                  {/* ═══ SYNC DASHBOARD ═══ */}
+                  <Card>
+                    <CardContent className="p-4">
+                      {/* Stats row */}
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                        <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold tabular-nums">{todaysLogs.length}</p>
+                          <p className="text-[9px] text-muted-foreground">Runs Today</p>
+                        </div>
+                        <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+                          <p className={cn("text-lg font-bold tabular-nums", runningLogs.length > 0 && "text-blue-600")}>{runningLogs.length}</p>
+                          <p className="text-[9px] text-muted-foreground">{runningLogs.length > 0 ? "Running Now" : "Running"}</p>
+                        </div>
+                        <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+                          <p className={cn("text-lg font-bold tabular-nums", failedToday.length > 0 && "text-red-600")}>{failedToday.length}</p>
+                          <p className="text-[9px] text-muted-foreground">Failed Today</p>
+                        </div>
+                        <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+                          <p className="text-lg font-bold tabular-nums">{totalRecordsToday.toLocaleString()}</p>
+                          <p className="text-[9px] text-muted-foreground">Records Today</p>
+                        </div>
+                        <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+                          <p className="text-sm font-bold tabular-nums">{lastSyncTime ? lastSyncTime.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" }) : "—"}</p>
+                          <p className="text-[9px] text-muted-foreground">Last Sync</p>
+                        </div>
+                      </div>
+
+                      {/* Running now indicator */}
+                      {runningLogs.length > 0 && (
+                        <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg p-2.5 mb-3 flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 text-blue-600 animate-spin shrink-0" />
+                          <div className="text-xs">
+                            <span className="font-medium text-blue-700 dark:text-blue-400">{runningLogs.length} source{runningLogs.length !== 1 ? "s" : ""} running:</span>
+                            <span className="text-blue-600 ml-1">{runningLogs.map(l => l.source_label || l.sync_type).join(", ")}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Upcoming cron schedule */}
+                      <div>
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-2 flex items-center gap-1"><Clock className="h-3 w-3" />Upcoming Scheduled Runs</p>
+                        <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5">
+                          {CRON_SCHEDULE.map(c => (
+                            <div key={c.label} className="border rounded px-2 py-1.5 text-center">
+                              <p className="text-[9px] font-medium truncate">{c.label}</p>
+                              <p className="text-[8px] text-muted-foreground">{c.schedule}</p>
+                              <p className="text-[8px] text-emerald-600 font-medium">{c.next}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
                   {/* ═══ TARGET SUBURBS POOL ═══ */}
                   <Card>
                     <CardContent className="p-4">
@@ -1534,9 +1611,13 @@ export default function IndustryPulse() {
                                 )}
                               </div>
                               {lastSync && (
-                                <span className="text-[9px] text-muted-foreground">
-                                  Last: {new Date(lastSync.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                                </span>
+                                <div className="flex items-center gap-1.5 text-[9px]">
+                                  {lastSync.status === "completed" ? <CheckCircle2 className="h-3 w-3 text-green-500" /> : lastSync.status === "running" ? <Loader2 className="h-3 w-3 text-blue-500 animate-spin" /> : <AlertTriangle className="h-3 w-3 text-red-500" />}
+                                  <span className="text-muted-foreground">
+                                    {new Date(lastSync.started_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                                  </span>
+                                  {lastSync.records_fetched > 0 && <span className="text-muted-foreground/60">({lastSync.records_fetched} records)</span>}
+                                </div>
                               )}
                               {sourceLogs.length > 0 && (
                                 <button className="text-[9px] text-primary flex items-center gap-0.5 hover:underline" onClick={() => setExpandedSource(isExpanded ? null : source.source_id)}>
