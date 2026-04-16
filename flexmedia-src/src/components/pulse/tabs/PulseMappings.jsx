@@ -17,7 +17,8 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, XCircle, Link2, Users, Building2, ExternalLink } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { CheckCircle2, XCircle, Link2, Users, Building2, ExternalLink, Search, X } from "lucide-react";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -187,6 +188,7 @@ export default function PulseMappings({
 }) {
   const [filterConfidence, setFilterConfidence] = useState("all");
   const [filterType, setFilterType] = useState("all");
+  const [searchText, setSearchText] = useState("");
   const [confirming, setConfirming] = useState(null);
   const [rejecting, setRejecting] = useState(null);
   const [rejectCandidate, setRejectCandidate] = useState(null);
@@ -226,12 +228,20 @@ export default function PulseMappings({
 
   // Filtered rows
   const filtered = useMemo(() => {
-    return rows.filter(({ mapping }) => {
+    const q = searchText.trim().toLowerCase();
+    return rows.filter(({ mapping, pulseName, crmName }) => {
       if (filterConfidence !== "all" && mapping.confidence !== filterConfidence) return false;
       if (filterType !== "all" && mapping.entity_type !== filterType) return false;
+      if (q) {
+        const hay = [pulseName, crmName, mapping.rea_id, mapping.entity_type]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
       return true;
     });
-  }, [rows, filterConfidence, filterType]);
+  }, [rows, filterConfidence, filterType, searchText]);
 
   // Counts for filter badges
   const counts = useMemo(() => {
@@ -282,6 +292,25 @@ export default function PulseMappings({
           <Link2 className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-semibold">CRM Mappings</h2>
           <Badge variant="outline" className="text-[10px] px-1.5 py-0">{filtered.length}</Badge>
+        </div>
+
+        {/* Search filter */}
+        <div className="relative w-full sm:w-48">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+          <Input
+            placeholder="Search mappings..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            className="h-7 text-xs pl-7 pr-7"
+          />
+          {searchText && (
+            <button
+              onClick={() => setSearchText("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
         </div>
 
         {/* Confidence filter */}

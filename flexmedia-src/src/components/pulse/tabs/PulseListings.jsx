@@ -563,6 +563,7 @@ export default function PulseListingsTab({
                   <Th col="agent_name" className="hidden lg:table-cell">Agent</Th>
                   <Th col="agency_name">Agency</Th>
                   <Th col="listed_date">Listed</Th>
+                  <Th col="sold_date" className="hidden sm:table-cell">Sold Date</Th>
                   <Th col="price_text">Status</Th>
                 </tr>
               </thead>
@@ -645,6 +646,11 @@ export default function PulseListingsTab({
                       {/* Listed date */}
                       <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
                         {fmtDate(l.listed_date)}
+                      </td>
+
+                      {/* Sold date */}
+                      <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground hidden sm:table-cell">
+                        {l.listing_type === "sold" && l.sold_date ? fmtDate(l.sold_date) : "—"}
                       </td>
 
                       {/* Status */}

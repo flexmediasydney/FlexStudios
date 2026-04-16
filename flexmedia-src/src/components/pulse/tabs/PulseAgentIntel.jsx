@@ -114,7 +114,9 @@ function PositionBadge({ position }) {
       ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-300 dark:border-blue-800"
       : position === "Senior"
       ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-800"
-      : "bg-muted text-muted-foreground border-border";
+      : position === "Associate"
+      ? "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/30 dark:text-violet-300 dark:border-violet-800"
+      : "bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-950/30 dark:text-gray-400 dark:border-gray-800";
   return (
     <span
       className={cn(
@@ -662,7 +664,7 @@ function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgen
               </h3>
               <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 flex items-start gap-2">
                 <Award className="h-4 w-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-                <p className="text-xs text-amber-700 dark:text-amber-300">{agent.awards}</p>
+                <p className="text-xs text-amber-700 dark:text-amber-300 whitespace-pre-line">{agent.awards}</p>
               </div>
             </section>
           )}
@@ -780,6 +782,7 @@ function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgen
               )}
               maxHeight="max-h-[300px]"
               emptyMessage="No timeline events for this agent"
+              compact
             />
           </div>
         </div>
@@ -822,6 +825,7 @@ const SORT_COLS = {
   sales_as_lead: (a) => a.sales_as_lead ?? -1,
   total_listings_active: (a) => a.total_listings_active ?? -1,
   avg_sold_price: (a) => a.avg_sold_price ?? -1,
+  avg_days_on_market: (a) => a.avg_days_on_market ?? -1,
   rea_rating: (a) => a.rea_rating ?? -1,
   name: (a) => (a.full_name || "").toLowerCase(),
   agency: (a) => (a.agency_name || "").toLowerCase(),
@@ -859,6 +863,9 @@ export default function PulseAgentIntel({
       // Clear the trigger so it doesn't re-fire on tab switch or re-render
       onClearAddToCrmFromCommand?.();
     }
+    return () => {
+      // Cleanup: ensure no stale trigger lingers if component unmounts mid-flow
+    };
   }, [addToCrmFromCommand, pulseAgents, onClearAddToCrmFromCommand]);
 
   // ── Toggle sort ───────────────────────────────────────────────────────────
@@ -1050,6 +1057,13 @@ export default function PulseAgentIntel({
                 >
                   Avg Price <SortIcon col="avg_sold_price" sort={agentSort} />
                 </th>
+                {/* Days on Market */}
+                <th
+                  className="py-2.5 px-2 text-right font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground hidden md:table-cell whitespace-nowrap"
+                  onClick={() => toggleSort("avg_days_on_market")}
+                >
+                  DOM <SortIcon col="avg_days_on_market" sort={agentSort} />
+                </th>
                 {/* Rating */}
                 <th
                   className="py-2.5 px-2 text-right font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground hidden sm:table-cell whitespace-nowrap"
@@ -1088,6 +1102,8 @@ export default function PulseAgentIntel({
                 <td className="py-1 px-2" />
                 {/* Avg Price — no filter */}
                 <td className="py-1 px-2 hidden sm:table-cell" />
+                {/* DOM — no filter */}
+                <td className="py-1 px-2 hidden md:table-cell" />
                 {/* Rating — no filter */}
                 <td className="py-1 px-2 hidden sm:table-cell" />
                 {/* Suburb filter (lives in CRM column for space, but targets suburb) */}
@@ -1108,7 +1124,7 @@ export default function PulseAgentIntel({
               {paginated.length === 0 && (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={11}
                     className="py-12 text-center text-sm text-muted-foreground"
                   >
                     <Users className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
@@ -1209,6 +1225,11 @@ export default function PulseAgentIntel({
                     {/* Avg Price */}
                     <td className="py-2 px-2 text-right tabular-nums hidden sm:table-cell">
                       {fmtPrice(agent.avg_sold_price)}
+                    </td>
+
+                    {/* Days on Market */}
+                    <td className="py-2 px-2 text-right tabular-nums text-muted-foreground hidden md:table-cell">
+                      {agent.avg_days_on_market > 0 ? `${agent.avg_days_on_market}d` : "—"}
                     </td>
 
                     {/* Rating */}

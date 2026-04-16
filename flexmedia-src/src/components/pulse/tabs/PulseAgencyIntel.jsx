@@ -2,11 +2,20 @@
  * PulseAgencyIntel — Agency Intelligence Tab
  * REA-only. Tabular agency roster with live agent counts, full-detail slideout.
  */
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
+import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   Building2,
@@ -27,6 +36,7 @@ import {
   ChevronDown,
   X,
   Activity,
+  UserPlus,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 
@@ -92,12 +102,12 @@ function mapPosition(jobTitle) {
 
 function positionColor(pos) {
   if (pos === "Partner")
-    return "text-purple-600 border-purple-200 dark:text-purple-400 dark:border-purple-800";
-  if (pos === "Senior")
     return "text-blue-600 border-blue-200 dark:text-blue-400 dark:border-blue-800";
+  if (pos === "Senior")
+    return "text-amber-600 border-amber-200 dark:text-amber-400 dark:border-amber-800";
   if (pos === "Associate")
-    return "text-teal-600 border-teal-200 dark:text-teal-400 dark:border-teal-800";
-  return "text-muted-foreground";
+    return "text-violet-600 border-violet-200 dark:text-violet-400 dark:border-violet-800";
+  return "text-gray-500 border-gray-200 dark:text-gray-400 dark:border-gray-800";
 }
 
 /* ── Small shared UI atoms ────────────────────────────────────────────────── */
@@ -224,7 +234,7 @@ const ListingRow = ({ l }) => {
 
 /* ── Agent row (within slideout) ─────────────────────────────────────────── */
 
-const AgentRow = ({ agent, isInCrm, isSelected, onSelect }) => {
+const AgentRow = ({ agent, isInCrm, isSelected, onSelect, crmEntityId }) => {
   const pos = mapPosition(agent.job_title);
   return (
     <button
@@ -278,6 +288,16 @@ const AgentRow = ({ agent, isInCrm, isSelected, onSelect }) => {
           </span>
         )}
         <CrmBadge inCrm={!!isInCrm} />
+        {isInCrm && crmEntityId && (
+          <a
+            href={`/people/${crmEntityId}`}
+            onClick={(e) => e.stopPropagation()}
+            className="text-primary hover:underline text-[9px] flex items-center gap-0.5"
+            title="View in CRM"
+          >
+            <ExternalLink className="h-2.5 w-2.5" />
+          </a>
+        )}
       </div>
     </button>
   );
@@ -388,9 +408,70 @@ const AgentMiniProfile = ({ agent, onClose }) => {
 /* ═══ AGENCY SLIDEOUT ══════════════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
-function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crmAgencies, onClose }) {
+function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crmAgencies, pulseMappings, onClose }) {
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [metaOpen, setMetaOpen] = useState(false);
+  const [addingToCrm, setAddingToCrm] = useState(false);
+
+  /* Check if already in CRM */
+  const existingCrmAgency = useMemo(
+    () => crmAgencies.find((c) => normAgencyKey(c.name) === normAgencyKey(agency?.name)),
+    [crmAgencies, agency]
+  );
+
+  /* Add agency to CRM handler */
+  async function handleAddAgencyToCrm() {
+    if (!agency) return;
+    setAddingToCrm(true);
+    try {
+      const newAgency = await api.entities.Agency.create({
+        name: agency.name,
+        phone: agency.phone || null,
+        email: agency.email || null,
+        website: agency.website || null,
+        rea_agency_id: agency.rea_agency_id || null,
+        source: "pulse",
+        relationship_state: "Prospecting",
+      });
+
+      // Create mapping
+      await api.entities.PulseCrmMapping.create({
+        entity_type: "agency",
+        pulse_entity_id: agency.id,
+        crm_entity_id: newAgency.id,
+        rea_id: agency.rea_agency_id,
+        match_type: "manual",
+        confidence: "confirmed",
+      });
+
+      // Mark pulse agency as in_crm
+      await api.entities.PulseAgency.update(agency.id, { is_in_crm: true });
+
+      await refetchEntityList("PulseAgency");
+      await refetchEntityList("Agency");
+      await refetchEntityList("PulseCrmMapping");
+
+      toast.success(`${agency.name} added to CRM`);
+      onClose();
+    } catch (err) {
+      console.error("Add agency to CRM failed:", err);
+      toast.error("Failed to add agency to CRM. Please try again.");
+    } finally {
+      setAddingToCrm(false);
+    }
+  }
+
+  /* Look up CRM entity ID for an agent via mappings */
+  function getCrmEntityIdForAgent(pulseAgent) {
+    if (!pulseAgent || !pulseMappings) return null;
+    const mapping = pulseMappings.find(
+      (m) =>
+        m.entity_type === "agent" &&
+        (m.pulse_entity_id === pulseAgent.id ||
+          (m.rea_id && m.rea_id === pulseAgent.rea_agent_id))
+    );
+    return mapping?.crm_entity_id || null;
+  }
 
   /* roster */
   const roster = useMemo(() => {
@@ -645,6 +726,7 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crm
                       isInCrm={agent.is_in_crm}
                       isSelected={selectedAgent?.id === agent.id}
                       onSelect={setSelectedAgent}
+                      crmEntityId={agent.is_in_crm ? getCrmEntityIdForAgent(agent) : null}
                     />
                     {selectedAgent?.id === agent.id && (
                       <AgentMiniProfile
@@ -724,6 +806,7 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crm
               )}
               maxHeight="max-h-[300px]"
               emptyMessage="No timeline events for this agency"
+              compact
             />
           </div>
 
@@ -761,6 +844,37 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crm
               </div>
             )}
           </section>
+        </div>
+
+        {/* ── Footer with Add to CRM ── */}
+        <div className="sticky bottom-0 bg-background border-t border-border px-5 py-3 flex items-center justify-between gap-3">
+          {!isInCrm && !existingCrmAgency && (
+            <Button
+              size="sm"
+              onClick={handleAddAgencyToCrm}
+              disabled={addingToCrm}
+              className="gap-1.5"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              {addingToCrm ? "Adding..." : "Add to CRM"}
+            </Button>
+          )}
+          {(isInCrm || existingCrmAgency) && (
+            <span className="text-xs text-muted-foreground">Already in CRM</span>
+          )}
+          {agency.rea_profile_url && (
+            <a
+              href={agency.rea_profile_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-auto"
+            >
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <ExternalLink className="h-3.5 w-3.5" />
+                View REA Profile
+              </Button>
+            </a>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -1155,6 +1269,7 @@ export default function PulseAgencyIntel({
           pulseListings={pulseListings}
           pulseTimeline={pulseTimeline}
           crmAgencies={crmAgencies}
+          pulseMappings={pulseMappings}
           onClose={() => setSelectedAgency(null)}
         />
       )}

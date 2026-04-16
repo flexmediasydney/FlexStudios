@@ -21,7 +21,7 @@ import {
   Rss, Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   TrendingUp, Users, Home, Clock, AlertTriangle, CheckCircle2, DollarSign,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
-  BarChart3, User, Loader2
+  BarChart3, User, Loader2, BookOpen, Database
 } from "lucide-react";
 
 /* ── Helpers ─────────────────────────────────────────────────────────────────── */
@@ -136,6 +136,11 @@ const ListingRow = ({ l, showSoldInfo }) => (
           </>
         ) : (
           <>
+            {l.previous_asking_price && (
+              <span className="text-muted-foreground line-through text-[10px] mr-1">
+                {fmtPrice(l.previous_asking_price)}
+              </span>
+            )}
             {l.asking_price > 0 && <span className="font-medium text-foreground">{fmtPrice(l.asking_price)}</span>}
             {l.listing_type === "for_rent" && l.asking_price > 0 && <span>/wk</span>}
             {l.bedrooms && <span>{l.bedrooms}bed</span>}
@@ -173,6 +178,10 @@ export default function PulseIntelligencePanel({
   const [metadataOpen, setMetadataOpen] = useState(false);
 
   /* ── Data hooks ─────────────────────────────────────────────────────────── */
+  // PERF NOTE: This loads 5000+ agents, 500 agencies, and 5000 listings client-side
+  // just to find 1 entity. This is a known performance issue. Future optimization:
+  // move to server-side filtering via RPC/views (e.g. get_pulse_data_for_entity(id)).
+  // Both agents and agencies are needed for cross-referencing (agency roster, agent→agency links).
   const { data: pulseMappings = [], loading: mappingsLoading } = useEntityList("PulseCrmMapping", "-created_at");
   const { data: pulseAgents = [], loading: agentsLoading } = useEntityList("PulseAgent", "-last_synced_at", 5000);
   const { data: pulseAgencies = [], loading: agenciesLoading } = useEntityList("PulseAgency", "-last_synced_at", 500);
@@ -222,14 +231,18 @@ export default function PulseIntelligencePanel({
   }, [entityType, mapping, pulseAgents, pulseAgencies, crmEntity, entityName]);
 
   /* ── 3. Filter timeline by entity ──────────────────────────────────────── */
+  // NOTE: rea_id is stored as a string in the timeline table, so we coerce
+  // all comparisons to string to avoid number/string mismatch bugs.
   const entityTimelineEntries = useMemo(() => {
     if (!entityId) return [];
     return pulseTimeline.filter(t => {
       if (t.crm_entity_id === entityId) return true;
-      if (mapping?.rea_id && t.rea_id === mapping.rea_id) return true;
+      if (mapping?.rea_id && String(t.rea_id) === String(mapping.rea_id)) return true;
       if (mapping?.pulse_entity_id && t.pulse_entity_id === mapping.pulse_entity_id) return true;
-      if (crmEntity?.rea_agent_id && t.rea_id === crmEntity.rea_agent_id) return true;
-      if (crmEntity?.rea_agency_id && t.rea_id === crmEntity.rea_agency_id) return true;
+      // Agent entity: match on rea_agent_id
+      if (crmEntity?.rea_agent_id && String(t.rea_id) === String(crmEntity.rea_agent_id)) return true;
+      // Agency entity: match on rea_agency_id
+      if (crmEntity?.rea_agency_id && String(t.rea_id) === String(crmEntity.rea_agency_id)) return true;
       return false;
     });
   }, [pulseTimeline, entityId, mapping, crmEntity]);
@@ -300,10 +313,15 @@ export default function PulseIntelligencePanel({
   const crossLinked = entityListings.filter(l => projectAddresses.has(normAddr(l.address)));
 
   /* ── 10. Agent CRM mapping lookup (for agency roster click-through) ──── */
+  // Index by both pulse_entity_id and rea_id so we can find CRM mappings
+  // regardless of which ID the agent record has.
   const agentMappingIndex = useMemo(() => {
     const idx = new Map();
     for (const m of pulseMappings) {
-      if (m.entity_type === "agent" && m.pulse_entity_id) idx.set(m.pulse_entity_id, m);
+      if (m.entity_type === "agent") {
+        if (m.pulse_entity_id) idx.set(`pid:${m.pulse_entity_id}`, m);
+        if (m.rea_id) idx.set(`rea:${m.rea_id}`, m);
+      }
     }
     return idx;
   }, [pulseMappings]);
@@ -328,19 +346,23 @@ export default function PulseIntelligencePanel({
 
   if (!pulseData && !mapping && entityTimelineEntries.length === 0) {
     return (
-      <div className="text-center py-12">
-        <Rss className="h-10 w-10 text-muted-foreground/20 mx-auto mb-3" />
-        <p className="text-sm text-muted-foreground">
-          No Industry Pulse data linked to this {entityType}.
-        </p>
-        <p className="text-[10px] text-muted-foreground/50 mt-1">
-          Run a data sync in Industry Pulse to populate intelligence data.
+      <div className="text-center py-8 text-muted-foreground space-y-2">
+        <Database className="h-8 w-8 mx-auto opacity-40" />
+        <p className="text-sm font-medium">No Industry Pulse data linked</p>
+        <p className="text-xs">
+          This {entityType} hasn't been matched to pulse intelligence data yet.
+          Run a data sync from Industry Pulse &rarr; Data Sources to populate agent/agency profiles.
         </p>
       </div>
     );
   }
 
   const a = pulseData; // shorthand
+
+  /* ── Data freshness indicator ───────────────────────────────────────────── */
+  const staleDays = a?.last_synced_at
+    ? Math.floor((Date.now() - new Date(a.last_synced_at).getTime()) / 86400000)
+    : null;
 
   /* ══════════════════════════════════════════════════════════════════════════ */
   /* ═══ RENDER ═══════════════════════════════════════════════════════════ */
@@ -391,6 +413,13 @@ export default function PulseIntelligencePanel({
             </Badge>
           );
         })()}
+
+        {/* Stale data warning */}
+        {staleDays !== null && staleDays > 7 && (
+          <Badge variant="outline" className="text-[9px] text-amber-600 border-amber-300">
+            Data {staleDays}d old
+          </Badge>
+        )}
 
         {/* Dates - right aligned */}
         <span className="text-[9px] text-muted-foreground ml-auto flex items-center gap-2">
@@ -464,6 +493,17 @@ export default function PulseIntelligencePanel({
                       <a href={`mailto:${a.email}`} className="text-primary hover:underline">{a.email}</a>
                     </div>
                   )}
+                  {/* Show additional emails from all_emails JSON array */}
+                  {(() => {
+                    const allEmails = parseArray(a.all_emails);
+                    const extras = allEmails.filter(e => e && e !== a.email);
+                    return extras.length > 0 && extras.map(em => (
+                      <div key={em} className="flex items-center gap-1 text-xs">
+                        <Mail className="h-3 w-3 text-muted-foreground/50" />
+                        <a href={`mailto:${em}`} className="text-primary/70 hover:underline">{em}</a>
+                      </div>
+                    ));
+                  })()}
                 </div>
 
                 {/* REA profile link */}
@@ -577,6 +617,16 @@ export default function PulseIntelligencePanel({
               <div className="text-xs text-muted-foreground whitespace-pre-line bg-amber-50/50 dark:bg-amber-950/10 rounded p-2.5 border border-amber-200/30">
                 {a.awards}
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── 7b. Biography ────────────────────────────────────────── */}
+        {a.biography && (
+          <Card>
+            <CardContent className="p-4">
+              <SectionHeader icon={BookOpen}>About</SectionHeader>
+              <p className="text-sm text-muted-foreground whitespace-pre-line">{a.biography}</p>
             </CardContent>
           </Card>
         )}
@@ -820,8 +870,8 @@ export default function PulseIntelligencePanel({
                   </thead>
                   <tbody>
                     {agencyAgents.slice(0, 30).map(ag => {
-                      const agMapping = agentMappingIndex.get(ag.id);
-                      const hasCrm = !!agMapping;
+                      const agMapping = agentMappingIndex.get(`pid:${ag.id}`) || (ag.rea_agent_id ? agentMappingIndex.get(`rea:${ag.rea_agent_id}`) : null);
+                      const hasCrm = !!agMapping?.crm_entity_id;
                       return (
                         <tr
                           key={ag.id}

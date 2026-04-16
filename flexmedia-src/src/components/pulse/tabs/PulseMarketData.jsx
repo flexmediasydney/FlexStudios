@@ -3,13 +3,14 @@
  * Sections: Summary stats, Top listing agents, Price distribution,
  *           Suburb heatmap table.
  */
-import React, { useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
-import { Home, DollarSign, Clock, TrendingUp, MapPin, Users } from "lucide-react";
+import { Home, DollarSign, Clock, TrendingUp, MapPin, Users, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -287,7 +288,27 @@ function PriceDistributionChart({ pulseListings }) {
 
 // ── Section 4: Suburb Heatmap Table ───────────────────────────────────────────
 
+function HeatmapSortIcon({ col, sort }) {
+  if (sort.col !== col)
+    return <ArrowUpDown className="h-3 w-3 text-muted-foreground/40 ml-0.5 inline" />;
+  return sort.dir === "asc" ? (
+    <ChevronUp className="h-3 w-3 text-primary ml-0.5 inline" />
+  ) : (
+    <ChevronDown className="h-3 w-3 text-primary ml-0.5 inline" />
+  );
+}
+
 function SuburbHeatmapTable({ pulseListings }) {
+  const [sort, setSort] = useState({ col: "count", dir: "desc" });
+
+  function toggleSort(col) {
+    setSort((prev) =>
+      prev.col === col
+        ? { col, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { col, dir: "desc" }
+    );
+  }
+
   const rows = useMemo(() => {
     const suburbMap = {};
 
@@ -302,16 +323,25 @@ function SuburbHeatmapTable({ pulseListings }) {
       if (l.days_on_market > 0) { s.domSum += l.days_on_market; s.domCount++; }
     });
 
-    return Object.entries(suburbMap)
+    const mapped = Object.entries(suburbMap)
       .map(([suburb, s]) => ({
         suburb,
         count: s.count,
         avgPrice: s.priceCount > 0 ? Math.round(s.priceSum / s.priceCount) : 0,
         avgDom: s.domCount > 0 ? Math.round(s.domSum / s.domCount) : 0,
-      }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 20);
-  }, [pulseListings]);
+      }));
+
+    // Sort
+    const mul = sort.dir === "asc" ? 1 : -1;
+    mapped.sort((a, b) => {
+      if (sort.col === "suburb") {
+        return mul * a.suburb.localeCompare(b.suburb);
+      }
+      return mul * ((a[sort.col] || 0) - (b[sort.col] || 0));
+    });
+
+    return mapped.slice(0, 20);
+  }, [pulseListings, sort]);
 
   const maxCount = Math.max(...rows.map((r) => r.count), 1);
 
@@ -341,13 +371,29 @@ function SuburbHeatmapTable({ pulseListings }) {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border/50">
-                  <th className="text-left py-2 pr-3 text-[10px] font-medium text-muted-foreground">Suburb</th>
-                  <th className="text-right py-2 pr-3 text-[10px] font-medium text-muted-foreground w-16">Listings</th>
-                  <th className="text-right py-2 pr-3 text-[10px] font-medium text-muted-foreground w-20 hidden sm:table-cell">
-                    Avg Price
+                  <th
+                    className="text-left py-2 pr-3 text-[10px] font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground"
+                    onClick={() => toggleSort("suburb")}
+                  >
+                    Suburb <HeatmapSortIcon col="suburb" sort={sort} />
                   </th>
-                  <th className="text-right py-2 text-[10px] font-medium text-muted-foreground w-14 hidden sm:table-cell">
-                    Avg DOM
+                  <th
+                    className="text-right py-2 pr-3 text-[10px] font-medium text-muted-foreground w-16 cursor-pointer select-none hover:text-foreground"
+                    onClick={() => toggleSort("count")}
+                  >
+                    Listings <HeatmapSortIcon col="count" sort={sort} />
+                  </th>
+                  <th
+                    className="text-right py-2 pr-3 text-[10px] font-medium text-muted-foreground w-20 hidden sm:table-cell cursor-pointer select-none hover:text-foreground"
+                    onClick={() => toggleSort("avgPrice")}
+                  >
+                    Avg Price <HeatmapSortIcon col="avgPrice" sort={sort} />
+                  </th>
+                  <th
+                    className="text-right py-2 text-[10px] font-medium text-muted-foreground w-14 hidden sm:table-cell cursor-pointer select-none hover:text-foreground"
+                    onClick={() => toggleSort("avgDom")}
+                  >
+                    Avg DOM <HeatmapSortIcon col="avgDom" sort={sort} />
                   </th>
                 </tr>
               </thead>
@@ -381,6 +427,21 @@ function SuburbHeatmapTable({ pulseListings }) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
+// ── Filter constants ─────────────────────────────────────────────────────────
+
+const TIME_RANGE_OPTIONS = [
+  { value: "30", label: "Last 30 days" },
+  { value: "90", label: "Last 90 days" },
+  { value: "all", label: "All time" },
+];
+
+const PROPERTY_TYPE_OPTIONS = [
+  { value: "all", label: "All Types" },
+  { value: "house", label: "House" },
+  { value: "apartment", label: "Apartment" },
+  { value: "townhouse", label: "Townhouse" },
+];
+
 export default function PulseMarketData({
   pulseAgents = [],
   pulseAgencies = [],
@@ -394,19 +455,92 @@ export default function PulseMarketData({
   stats = {},
   search = "",
 }) {
+  const [timeRange, setTimeRange] = useState("all");
+  const [propertyType, setPropertyType] = useState("all");
+
+  // Filter listings by time range and property type
+  const filteredListings = useMemo(() => {
+    let list = pulseListings;
+
+    // Time range filter
+    if (timeRange !== "all") {
+      const days = Number(timeRange);
+      const cutoff = new Date(Date.now() - days * 86400000);
+      list = list.filter((l) => {
+        const d = l.listed_date || l.created_at;
+        return d && new Date(d) >= cutoff;
+      });
+    }
+
+    // Property type filter
+    if (propertyType !== "all") {
+      list = list.filter(
+        (l) => (l.property_type || "").toLowerCase() === propertyType
+      );
+    }
+
+    return list;
+  }, [pulseListings, timeRange, propertyType]);
+
   return (
     <div className="space-y-6">
+      {/* ── Filter bar ── */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Time range */}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mr-1">
+            Time:
+          </span>
+          {TIME_RANGE_OPTIONS.map((opt) => (
+            <Button
+              key={opt.value}
+              variant={timeRange === opt.value ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 px-2.5 text-xs"
+              onClick={() => setTimeRange(opt.value)}
+            >
+              {opt.label}
+            </Button>
+          ))}
+        </div>
+
+        <span className="text-muted-foreground text-xs mx-1">|</span>
+
+        {/* Property type */}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mr-1">
+            Property:
+          </span>
+          {PROPERTY_TYPE_OPTIONS.map((opt) => (
+            <Button
+              key={opt.value}
+              variant={propertyType === opt.value ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 px-2.5 text-xs"
+              onClick={() => setPropertyType(opt.value)}
+            >
+              {opt.label}
+            </Button>
+          ))}
+        </div>
+
+        {/* Filtered count */}
+        <span className="text-[10px] text-muted-foreground ml-auto tabular-nums">
+          {filteredListings.length.toLocaleString()} listings
+        </span>
+      </div>
+
       {/* Section 1: Summary stats */}
-      <SummaryStats pulseListings={pulseListings} />
+      <SummaryStats pulseListings={filteredListings} />
 
       {/* Section 2 + 3: Agents table + Price distribution side-by-side on large screens */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TopListingAgentsTable pulseListings={pulseListings} crmAgents={crmAgents} />
-        <PriceDistributionChart pulseListings={pulseListings} />
+        <TopListingAgentsTable pulseListings={filteredListings} crmAgents={crmAgents} />
+        <PriceDistributionChart pulseListings={filteredListings} />
       </div>
 
       {/* Section 4: Suburb heatmap */}
-      <SuburbHeatmapTable pulseListings={pulseListings} />
+      <SuburbHeatmapTable pulseListings={filteredListings} />
     </div>
   );
 }

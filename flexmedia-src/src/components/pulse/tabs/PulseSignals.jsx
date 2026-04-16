@@ -8,7 +8,7 @@ import PulseSignalQuickAdd from "@/components/nurturing/PulseSignalQuickAdd";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { Plus, Zap } from "lucide-react";
+import { Plus, Zap, ArrowDownUp } from "lucide-react";
 
 // ── Filter config ─────────────────────────────────────────────────────────────
 
@@ -55,9 +55,18 @@ function FilterButton({ active, label, colorClass, onClick }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+const SORT_OPTIONS = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "level",  label: "By level" },
+];
+
+const LEVEL_PRIORITY = { high: 0, medium: 1, low: 2 };
+
 export default function PulseSignals({ pulseSignals = [], search = "" }) {
   const [levelFilter, setLevelFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("newest");
   const [addOpen, setAddOpen] = useState(false);
 
   // Counts for badges
@@ -70,10 +79,10 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
     return result;
   }, [pulseSignals]);
 
-  // Filtered signals
+  // Filtered + sorted signals
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return pulseSignals.filter((s) => {
+    let list = pulseSignals.filter((s) => {
       if (levelFilter  !== "all" && s.level  !== levelFilter)  return false;
       if (statusFilter !== "all" && s.status !== statusFilter) return false;
       if (q) {
@@ -85,7 +94,25 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
       }
       return true;
     });
-  }, [pulseSignals, levelFilter, statusFilter, search]);
+
+    // Sort
+    list = [...list].sort((a, b) => {
+      if (sortBy === "newest") {
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      }
+      if (sortBy === "oldest") {
+        return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+      }
+      // by level: high > medium > low
+      const pa = LEVEL_PRIORITY[a.level] ?? 3;
+      const pb = LEVEL_PRIORITY[b.level] ?? 3;
+      if (pa !== pb) return pa - pb;
+      // secondary sort: newest first within same level
+      return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    });
+
+    return list;
+  }, [pulseSignals, levelFilter, statusFilter, search, sortBy]);
 
   return (
     <div className="space-y-4">
@@ -99,14 +126,31 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
             {filtered.length !== pulseSignals.length && ` / ${pulseSignals.length}`}
           </Badge>
         </div>
-        <Button
-          size="sm"
-          className="h-8 text-xs gap-1.5"
-          onClick={() => setAddOpen(true)}
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add Signal
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Sort selector */}
+          <div className="flex items-center gap-1">
+            <ArrowDownUp className="h-3.5 w-3.5 text-muted-foreground" />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="h-8 text-xs rounded-md border bg-background px-2 py-1 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button
+            size="sm"
+            className="h-8 text-xs gap-1.5"
+            onClick={() => setAddOpen(true)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Signal
+          </Button>
+        </div>
       </div>
 
       {/* ── Filters ── */}

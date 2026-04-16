@@ -139,11 +139,11 @@ export default function IndustryPulse() {
   const { data: pulseAgents = [], loading: agentsLoading } = useEntityList(
     "PulseAgent", "-total_listings_active", 5000
   );
-  const { data: pulseAgencies = [] } = useEntityList("PulseAgency", "-active_listings", 500);
-  const { data: pulseListings = [] } = useEntityList("PulseListing", "-created_at", 5000);
+  const { data: pulseAgencies = [], loading: agenciesLoading } = useEntityList("PulseAgency", "-active_listings", 500);
+  const { data: pulseListings = [], loading: listingsLoading } = useEntityList("PulseListing", "-created_at", 5000);
   const { data: pulseEvents = [] } = useEntityList("PulseEvent", "event_date", 200);
   const { data: pulseSignals = [] } = useEntityList("PulseSignal", "-created_at");
-  const { data: crmAgents = [] } = useEntityList("Agent", "name");
+  const { data: crmAgents = [], loading: crmAgentsLoading } = useEntityList("Agent", "name");
   const { data: crmAgencies = [] } = useEntityList("Agency", "name");
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
   const { data: pulseMappings = [] } = useEntityList("PulseCrmMapping", "-created_at");
@@ -152,6 +152,9 @@ export default function IndustryPulse() {
   const { data: sourceConfigs = [] } = useEntityList("PulseSourceConfig", "label");
   const { data: targetSuburbs = [] } = useEntityList("PulseTargetSuburb", "-priority", 500);
   const { data: user } = useCurrentUser();
+
+  // True when any primary data set is still loading
+  const isLoading = agentsLoading || agenciesLoading || listingsLoading || crmAgentsLoading;
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [tab, setTab] = useState("command");
@@ -260,7 +263,7 @@ export default function IndustryPulse() {
   };
 
   // ── Early return: loading skeleton ───────────────────────────────────────────
-  if (agentsLoading) return <LoadingSkeleton />;
+  if (isLoading) return <LoadingSkeleton />;
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
