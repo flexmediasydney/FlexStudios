@@ -53,6 +53,15 @@ export default function PackageGridView({ packages, onEdit, onDelete, projectTyp
                   <span className="text-muted-foreground">Premium:</span>
                   <span className="font-medium"><Price value={pkg.premium_tier?.package_price} /></span>
                 </div>
+                {((pkg.standard_task_templates || []).length > 0 || (pkg.premium_task_templates || []).length > 0) && (
+                  <div className="flex justify-between pt-1 border-t mt-1">
+                    <span className="text-muted-foreground">Task Templates:</span>
+                    <div className="flex gap-2">
+                      <Badge variant="outline" className="text-[10px]">Std: {(pkg.standard_task_templates || []).length}</Badge>
+                      <Badge variant="outline" className="text-[10px]">Prm: {(pkg.premium_task_templates || []).length}</Badge>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <Badge variant="outline" className={pkg.is_active ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800" : "bg-gray-100 dark:bg-gray-800"}>

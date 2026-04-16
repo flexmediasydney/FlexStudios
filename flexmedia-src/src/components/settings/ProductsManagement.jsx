@@ -309,6 +309,8 @@ export default function ProductsManagement() {
                     <TableHead>Pricing</TableHead>
                     <TableHead>Standard</TableHead>
                     <TableHead>Premium</TableHead>
+                    <TableHead className="text-center">Tasks (Std)</TableHead>
+                    <TableHead className="text-center">Tasks (Prm)</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -405,6 +407,18 @@ export default function ProductsManagement() {
                             {product.pricing_type === "per_unit" && product.premium_tier?.unit_price > 0 && (
                               <span className="text-xs text-muted-foreground ml-1">+ ${product.premium_tier.unit_price}/unit</span>
                             )}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {(() => {
+                              const count = (product.standard_task_templates || []).length;
+                              return count > 0 ? <Badge variant="outline" className="text-[10px] tabular-nums">{count}</Badge> : <span className="text-muted-foreground/30">0</span>;
+                            })()}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {(() => {
+                              const count = (product.premium_task_templates || []).length;
+                              return count > 0 ? <Badge variant="outline" className="text-[10px] tabular-nums">{count}</Badge> : <span className="text-muted-foreground/30">0</span>;
+                            })()}
                           </TableCell>
                           <TableCell>
                             <Badge variant="outline" className={product.is_active ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400 dark:border-green-800" : "bg-gray-100 dark:bg-gray-800"}>
