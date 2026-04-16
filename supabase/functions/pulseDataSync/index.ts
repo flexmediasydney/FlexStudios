@@ -83,7 +83,33 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
 
 function normalizeMobile(raw: string | null): string {
   if (!raw) return '';
-  return String(raw).replace(/\D/g, '').replace(/^61/, '0').replace(/^0+/, '0');
+  // Strip all non-digits, normalize +61/61 prefix → 04 format
+  let digits = String(raw).replace(/\D/g, '');
+  if (digits.startsWith('614')) digits = '0' + digits.slice(2); // 61412... → 0412...
+  else if (digits.startsWith('61')) digits = '0' + digits.slice(2);
+  if (!digits.startsWith('0')) digits = '0' + digits;
+  return digits;
+}
+
+function parsePrice(raw: string | null): number | null {
+  if (!raw) return null;
+  const s = String(raw).toLowerCase().replace(/,/g, '');
+  // "contact agent", "price on request" etc
+  if (s.includes('contact') || s.includes('request') || s.includes('enquire') || s.includes('auction')) return null;
+  // "$1.08m" or "$1.08M"
+  const mMatch = s.match(/\$?([\d.]+)\s*m/i);
+  if (mMatch) return Math.round(parseFloat(mMatch[1]) * 1000000);
+  // "$850k" or "$850K"
+  const kMatch = s.match(/\$?([\d.]+)\s*k/i);
+  if (kMatch) return Math.round(parseFloat(kMatch[1]) * 1000);
+  // "$850,000" or ranges "$850,000 - $900,000" (take lower bound)
+  const numMatch = s.match(/\$?([\d]+(?:\.[\d]+)?)/);
+  if (numMatch) {
+    const val = parseFloat(numMatch[1]);
+    // If value < 10000, likely already in K or M shorthand that wasn't caught
+    return val > 10000 ? Math.round(val) : null;
+  }
+  return null;
 }
 
 function normalizeAgencyName(raw: string | null): string {
@@ -667,8 +693,12 @@ Deno.serve(async (req) => {
     const listingRecords = allListings.map(l => {
       const listingId = l.listingId ? String(l.listingId) : null;
       const isNew = listingId && !existingListingIds.has(listingId);
-      // Extract first inspection as next_inspection timestamp
-      const nextInspection = (l.inspections && l.inspections[0]?.startTime) || null;
+      // Extract first future inspection
+      const inspections = Array.isArray(l.inspections) ? l.inspections : [];
+      const nextInspection = inspections[0]?.startTime || null;
+      // Extract agent details from listing (emails, photos, REA IDs)
+      const listingAgents = Array.isArray(l.agents) ? l.agents : [];
+      const primaryAgent = listingAgents[0] || {};
       return {
         address: l.address || null,
         suburb: l.suburb || l._suburb || null,
@@ -676,18 +706,18 @@ Deno.serve(async (req) => {
         property_type: l.propertyType || null,
         bedrooms: l.bedrooms || null,
         bathrooms: l.bathrooms || null,
-        parking: l.parking || l.carSpaces ? String(l.parking || l.carSpaces) : null,
+        parking: (l.parking || l.carSpaces) ? String(l.parking || l.carSpaces) : null,
         land_size: l.landSize ? String(l.landSize) : null,
         listing_type: l.isSold ? 'sold' : l.isBuy ? 'for_sale' : l.isRent ? 'for_rent' : 'other',
-        asking_price: parseFloat(String(l.price || '').replace(/[^0-9.]/g, '')) || null,
-        sold_price: l.soldPrice ? parseFloat(String(l.soldPrice).replace(/[^0-9.]/g, '')) : null,
+        asking_price: parsePrice(l.price),
+        sold_price: parsePrice(l.soldPrice),
         listed_date: l.listedDate || l.dateAvailable || null,
         sold_date: l.soldDate || null,
         days_on_market: l.daysOnMarket || null,
         status: l.status || null,
         next_inspection: nextInspection,
-        agent_name: (l.agents && l.agents[0]) ? l.agents[0].name : null,
-        agent_phone: (l.agents && l.agents[0]) ? l.agents[0].phoneNumber : null,
+        agent_name: primaryAgent.name || null,
+        agent_phone: primaryAgent.phoneNumber || null,
         agency_name: l.agencyName || null,
         description: l.description ? String(l.description).substring(0, 500) : null,
         image_url: l.mainImage || (l.images && l.images[0]) || null,
@@ -695,14 +725,23 @@ Deno.serve(async (req) => {
         source_url: l.url || null,
         source_listing_id: listingId,
         last_synced_at: now,
-        // first_seen_at is set by DB default on INSERT, not overwritten on upsert
         _isNew: isNew,
+        // Cross-enrichment data (stripped before DB insert, used for agent enrichment)
+        _agentEmail: (primaryAgent.emails && primaryAgent.emails[0]) || null,
+        _agentPhoto: primaryAgent.image || null,
+        _agentReaId: primaryAgent.agentId ? String(primaryAgent.agentId) : null,
+        _agentJobTitle: primaryAgent.jobTitle || null,
+        _allAgents: listingAgents.map((a: any) => ({
+          name: a.name, email: (a.emails && a.emails[0]) || null,
+          phone: a.phoneNumber || null, photo: a.image || null,
+          reaId: a.agentId ? String(a.agentId) : null, jobTitle: a.jobTitle || null,
+        })),
       };
     });
 
     for (let i = 0; i < listingRecords.length; i += BATCH) {
       const batch = listingRecords.slice(i, i + BATCH);
-      const cleanBatch = batch.map(({ _isNew, ...rest }) => rest);
+      const cleanBatch = batch.map(({ _isNew, _agentEmail, _agentPhoto, _agentReaId, _agentJobTitle, _allAgents, ...rest }) => rest);
       const { error } = await admin.from('pulse_listings').upsert(cleanBatch, {
         onConflict: 'source_listing_id',
         ignoreDuplicates: false,
@@ -736,6 +775,101 @@ Deno.serve(async (req) => {
           source: source_id || 'rea_sync',
         });
       } catch { /* non-fatal */ }
+    }
+
+    // Load CRM data once — used by cross-enrichment notifications + auto-mapping
+    const crmAgentsList = await entities.Agent.filter({}, null, 1000).catch(() => []);
+    const crmAgenciesList = await entities.Agency.filter({}, null, 500).catch(() => []);
+
+    // ── Step 5.5: Cross-enrich agents from listing data ──────────────
+    // Listings contain agent emails, photos, and REA IDs that the agent
+    // scraper doesn't provide. Merge these into existing pulse_agents.
+    {
+      // Build a map of agent enrichment data from all listings
+      const agentEnrichMap = new Map<string, { email?: string; photo?: string; reaId?: string; jobTitle?: string; listingCount: number; latestListing?: string }>();
+
+      for (const lr of listingRecords) {
+        const agents = lr._allAgents || [];
+        for (const la of agents) {
+          if (!la.name) continue;
+          const key = la.name.toLowerCase().trim();
+          const existing = agentEnrichMap.get(key) || { listingCount: 0 };
+          if (la.email && !existing.email) existing.email = la.email;
+          if (la.photo && !existing.photo) existing.photo = la.photo;
+          if (la.reaId && !existing.reaId) existing.reaId = la.reaId;
+          if (la.jobTitle && !existing.jobTitle) existing.jobTitle = la.jobTitle;
+          existing.listingCount++;
+          if (lr.source_url) existing.latestListing = lr.address || lr.suburb || lr.source_url;
+          agentEnrichMap.set(key, existing);
+        }
+      }
+
+      if (agentEnrichMap.size > 0) {
+        // Load existing pulse_agents to enrich
+        const { data: existingAgentsForEnrich = [] } = await admin.from('pulse_agents')
+          .select('id, full_name, email, profile_image, rea_agent_id, job_title, total_listings_active');
+
+        let enriched = 0;
+        for (const pa of existingAgentsForEnrich) {
+          const key = (pa.full_name || '').toLowerCase().trim();
+          const enrichData = agentEnrichMap.get(key);
+          if (!enrichData) continue;
+
+          const updates: Record<string, any> = {};
+          if (enrichData.email && !pa.email) updates.email = enrichData.email;
+          if (enrichData.photo && !pa.profile_image) updates.profile_image = enrichData.photo;
+          if (enrichData.reaId && !pa.rea_agent_id) updates.rea_agent_id = enrichData.reaId;
+          if (enrichData.jobTitle && !pa.job_title) updates.job_title = enrichData.jobTitle;
+          if (enrichData.listingCount > 0) updates.total_listings_active = enrichData.listingCount;
+
+          if (Object.keys(updates).length > 0) {
+            await admin.from('pulse_agents').update(updates).eq('id', pa.id);
+            enriched++;
+          }
+        }
+        console.log(`Cross-enriched ${enriched} agents from listing data (${agentEnrichMap.size} unique agents in listings)`);
+      }
+    }
+
+    // ── Step 5.6: CRM client listing notifications ─────────────────────
+    // When a new listing comes from an agent who IS in the CRM, notify admins.
+    if (newListingsDetected > 0) {
+      const newListingsFromCrmAgents = listingRecords.filter(l => {
+        if (!l._isNew || !l.agent_name) return false;
+        const agentName = l.agent_name.toLowerCase().trim();
+        return crmAgentsList.some((c: any) => (c.name || '').toLowerCase().trim() === agentName);
+      });
+
+      if (newListingsFromCrmAgents.length > 0) {
+        const users = await entities.User.list('-created_date', 200).catch(() => []);
+        const admins = (users as any[]).filter((u: any) => u.role === 'master_admin' || u.role === 'admin');
+        for (const listing of newListingsFromCrmAgents.slice(0, 5)) {
+          const addr = listing.address || listing.suburb || 'New property';
+          for (const u of admins) {
+            try {
+              await entities.Notification.create({
+                user_id: u.id, type: 'pulse_client_listing', category: 'pulse', severity: 'info',
+                title: `Client listing: ${listing.agent_name}`,
+                message: `Your client ${listing.agent_name} just listed ${addr}${listing.asking_price ? ` (${listing.asking_price > 1000000 ? '$' + (listing.asking_price / 1000000).toFixed(1) + 'M' : '$' + Math.round(listing.asking_price / 1000) + 'K'})` : ''}`,
+                is_read: false, is_dismissed: false, source: 'pulse',
+                idempotency_key: `client_listing:${listing.source_listing_id}:${u.id}`,
+                created_date: now,
+              });
+            } catch { /* dedup key handles repeats */ }
+          }
+        }
+        // Timeline entry
+        try {
+          await admin.from('pulse_timeline').insert({
+            entity_type: 'listing',
+            event_type: 'client_new_listing',
+            event_category: 'market',
+            title: `${newListingsFromCrmAgents.length} new listing${newListingsFromCrmAgents.length !== 1 ? 's' : ''} from CRM clients`,
+            description: newListingsFromCrmAgents.slice(0, 3).map(l => `${l.agent_name}: ${l.address || l.suburb}`).join('; '),
+            source: source_id || 'rea_sync',
+          });
+        } catch { /* non-fatal */ }
+      }
     }
 
     // ── Step 6: Movement Detection + Timeline Logging ──────────────────
@@ -796,9 +930,7 @@ Deno.serve(async (req) => {
     }
 
     // ── Step 7: Auto-Mapping via Platform IDs + Phone (Agents + Agencies) ──
-
-    const crmAgentsList = await entities.Agent.filter({}, null, 1000).catch(() => []);
-    const crmAgenciesList = await entities.Agency.filter({}, null, 500).catch(() => []);
+    // crmAgentsList + crmAgenciesList already loaded before Step 5.5
 
     // Load existing mappings to skip already-mapped
     const { data: existingMappings = [] } = await admin.from('pulse_crm_mappings').select('rea_id, domain_id, entity_type, confidence');
