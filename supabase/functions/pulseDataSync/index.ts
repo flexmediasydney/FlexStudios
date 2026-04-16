@@ -71,12 +71,21 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
   }
 
   // Fetch results
-  const itemsResp = await fetch(`${APIFY_BASE}/datasets/${datasetId}/items?limit=5000`, {
-    headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
-  });
-  const items = await itemsResp.json();
-  console.log(`Apify ${label}: ${items.length} results`);
-  return { items, runId, datasetId };
+  try {
+    const itemsResp = await fetch(`${APIFY_BASE}/datasets/${datasetId}/items?limit=5000`, {
+      headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
+    });
+    if (!itemsResp.ok) {
+      console.error(`Apify ${label}: dataset fetch failed (${itemsResp.status})`);
+      return { items: [], runId, datasetId };
+    }
+    const items = await itemsResp.json();
+    console.log(`Apify ${label}: ${items.length} results`);
+    return { items: Array.isArray(items) ? items : [], runId, datasetId };
+  } catch (fetchErr: any) {
+    console.error(`Apify ${label}: dataset fetch error: ${fetchErr.message}`);
+    return { items: [], runId, datasetId };
+  }
 }
 
 // ── Normalize helpers ───────────────────────────────────────────────────────
@@ -838,7 +847,6 @@ Deno.serve(async (req) => {
         source: l._source || 'rea',
         source_url: l.url || null,
         source_listing_id: l._source === 'domain_listings' ? null : listingId,
-        domain_listing_id: l._source === 'domain_listings' ? listingId : null,
         last_synced_at: now,
         _isNew: isNew,
         // Cross-enrichment data (stripped before DB insert, used for agent enrichment)
@@ -1126,7 +1134,7 @@ Deno.serve(async (req) => {
             if (reaId && !matchedCrm.rea_agent_id) crmUpdates.rea_agent_id = reaId;
             if (domainId && !matchedCrm.domain_agent_id) crmUpdates.domain_agent_id = domainId;
             if (Object.keys(crmUpdates).length > 0) {
-              admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id);
+              await admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id);
             }
 
             const { data: freshAgent } = await admin.from('pulse_agents')
@@ -1194,7 +1202,7 @@ Deno.serve(async (req) => {
             if (agency.rea_profile_url && !matchedCrmAgency.rea_profile_url) agencyUpdates.rea_profile_url = agency.rea_profile_url;
             if (agency.domain_profile_url && !matchedCrmAgency.domain_profile_url) agencyUpdates.domain_profile_url = agency.domain_profile_url;
             if (Object.keys(agencyUpdates).length > 0) {
-              admin.from('agencies').update(agencyUpdates).eq('id', matchedCrmAgency.id);
+              await admin.from('agencies').update(agencyUpdates).eq('id', matchedCrmAgency.id);
             }
           }
         }
@@ -1202,8 +1210,7 @@ Deno.serve(async (req) => {
 
       // Set is_in_crm on pulse_agency
       if (matchedCrmAgency) {
-        const normName = normalizeAgencyName(agency.name);
-        admin.from('pulse_agencies').update({ is_in_crm: true })
+        await admin.from('pulse_agencies').update({ is_in_crm: true })
           .ilike('name', agency.name.trim());
       }
     }
