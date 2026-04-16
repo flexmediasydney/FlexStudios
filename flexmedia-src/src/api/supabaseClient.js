@@ -225,16 +225,31 @@ function createEntityApi(entityName, client) {
      * Base44 signature: Entity.list(sortBy?, limit?)
      */
     async list(sortBy = null, limit = null) {
-      let query = client.from(table).select('*');
-      query = applySort(query, sortBy);
-      // BUG FIX: Supabase default limit is 1000. Without an explicit limit,
-      // tables with >1000 rows silently return truncated data. Always set the
-      // limit explicitly so the caller's intent is honoured, and apply the
-      // Supabase maximum (1000) when no limit is specified.
-      query = query.limit(limit || 1000);
-      const { data, error } = await query;
-      if (error) throw new Error(error.message);
-      return mapRows(data || []);
+      const targetLimit = limit || 1000;
+      // Supabase PostgREST caps at 1000 rows per request.
+      // For larger limits, paginate with range() calls.
+      if (targetLimit <= 1000) {
+        let query = client.from(table).select('*');
+        query = applySort(query, sortBy);
+        query = query.limit(targetLimit);
+        const { data, error } = await query;
+        if (error) throw new Error(error.message);
+        return mapRows(data || []);
+      }
+      // Paginated fetch for large tables (Pulse intelligence data)
+      const PAGE_SIZE = 1000;
+      const allRows = [];
+      for (let offset = 0; offset < targetLimit; offset += PAGE_SIZE) {
+        let query = client.from(table).select('*');
+        query = applySort(query, sortBy);
+        query = query.range(offset, offset + PAGE_SIZE - 1);
+        const { data, error } = await query;
+        if (error) throw new Error(error.message);
+        const rows = data || [];
+        allRows.push(...rows);
+        if (rows.length < PAGE_SIZE) break; // no more pages
+      }
+      return mapRows(allRows);
     },
 
     /**

@@ -90,7 +90,7 @@ export default function IndustryPulse() {
   const { data: pulseSignals = [] } = useEntityList("PulseSignal", "-created_at");
   const { data: pulseAgents = [], loading: agentsLoading } = useEntityList("PulseAgent", "-total_listings_active", 5000);
   const { data: pulseEvents = [] } = useEntityList("PulseEvent", "event_date", 200);
-  const { data: pulseListings = [] } = useEntityList("PulseListing", "-listed_date", 5000);
+  const { data: pulseListings = [] } = useEntityList("PulseListing", "-created_at", 5000);
   const { data: pulseAgencies = [] } = useEntityList("PulseAgency", "-active_listings", 500);
   const { data: crmAgents = [] } = useEntityList("Agent", "name");
   const { data: crmAgencies = [] } = useEntityList("Agency", "name");
@@ -410,10 +410,12 @@ export default function IndustryPulse() {
     });
     const existingAgentByMobile = mobile ? crmAgents.filter(a => (a.phone || "").replace(/\D/g, "") === mobile) : [];
 
-    // Check for existing agency
+    // Check for existing agency — normalize by stripping dashes, extra spaces, common suffixes
+    const normAgency = (s) => (s || "").toLowerCase().replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim();
+    const normAgencyName = normAgency(pulseAgent.agency_name);
     const existingAgency = crmAgencies.find(a => {
-      const n = (a.name || "").toLowerCase().trim();
-      return n === agencyName || n.includes(agencyName) || agencyName.includes(n);
+      const n = normAgency(a.name);
+      return n === normAgencyName || n.includes(normAgencyName) || normAgencyName.includes(n);
     });
 
     // Check pulse_agencies for richer data

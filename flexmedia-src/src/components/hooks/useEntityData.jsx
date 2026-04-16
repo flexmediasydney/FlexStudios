@@ -43,7 +43,14 @@ const singleListeners = new Map(); // "Entity:id" → Set<fn>
 const subscriptions   = new Map(); // entityName → unsubscribeFn
 
 const CACHE_TTL  = 5 * 60 * 1000; // 5 minutes
-const LIST_LIMIT = 1000;           // always fetch up to 1000; limit applied client-side
+const LIST_LIMIT = 1000;           // default: fetch up to 1000; limit applied client-side
+// Large Pulse intelligence tables need higher limits
+const ENTITY_LIST_LIMITS = {
+  PulseListing: 5000,
+  PulseAgent: 5000,
+  PulseAgency: 2000,
+  PulseTimeline: 2000,
+};
 const CACHE_PRUNE_INTERVAL = 10 * 60 * 1000; // prune every 10 minutes
 const MAX_SINGLE_CACHE_SIZE = 2000; // BUG FIX: cap singleCache to prevent unbounded memory growth
 
@@ -262,7 +269,7 @@ function fetchEntityList(entityName) {
   }
 
   const promise = globalThrottler
-    .execute(() => api.entities[entityName].list(null, LIST_LIMIT))
+    .execute(() => api.entities[entityName].list(null, ENTITY_LIST_LIMITS[entityName] || LIST_LIMIT))
     .then(items => {
       inFlight.delete(entityName);
       const raw = items || [];
