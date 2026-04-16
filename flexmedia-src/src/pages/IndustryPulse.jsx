@@ -4,16 +4,17 @@
  * renders header / stats strip / tab bar, delegates to tab components.
  */
 import React, { useState, useMemo, useCallback } from "react";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import {
   Rss, Search, TrendingUp, Users, UserPlus, Home, Clock, Calendar, Zap,
-  ArrowRight, Target,
+  ArrowRight, Target, RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -163,6 +164,36 @@ export default function IndustryPulse() {
     setAddToCrmFromCommand(agent);
   }, []);
 
+  // Clear handler so the effect in AgentIntel doesn't re-fire
+  const handleClearAddToCrmFromCommand = useCallback(() => {
+    setAddToCrmFromCommand(null);
+  }, []);
+
+  // Refresh all entity data
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefreshAll = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        refetchEntityList("PulseAgent"),
+        refetchEntityList("PulseAgency"),
+        refetchEntityList("PulseListing"),
+        refetchEntityList("PulseEvent"),
+        refetchEntityList("PulseSignal"),
+        refetchEntityList("Agent"),
+        refetchEntityList("Agency"),
+        refetchEntityList("Project"),
+        refetchEntityList("PulseCrmMapping"),
+        refetchEntityList("PulseTimeline"),
+        refetchEntityList("PulseSyncLog"),
+        refetchEntityList("PulseSourceConfig"),
+        refetchEntityList("PulseTargetSuburb"),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
   // ── Computed stats ───────────────────────────────────────────────────────────
   const stats = useMemo(() => {
     const now = new Date();
@@ -225,6 +256,7 @@ export default function IndustryPulse() {
     user,
     onAddToCrm: handleAddToCrmFromCommand,
     addToCrmFromCommand,
+    onClearAddToCrmFromCommand: handleClearAddToCrmFromCommand,
   };
 
   // ── Early return: loading skeleton ───────────────────────────────────────────
@@ -243,14 +275,27 @@ export default function IndustryPulse() {
             REA
           </Badge>
         </div>
-        <div className="relative w-full sm:w-56">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <Input
-            placeholder="Search agents, agencies…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-8 h-8 text-xs"
-          />
+        <div className="flex items-center gap-2">
+          <div className="relative w-full sm:w-56">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Search agents, agencies…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8 h-8 text-xs"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2.5 text-xs gap-1.5"
+            onClick={handleRefreshAll}
+            disabled={refreshing}
+            title="Refresh all data"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
         </div>
       </div>
 

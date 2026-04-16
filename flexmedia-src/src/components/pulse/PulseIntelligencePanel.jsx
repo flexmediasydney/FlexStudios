@@ -440,7 +440,7 @@ export default function PulseIntelligencePanel({
                     ) : (
                       <span className="font-medium">{a.agency_name}</span>
                     )}
-                    {a.agency_suburb && <span className="text-muted-foreground">- {a.agency_suburb}</span>}
+                    {a.suburb && <span className="text-muted-foreground">- {a.suburb}</span>}
                   </div>
                 )}
 
@@ -488,8 +488,8 @@ export default function PulseIntelligencePanel({
             <SectionHeader icon={TrendingUp}>Performance</SectionHeader>
             <div className="grid grid-cols-3 gap-2">
               <StatBox value={a.sales_as_lead || 0} label="Sales (Lead, 12m)" />
-              <StatBox value={fmtPrice(a.rea_median_sold_price || a.avg_sold_price)} label="Median Sold" />
-              <StatBox value={a.rea_median_dom || a.avg_days_on_market || "\u2014"} label="Avg Days on Market" />
+              <StatBox value={fmtPrice(a.avg_sold_price)} label="Avg Sold Price" />
+              <StatBox value={a.avg_days_on_market > 0 ? `${a.avg_days_on_market}d` : "\u2014"} label="Avg Days on Market" />
             </div>
 
             {/* Reviews row */}

@@ -44,7 +44,9 @@ import {
   ChevronUp,
   ChevronDown,
   X,
+  Activity,
 } from "lucide-react";
+import PulseTimeline from "@/components/pulse/PulseTimeline";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -464,7 +466,7 @@ function AddToCrmDialog({ agent, crmAgents, crmAgencies, pulseMappings, onClose,
 
 /* ── Agent Slideout ──────────────────────────────────────────────────────── */
 
-function AgentSlideout({ agent, pulseListings, crmAgents, crmAgencies, pulseMappings, onClose, onAddToCrm }) {
+function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgencies, pulseMappings, onClose, onAddToCrm }) {
   const position = mapPosition(agent.job_title);
 
   const agentListings = useMemo(() => {
@@ -495,17 +497,11 @@ function AgentSlideout({ agent, pulseListings, crmAgents, crmAgencies, pulseMapp
     }
   }, [agent.suburbs_active]);
 
-  const socials = useMemo(() => {
-    try {
-      const raw = agent.social_links;
-      if (!raw) return {};
-      if (typeof raw === "object" && !Array.isArray(raw)) return raw;
-      if (typeof raw === "string") return JSON.parse(raw);
-      return {};
-    } catch {
-      return {};
-    }
-  }, [agent.social_links]);
+  const socials = useMemo(() => ({
+    facebook: agent.social_facebook || null,
+    instagram: agent.social_instagram || null,
+    linkedin: agent.social_linkedin || null,
+  }), [agent.social_facebook, agent.social_instagram, agent.social_linkedin]);
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -590,10 +586,10 @@ function AgentSlideout({ agent, pulseListings, crmAgents, crmAgencies, pulseMapp
                   <span className="text-muted-foreground">{agent.suburb}</span>
                 </div>
               )}
-              {agent.agency_id && (
+              {agent.agency_rea_id && (
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Hash className="h-3 w-3" />
-                  <span className="font-mono">{agent.agency_id}</span>
+                  <span className="font-mono">{agent.agency_rea_id}</span>
                 </div>
               )}
             </div>
@@ -613,7 +609,7 @@ function AgentSlideout({ agent, pulseListings, crmAgents, crmAgencies, pulseMapp
               </div>
               <div className="rounded-lg border border-border p-3 text-center">
                 <p className="text-lg font-bold tabular-nums text-foreground">
-                  {fmtPrice(agent.median_sold_price || agent.avg_sold_price)}
+                  {fmtPrice(agent.avg_sold_price)}
                 </p>
                 <p className="text-[10px] text-muted-foreground mt-0.5">Median Sold</p>
               </div>
@@ -771,6 +767,21 @@ function AgentSlideout({ agent, pulseListings, crmAgents, crmAgencies, pulseMapp
               emptyMsg="No sold listings found"
             />
           </section>
+
+          {/* ── Timeline ── */}
+          <div className="mt-4">
+            <h4 className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1.5">
+              <Activity className="h-3.5 w-3.5" /> Timeline
+            </h4>
+            <PulseTimeline
+              entries={(pulseTimeline || []).filter(e =>
+                e.rea_id === agent?.rea_agent_id ||
+                e.pulse_entity_id === agent?.id
+              )}
+              maxHeight="max-h-[300px]"
+              emptyMessage="No timeline events for this agent"
+            />
+          </div>
         </div>
 
         {/* ── Footer ── */}
@@ -821,12 +832,14 @@ export default function PulseAgentIntel({
   pulseAgents = [],
   pulseAgencies = [],
   pulseListings = [],
+  pulseTimeline = [],
   crmAgents = [],
   crmAgencies = [],
   pulseMappings = [],
   search = "",
   stats = {},
   addToCrmFromCommand,
+  onClearAddToCrmFromCommand,
 }) {
   // ── UI state ──────────────────────────────────────────────────────────────
   const [agentFilter, setAgentFilter] = useState("all"); // all | not_in_crm | in_crm
@@ -843,8 +856,10 @@ export default function PulseAgentIntel({
       if (agent) {
         setAddToCrmCandidate(agent);
       }
+      // Clear the trigger so it doesn't re-fire on tab switch or re-render
+      onClearAddToCrmFromCommand?.();
     }
-  }, [addToCrmFromCommand, pulseAgents]);
+  }, [addToCrmFromCommand, pulseAgents, onClearAddToCrmFromCommand]);
 
   // ── Toggle sort ───────────────────────────────────────────────────────────
   const toggleSort = useCallback(
@@ -1247,6 +1262,7 @@ export default function PulseAgentIntel({
         <AgentSlideout
           agent={selectedAgent}
           pulseListings={pulseListings}
+          pulseTimeline={pulseTimeline}
           crmAgents={crmAgents}
           crmAgencies={crmAgencies}
           pulseMappings={pulseMappings}

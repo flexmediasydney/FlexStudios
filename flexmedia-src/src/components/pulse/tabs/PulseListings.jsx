@@ -28,6 +28,7 @@ import {
   X,
   Image as ImageIcon,
   Phone,
+  Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -269,7 +270,7 @@ function ListingSlideout({ listing, pulseAgents, onClose }) {
                 )}
                 {linkedAgent && (
                   <p className="text-[10px] text-blue-500 mt-0.5">
-                    In Pulse: {linkedAgent.name}
+                    In Pulse: {linkedAgent.full_name}
                   </p>
                 )}
               </div>
@@ -357,6 +358,33 @@ function ListingSlideout({ listing, pulseAgents, onClose }) {
                 <ExternalLink className="h-3.5 w-3.5" />
                 View on realestate.com.au
               </a>
+            </div>
+          )}
+
+          {/* Price/Status History */}
+          {(listing.previous_asking_price || listing.previous_listing_type) && (
+            <div className="mt-4 border-t pt-3">
+              <h4 className="text-xs font-semibold text-muted-foreground mb-2">Changes Detected</h4>
+              <div className="space-y-1.5">
+                {listing.previous_asking_price && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge variant="outline" className="text-[9px]">Price Change</Badge>
+                    <span className="text-muted-foreground line-through">{fmtPrice(listing.previous_asking_price)}</span>
+                    <span>→</span>
+                    <span className="font-medium">{fmtPrice(listing.asking_price)}</span>
+                    {listing.price_changed_at && <span className="text-muted-foreground ml-auto">{fmtDate(listing.price_changed_at)}</span>}
+                  </div>
+                )}
+                {listing.previous_listing_type && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge variant="outline" className="text-[9px]">Status Change</Badge>
+                    <span className="text-muted-foreground">{listing.previous_listing_type}</span>
+                    <span>→</span>
+                    <span className="font-medium">{listing.listing_type}</span>
+                    {listing.status_changed_at && <span className="text-muted-foreground ml-auto">{fmtDate(listing.status_changed_at)}</span>}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -529,9 +557,10 @@ export default function PulseListingsTab({
                   <Th col="address">Address</Th>
                   <Th col="asking_price">Price</Th>
                   <Th col="listing_type">Type</Th>
-                  <Th col="property_type">Property</Th>
-                  <Th col="bedrooms">B/B/C</Th>
-                  <Th col="agent_name">Agent</Th>
+                  <Th col="property_type" className="hidden lg:table-cell">Property</Th>
+                  <Th col="bedrooms" className="hidden md:table-cell">B/B/C</Th>
+                  <Th col="days_on_market" className="hidden sm:table-cell">DOM</Th>
+                  <Th col="agent_name" className="hidden lg:table-cell">Agent</Th>
                   <Th col="agency_name">Agency</Th>
                   <Th col="listed_date">Listed</Th>
                   <Th col="price_text">Status</Th>
@@ -587,19 +616,24 @@ export default function PulseListingsTab({
                       </td>
 
                       {/* Property type */}
-                      <td className="px-2 py-1.5 text-muted-foreground capitalize">
+                      <td className="px-2 py-1.5 text-muted-foreground capitalize hidden lg:table-cell">
                         {l.property_type || "—"}
                       </td>
 
                       {/* Beds / Bath / Car */}
-                      <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
+                      <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap hidden md:table-cell">
                         {[l.bedrooms, l.bathrooms, l.car_spaces].every((x) => !x)
                           ? "—"
                           : [l.bedrooms || "–", l.bathrooms || "–", l.car_spaces || "–"].join(" / ")}
                       </td>
 
+                      {/* Days on Market */}
+                      <td className="px-2 py-1.5 text-muted-foreground tabular-nums whitespace-nowrap hidden sm:table-cell">
+                        {l.days_on_market > 0 ? `${l.days_on_market}d` : "—"}
+                      </td>
+
                       {/* Agent */}
-                      <td className="px-2 py-1.5 max-w-[120px]">
+                      <td className="px-2 py-1.5 max-w-[120px] hidden lg:table-cell">
                         <p className="truncate">{l.agent_name || "—"}</p>
                       </td>
 

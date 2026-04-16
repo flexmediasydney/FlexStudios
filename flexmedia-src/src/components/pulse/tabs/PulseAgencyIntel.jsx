@@ -26,7 +26,9 @@ import {
   ChevronUp,
   ChevronDown,
   X,
+  Activity,
 } from "lucide-react";
+import PulseTimeline from "@/components/pulse/PulseTimeline";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -386,7 +388,7 @@ const AgentMiniProfile = ({ agent, onClose }) => {
 /* ═══ AGENCY SLIDEOUT ══════════════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
-function AgencySlideout({ agency, pulseAgents, pulseListings, crmAgencies, onClose }) {
+function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crmAgencies, onClose }) {
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [metaOpen, setMetaOpen] = useState(false);
 
@@ -710,6 +712,21 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, crmAgencies, onClo
             </section>
           )}
 
+          {/* ── Timeline ── */}
+          <div className="mt-4">
+            <h4 className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1.5">
+              <Activity className="h-3.5 w-3.5" /> Timeline
+            </h4>
+            <PulseTimeline
+              entries={(pulseTimeline || []).filter(e =>
+                e.rea_id === agency?.rea_agency_id ||
+                e.pulse_entity_id === agency?.id
+              )}
+              maxHeight="max-h-[300px]"
+              emptyMessage="No timeline events for this agency"
+            />
+          </div>
+
           {/* ── Enrichment Metadata (collapsed) ── */}
           <section>
             <button
@@ -760,6 +777,7 @@ export default function PulseAgencyIntel({
   pulseAgents = [],
   pulseAgencies = [],
   pulseListings = [],
+  pulseTimeline = [],
   crmAgents = [],
   crmAgencies = [],
   pulseMappings = [],
@@ -1135,6 +1153,7 @@ export default function PulseAgencyIntel({
           agency={selectedAgency}
           pulseAgents={pulseAgents}
           pulseListings={pulseListings}
+          pulseTimeline={pulseTimeline}
           crmAgencies={crmAgencies}
           onClose={() => setSelectedAgency(null)}
         />

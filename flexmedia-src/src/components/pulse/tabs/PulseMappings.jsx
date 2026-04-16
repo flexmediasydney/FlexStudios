@@ -8,9 +8,16 @@ import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, XCircle, Link2, Users, Building2 } from "lucide-react";
+import { CheckCircle2, XCircle, Link2, Users, Building2, ExternalLink } from "lucide-react";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -97,9 +104,22 @@ function MappingRow({ mapping, pulseName, crmName, onConfirm, onReject, confirmi
 
       {/* CRM entity */}
       <td className="py-2.5 pr-3 max-w-[180px]">
-        <p className="text-xs font-medium truncate">
-          {crmName || <span className="text-muted-foreground italic">—</span>}
-        </p>
+        {crmName && mapping.crm_entity_id ? (
+          <a
+            href={mapping.entity_type === "agency"
+              ? `/organisations/${mapping.crm_entity_id}`
+              : `/people/${mapping.crm_entity_id}`}
+            className="text-xs font-medium truncate text-primary hover:underline flex items-center gap-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {crmName}
+            <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
+          </a>
+        ) : (
+          <p className="text-xs font-medium truncate">
+            {crmName || <span className="text-muted-foreground italic">—</span>}
+          </p>
+        )}
       </td>
 
       {/* Match type */}
@@ -169,6 +189,7 @@ export default function PulseMappings({
   const [filterType, setFilterType] = useState("all");
   const [confirming, setConfirming] = useState(null);
   const [rejecting, setRejecting] = useState(null);
+  const [rejectCandidate, setRejectCandidate] = useState(null);
 
   // Resolved rows
   const rows = useMemo(() => {
@@ -232,10 +253,18 @@ export default function PulseMappings({
     }
   }, []);
 
-  const handleReject = useCallback(async (mapping) => {
-    setRejecting(mapping.id);
+  // Opens confirmation dialog
+  const handleRejectRequest = useCallback((mapping) => {
+    setRejectCandidate(mapping);
+  }, []);
+
+  // Executes the actual delete after confirmation
+  const handleRejectConfirm = useCallback(async () => {
+    if (!rejectCandidate) return;
+    setRejecting(rejectCandidate.id);
+    setRejectCandidate(null);
     try {
-      await api.entities.PulseCrmMapping.delete(mapping.id);
+      await api.entities.PulseCrmMapping.delete(rejectCandidate.id);
       await refetchEntityList("PulseCrmMapping");
       toast.success("Mapping removed");
     } catch (err) {
@@ -243,7 +272,7 @@ export default function PulseMappings({
     } finally {
       setRejecting(null);
     }
-  }, []);
+  }, [rejectCandidate]);
 
   return (
     <div className="space-y-4">
@@ -323,7 +352,7 @@ export default function PulseMappings({
                     pulseName={pulseName}
                     crmName={crmName}
                     onConfirm={handleConfirm}
-                    onReject={handleReject}
+                    onReject={handleRejectRequest}
                     confirming={confirming}
                     rejecting={rejecting}
                   />
@@ -345,6 +374,41 @@ export default function PulseMappings({
             </p>
           </CardContent>
         </Card>
+      )}
+
+      {/* ── Reject confirmation dialog ── */}
+      {rejectCandidate && (
+        <Dialog open onOpenChange={(open) => { if (!open) setRejectCandidate(null); }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="text-sm flex items-center gap-2">
+                <XCircle className="h-4 w-4 text-red-500" />
+                Remove Mapping
+              </DialogTitle>
+            </DialogHeader>
+            <p className="text-xs text-muted-foreground py-2">
+              Are you sure you want to delete this{" "}
+              <strong>{rejectCandidate.entity_type}</strong> mapping? This
+              action cannot be undone.
+            </p>
+            <DialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setRejectCandidate(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleRejectConfirm}
+              >
+                Delete Mapping
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

@@ -130,6 +130,11 @@ function parseListingStatus(priceText: string | null, defaultType: string): stri
   return defaultType;
 }
 
+function fmtPriceShort(v: number | null): string {
+  if (!v) return '?';
+  return v >= 1000000 ? `$${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `$${Math.round(v / 1000)}K` : `$${v}`;
+}
+
 function normalizeAgencyName(raw: string | null): string {
   if (!raw) return '';
   return raw.replace(/\s*-\s*/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -151,8 +156,9 @@ function fuzzyNameMatch(a: string, b: string): boolean {
 
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
+  const admin = getAdminClient();
+  let syncLogId: string | null = null;
   try {
-    const admin = getAdminClient();
     const entities = createEntities(admin);
     const body = await req.json().catch(() => ({}));
 
@@ -184,7 +190,6 @@ Deno.serve(async (req) => {
     const apifyRunIds: Record<string, string | null> = {};
 
     // Log sync start
-    let syncLogId: string | null = null;
     if (!dryRun) {
       const log = await entities.PulseSyncLog.create({
         sync_type: source_id || 'full_sweep',
@@ -294,6 +299,7 @@ Deno.serve(async (req) => {
         social_instagram: rea.social?.instagram || null,
         social_linkedin: rea.social?.linkedin || null,
         community_involvement: rea.community_involvement || null,
+        biography: rea.description || rea.about || rea.biography || null,
         recent_listing_ids: JSON.stringify((rea.recent_listings || []).slice(0, 10).map((l: any) => l.listing_id)),
         sales_breakdown: rea.profile_sales_breakdown ? JSON.stringify(rea.profile_sales_breakdown) : null,
         rea_agent_id: rea.salesperson_id ? String(rea.salesperson_id) : null,
@@ -470,6 +476,18 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Fallback: agents with confirmed CRM mappings stay is_in_crm even if agency changed
+    const { data: confirmedAgentMappings = [] } = await admin.from('pulse_crm_mappings')
+      .select('rea_id')
+      .eq('entity_type', 'agent')
+      .eq('confidence', 'confirmed');
+    const confirmedReaIds = new Set(confirmedAgentMappings.map((m: any) => m.rea_id).filter(Boolean));
+    for (const agent of processedAgents) {
+      if (!agent.is_in_crm && agent.rea_agent_id && confirmedReaIds.has(agent.rea_agent_id)) {
+        agent.is_in_crm = true;
+      }
+    }
+
     console.log(`Processed: ${processedAgents.length} agents, ${mergedAgencies.length} agencies`);
     console.log(`In CRM: ${processedAgents.filter(a => a.is_in_crm).length} agents, ${mergedAgencies.filter(a => a.is_in_crm).length} agencies`);
 
@@ -576,9 +594,17 @@ Deno.serve(async (req) => {
       if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${uniqueAgents.length}...`);
     }
 
-    // Upsert agencies — check-then-insert/update (functional index not supported by Supabase JS)
+    // Upsert agencies — pre-load existing for batch lookup (replaces N+1 pattern)
     let agenciesInserted = 0;
     let agenciesUpdated = 0;
+
+    const { data: existingAgenciesList = [] } = await admin.from('pulse_agencies')
+      .select('id, name');
+    const existingAgencyMap = new Map<string, string>();
+    existingAgenciesList.forEach((a: any) => {
+      existingAgencyMap.set((a.name || '').trim().toLowerCase(), a.id);
+    });
+
     for (const agency of mergedAgencies) {
       const cleaned = {
         ...agency,
@@ -586,13 +612,10 @@ Deno.serve(async (req) => {
         data_sources: typeof agency.data_sources === 'string' ? JSON.parse(agency.data_sources) : (agency.data_sources || []),
       };
       try {
-        const { data: existing } = await admin.from('pulse_agencies')
-          .select('id')
-          .ilike('name', agency.name.trim())
-          .limit(1);
+        const existingId = existingAgencyMap.get(agency.name.trim().toLowerCase());
 
-        if (existing && existing.length > 0) {
-          await admin.from('pulse_agencies').update(cleaned).eq('id', existing[0].id);
+        if (existingId) {
+          await admin.from('pulse_agencies').update(cleaned).eq('id', existingId);
           agenciesUpdated++;
         } else {
           await admin.from('pulse_agencies').insert(cleaned);
@@ -671,6 +694,33 @@ Deno.serve(async (req) => {
         source_url: l.url || null,
         source_listing_id: listingId || null,
         last_synced_at: now,
+        // Change detection
+        previous_asking_price: (() => {
+          if (!listingId) return undefined;
+          const ex = existingListingData.get(listingId);
+          if (!ex?.asking_price) return undefined;
+          const newPrice = parsePrice(l.price);
+          return (newPrice && newPrice !== ex.asking_price) ? ex.asking_price : undefined;
+        })(),
+        price_changed_at: (() => {
+          if (!listingId) return undefined;
+          const ex = existingListingData.get(listingId);
+          if (!ex?.asking_price) return undefined;
+          const newPrice = parsePrice(l.price);
+          return (newPrice && newPrice !== ex.asking_price) ? now : undefined;
+        })(),
+        previous_listing_type: (() => {
+          if (!listingId) return undefined;
+          const ex = existingListingData.get(listingId);
+          if (!ex?.listing_type) return undefined;
+          return (listingType !== ex.listing_type) ? ex.listing_type : undefined;
+        })(),
+        status_changed_at: (() => {
+          if (!listingId) return undefined;
+          const ex = existingListingData.get(listingId);
+          if (!ex?.listing_type) return undefined;
+          return (listingType !== ex.listing_type) ? now : undefined;
+        })(),
         _isNew: isNew,
         // Cross-enrichment temp data (stripped before DB insert)
         _agentEmail: (primaryAgent.emails && primaryAgent.emails[0]) || null,
@@ -700,9 +750,30 @@ Deno.serve(async (req) => {
     });
     console.log(`Listings: ${listingRecords.length} total, ${filteredListingRecords.length} after state filter (removed ${listingRecords.length - filteredListingRecords.length} out-of-state)`);
 
+    // Load existing listing prices + types for change detection
+    const existingListingData = new Map<string, { asking_price: number | null; listing_type: string | null }>();
+    if (allListings.length > 0) {
+      const listingIds = allListings.map(l => l.listingId ? String(l.listingId) : null).filter(Boolean) as string[];
+      if (listingIds.length > 0) {
+        const { data: existingPriceData = [] } = await admin.from('pulse_listings')
+          .select('source_listing_id, asking_price, listing_type')
+          .in('source_listing_id', listingIds.slice(0, 1000));
+        existingPriceData.forEach((l: any) => {
+          existingListingData.set(l.source_listing_id, { asking_price: l.asking_price, listing_type: l.listing_type });
+        });
+      }
+    }
+
     for (let i = 0; i < filteredListingRecords.length; i += BATCH) {
       const batch = filteredListingRecords.slice(i, i + BATCH);
-      const cleanBatch = batch.map(({ _isNew, _agentEmail, _agentPhoto, _agentReaId, _agentJobTitle, _allAgents, ...rest }) => rest);
+      const cleanBatch = batch.map(({ _isNew, _agentEmail, _agentPhoto, _agentReaId, _agentJobTitle, _allAgents, ...rest }) => {
+        // Strip undefined values so they don't null-out existing data
+        const cleaned: Record<string, any> = {};
+        for (const [k, v] of Object.entries(rest)) {
+          if (v !== undefined) cleaned[k] = v;
+        }
+        return cleaned;
+      });
       const { error } = await admin.from('pulse_listings').upsert(cleanBatch, {
         onConflict: 'source_listing_id',
         ignoreDuplicates: false,
@@ -730,6 +801,34 @@ Deno.serve(async (req) => {
           title: `${newListingsDetected} new listing${newListingsDetected !== 1 ? 's' : ''} detected`,
           description: sampleNew.map(l => `${l.address || l.suburb || '?'} - ${l.agency_name || '?'}`).join('; '),
           new_value: { count: newListingsDetected, sample: sampleNew.map(l => ({ address: l.address, suburb: l.suburb, price: l.asking_price, agency: l.agency_name, agent: l.agent_name })) },
+          source: source_id || 'rea_sync',
+        });
+      } catch { /* non-fatal */ }
+    }
+
+    // Timeline events for price changes
+    const priceChangedListings = filteredListingRecords.filter(l => l.previous_asking_price !== undefined);
+    if (priceChangedListings.length > 0) {
+      try {
+        await admin.from('pulse_timeline').insert({
+          entity_type: 'listing', event_type: 'price_change', event_category: 'market',
+          title: `${priceChangedListings.length} listing price change${priceChangedListings.length !== 1 ? 's' : ''} detected`,
+          description: priceChangedListings.slice(0, 5).map(l => `${l.address || l.suburb}: ${fmtPriceShort(l.previous_asking_price)} → ${fmtPriceShort(l.asking_price)}`).join('; '),
+          new_value: { count: priceChangedListings.length, sample: priceChangedListings.slice(0, 5).map(l => ({ address: l.address, old: l.previous_asking_price, new: l.asking_price })) },
+          source: source_id || 'rea_sync',
+        });
+      } catch { /* non-fatal */ }
+    }
+
+    // Timeline events for status changes (e.g., for_sale → sold)
+    const statusChangedListings = filteredListingRecords.filter(l => l.previous_listing_type !== undefined);
+    if (statusChangedListings.length > 0) {
+      try {
+        await admin.from('pulse_timeline').insert({
+          entity_type: 'listing', event_type: 'status_change', event_category: 'market',
+          title: `${statusChangedListings.length} listing status change${statusChangedListings.length !== 1 ? 's' : ''} detected`,
+          description: statusChangedListings.slice(0, 5).map(l => `${l.address || l.suburb}: ${l.previous_listing_type} → ${l.listing_type}`).join('; '),
+          new_value: { count: statusChangedListings.length, sample: statusChangedListings.slice(0, 5).map(l => ({ address: l.address, old: l.previous_listing_type, new: l.listing_type })) },
           source: source_id || 'rea_sync',
         });
       } catch { /* non-fatal */ }
@@ -798,9 +897,21 @@ Deno.serve(async (req) => {
           if (!enrichData) continue;
 
           const updates: Record<string, any> = {};
-          // Always update email/photo from latest listing data (current, not historical)
-          if (enrichData.email) updates.email = enrichData.email;
-          if (enrichData.photo) updates.profile_image = enrichData.photo;
+          // Smart email update: fill blank, or update if domain changed (agency move)
+          if (enrichData.email) {
+            if (!pa.email) {
+              updates.email = enrichData.email;
+            } else if (pa.email !== enrichData.email) {
+              const existingDomain = (pa.email).split('@')[1] || '';
+              const newDomain = (enrichData.email).split('@')[1] || '';
+              if (existingDomain !== newDomain) {
+                updates.previous_email = pa.email;
+                updates.email = enrichData.email;
+              }
+            }
+          }
+          // Photo: only fill blank (don't thrash)
+          if (enrichData.photo && !pa.profile_image) updates.profile_image = enrichData.photo;
           if (enrichData.phone && !pa.mobile) updates.mobile = enrichData.phone;
           if (enrichData.reaId && !pa.rea_agent_id) updates.rea_agent_id = enrichData.reaId;
           if (enrichData.jobTitle && !pa.job_title) updates.job_title = enrichData.jobTitle;
@@ -1142,6 +1253,16 @@ Deno.serve(async (req) => {
 
   } catch (error: any) {
     console.error('pulseDataSync error:', error);
+    // Update sync log to failed so it doesn't block future runs
+    if (syncLogId) {
+      try {
+        await admin.from('pulse_sync_logs').update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          result_summary: { error: error.message?.substring(0, 500) },
+        }).eq('id', syncLogId);
+      } catch { /* last resort */ }
+    }
     return errorResponse(error.message);
   }
 });

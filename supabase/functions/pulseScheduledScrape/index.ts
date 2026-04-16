@@ -109,15 +109,16 @@ Deno.serve(async (req) => {
       const batch = batches[b];
       console.log(`[pulseScheduledScrape] batch ${b + 1}/${batches.length}: ${batch.join(', ')}`);
 
-      try {
-        const params = {
-          ...paramBuilder(batch),
-          source_id,
-          source_label: `${SOURCE_LABELS[source_id]} (auto)`,
-          triggered_by: null,
-          triggered_by_name: 'Scheduled Cron',
-        };
+      // Move params OUTSIDE the try block so retry catch can access it
+      const params = {
+        ...paramBuilder(batch),
+        source_id,
+        source_label: `${SOURCE_LABELS[source_id]} (auto)`,
+        triggered_by: null,
+        triggered_by_name: 'Scheduled Cron',
+      };
 
+      try {
         const result = await invokeFunction('pulseDataSync', params) as any;
         const d = result || {};
         totalAgents += d.agents_processed ?? d.agents_merged ?? 0;

@@ -25,6 +25,8 @@ import {
   MapPin,
   Clock,
   X,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 // ── Category config ───────────────────────────────────────────────────────────
@@ -432,9 +434,12 @@ function EventCard({ event, onUpdateStatus }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+const EVENTS_PAGE_SIZE = 20;
+
 export default function PulseEventsTab({ pulseEvents = [], search = "" }) {
   const [eventStatus, setEventStatus] = useState("all");
   const [showAddEvent, setShowAddEvent] = useState(false);
+  const [eventPage, setEventPage] = useState(0);
 
   // ── Update status ───────────────────────────────────────────────────────────
   const handleUpdateStatus = useCallback(async (id, status) => {
@@ -489,7 +494,7 @@ export default function PulseEventsTab({ pulseEvents = [], search = "" }) {
           {STATUS_FILTERS.map(({ value, label }) => (
             <button
               key={value}
-              onClick={() => setEventStatus(value)}
+              onClick={() => { setEventStatus(value); setEventPage(0); }}
               className={cn(
                 "text-[11px] px-2.5 py-1 rounded-md border font-medium transition-colors",
                 eventStatus === value
@@ -536,15 +541,52 @@ export default function PulseEventsTab({ pulseEvents = [], search = "" }) {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {filtered.map((event) => (
-            <EventCard
-              key={event.id}
-              event={event}
-              onUpdateStatus={handleUpdateStatus}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {filtered
+              .slice(eventPage * EVENTS_PAGE_SIZE, (eventPage + 1) * EVENTS_PAGE_SIZE)
+              .map((event) => (
+                <EventCard
+                  key={event.id}
+                  event={event}
+                  onUpdateStatus={handleUpdateStatus}
+                />
+              ))}
+          </div>
+
+          {/* ── Pagination ── */}
+          {filtered.length > EVENTS_PAGE_SIZE && (() => {
+            const totalPages = Math.ceil(filtered.length / EVENTS_PAGE_SIZE);
+            const safePage = Math.min(eventPage, totalPages - 1);
+            return (
+              <div className="flex items-center justify-between px-1 pt-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  disabled={safePage === 0}
+                  onClick={() => setEventPage((p) => Math.max(0, p - 1))}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5 mr-1" />
+                  Prev
+                </Button>
+                <span className="text-[11px] text-muted-foreground">
+                  Page {safePage + 1} of {totalPages}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  disabled={safePage >= totalPages - 1}
+                  onClick={() => setEventPage((p) => Math.min(totalPages - 1, p + 1))}
+                >
+                  Next
+                  <ChevronRight className="h-3.5 w-3.5 ml-1" />
+                </Button>
+              </div>
+            );
+          })()}
+        </>
       )}
 
       {/* ── Add Event dialog ── */}
