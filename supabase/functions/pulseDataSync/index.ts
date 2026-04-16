@@ -1185,11 +1185,10 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 7b: Agency mapping — Domain ID, REA ID, then name
+    // 7b: Agency mapping — match ALL agencies (not just those with IDs)
     for (const agency of mergedAgencies) {
       const reaAgencyId = agency.rea_agency_id;
       const domainAgencyId = agency.domain_agency_id;
-      if (!reaAgencyId && !domainAgencyId) continue;
 
       let matchedCrmAgency: any = null;
       let agencyMatchType = '';
@@ -1206,7 +1205,8 @@ Deno.serve(async (req) => {
         if (matchedCrmAgency) agencyMatchType = 'rea_id';
       }
 
-      // Priority 3: Normalized name match
+      // Priority 3: Normalized name match — this is the KEY fix:
+      // name matches should ALSO work even when there are no platform IDs
       if (!matchedCrmAgency) {
         const normName = normalizeAgencyName(agency.name);
         matchedCrmAgency = crmAgenciesList.find((c: any) => normalizeAgencyName(c.name) === normName);
@@ -1214,14 +1214,17 @@ Deno.serve(async (req) => {
       }
 
       if (matchedCrmAgency) {
+        // Name-exact match with available IDs = confirmed. Name-only with no IDs = still confirmed
+        // (if the normalized names match exactly, it's the same agency)
+        const agencyConfidence = 'confirmed';
+
         const { data: existAgencyMap } = await admin.from('pulse_crm_mappings')
-          .select('id').eq('entity_type', 'agency')
+          .select('id, confidence, rea_id').eq('entity_type', 'agency')
           .eq('crm_entity_id', matchedCrmAgency.id)
           .limit(1);
 
         if (!existAgencyMap || existAgencyMap.length === 0) {
-          const agencyConfidence = (agencyMatchType === 'domain_id' || agencyMatchType === 'rea_id') ? 'confirmed' : 'suggested';
-
+          // Create new mapping
           await admin.from('pulse_crm_mappings').insert({
             entity_type: 'agency',
             rea_id: reaAgencyId || null,
@@ -1231,23 +1234,24 @@ Deno.serve(async (req) => {
             confidence: agencyConfidence,
           });
           mappingsCreated++;
-
-          // Write platform IDs back to CRM agency
-          if (agencyConfidence === 'confirmed') {
-            const agencyUpdates: Record<string, any> = {};
-            if (reaAgencyId && !matchedCrmAgency.rea_agency_id) agencyUpdates.rea_agency_id = reaAgencyId;
-            if (domainAgencyId && !matchedCrmAgency.domain_agency_id) agencyUpdates.domain_agency_id = domainAgencyId;
-            if (agency.rea_profile_url && !matchedCrmAgency.rea_profile_url) agencyUpdates.rea_profile_url = agency.rea_profile_url;
-            if (agency.domain_profile_url && !matchedCrmAgency.domain_profile_url) agencyUpdates.domain_profile_url = agency.domain_profile_url;
-            if (Object.keys(agencyUpdates).length > 0) {
-              await admin.from('agencies').update(agencyUpdates).eq('id', matchedCrmAgency.id);
-            }
-          }
+        } else if (existAgencyMap[0].confidence === 'suggested') {
+          // Upgrade existing suggested mapping to confirmed
+          const updates: Record<string, any> = { confidence: 'confirmed' };
+          if (reaAgencyId && !existAgencyMap[0].rea_id) updates.rea_id = reaAgencyId;
+          await admin.from('pulse_crm_mappings').update(updates).eq('id', existAgencyMap[0].id);
         }
-      }
 
-      // Set is_in_crm on pulse_agency
-      if (matchedCrmAgency) {
+        // ALWAYS write platform IDs back to CRM agency (not just on first mapping)
+        const agencyUpdates: Record<string, any> = {};
+        if (reaAgencyId && !matchedCrmAgency.rea_agency_id) agencyUpdates.rea_agency_id = reaAgencyId;
+        if (domainAgencyId && !matchedCrmAgency.domain_agency_id) agencyUpdates.domain_agency_id = domainAgencyId;
+        if (agency.rea_profile_url && !matchedCrmAgency.rea_profile_url) agencyUpdates.rea_profile_url = agency.rea_profile_url;
+        if (agency.domain_profile_url && !matchedCrmAgency.domain_profile_url) agencyUpdates.domain_profile_url = agency.domain_profile_url;
+        if (Object.keys(agencyUpdates).length > 0) {
+          await admin.from('agencies').update(agencyUpdates).eq('id', matchedCrmAgency.id);
+        }
+
+        // Set is_in_crm on pulse_agency
         await admin.from('pulse_agencies').update({ is_in_crm: true })
           .ilike('name', agency.name.trim());
       }
