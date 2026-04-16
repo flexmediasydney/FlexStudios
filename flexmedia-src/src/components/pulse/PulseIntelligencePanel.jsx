@@ -35,20 +35,51 @@ export default function PulseIntelligencePanel({ entityType, crmEntityId, crmEnt
     [mappings, crmEntityId, entityType]
   );
 
-  // Find pulse data via mapping or name match
+  // Find pulse data via 6-ID platform matching, then mapping, then name fallback
   const pulseData = useMemo(() => {
     if (entityType === "agent") {
-      if (mapping?.rea_id) {
-        return pulseAgents.find(a => a.rea_agent_id === mapping.rea_id);
+      // Priority 1: Direct ID match from CRM record's platform IDs
+      if (crmEntity?.rea_agent_id) {
+        const match = pulseAgents.find(a => a.rea_agent_id === crmEntity.rea_agent_id);
+        if (match) return match;
       }
-      // Fallback: name match
+      if (crmEntity?.domain_agent_id) {
+        const match = pulseAgents.find(a => a.domain_agent_id === crmEntity.domain_agent_id);
+        if (match) return match;
+      }
+      // Priority 2: Mapping table
+      if (mapping?.rea_id) {
+        const match = pulseAgents.find(a => a.rea_agent_id === mapping.rea_id);
+        if (match) return match;
+      }
+      if (mapping?.domain_id) {
+        const match = pulseAgents.find(a => a.domain_agent_id === mapping.domain_id);
+        if (match) return match;
+      }
+      // Priority 3: Name fallback
       const name = (crmEntity?.name || "").toLowerCase().trim();
       return pulseAgents.find(a => (a.full_name || "").toLowerCase().trim() === name);
     } else {
-      if (mapping?.rea_id) {
-        // Match by agency REA ID if available
-        return pulseAgencies.find(a => a.rea_profile_url?.includes(mapping.rea_id));
+      // Agency matching
+      // Priority 1: Direct ID match
+      if (crmEntity?.rea_agency_id) {
+        const match = pulseAgencies.find(a => a.rea_agency_id === crmEntity.rea_agency_id);
+        if (match) return match;
       }
+      if (crmEntity?.domain_agency_id) {
+        const match = pulseAgencies.find(a => a.domain_agency_id === crmEntity.domain_agency_id);
+        if (match) return match;
+      }
+      // Priority 2: Mapping table
+      if (mapping?.rea_id) {
+        const match = pulseAgencies.find(a => a.rea_agency_id === mapping.rea_id);
+        if (match) return match;
+      }
+      if (mapping?.domain_id) {
+        const match = pulseAgencies.find(a => a.domain_agency_id === mapping.domain_id);
+        if (match) return match;
+      }
+      // Priority 3: Name fallback
       const name = (crmEntity?.name || "").toLowerCase().trim();
       return pulseAgencies.find(a => (a.name || "").toLowerCase().trim().includes(name) || name.includes((a.name || "").toLowerCase().trim()));
     }

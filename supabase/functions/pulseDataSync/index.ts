@@ -563,7 +563,16 @@ Deno.serve(async (req) => {
       const agency = agencyMap.get(key)!;
       agency.sources.add('domain_agencies');
       // Domain agency data is authoritative for these fields — overwrite if present
-      if (domAgency.displayAddress) agency.address = domAgency.displayAddress;
+      if (domAgency.displayAddress) {
+        agency.address = domAgency.displayAddress;
+        // Extract suburb from display address (e.g. "Level 5, 66 Berry Street, North Sydney NSW 2060")
+        const addrParts = domAgency.displayAddress.split(',');
+        if (addrParts.length >= 2) {
+          const lastPart = addrParts[addrParts.length - 1].trim();
+          const suburbMatch = lastPart.match(/^(.+?)\s+(?:NSW|VIC|QLD|SA|WA|TAS|NT|ACT)\s+\d{4}$/);
+          if (suburbMatch) agency.suburb = suburbMatch[1].trim();
+        }
+      }
       if (domAgency.telephone) agency.phone = agency.phone || domAgency.telephone;
       if (domAgency.mobile) agency.phone = agency.phone || domAgency.mobile;
       if (domAgency.email) agency.email = domAgency.email;

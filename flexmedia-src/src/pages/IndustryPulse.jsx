@@ -161,8 +161,13 @@ export default function IndustryPulse() {
 
     const totalAgencies = pulseAgencies.length;
     const agenciesNotInCrm = pulseAgencies.filter(a => !a.is_in_crm).length;
+    const totalListings = pulseListings.length;
+    const rentals = pulseListings.filter(l => l.listing_type === "for_rent").length;
+    const sold = pulseListings.filter(l => l.listing_type === "sold").length;
+    const withImages = pulseListings.filter(l => l.images && Array.isArray(l.images) && l.images.length > 0).length;
+    const newListingsToday = pulseListings.filter(l => l.first_seen_at && new Date(l.first_seen_at) > d30).length;
 
-    return { totalAgents, notInCrm, activeListings, avgDom, upcomingEvents, newSignals, agentMovements, marketShare, recentProjects, recentListings, totalAgencies, agenciesNotInCrm };
+    return { totalAgents, notInCrm, activeListings, avgDom, upcomingEvents, newSignals, agentMovements, marketShare, recentProjects, recentListings, totalAgencies, agenciesNotInCrm, totalListings, rentals, sold, withImages, newListingsToday };
   }, [pulseAgents, pulseAgencies, pulseListings, pulseEvents, pulseSignals, projects]);
 
   // ── Derived data ────────────────────────────────────────────────────────
@@ -513,9 +518,9 @@ export default function IndustryPulse() {
 
       {/* Stats Strip */}
       <div className="grid grid-cols-4 lg:grid-cols-8 gap-2">
-        <StatCard label="Agents Tracked" value={String(stats.totalAgents)} icon={Users} />
+        <StatCard label="Agents Tracked" value={String(stats.totalAgents)} icon={Users} subtitle={`${stats.totalAgencies} agencies`} />
         <StatCard label="Not In CRM" value={String(stats.notInCrm)} icon={UserPlus} color={stats.notInCrm > 0 ? "text-amber-600" : undefined} />
-        <StatCard label="Active Listings" value={String(stats.activeListings)} icon={Home} color="text-blue-600" />
+        <StatCard label="Total Listings" value={String(stats.totalListings)} icon={Home} color="text-blue-600" subtitle={`${stats.activeListings} sale · ${stats.rentals} rent`} />
         <StatCard label="Avg DOM" value={stats.avgDom > 0 ? `${stats.avgDom}d` : "—"} icon={Clock} />
         <StatCard label="Events" value={String(stats.upcomingEvents)} icon={Calendar} color="text-purple-600" />
         <StatCard label="New Signals" value={String(stats.newSignals)} icon={Zap} color={stats.newSignals > 0 ? "text-red-600" : undefined} />
@@ -1238,15 +1243,15 @@ export default function IndustryPulse() {
                 { source_id: "rea_listings_bb_sold", label: "REA Recently Sold (Greater Sydney)", description: "azzouzana — Recently sold properties across Greater Sydney", icon: DollarSign, color: "text-emerald-600",
                   defaultMax: 500, schedule: "Daily (6am)", scheduleDetail: "Bounding box — sold",
                   runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: "https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement", maxListingsTotal: max }) },
-                { source_id: "domain_listings_buy", label: "Domain Sales Listings (Sydney)", description: "fatihtahta — Sales listings with listing dates, media galleries, geolocation from domain.com.au", icon: Globe, color: "text-violet-600",
-                  defaultMax: 500, schedule: "Daily (7am)", scheduleDetail: "With actual listing creation dates + image galleries",
-                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: "Sydney", domainListingsSaleType: "buy", maxDomainListings: max }) },
-                { source_id: "domain_listings_rent", label: "Domain Rental Listings (Sydney)", description: "fatihtahta — Rental listings with listing dates, media galleries from domain.com.au", icon: Globe, color: "text-violet-500",
-                  defaultMax: 500, schedule: "Daily (8am)", scheduleDetail: "With actual listing creation dates",
-                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: "Sydney", domainListingsSaleType: "rent", maxDomainListings: max }) },
-                { source_id: "domain_listings_sold", label: "Domain Recently Sold (Sydney)", description: "fatihtahta — Sold properties with sale dates, media from domain.com.au", icon: Globe, color: "text-violet-400",
-                  defaultMax: 500, schedule: "Weekly (Thu 5am)", scheduleDetail: "With actual sale dates",
-                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: "Sydney", domainListingsSaleType: "sold", maxDomainListings: max }) },
+                { source_id: "domain_listings_buy", label: "Domain Sales Listings", description: "fatihtahta — Sales listings with listing dates, media galleries, geolocation from domain.com.au", icon: Globe, color: "text-violet-600",
+                  defaultMax: 50, schedule: "Daily (7am)", scheduleDetail: "Per-suburb, with actual listing dates + image galleries",
+                  runParams: (subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: subs[0] || "Strathfield", domainListingsSaleType: "buy", maxDomainListings: max }) },
+                { source_id: "domain_listings_rent", label: "Domain Rental Listings", description: "fatihtahta — Rental listings with listing dates, media galleries from domain.com.au", icon: Globe, color: "text-violet-500",
+                  defaultMax: 50, schedule: "Daily (8am)", scheduleDetail: "Per-suburb, with actual listing dates",
+                  runParams: (subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: subs[0] || "Strathfield", domainListingsSaleType: "rent", maxDomainListings: max }) },
+                { source_id: "domain_listings_sold", label: "Domain Recently Sold", description: "fatihtahta — Sold properties with sale dates, media from domain.com.au", icon: Globe, color: "text-violet-400",
+                  defaultMax: 50, schedule: "Weekly (Thu 5am)", scheduleDetail: "Per-suburb, with actual sale dates",
+                  runParams: (subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: subs[0] || "Strathfield", domainListingsSaleType: "sold", maxDomainListings: max }) },
               ].map(s => {
                 const db = sourceConfigs.find(c => c.source_id === s.source_id);
                 return { ...s,
@@ -2353,6 +2358,31 @@ export default function IndustryPulse() {
                 {ag.rea_agency_id && <p><Src s="REA" /> Agency ID: {ag.rea_agency_id}</p>}
                 {ag.domain_agency_id && <p><Src s="Domain" /> Agency ID: {ag.domain_agency_id}</p>}
               </div>
+
+              {/* Add Agency to CRM */}
+              {!ag.is_in_crm && (
+                <Button className="w-full" onClick={async () => {
+                  try {
+                    await api.entities.Agency.create({
+                      name: ag.name,
+                      phone: ag.phone || null,
+                      email: ag.email || null,
+                      website: ag.website || null,
+                      relationship_state: "Prospecting",
+                      source: "industry_pulse",
+                      rea_agency_id: ag.rea_agency_id || null,
+                      domain_agency_id: ag.domain_agency_id || null,
+                      rea_profile_url: ag.rea_profile_url || null,
+                      domain_profile_url: ag.domain_profile_url || null,
+                    });
+                    refetchEntityList("Agency"); refetchEntityList("PulseAgency");
+                    toast.success(ag.name + " added to CRM");
+                    setSelectedAgency(null);
+                  } catch (err) { toast.error("Failed: " + (err?.message || "unknown")); }
+                }}>
+                  <Building2 className="h-4 w-4 mr-2" />Add Agency to CRM
+                </Button>
+              )}
                 </>); /* end Src IIFE */
               })()}
             </div>
