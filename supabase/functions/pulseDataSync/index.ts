@@ -577,7 +577,7 @@ Deno.serve(async (req) => {
     // ── Step 5: Upsert to database ──────────────────────────────────────
 
     // Clear existing Fair Trading junk data first
-    await admin.from('pulse_agents').delete().eq('source', 'fair_trading').then(() => {});
+    await admin.from('pulse_agents').delete().eq('source', 'fair_trading');
 
     // Batch insert agents — use raw admin client with explicit JSONB handling
     let agentsInserted = 0;
@@ -703,10 +703,13 @@ Deno.serve(async (req) => {
         ignoreDuplicates: false,
       });
       if (error) {
-        // Fallback: insert ignoring conflicts
-        const { error: insertErr } = await admin.from('pulse_listings').insert(cleanBatch).select();
-        if (!insertErr) listingsInserted += cleanBatch.length;
-        else if (listingsInserted < 2) console.error(`Listing upsert error:`, error.message?.substring(0, 200));
+        console.error(`Listing upsert error (batch ${i / BATCH}):`, error.message?.substring(0, 300));
+        // Fallback: insert one by one, skipping failures
+        for (const rec of cleanBatch) {
+          const { error: singleErr } = await admin.from('pulse_listings').insert(rec);
+          if (!singleErr) listingsInserted++;
+          else if (listingsInserted < 3) console.error(`Single listing insert error:`, singleErr.message?.substring(0, 200), 'listing_id:', rec.source_listing_id);
+        }
       } else {
         listingsInserted += cleanBatch.length;
       }
@@ -717,15 +720,17 @@ Deno.serve(async (req) => {
     // Log new listings to timeline
     if (newListingsDetected > 0) {
       const sampleNew = listingRecords.filter(l => l._isNew).slice(0, 5);
-      await admin.from('pulse_timeline').insert({
-        entity_type: 'listing',
-        event_type: 'new_listings_detected',
-        event_category: 'market',
-        title: `${newListingsDetected} new listing${newListingsDetected !== 1 ? 's' : ''} detected`,
-        description: sampleNew.map(l => `${l.address || l.suburb || '?'} — ${l.agency_name || '?'}`).join('; '),
-        new_value: { count: newListingsDetected, sample: sampleNew.map(l => ({ address: l.address, suburb: l.suburb, price: l.asking_price, agency: l.agency_name, agent: l.agent_name })) },
-        source: source_id || 'rea_sync',
-      }).catch(() => {});
+      try {
+        await admin.from('pulse_timeline').insert({
+          entity_type: 'listing',
+          event_type: 'new_listings_detected',
+          event_category: 'market',
+          title: `${newListingsDetected} new listing${newListingsDetected !== 1 ? 's' : ''} detected`,
+          description: sampleNew.map(l => `${l.address || l.suburb || '?'} — ${l.agency_name || '?'}`).join('; '),
+          new_value: { count: newListingsDetected, sample: sampleNew.map(l => ({ address: l.address, suburb: l.suburb, price: l.asking_price, agency: l.agency_name, agent: l.agent_name })) },
+          source: source_id || 'rea_sync',
+        });
+      } catch { /* non-fatal */ }
     }
 
     // ── Step 6: Movement Detection + Timeline Logging ──────────────────
@@ -758,7 +763,8 @@ Deno.serve(async (req) => {
           description: `Agent first seen in ${agent.agency_name || 'unknown agency'}, ${agent.agency_suburb || ''}`,
           new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id, suburb: agent.agency_suburb },
           source: 'rea_sync',
-        }).then(() => { timelineEntries++; }).catch(() => {});
+        });
+        timelineEntries++;
       } else if (existing.agency_rea_id && agent.agency_rea_id && existing.agency_rea_id !== agent.agency_rea_id) {
         // Agency change detected!
         movementsDetected++;
@@ -773,13 +779,14 @@ Deno.serve(async (req) => {
           previous_value: { agency_name: existing.agency_name, agency_rea_id: existing.agency_rea_id },
           new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id },
           source: 'rea_sync',
-        }).then(() => { timelineEntries++; }).catch(() => {});
+        });
+        timelineEntries++;
 
         // Update the existing record with movement data
         await admin.from('pulse_agents').update({
           previous_agency_name: existing.agency_name,
           agency_changed_at: now,
-        }).eq('id', existing.id).then(() => {}).catch(() => {});
+        }).eq('id', existing.id);
       }
     }
 
@@ -858,7 +865,8 @@ Deno.serve(async (req) => {
             crm_entity_id: matchedCrm.id,
             match_type: hasNameOverlap ? `${matchType}+name` : matchType,
             confidence,
-          }).then(() => { mappingsCreated++; }).catch(() => {});
+          });
+          mappingsCreated++;
 
           if (confidence === 'confirmed') {
             // Write platform IDs back to the CRM record for future matching
@@ -866,7 +874,7 @@ Deno.serve(async (req) => {
             if (reaId && !matchedCrm.rea_agent_id) crmUpdates.rea_agent_id = reaId;
             if (domainId && !matchedCrm.domain_agent_id) crmUpdates.domain_agent_id = domainId;
             if (Object.keys(crmUpdates).length > 0) {
-              admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id).then(() => {}).catch(() => {});
+              admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id);
             }
 
             const { data: freshAgent } = await admin.from('pulse_agents')
@@ -923,7 +931,8 @@ Deno.serve(async (req) => {
             crm_entity_id: matchedCrmAgency.id,
             match_type: agencyMatchType,
             confidence: agencyConfidence,
-          }).then(() => { mappingsCreated++; }).catch(() => {});
+          });
+          mappingsCreated++;
 
           // Write platform IDs back to CRM agency
           if (agencyConfidence === 'confirmed') {
@@ -933,7 +942,7 @@ Deno.serve(async (req) => {
             if (agency.rea_profile_url && !matchedCrmAgency.rea_profile_url) agencyUpdates.rea_profile_url = agency.rea_profile_url;
             if (agency.domain_profile_url && !matchedCrmAgency.domain_profile_url) agencyUpdates.domain_profile_url = agency.domain_profile_url;
             if (Object.keys(agencyUpdates).length > 0) {
-              admin.from('agencies').update(agencyUpdates).eq('id', matchedCrmAgency.id).then(() => {}).catch(() => {});
+              admin.from('agencies').update(agencyUpdates).eq('id', matchedCrmAgency.id);
             }
           }
         }
@@ -943,7 +952,7 @@ Deno.serve(async (req) => {
       if (matchedCrmAgency) {
         const normName = normalizeAgencyName(agency.name);
         admin.from('pulse_agencies').update({ is_in_crm: true })
-          .ilike('name', agency.name.trim()).then(() => {}).catch(() => {});
+          .ilike('name', agency.name.trim());
       }
     }
 

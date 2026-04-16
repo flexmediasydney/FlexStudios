@@ -1225,9 +1225,15 @@ export default function IndustryPulse() {
                 { source_id: "rea_listings", label: "REA Listings (per suburb)", description: "azzouzana — Active listings per suburb from realestate.com.au", icon: Home, color: "text-green-600",
                   defaultMax: 20, schedule: "Weekly (Sun 3am)", scheduleDetail: "Full suburb sweep",
                   runParams: (subs, max) => ({ suburbs: subs, state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: max, skipDomain: true, skipDomainAgencies: true, skipListings: false }) },
-                { source_id: "rea_listings_bb", label: "REA New Listings (Greater Sydney)", description: "azzouzana — Newest listings across Greater Sydney via bounding box, sorted by list date", icon: Zap, color: "text-orange-600",
-                  defaultMax: 500, schedule: "2x daily (6am, 2pm)", scheduleDetail: "Single bounding box covers all of Greater Sydney",
+                { source_id: "rea_listings_bb_buy", label: "REA New Sales (Greater Sydney)", description: "azzouzana — Newest sale listings across Greater Sydney, sorted by list date", icon: Zap, color: "text-orange-600",
+                  defaultMax: 500, schedule: "2x daily (6am, 2pm)", scheduleDetail: "Bounding box — sales",
                   runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: "https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers", maxListingsTotal: max }) },
+                { source_id: "rea_listings_bb_rent", label: "REA New Rentals (Greater Sydney)", description: "azzouzana — Newest rental listings across Greater Sydney, sorted by list date", icon: Zap, color: "text-cyan-600",
+                  defaultMax: 500, schedule: "2x daily (6am, 2pm)", scheduleDetail: "Bounding box — rentals",
+                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: "https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&source=refinement", maxListingsTotal: max }) },
+                { source_id: "rea_listings_bb_sold", label: "REA Recently Sold (Greater Sydney)", description: "azzouzana — Recently sold properties across Greater Sydney", icon: DollarSign, color: "text-emerald-600",
+                  defaultMax: 500, schedule: "Daily (6am)", scheduleDetail: "Bounding box — sold",
+                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: "https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement", maxListingsTotal: max }) },
               ].map(s => {
                 const db = sourceConfigs.find(c => c.source_id === s.source_id);
                 return { ...s,
