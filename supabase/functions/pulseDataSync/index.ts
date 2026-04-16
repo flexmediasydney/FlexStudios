@@ -675,12 +675,12 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ── Step 4: Cross-reference with CRM ────────────────────────────────
+    // ── Step 4: Cross-reference with CRM (load once, reuse in Steps 4, 5.5, 5.6, 7) ──
 
-    const crmAgents = await entities.Agent.filter({}, null, 1000).catch(() => []);
-    const crmNames = new Set(crmAgents.map((a: any) => (a.name || '').toLowerCase().trim()));
-    const crmAgencies = await entities.Agency.filter({}, null, 500).catch(() => []);
-    const crmAgencyNames = new Set(crmAgencies.map((a: any) => normalizeAgencyName(a.name)));
+    const crmAgentsList = await entities.Agent.filter({}, null, 1000).catch(() => []);
+    const crmNames = new Set(crmAgentsList.map((a: any) => (a.name || '').toLowerCase().trim()));
+    const crmAgenciesList = await entities.Agency.filter({}, null, 500).catch(() => []);
+    const crmAgencyNames = new Set(crmAgenciesList.map((a: any) => normalizeAgencyName(a.name)));
 
     for (const agent of mergedAgents) {
       const name = (agent.full_name || '').toLowerCase().trim();
@@ -751,23 +751,45 @@ Deno.serve(async (req) => {
     console.log(`Deduped: ${mergedAgents.length} → ${uniqueAgents.length} unique agents`);
 
     // Upsert agents by rea_agent_id (update if exists, insert if new)
+    // IMPORTANT: Strip null values for fields that get enriched post-insert (email, profile_image,
+    // total_listings_active) so the upsert doesn't overwrite enriched data back to null.
     for (let i = 0; i < uniqueAgents.length; i += BATCH) {
-      const batch = uniqueAgents.slice(i, i + BATCH).map(a => ({
-        ...a,
-        data_sources: typeof a.data_sources === 'string' ? JSON.parse(a.data_sources) : (a.data_sources || []),
-        suburbs_active: typeof a.suburbs_active === 'string' ? JSON.parse(a.suburbs_active) : (a.suburbs_active || []),
-        recent_listing_ids: typeof a.recent_listing_ids === 'string' ? JSON.parse(a.recent_listing_ids) : (a.recent_listing_ids || []),
-        sales_breakdown: typeof a.sales_breakdown === 'string' ? JSON.parse(a.sales_breakdown) : (a.sales_breakdown || null),
-      }));
-      const { error } = await admin.from('pulse_agents').upsert(batch, {
-        onConflict: 'rea_agent_id',
-        ignoreDuplicates: false,  // update existing records
+      const batch = uniqueAgents.slice(i, i + BATCH).map(a => {
+        const record: Record<string, any> = {
+          ...a,
+          data_sources: typeof a.data_sources === 'string' ? JSON.parse(a.data_sources) : (a.data_sources || []),
+          suburbs_active: typeof a.suburbs_active === 'string' ? JSON.parse(a.suburbs_active) : (a.suburbs_active || []),
+          recent_listing_ids: typeof a.recent_listing_ids === 'string' ? JSON.parse(a.recent_listing_ids) : (a.recent_listing_ids || []),
+          sales_breakdown: typeof a.sales_breakdown === 'string' ? JSON.parse(a.sales_breakdown) : (a.sales_breakdown || null),
+        };
+        // Don't overwrite cross-enriched fields with null
+        if (!record.email) delete record.email;
+        if (!record.profile_image) delete record.profile_image;
+        return record;
       });
-      if (error) {
-        agentErrors++;
-        _agentErrorMsgs.push(error.message?.substring(0, 300) || 'unknown');
-      } else {
-        agentsInserted += batch.length;
+      // Split batch: agents WITH rea_agent_id use upsert, agents WITHOUT use check-then-insert
+      const withReaId = batch.filter(a => a.rea_agent_id);
+      const withoutReaId = batch.filter(a => !a.rea_agent_id);
+
+      if (withReaId.length > 0) {
+        const { error } = await admin.from('pulse_agents').upsert(withReaId, {
+          onConflict: 'rea_agent_id',
+          ignoreDuplicates: false,
+        });
+        if (error) { agentErrors++; _agentErrorMsgs.push(error.message?.substring(0, 300) || 'unknown'); }
+        else agentsInserted += withReaId.length;
+      }
+
+      // Domain-only agents: check by name to avoid duplicates across runs
+      for (const agent of withoutReaId) {
+        const { data: existing } = await admin.from('pulse_agents')
+          .select('id').ilike('full_name', agent.full_name?.trim() || '').limit(1);
+        if (existing && existing.length > 0) {
+          await admin.from('pulse_agents').update(agent).eq('id', existing[0].id);
+        } else {
+          const { error: insertErr } = await admin.from('pulse_agents').insert(agent);
+          if (!insertErr) agentsInserted++;
+        }
       }
       if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${uniqueAgents.length}...`);
     }
@@ -918,9 +940,7 @@ Deno.serve(async (req) => {
       } catch { /* non-fatal */ }
     }
 
-    // Load CRM data once — used by cross-enrichment notifications + auto-mapping
-    const crmAgentsList = await entities.Agent.filter({}, null, 1000).catch(() => []);
-    const crmAgenciesList = await entities.Agency.filter({}, null, 500).catch(() => []);
+    // crmAgentsList + crmAgenciesList already loaded in Step 4
 
     // ── Step 5.5: Cross-enrich agents from listing data ──────────────
     // Listings contain agent emails, photos, and REA IDs that the agent
