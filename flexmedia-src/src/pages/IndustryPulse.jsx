@@ -262,12 +262,15 @@ export default function IndustryPulse() {
   }, [pulseAgents, agentFilter, agentColFilters, search, agentSort]);
 
   // Filtered + sorted agencies for Agency Intelligence tab
+  // Normalize agency names consistently (strip dashes, collapse spaces)
+  const normAgencyKey = (s) => (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+
   const filteredAgencies = useMemo(() => {
-    // Build a live agent count map (agency name → count) for accurate aggregation
+    // Build a live agent count map (normalized agency name → count)
     const agentCountMap = {};
     const agentsByAgency = {};
     for (const a of pulseAgents) {
-      const key = (a.agency_name || "").toLowerCase().trim();
+      const key = normAgencyKey(a.agency_name);
       if (!key) continue;
       agentCountMap[key] = (agentCountMap[key] || 0) + 1;
       if (!agentsByAgency[key]) agentsByAgency[key] = [];
@@ -275,7 +278,7 @@ export default function IndustryPulse() {
     }
 
     let result = pulseAgencies.map(ag => {
-      const key = (ag.name || "").toLowerCase().trim();
+      const key = normAgencyKey(ag.name);
       return { ...ag, live_agent_count: agentCountMap[key] || ag.agent_count || 0, _agents: agentsByAgency[key] || [] };
     });
 
@@ -444,13 +447,19 @@ export default function IndustryPulse() {
         if (preview.existingAgency) {
           agencyId = preview.existingAgency.id;
         } else {
-          // Create new agency from pulse data with platform IDs
+          // Create new agency from pulse data with platform IDs + enriched fields
+          const matchingPulseAgency = pulseAgencies.find(pa => normAgencyKey(pa.name) === normAgencyKey(pulseAgent.agency_name));
           const newAgency = await api.entities.Agency.create({
             name: pulseAgent.agency_name,
+            phone: matchingPulseAgency?.phone || null,
+            email: matchingPulseAgency?.email || null,
+            website: matchingPulseAgency?.website || null,
             relationship_state: "Prospecting",
             source: "industry_pulse",
-            rea_agency_id: pulseAgent.agency_rea_id || null,
-            domain_agency_id: pulseAgent.agency_domain_id || null,
+            rea_agency_id: matchingPulseAgency?.rea_agency_id || pulseAgent.agency_rea_id || null,
+            domain_agency_id: matchingPulseAgency?.domain_agency_id || pulseAgent.agency_domain_id || null,
+            rea_profile_url: matchingPulseAgency?.rea_profile_url || null,
+            domain_profile_url: matchingPulseAgency?.domain_profile_url || null,
           });
           agencyId = newAgency.id;
         }
@@ -1976,6 +1985,7 @@ export default function IndustryPulse() {
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-green-600" onClick={async () => {
                                     await api.entities.PulseCrmMapping.update(m.id, { confidence: "confirmed", confirmed_at: new Date().toISOString(), confirmed_by_name: user?.full_name });
                                     if (!isAgency && pulseRecord) await api.entities.PulseAgent.update(pulseRecord.id, { is_in_crm: true, linked_agent_id: m.crm_entity_id });
+                                    if (isAgency && pulseRecord) await api.entities.PulseAgency.update(pulseRecord.id, { is_in_crm: true });
                                     api.entities.PulseTimeline.create({ entity_type: m.entity_type || "agent", rea_id: m.rea_id, crm_entity_id: m.crm_entity_id, event_type: "crm_mapped", event_category: "system", title: `${pulseName} mapping confirmed`, description: `Manually confirmed by ${user?.full_name}. Match type: ${m.match_type}.`, source: "manual" }).catch(() => {});
                                     refetchEntityList("PulseCrmMapping"); refetchEntityList("PulseAgent"); refetchEntityList("PulseAgency"); refetchEntityList("PulseTimeline");
                                     toast.success("Mapping confirmed");
@@ -2578,7 +2588,8 @@ export default function IndustryPulse() {
                         {(a.rea_median_sold_price || a.domain_avg_sold_price) && <tr className="border-t"><td className="px-2 py-1">Sold Price</td><td className="px-2 py-1 text-center tabular-nums">{fmtPrice(a.rea_median_sold_price) || "—"}</td><td className="px-2 py-1 text-center tabular-nums">{fmtPrice(a.domain_avg_sold_price) || "—"}</td></tr>}
                         {(a.rea_median_dom || a.domain_avg_dom) && <tr className="border-t"><td className="px-2 py-1">Days on Market</td><td className="px-2 py-1 text-center tabular-nums">{a.rea_median_dom || "—"}</td><td className="px-2 py-1 text-center tabular-nums">{a.domain_avg_dom || "—"}</td></tr>}
                         {(a.rea_rating || a.domain_rating) && <tr className="border-t"><td className="px-2 py-1">Rating</td><td className="px-2 py-1 text-center tabular-nums">{a.rea_rating ? `${a.rea_rating} (${a.rea_review_count || 0})` : "—"}</td><td className="px-2 py-1 text-center tabular-nums">{a.domain_rating ? `${a.domain_rating} (${a.domain_review_count || 0})` : "—"}</td></tr>}
-                        <tr className="border-t"><td className="px-2 py-1">Active Listings</td><td className="px-2 py-1 text-center tabular-nums">{a.total_listings_active || "—"}</td><td className="px-2 py-1 text-center tabular-nums">{a.total_sold_12m || "—"}</td></tr>
+                        <tr className="border-t"><td className="px-2 py-1">For Sale</td><td className="px-2 py-1 text-center tabular-nums">{a.total_listings_active || "—"}</td><td className="px-2 py-1 text-center tabular-nums">{a.total_listings_active || "—"}</td></tr>
+                        <tr className="border-t"><td className="px-2 py-1">Sold (12m)</td><td className="px-2 py-1 text-center tabular-nums">{a.sales_as_lead || "—"}</td><td className="px-2 py-1 text-center tabular-nums">{a.total_sold_12m || "—"}</td></tr>
                       </tbody>
                     </table>
                   </div>
