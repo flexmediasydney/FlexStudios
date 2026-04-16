@@ -3,7 +3,7 @@
  * Thin container: loads all data hooks, computes shared stats,
  * renders header / stats strip / tab bar, delegates to tab components.
  */
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Card, CardContent } from "@/components/ui/card";
@@ -155,6 +155,13 @@ export default function IndustryPulse() {
   // ── UI state ────────────────────────────────────────────────────────────────
   const [tab, setTab] = useState("command");
   const [search, setSearch] = useState("");
+  const [addToCrmFromCommand, setAddToCrmFromCommand] = useState(null);
+
+  // Handler: CommandCenter "Add" button switches to agents tab and triggers dialog
+  const handleAddToCrmFromCommand = useCallback((agent) => {
+    setTab("agents");
+    setAddToCrmFromCommand(agent);
+  }, []);
 
   // ── Computed stats ───────────────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -194,9 +201,9 @@ export default function IndustryPulse() {
       recentListings,
       marketShare:
         recentListings > 0 ? Math.round((recentProjects / recentListings) * 100) : 0,
-      suggestedMappings: 0, // computed inside PulseMappings tab
+      suggestedMappings: pulseMappings.filter(m => m.confidence === "suggested").length,
     };
-  }, [pulseAgents, pulseAgencies, pulseListings, pulseEvents, pulseSignals, projects]);
+  }, [pulseAgents, pulseAgencies, pulseListings, pulseEvents, pulseSignals, projects, pulseMappings]);
 
   // ── Shared props spread into every tab ──────────────────────────────────────
   const sharedProps = {
@@ -216,6 +223,8 @@ export default function IndustryPulse() {
     search,
     stats,
     user,
+    onAddToCrm: handleAddToCrmFromCommand,
+    addToCrmFromCommand,
   };
 
   // ── Early return: loading skeleton ───────────────────────────────────────────

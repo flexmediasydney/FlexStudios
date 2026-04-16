@@ -21,7 +21,7 @@ import {
   Rss, Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   TrendingUp, Users, Home, Clock, AlertTriangle, CheckCircle2, DollarSign,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
-  BarChart3, User
+  BarChart3, User, Loader2
 } from "lucide-react";
 
 /* ── Helpers ─────────────────────────────────────────────────────────────────── */
@@ -173,12 +173,14 @@ export default function PulseIntelligencePanel({
   const [metadataOpen, setMetadataOpen] = useState(false);
 
   /* ── Data hooks ─────────────────────────────────────────────────────────── */
-  const { data: pulseMappings = [] } = useEntityList("PulseCrmMapping", "-created_at");
-  const { data: pulseAgents = [] } = useEntityList("PulseAgent", "-last_synced_at", 5000);
-  const { data: pulseAgencies = [] } = useEntityList("PulseAgency", "-last_synced_at", 500);
+  const { data: pulseMappings = [], loading: mappingsLoading } = useEntityList("PulseCrmMapping", "-created_at");
+  const { data: pulseAgents = [], loading: agentsLoading } = useEntityList("PulseAgent", "-last_synced_at", 5000);
+  const { data: pulseAgencies = [], loading: agenciesLoading } = useEntityList("PulseAgency", "-last_synced_at", 500);
   const { data: pulseListings = [] } = useEntityList("PulseListing", "-created_at", 5000);
   const { data: pulseTimeline = [] } = useEntityList("PulseTimeline", "-created_at", 500);
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
+
+  const coreLoading = mappingsLoading || agentsLoading || agenciesLoading;
 
   /* ── 1. Find CRM mapping ───────────────────────────────────────────────── */
   const mapping = useMemo(() =>
@@ -206,8 +208,18 @@ export default function PulseIntelligencePanel({
       const match = collection.find(a => a[idField] === crmEntity[idField]);
       if (match) return match;
     }
+    // Step 4: Fuzzy name fallback (last resort for manually-added CRM entities)
+    if (entityName && entityType === "agent") {
+      const norm = (s) => (s || "").toLowerCase().replace(/[^a-z\s]/g, "").trim();
+      const nameMatch = pulseAgents.find(a => norm(a.full_name) === norm(entityName));
+      if (nameMatch) return nameMatch;
+    }
+    if (entityName && entityType === "agency") {
+      const nameMatch = pulseAgencies.find(a => normName(a.name) === normName(entityName));
+      if (nameMatch) return nameMatch;
+    }
     return null;
-  }, [entityType, mapping, pulseAgents, pulseAgencies, crmEntity]);
+  }, [entityType, mapping, pulseAgents, pulseAgencies, crmEntity, entityName]);
 
   /* ── 3. Filter timeline by entity ──────────────────────────────────────── */
   const entityTimelineEntries = useMemo(() => {
@@ -296,9 +308,23 @@ export default function PulseIntelligencePanel({
     return idx;
   }, [pulseMappings]);
 
+  /* ── 11. Agency mapping for agent dossier (clickable agency name) ───── */
+  const agencyMapping = useMemo(() => {
+    if (!pulseData?.agency_rea_id) return null;
+    return pulseMappings.find(m => m.entity_type === "agency" && m.rea_id === pulseData.agency_rea_id);
+  }, [pulseData, pulseMappings]);
+
   /* ══════════════════════════════════════════════════════════════════════════ */
   /* ═══ EMPTY STATE ═══════════════════════════════════════════════════════ */
   /* ══════════════════════════════════════════════════════════════════════════ */
+
+  if (coreLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   if (!pulseData && !mapping && entityTimelineEntries.length === 0) {
     return (
@@ -409,7 +435,11 @@ export default function PulseIntelligencePanel({
                 {a.agency_name && (
                   <div className="flex items-center gap-1.5 mt-1 text-xs">
                     <Building2 className="h-3 w-3 text-muted-foreground" />
-                    <span className="font-medium">{a.agency_name}</span>
+                    {agencyMapping?.crm_entity_id ? (
+                      <a href={`/organisations/${agencyMapping.crm_entity_id}`} className="font-medium text-primary hover:underline">{a.agency_name}</a>
+                    ) : (
+                      <span className="font-medium">{a.agency_name}</span>
+                    )}
                     {a.agency_suburb && <span className="text-muted-foreground">- {a.agency_suburb}</span>}
                   </div>
                 )}

@@ -125,7 +125,7 @@ function ListingSlideout({ listing, pulseAgents, onClose }) {
 
   // Cross-reference: find pulse agent record
   const linkedAgent = listing.agent_rea_id
-    ? pulseAgents.find((a) => a.rea_id === listing.agent_rea_id)
+    ? pulseAgents.find((a) => a.rea_agent_id === listing.agent_rea_id)
     : null;
 
   // Parse images array safely

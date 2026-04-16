@@ -113,7 +113,7 @@ function parsePrice(raw: string | null): number | null {
   const numMatch = s.match(/\$?([\d]+(?:\.[\d]+)?)/);
   if (numMatch) {
     const val = parseFloat(numMatch[1]);
-    return val > 10000 ? Math.round(val) : null;
+    return val > 50 ? Math.round(val) : null;
   }
   return null;
 }
@@ -268,7 +268,7 @@ Deno.serve(async (req) => {
 
       processedAgents.push({
         full_name: reaName,
-        email: null, // Will be cross-enriched from listing data in Step 6
+        email: rea.email || null, // May come from websift, also cross-enriched from listing data
         mobile: rea.mobile ? String(rea.mobile) : null,
         business_phone: rea.businessPhone ? String(rea.businessPhone) : null,
         phone: rea.businessPhone ? String(rea.businessPhone) : null,
@@ -298,7 +298,7 @@ Deno.serve(async (req) => {
         sales_breakdown: rea.profile_sales_breakdown ? JSON.stringify(rea.profile_sales_breakdown) : null,
         rea_agent_id: rea.salesperson_id ? String(rea.salesperson_id) : null,
         rea_profile_url: rea.profile_url || null,
-        profile_image: null, // Will be cross-enriched from listing data in Step 6
+        profile_image: rea.image || rea.photo_url || rea.profile_image || null, // May come from websift, also cross-enriched from listing data
         source: 'rea',
         data_sources: JSON.stringify(['rea']),
         data_integrity_score: integrityScore,
@@ -432,12 +432,33 @@ Deno.serve(async (req) => {
     for (const agent of processedAgents) {
       const name = (agent.full_name || '').toLowerCase().trim();
       if (crmNames.has(name)) {
-        agent.is_in_crm = true;
+        // Verify agency matches too (if available) to avoid false positives
+        const crmAgent = crmAgentsList.find((c: any) => (c.name || '').toLowerCase().trim() === name);
+        if (crmAgent) {
+          const crmAgencyName = (crmAgent.current_agency_name || '').toLowerCase().trim();
+          const pulseAgencyName = (agent.agency_name || '').toLowerCase().trim();
+          if (!crmAgencyName || !pulseAgencyName || crmAgencyName.includes(pulseAgencyName) || pulseAgencyName.includes(crmAgencyName)) {
+            agent.is_in_crm = true;
+          }
+        } else {
+          agent.is_in_crm = true; // No CRM agent found for validation, trust name match
+        }
       } else {
         for (const cn of crmNames) {
           if (fuzzyNameMatch(name, cn)) {
-            agent.is_in_crm = true;
-            break;
+            // Verify agency matches too (if available)
+            const crmAgent = crmAgentsList.find((c: any) => (c.name || '').toLowerCase().trim() === cn);
+            if (crmAgent) {
+              const crmAgencyName = (crmAgent.current_agency_name || '').toLowerCase().trim();
+              const pulseAgencyName = (agent.agency_name || '').toLowerCase().trim();
+              if (!crmAgencyName || !pulseAgencyName || crmAgencyName.includes(pulseAgencyName) || pulseAgencyName.includes(crmAgencyName)) {
+                agent.is_in_crm = true;
+                break;
+              }
+            } else {
+              agent.is_in_crm = true;
+              break;
+            }
           }
         }
       }
@@ -466,9 +487,18 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── Step 5b: Snapshot existing agents BEFORE upsert (for movement detection in Step 9) ──
+    // Must load before Step 6 upsert — otherwise existing.agency_rea_id already equals the new value
+    const { data: preUpsertPulseAgents = [] } = await admin.from('pulse_agents')
+      .select('id, rea_agent_id, agency_name, agency_rea_id, full_name')
+      .not('rea_agent_id', 'is', null);
+    const existingByReaIdSnapshot = new Map(preUpsertPulseAgents.map((a: any) => [a.rea_agent_id, a]));
+    console.log(`Pre-upsert snapshot: ${preUpsertPulseAgents.length} existing agents with REA IDs`);
+
     // ── Step 6: Upsert to database ──────────────────────────────────────
 
     let agentsInserted = 0;
+    let agentsUpdated = 0;
     let agentErrors = 0;
     const _agentErrorMsgs: string[] = [];
     const BATCH = 50;
@@ -519,7 +549,16 @@ Deno.serve(async (req) => {
           ignoreDuplicates: false,
         });
         if (error) { agentErrors++; _agentErrorMsgs.push(error.message?.substring(0, 300) || 'unknown'); }
-        else agentsInserted += withReaId.length;
+        else {
+          // Count inserts vs updates using pre-upsert snapshot
+          for (const a of withReaId) {
+            if (existingByReaIdSnapshot.has(a.rea_agent_id)) {
+              agentsUpdated++;
+            } else {
+              agentsInserted++;
+            }
+          }
+        }
       }
 
       // Agents without REA ID: check by name to avoid duplicates
@@ -528,6 +567,7 @@ Deno.serve(async (req) => {
           .select('id').ilike('full_name', agent.full_name?.trim() || '').limit(1);
         if (existing && existing.length > 0) {
           await admin.from('pulse_agents').update(agent).eq('id', existing[0].id);
+          agentsUpdated++;
         } else {
           const { error: insertErr } = await admin.from('pulse_agents').insert(agent);
           if (!insertErr) agentsInserted++;
@@ -538,6 +578,7 @@ Deno.serve(async (req) => {
 
     // Upsert agencies — check-then-insert/update (functional index not supported by Supabase JS)
     let agenciesInserted = 0;
+    let agenciesUpdated = 0;
     for (const agency of mergedAgencies) {
       const cleaned = {
         ...agency,
@@ -552,10 +593,11 @@ Deno.serve(async (req) => {
 
         if (existing && existing.length > 0) {
           await admin.from('pulse_agencies').update(cleaned).eq('id', existing[0].id);
+          agenciesUpdated++;
         } else {
           await admin.from('pulse_agencies').insert(cleaned);
+          agenciesInserted++;
         }
-        agenciesInserted++;
       } catch (err: any) {
         if (agenciesInserted < 3) console.error(`Agency upsert error for ${agency.name}:`, err.message?.substring(0, 200));
       }
@@ -624,7 +666,7 @@ Deno.serve(async (req) => {
         promo_level: l.promoLevel || l.productDepth || null,
         // Agent + agency ID foreign keys
         agent_rea_id: primaryAgent.agentId ? String(primaryAgent.agentId) : null,
-        agency_rea_id: l.agencyProfileUrl ? l.agencyProfileUrl.replace(/.*\/agency\/[^-]+-/, '') : null,
+        agency_rea_id: (() => { const match = (l.agencyProfileUrl || '').match(/agency\/.*?([A-Z0-9]{5,})(?:\/|$)/i); return match ? match[1] : null; })(),
         source: l._source || 'rea',
         source_url: l.url || null,
         source_listing_id: listingId || null,
@@ -643,8 +685,23 @@ Deno.serve(async (req) => {
       };
     });
 
-    for (let i = 0; i < listingRecords.length; i += BATCH) {
-      const batch = listingRecords.slice(i, i + BATCH);
+    // Filter out obvious out-of-state listings (VIC, QLD, SA, WA, TAS, NT by postcode)
+    // Keep listingRecords intact for cross-enrichment (agent emails from interstate sales still valid)
+    const filteredListingRecords = listingRecords.filter(l => {
+      if (!l.suburb) return true; // keep if no suburb data
+      if (l.postcode) {
+        const pc = parseInt(l.postcode);
+        if (pc >= 3000 && pc < 5000) return false; // VIC/QLD
+        if (pc >= 5000 && pc < 7000) return false; // SA/WA
+        if (pc >= 7000 && pc < 8000) return false; // TAS
+        if (pc >= 800 && pc < 900) return false; // NT
+      }
+      return true;
+    });
+    console.log(`Listings: ${listingRecords.length} total, ${filteredListingRecords.length} after state filter (removed ${listingRecords.length - filteredListingRecords.length} out-of-state)`);
+
+    for (let i = 0; i < filteredListingRecords.length; i += BATCH) {
+      const batch = filteredListingRecords.slice(i, i + BATCH);
       const cleanBatch = batch.map(({ _isNew, _agentEmail, _agentPhoto, _agentReaId, _agentJobTitle, _allAgents, ...rest }) => rest);
       const { error } = await admin.from('pulse_listings').upsert(cleanBatch, {
         onConflict: 'source_listing_id',
@@ -653,7 +710,7 @@ Deno.serve(async (req) => {
       if (error) {
         console.error(`Listing upsert error (batch ${i / BATCH}):`, error.message?.substring(0, 300));
         for (const rec of cleanBatch) {
-          const { error: singleErr } = await admin.from('pulse_listings').insert(rec);
+          const { error: singleErr } = await admin.from('pulse_listings').upsert(rec, { onConflict: 'source_listing_id', ignoreDuplicates: false });
           if (!singleErr) listingsInserted++;
         }
       } else {
@@ -719,7 +776,7 @@ Deno.serve(async (req) => {
 
       if (enrichByReaId.size > 0 || enrichByName.size > 0) {
         const { data: existingAgentsForEnrich = [] } = await admin.from('pulse_agents')
-          .select('id, full_name, email, profile_image, rea_agent_id, job_title, total_listings_active, data_integrity_score');
+          .select('id, full_name, email, mobile, profile_image, rea_agent_id, job_title, total_listings_active, data_integrity_score');
 
         let enriched = 0;
         for (const pa of existingAgentsForEnrich) {
@@ -741,18 +798,22 @@ Deno.serve(async (req) => {
           if (!enrichData) continue;
 
           const updates: Record<string, any> = {};
-          if (enrichData.email && !pa.email) updates.email = enrichData.email;
-          if (enrichData.photo && !pa.profile_image) updates.profile_image = enrichData.photo;
+          // Always update email/photo from latest listing data (current, not historical)
+          if (enrichData.email) updates.email = enrichData.email;
+          if (enrichData.photo) updates.profile_image = enrichData.photo;
+          if (enrichData.phone && !pa.mobile) updates.mobile = enrichData.phone;
           if (enrichData.reaId && !pa.rea_agent_id) updates.rea_agent_id = enrichData.reaId;
           if (enrichData.jobTitle && !pa.job_title) updates.job_title = enrichData.jobTitle;
           if (enrichData.listingCount > 0) updates.total_listings_active = enrichData.listingCount;
 
-          // Recalculate integrity score with enrichment
+          // Recalculate integrity score from scratch (avoids competing Math.max paths)
           if (Object.keys(updates).length > 0) {
-            let newScore = pa.data_integrity_score || 50;
-            if (updates.email || pa.email) newScore = Math.max(newScore, 65);
-            if ((updates.profile_image || pa.profile_image) && (updates.email || pa.email)) newScore = Math.max(newScore, 80);
-            if ((updates.email || pa.email) && (updates.profile_image || pa.profile_image) && pa.rea_agent_id) newScore = Math.max(newScore, 90);
+            let newScore = 50; // base: exists in REA
+            if (pa.mobile || updates.mobile) newScore += 10;
+            if (updates.email || pa.email) newScore += 15;
+            if (updates.profile_image || pa.profile_image) newScore += 10;
+            if ((updates.email || pa.email) && (updates.profile_image || pa.profile_image)) newScore += 5;
+            if (pa.rea_agent_id) newScore += 10;
             updates.data_integrity_score = newScore;
 
             await admin.from('pulse_agents').update(updates).eq('id', pa.id);
@@ -803,22 +864,18 @@ Deno.serve(async (req) => {
     }
 
     // ── Step 9: Movement Detection + Timeline ───────────────────────────
+    // Uses existingByReaIdSnapshot from Step 5b (loaded BEFORE the upsert)
+    // so we can detect movements and first_seen correctly.
 
     let movementsDetected = 0;
     let timelineEntries = 0;
     let mappingsCreated = 0;
 
-    const { data: existingPulseAgents = [] } = await admin.from('pulse_agents')
-      .select('id, rea_agent_id, agency_name, agency_rea_id, full_name')
-      .not('rea_agent_id', 'is', null);
-
-    const existingByReaId = new Map(existingPulseAgents.map((a: any) => [a.rea_agent_id, a]));
-
     for (const agent of processedAgents) {
       const reaId = agent.rea_agent_id;
       if (!reaId) continue;
 
-      const existing = existingByReaId.get(reaId);
+      const existing = existingByReaIdSnapshot.get(reaId);
 
       if (!existing) {
         // New agent — first seen
@@ -1025,7 +1082,8 @@ Deno.serve(async (req) => {
       await entities.PulseSyncLog.update(syncLogId, {
         status: 'completed',
         records_fetched: allReaAgents.length + allListings.length,
-        records_new: agentsInserted + agenciesInserted + listingsInserted,
+        records_new: agentsInserted + agenciesInserted,
+        records_updated: agentsUpdated + agenciesUpdated + listingsInserted,
         completed_at: new Date().toISOString(),
         apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
         raw_payload: {
@@ -1033,8 +1091,10 @@ Deno.serve(async (req) => {
           listings: allListings,
         },
         result_summary: {
-          agents_processed: agentsInserted,
-          agencies_extracted: agenciesInserted,
+          agents_inserted: agentsInserted,
+          agents_updated: agentsUpdated,
+          agencies_inserted: agenciesInserted,
+          agencies_updated: agenciesUpdated,
           listings_stored: listingsInserted,
           movements_detected: movementsDetected,
           timeline_entries: timelineEntries,
@@ -1045,13 +1105,25 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Update source config last_run_at
+    if (source_id) {
+      try {
+        await admin.from('pulse_source_configs').update({ last_run_at: now }).eq('source_id', source_id);
+      } catch { /* non-fatal */ }
+    }
+
     return jsonResponse({
       success: true,
       _version: 'v2.0',
       suburbs,
-      agents_processed: agentsInserted,
-      agencies_extracted: agenciesInserted,
+      agents_inserted: agentsInserted,
+      agents_updated: agentsUpdated,
+      agents_processed: agentsInserted + agentsUpdated,
+      agencies_inserted: agenciesInserted,
+      agencies_updated: agenciesUpdated,
+      agencies_extracted: agenciesInserted + agenciesUpdated,
       listings_stored: listingsInserted,
+      listings_filtered_out: listingRecords.length - filteredListingRecords.length,
       movements_detected: movementsDetected,
       timeline_entries: timelineEntries,
       mappings_created: mappingsCreated,

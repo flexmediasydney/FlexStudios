@@ -10,7 +10,7 @@
  * Architecture: REA-only. Single ID: rea_agent_id. Zero Domain references.
  */
 
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -102,6 +102,7 @@ function mapPosition(jobTitle) {
     return "Partner";
   if (jt.includes("senior") || jt.includes("manager") || jt.includes("head of"))
     return "Senior";
+  if (jt.includes("associate")) return "Associate";
   return "Junior";
 }
 
@@ -223,7 +224,7 @@ function MiniListingTable({ listings, emptyMsg }) {
               <td className="py-1.5 pr-3 max-w-[220px] truncate text-foreground">
                 {l.address || l.suburb || "—"}
               </td>
-              <td className="py-1.5 pr-3 text-right tabular-nums">{fmtPrice(l.price)}</td>
+              <td className="py-1.5 pr-3 text-right tabular-nums">{fmtPrice(l.asking_price || l.sold_price)}</td>
               <td className="py-1.5 text-right tabular-nums text-muted-foreground">
                 {l.days_on_market > 0 ? `${l.days_on_market}d` : "—"}
               </td>
@@ -276,8 +277,7 @@ function AddToCrmDialog({ agent, crmAgents, crmAgencies, pulseMappings, onClose,
       if (!agencyId && agent.agency_name) {
         const newAgency = await api.entities.Agency.create({
           name: agent.agency_name,
-          suburb: agent.suburb,
-          rea_agency_id: agent.agency_id,
+          rea_agency_id: agent.agency_rea_id,
         });
         agencyId = newAgency.id;
         await refetchEntityList("Agency");
@@ -287,25 +287,22 @@ function AddToCrmDialog({ agent, crmAgents, crmAgencies, pulseMappings, onClose,
       const newAgent = await api.entities.Agent.create({
         name: agent.full_name,
         phone: agent.mobile || agent.business_phone,
-        mobile: agent.mobile,
         email: agent.email,
-        agency_id: agencyId,
+        current_agency_id: agencyId,
         rea_agent_id: agent.rea_agent_id,
-        job_title: agent.job_title,
-        suburb: agent.suburb,
-        profile_image: agent.profile_image,
+        title: agent.job_title,
+        relationship_state: "prospect",
+        source: "pulse",
       });
 
       // 3. Create mapping
       await api.entities.PulseCrmMapping.create({
-        pulse_entity_type: "agent",
+        entity_type: "agent",
         pulse_entity_id: agent.id,
-        crm_entity_type: "Agent",
         crm_entity_id: newAgent.id,
-        rea_agent_id: agent.rea_agent_id,
-        mapping_source: "manual",
-        confidence: 100,
-        status: "confirmed",
+        rea_id: agent.rea_agent_id,
+        match_type: "manual",
+        confidence: "confirmed",
       });
 
       // 4. Mark pulse agent as in_crm
@@ -829,6 +826,7 @@ export default function PulseAgentIntel({
   pulseMappings = [],
   search = "",
   stats = {},
+  addToCrmFromCommand,
 }) {
   // ── UI state ──────────────────────────────────────────────────────────────
   const [agentFilter, setAgentFilter] = useState("all"); // all | not_in_crm | in_crm
@@ -837,6 +835,16 @@ export default function PulseAgentIntel({
   const [agentPage, setAgentPage] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [addToCrmCandidate, setAddToCrmCandidate] = useState(null);
+
+  // ── Auto-open Add-to-CRM dialog when triggered from CommandCenter ───────
+  useEffect(() => {
+    if (addToCrmFromCommand) {
+      const agent = pulseAgents.find((a) => a.id === addToCrmFromCommand.id);
+      if (agent) {
+        setAddToCrmCandidate(agent);
+      }
+    }
+  }, [addToCrmFromCommand, pulseAgents]);
 
   // ── Toggle sort ───────────────────────────────────────────────────────────
   const toggleSort = useCallback(

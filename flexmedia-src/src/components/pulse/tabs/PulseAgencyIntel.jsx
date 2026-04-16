@@ -232,10 +232,10 @@ const AgentRow = ({ agent, isInCrm, isSelected, onSelect }) => {
         isSelected && "bg-muted/60 ring-1 ring-primary/20"
       )}
     >
-      {agent.photo_url ? (
+      {agent.profile_image ? (
         <img
-          src={agent.photo_url}
-          alt={agent.name}
+          src={agent.profile_image}
+          alt={agent.full_name}
           className="h-8 w-8 rounded-full object-cover shrink-0"
         />
       ) : (
@@ -245,7 +245,7 @@ const AgentRow = ({ agent, isInCrm, isSelected, onSelect }) => {
       )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-xs font-medium truncate">{agent.name || "—"}</span>
+          <span className="text-xs font-medium truncate">{agent.full_name || "—"}</span>
           {pos !== "Junior" && (
             <Badge
               variant="outline"
@@ -262,17 +262,17 @@ const AgentRow = ({ agent, isInCrm, isSelected, onSelect }) => {
       <div className="flex flex-col items-end gap-0.5 shrink-0 text-[10px]">
         {(agent.sales_as_lead > 0 || agent.total_listings_active > 0) && (
           <span className="text-muted-foreground tabular-nums">
-            {agent.sales_as_lead > 0 && `${agent.sales_as_lead} sold`}
+            {(agent.sales_as_lead || agent.total_sold_12m) > 0 && `${agent.sales_as_lead || agent.total_sold_12m} sold`}
             {agent.total_listings_active > 0 && ` · ${agent.total_listings_active} active`}
           </span>
         )}
-        {agent.avg_price > 0 && (
-          <span className="font-medium text-foreground">{fmtPrice(agent.avg_price)}</span>
+        {agent.avg_sold_price > 0 && (
+          <span className="font-medium text-foreground">{fmtPrice(agent.avg_sold_price)}</span>
         )}
-        {agent.avg_rating > 0 && (
+        {(agent.rea_rating || agent.reviews_avg) > 0 && (
           <span className="flex items-center gap-0.5 text-amber-500">
             <Star className="h-2.5 w-2.5 fill-amber-400" />
-            {Number(agent.avg_rating).toFixed(1)}
+            {Number(agent.rea_rating || agent.reviews_avg).toFixed(1)}
           </span>
         )}
         <CrmBadge inCrm={!!isInCrm} />
@@ -289,10 +289,10 @@ const AgentMiniProfile = ({ agent, onClose }) => {
     <div className="mt-2 p-3 rounded-xl border bg-card shadow-sm animate-in slide-in-from-top-1 duration-150">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-3">
-          {agent.photo_url ? (
+          {agent.profile_image ? (
             <img
-              src={agent.photo_url}
-              alt={agent.name}
+              src={agent.profile_image}
+              alt={agent.full_name}
               className="h-12 w-12 rounded-full object-cover shrink-0"
             />
           ) : (
@@ -301,7 +301,7 @@ const AgentMiniProfile = ({ agent, onClose }) => {
             </div>
           )}
           <div>
-            <p className="font-semibold text-sm">{agent.name || "—"}</p>
+            <p className="font-semibold text-sm">{agent.full_name || "—"}</p>
             {agent.job_title && (
               <p className="text-xs text-muted-foreground">{agent.job_title}</p>
             )}
@@ -330,15 +330,15 @@ const AgentMiniProfile = ({ agent, onClose }) => {
         <StatBox label="Sold (12m)" value={agent.sales_as_lead > 0 ? agent.sales_as_lead : "—"} />
         <StatBox
           label="Avg Price"
-          value={fmtPrice(agent.avg_price)}
+          value={fmtPrice(agent.avg_sold_price)}
         />
         <StatBox
           label="Rating"
           value={
-            agent.avg_rating > 0 ? (
+            (agent.rea_rating || agent.reviews_avg) > 0 ? (
               <span className="flex items-center justify-center gap-0.5">
                 <Star className="h-3.5 w-3.5 text-amber-400 fill-amber-400" />
-                {Number(agent.avg_rating).toFixed(1)}
+                {Number(agent.rea_rating || agent.reviews_avg).toFixed(1)}
               </span>
             ) : (
               "—"
@@ -348,13 +348,13 @@ const AgentMiniProfile = ({ agent, onClose }) => {
       </div>
 
       <div className="flex flex-wrap gap-2 mt-3 text-xs">
-        {agent.phone && (
+        {(agent.mobile || agent.business_phone) && (
           <a
-            href={`tel:${agent.phone}`}
+            href={`tel:${agent.mobile || agent.business_phone}`}
             className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
           >
             <Phone className="h-3 w-3" />
-            {agent.phone}
+            {agent.mobile || agent.business_phone}
           </a>
         )}
         {agent.email && (
@@ -366,9 +366,9 @@ const AgentMiniProfile = ({ agent, onClose }) => {
             {agent.email}
           </a>
         )}
-        {agent.profile_url && (
+        {agent.rea_profile_url && (
           <a
-            href={agent.profile_url}
+            href={agent.rea_profile_url}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 text-red-500 hover:text-red-600 transition-colors"

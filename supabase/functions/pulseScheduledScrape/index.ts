@@ -120,31 +120,52 @@ Deno.serve(async (req) => {
 
         const result = await invokeFunction('pulseDataSync', params) as any;
         const d = result || {};
-        totalAgents += d.agents_processed || d.agents_merged || 0;
-        totalAgencies += d.agencies_extracted || 0;
-        totalListings += d.listings_stored || 0;
-        totalMovements += d.movements_detected || 0;
-        totalMappings += d.mappings_created || 0;
+        totalAgents += d.agents_processed ?? d.agents_merged ?? 0;
+        totalAgencies += d.agencies_extracted ?? 0;
+        totalListings += d.listings_stored ?? 0;
+        totalMovements += d.movements_detected ?? 0;
+        totalMappings += d.mappings_created ?? 0;
         batchesSucceeded++;
 
         batchResults.push({
           batch: b + 1,
           suburbs: batch,
           status: 'ok',
-          agents: d.agents_processed || d.agents_merged || 0,
-          agencies: d.agencies_extracted || 0,
-          listings: d.listings_stored || 0,
-          sync_log_id: d.sync_log_id || null,
+          agents: d.agents_processed ?? d.agents_merged ?? 0,
+          agencies: d.agencies_extracted ?? 0,
+          listings: d.listings_stored ?? 0,
+          sync_log_id: d.sync_log_id ?? null,
         });
       } catch (err: any) {
-        batchesFailed++;
         console.error(`[pulseScheduledScrape] batch ${b + 1} failed:`, err.message);
-        batchResults.push({
-          batch: b + 1,
-          suburbs: batch,
-          status: 'error',
-          error: err.message?.substring(0, 200),
-        });
+        // Retry once
+        try {
+          const retryResult = await invokeFunction('pulseDataSync', params) as any;
+          const rd = retryResult || {};
+          totalAgents += rd.agents_processed ?? rd.agents_merged ?? 0;
+          totalAgencies += rd.agencies_extracted ?? 0;
+          totalListings += rd.listings_stored ?? 0;
+          totalMovements += rd.movements_detected ?? 0;
+          totalMappings += rd.mappings_created ?? 0;
+          batchesSucceeded++;
+          batchResults.push({
+            batch: b + 1,
+            suburbs: batch,
+            status: 'ok_retry',
+            agents: rd.agents_processed ?? rd.agents_merged ?? 0,
+            agencies: rd.agencies_extracted ?? 0,
+            listings: rd.listings_stored ?? 0,
+            sync_log_id: rd.sync_log_id ?? null,
+          });
+        } catch (retryErr: any) {
+          batchesFailed++;
+          batchResults.push({
+            batch: b + 1,
+            suburbs: batch,
+            status: 'error',
+            error: retryErr.message?.substring(0, 200),
+          });
+        }
       }
     }
 

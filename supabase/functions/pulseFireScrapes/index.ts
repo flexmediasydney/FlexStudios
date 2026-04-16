@@ -65,6 +65,17 @@ Deno.serve(async (req) => {
 
     const isBoundingBox = source_id.startsWith('rea_listings_bb');
 
+    // Duplicate run check — skip if already running within last 30 min
+    const { data: runningSync } = await admin.from('pulse_sync_logs')
+      .select('id')
+      .eq('source_id', source_id)
+      .eq('status', 'running')
+      .gte('started_at', new Date(Date.now() - 30 * 60000).toISOString())
+      .limit(1);
+    if (runningSync && runningSync.length > 0) {
+      return jsonResponse({ success: false, message: `Source ${source_id} already running`, existing_log: runningSync[0].id });
+    }
+
     if (isBoundingBox) {
       const params = {
         ...paramBuilder(''),
@@ -81,7 +92,7 @@ Deno.serve(async (req) => {
           'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         },
         body: JSON.stringify(params),
-      }).catch(() => {});
+      }).catch((err) => { console.error('Fire-and-forget failed for', source_id, err.message?.substring(0, 100)); });
 
       try {
         await admin.from('pulse_timeline').insert({
@@ -90,6 +101,10 @@ Deno.serve(async (req) => {
           description: `Bounding box scrape fired`,
           source: 'cron',
         });
+      } catch { /* non-fatal */ }
+
+      try {
+        await admin.from('pulse_source_configs').update({ last_run_at: now }).eq('source_id', source_id);
       } catch { /* non-fatal */ }
 
       return jsonResponse({ success: true, source_id, dispatched: 1, type: 'bounding_box' });
@@ -128,9 +143,14 @@ Deno.serve(async (req) => {
           'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         },
         body: JSON.stringify(params),
-      }).catch(() => {});
+      }).catch((err) => { console.error('Fire-and-forget failed for', source_id, err.message?.substring(0, 100)); });
 
       dispatched++;
+
+      // Stagger to avoid Apify rate limit
+      if (dispatched < suburbs.length) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
     }
 
     try {
@@ -141,6 +161,10 @@ Deno.serve(async (req) => {
         new_value: { source_id, dispatched, min_priority, suburbs: suburbs.map(s => s.name) },
         source: 'cron',
       });
+    } catch { /* non-fatal */ }
+
+    try {
+      await admin.from('pulse_source_configs').update({ last_run_at: now }).eq('source_id', source_id);
     } catch { /* non-fatal */ }
 
     return jsonResponse({ success: true, source_id, dispatched, suburbs: suburbs.length });

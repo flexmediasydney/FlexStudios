@@ -188,7 +188,7 @@ export default function PulseMappings({
           : crmAgents.find((a) => a.id === m.crm_entity_id);
 
       const pulseName =
-        pulseRecord?.name ||
+        (m.entity_type === "agent" ? pulseRecord?.full_name : pulseRecord?.name) ||
         pulseRecord?.agent_name ||
         pulseRecord?.agency_name ||
         null;

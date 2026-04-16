@@ -54,7 +54,7 @@ AGENT_SCRAPERS = [
     {
         "name": "scrapestorm/domain-com-au-real-estate-agents-scraper---cheap",
         "label": "scrapestorm Domain Agents Cheap",
-        "input": {"location": f"{TEST_SUBURB}", "maxItems": 50},
+        "input": {"target_url": f"https://www.domain.com.au/real-estate-agents/{TEST_SUBURB.lower()}-{TEST_STATE.lower()}-{TEST_POSTCODE}/", "max_items": 50},
     },
     {
         "name": "websift/australian-realestate-agent-collector",
@@ -107,7 +107,9 @@ REA_SCRAPERS = [
 
 def run_actor(actor_id, input_data, timeout_secs=120):
     """Run an Apify actor and wait for results."""
-    url = f"{BASE}/acts/{actor_id}/runs?timeout={timeout_secs}&waitForFinish={timeout_secs}"
+    # Apify API uses ~ instead of / in actor IDs
+    safe_id = actor_id.replace("/", "~")
+    url = f"{BASE}/acts/{safe_id}/runs?timeout={timeout_secs}&waitForFinish={timeout_secs}"
     body = json.dumps(input_data).encode()
     req = urllib.request.Request(url, data=body, method="POST", headers=HEADERS)
 
@@ -231,7 +233,7 @@ def analyze_property_results(items):
     has_price = sum(1 for i in items if i.get("price") or i.get("askingPrice") or i.get("priceDetails") or i.get("displayPrice"))
     has_agent = sum(1 for i in items if i.get("agent") or i.get("agentName") or i.get("agents") or i.get("listingAgent"))
     has_agency = sum(1 for i in items if i.get("agency") or i.get("agencyName"))
-    has_beds = sum(1 for i in items if i.get("beds") or i.get("bedrooms") or i.get("features", {}).get("beds") if isinstance(i.get("features"), dict) else i.get("beds"))
+    has_beds = sum(1 for i in items if i.get("beds") or i.get("bedrooms"))
     has_type = sum(1 for i in items if i.get("propertyType") or i.get("type") or i.get("property_type"))
     has_suburb = sum(1 for i in items if i.get("suburb") or i.get("location"))
     has_listed_date = sum(1 for i in items if i.get("listedDate") or i.get("dateListed") or i.get("listed_date"))

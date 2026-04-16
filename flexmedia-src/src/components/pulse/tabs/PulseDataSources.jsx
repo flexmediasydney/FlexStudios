@@ -160,8 +160,8 @@ function recordsSummary(log) {
   if (!log?.result_summary) return "—";
   const s = log.result_summary;
   const parts = [];
-  if (s.agents_saved != null)   parts.push(`${s.agents_saved} agents`);
-  if (s.listings_saved != null) parts.push(`${s.listings_saved} listings`);
+  if (s.agents_processed != null)   parts.push(`${s.agents_processed} agents`);
+  if (s.listings_stored != null) parts.push(`${s.listings_stored} listings`);
   if (s.records_saved != null && !parts.length) parts.push(`${s.records_saved} records`);
   return parts.join(", ") || "—";
 }
@@ -498,7 +498,8 @@ function DrillPayloadRow({ item, index }) {
 }
 
 function DrillDialog({ log, onClose }) {
-  const [page, setPage] = useState(0);
+  const [agentsPage, setAgentsPage] = useState(0);
+  const [listingsPage, setListingsPage] = useState(0);
 
   const payload = log?.raw_payload ?? {};
   const agents   = useMemo(() => Array.isArray(payload?.agents)   ? payload.agents   : [], [payload]);
@@ -526,12 +527,12 @@ function DrillDialog({ log, onClose }) {
 
           {hasAgents && (
             <TabsContent value="agents" className="flex-1 overflow-y-auto mt-2">
-              <DrillPaginatedList items={agents} page={page} setPage={setPage} />
+              <DrillPaginatedList items={agents} page={agentsPage} setPage={setAgentsPage} />
             </TabsContent>
           )}
           {hasListings && (
             <TabsContent value="listings" className="flex-1 overflow-y-auto mt-2">
-              <DrillPaginatedList items={listings} page={page} setPage={setPage} />
+              <DrillPaginatedList items={listings} page={listingsPage} setPage={setListingsPage} />
             </TabsContent>
           )}
           <TabsContent value="raw" className="flex-1 overflow-y-auto mt-2">
