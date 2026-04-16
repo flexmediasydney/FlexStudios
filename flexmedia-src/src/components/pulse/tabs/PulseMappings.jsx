@@ -1,0 +1,351 @@
+/**
+ * PulseMappings — Industry Pulse "Mappings" tab.
+ * Shows pulse_crm_mappings with confirm/reject actions.
+ */
+import React, { useState, useMemo, useCallback } from "react";
+import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import { CheckCircle2, XCircle, Link2, Users, Building2 } from "lucide-react";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtDate(d) {
+  if (!d) return "—";
+  try {
+    return new Date(d).toLocaleDateString("en-AU", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function ConfidenceBadge({ confidence }) {
+  if (confidence === "confirmed")
+    return (
+      <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0">
+        Confirmed
+      </Badge>
+    );
+  if (confidence === "suggested")
+    return (
+      <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0">
+        Suggested
+      </Badge>
+    );
+  return (
+    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+      {confidence || "—"}
+    </Badge>
+  );
+}
+
+function MatchTypeBadge({ matchType }) {
+  const label = matchType || "—";
+  return (
+    <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">
+      {label}
+    </Badge>
+  );
+}
+
+// ── Filter bar ────────────────────────────────────────────────────────────────
+
+const FILTER_OPTIONS = [
+  { value: "all",       label: "All" },
+  { value: "confirmed", label: "Confirmed" },
+  { value: "suggested", label: "Suggested" },
+];
+
+const TYPE_OPTIONS = [
+  { value: "all",    label: "All types" },
+  { value: "agent",  label: "Agents" },
+  { value: "agency", label: "Agencies" },
+];
+
+// ── Row ───────────────────────────────────────────────────────────────────────
+
+function MappingRow({ mapping, pulseName, crmName, onConfirm, onReject, confirming, rejecting }) {
+  return (
+    <tr className="border-b last:border-0 hover:bg-muted/30 transition-colors align-top">
+      {/* Entity type */}
+      <td className="py-2.5 pr-3">
+        <div className="flex items-center gap-1.5">
+          {mapping.entity_type === "agency" ? (
+            <Building2 className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+          ) : (
+            <Users className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+          )}
+          <span className="text-xs capitalize">{mapping.entity_type}</span>
+        </div>
+      </td>
+
+      {/* Pulse entity */}
+      <td className="py-2.5 pr-3 max-w-[180px]">
+        <p className="text-xs font-medium truncate">{pulseName || <span className="text-muted-foreground italic">—</span>}</p>
+        {mapping.rea_id && (
+          <p className="text-[10px] text-muted-foreground truncate">ID: {mapping.rea_id}</p>
+        )}
+      </td>
+
+      {/* CRM entity */}
+      <td className="py-2.5 pr-3 max-w-[180px]">
+        <p className="text-xs font-medium truncate">
+          {crmName || <span className="text-muted-foreground italic">—</span>}
+        </p>
+      </td>
+
+      {/* Match type */}
+      <td className="py-2.5 pr-3">
+        <MatchTypeBadge matchType={mapping.match_type} />
+      </td>
+
+      {/* Confidence */}
+      <td className="py-2.5 pr-3">
+        <ConfidenceBadge confidence={mapping.confidence} />
+      </td>
+
+      {/* Created at */}
+      <td className="py-2.5 pr-3 text-[10px] text-muted-foreground whitespace-nowrap">
+        {fmtDate(mapping.created_at)}
+      </td>
+
+      {/* Actions */}
+      <td className="py-2.5">
+        <div className="flex items-center gap-1">
+          {mapping.confidence !== "confirmed" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-900/20"
+              onClick={() => onConfirm(mapping)}
+              disabled={confirming === mapping.id || rejecting === mapping.id}
+              title="Confirm mapping"
+            >
+              {confirming === mapping.id ? (
+                <span className="animate-spin text-[10px]">⟳</span>
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 w-6 p-0 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+            onClick={() => onReject(mapping)}
+            disabled={confirming === mapping.id || rejecting === mapping.id}
+            title="Reject mapping"
+          >
+            {rejecting === mapping.id ? (
+              <span className="animate-spin text-[10px]">⟳</span>
+            ) : (
+              <XCircle className="h-3.5 w-3.5" />
+            )}
+          </Button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
+export default function PulseMappings({
+  pulseAgents = [],
+  pulseAgencies = [],
+  pulseMappings = [],
+  crmAgents = [],
+  crmAgencies = [],
+}) {
+  const [filterConfidence, setFilterConfidence] = useState("all");
+  const [filterType, setFilterType] = useState("all");
+  const [confirming, setConfirming] = useState(null);
+  const [rejecting, setRejecting] = useState(null);
+
+  // Resolved rows
+  const rows = useMemo(() => {
+    return pulseMappings.map((m) => {
+      const pulseRecord =
+        m.entity_type === "agency"
+          ? pulseAgencies.find(
+              (a) => a.id === m.pulse_entity_id || (a.rea_agency_id && a.rea_agency_id === m.rea_id)
+            )
+          : pulseAgents.find(
+              (a) => a.id === m.pulse_entity_id || a.rea_agent_id === m.rea_id
+            );
+
+      const crmRecord =
+        m.entity_type === "agency"
+          ? crmAgencies.find((a) => a.id === m.crm_entity_id)
+          : crmAgents.find((a) => a.id === m.crm_entity_id);
+
+      const pulseName =
+        pulseRecord?.name ||
+        pulseRecord?.agent_name ||
+        pulseRecord?.agency_name ||
+        null;
+
+      const crmName =
+        crmRecord?.name ||
+        crmRecord?.agent_name ||
+        crmRecord?.agency_name ||
+        null;
+
+      return { mapping: m, pulseName, crmName };
+    });
+  }, [pulseMappings, pulseAgents, pulseAgencies, crmAgents, crmAgencies]);
+
+  // Filtered rows
+  const filtered = useMemo(() => {
+    return rows.filter(({ mapping }) => {
+      if (filterConfidence !== "all" && mapping.confidence !== filterConfidence) return false;
+      if (filterType !== "all" && mapping.entity_type !== filterType) return false;
+      return true;
+    });
+  }, [rows, filterConfidence, filterType]);
+
+  // Counts for filter badges
+  const counts = useMemo(() => {
+    const confirmed = pulseMappings.filter((m) => m.confidence === "confirmed").length;
+    const suggested = pulseMappings.filter((m) => m.confidence === "suggested").length;
+    return { all: pulseMappings.length, confirmed, suggested };
+  }, [pulseMappings]);
+
+  const handleConfirm = useCallback(async (mapping) => {
+    setConfirming(mapping.id);
+    try {
+      await api.entities.PulseCrmMapping.update(mapping.id, { confidence: "confirmed" });
+      await refetchEntityList("PulseCrmMapping");
+      toast.success("Mapping confirmed");
+    } catch (err) {
+      toast.error(`Failed to confirm: ${err.message}`);
+    } finally {
+      setConfirming(null);
+    }
+  }, []);
+
+  const handleReject = useCallback(async (mapping) => {
+    setRejecting(mapping.id);
+    try {
+      await api.entities.PulseCrmMapping.delete(mapping.id);
+      await refetchEntityList("PulseCrmMapping");
+      toast.success("Mapping removed");
+    } catch (err) {
+      toast.error(`Failed to remove: ${err.message}`);
+    } finally {
+      setRejecting(null);
+    }
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      {/* ── Header + filters ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex items-center gap-2">
+          <Link2 className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">CRM Mappings</h2>
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{filtered.length}</Badge>
+        </div>
+
+        {/* Confidence filter */}
+        <div className="flex items-center gap-1 flex-wrap">
+          {FILTER_OPTIONS.map((opt) => (
+            <Button
+              key={opt.value}
+              variant={filterConfidence === opt.value ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 px-2.5 text-xs"
+              onClick={() => setFilterConfidence(opt.value)}
+            >
+              {opt.label}
+              {opt.value !== "all" && (
+                <Badge
+                  className={cn(
+                    "ml-1.5 text-[9px] px-1 py-0",
+                    opt.value === "confirmed"
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                      : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                  )}
+                >
+                  {counts[opt.value] ?? 0}
+                </Badge>
+              )}
+            </Button>
+          ))}
+          <span className="text-muted-foreground text-xs mx-1">|</span>
+          {TYPE_OPTIONS.map((opt) => (
+            <Button
+              key={opt.value}
+              variant={filterType === opt.value ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 px-2.5 text-xs"
+              onClick={() => setFilterType(opt.value)}
+            >
+              {opt.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Table ── */}
+      <Card className="rounded-xl border shadow-sm">
+        <CardContent className="p-0 overflow-x-auto">
+          {filtered.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              No mappings found.
+            </div>
+          ) : (
+            <table className="w-full text-xs min-w-[700px]">
+              <thead>
+                <tr className="border-b bg-muted/30">
+                  <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Type</th>
+                  <th className="text-left px-3 py-2.5 font-medium text-muted-foreground">Pulse Entity</th>
+                  <th className="text-left px-3 py-2.5 font-medium text-muted-foreground">CRM Entity</th>
+                  <th className="text-left px-3 py-2.5 font-medium text-muted-foreground">Match</th>
+                  <th className="text-left px-3 py-2.5 font-medium text-muted-foreground">Confidence</th>
+                  <th className="text-left px-3 py-2.5 font-medium text-muted-foreground">Created</th>
+                  <th className="text-left px-3 py-2.5 font-medium text-muted-foreground">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(({ mapping, pulseName, crmName }) => (
+                  <MappingRow
+                    key={mapping.id}
+                    mapping={mapping}
+                    pulseName={pulseName}
+                    crmName={crmName}
+                    onConfirm={handleConfirm}
+                    onReject={handleReject}
+                    confirming={confirming}
+                    rejecting={rejecting}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Empty state for no mappings at all ── */}
+      {pulseMappings.length === 0 && (
+        <Card className="rounded-xl border shadow-sm">
+          <CardContent className="py-12 text-center">
+            <Link2 className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">No mappings yet</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">
+              Run a scrape and the system will auto-suggest mappings between Pulse records and CRM contacts.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}

@@ -1,14 +1,13 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
 /**
- * Pulse Scheduled Scrape — Cron-triggered scraper orchestrator
+ * Pulse Scheduled Scrape — Cron-triggered orchestrator (v2 REA-only)
  *
  * Reads active suburbs from pulse_target_suburbs (filtered by priority tier),
- * batches them, and calls pulseDataSync for each batch. Each batch creates
- * its own sync log with full raw_payload, input_config, and result_summary.
+ * batches them, and calls pulseDataSync for each batch.
  *
  * Body params:
- *   source_id: string    — which source to run (rea_agents, domain_agents, domain_agencies, rea_listings)
+ *   source_id: string    — rea_agents, rea_listings, rea_listings_bb_buy/rent/sold
  *   min_priority: number — minimum suburb priority to include (default 0 = all)
  *   batch_size: number   — suburbs per batch (default 10)
  *   max_batches: number  — safety limit (default 20 = 200 suburbs max)
@@ -22,7 +21,7 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
 
     if (body?._health_check) {
-      return jsonResponse({ _version: 'v1.0', _fn: 'pulseScheduledScrape' });
+      return jsonResponse({ _version: 'v2.0', _fn: 'pulseScheduledScrape', _arch: 'rea-only' });
     }
 
     const {
@@ -33,12 +32,12 @@ Deno.serve(async (req) => {
     } = body;
 
     if (!source_id) {
-      return errorResponse('source_id is required (rea_agents, domain_agents, domain_agencies, rea_listings)', 400);
+      return errorResponse('source_id is required (rea_agents, rea_listings, rea_listings_bb_buy/rent/sold)', 400);
     }
 
     const now = new Date().toISOString();
 
-    // ── Load active suburbs filtered by priority ──
+    // Load active suburbs
     let query = admin.from('pulse_target_suburbs')
       .select('name, state, priority, region')
       .eq('is_active', true)
@@ -48,7 +47,6 @@ Deno.serve(async (req) => {
       query = query.gte('priority', min_priority);
     }
 
-    // Bounding box sources don't need suburbs — single call
     const isBoundingBox = source_id.startsWith('rea_listings_bb');
 
     const { data: suburbs, error: suburbErr } = await query;
@@ -60,19 +58,13 @@ Deno.serve(async (req) => {
     const suburbNames = isBoundingBox ? [] : suburbs!.map(s => s.name);
     console.log(`[pulseScheduledScrape] source=${source_id} priority>=${min_priority} suburbs=${isBoundingBox ? 'bounding-box' : suburbNames.length}`);
 
-    // ── Build run params based on source type ──
+    // REA-only source param builders
     const SOURCE_PARAMS: Record<string, (subs: string[]) => Record<string, any>> = {
-      rea_agents: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true }),
-      domain_agents: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: false, skipDomainAgencies: true, skipListings: true }),
-      domain_agencies: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 0, maxAgenciesPerSuburb: 50, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: false, skipListings: true }),
-      rea_listings: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipDomain: true, skipDomainAgencies: true, skipListings: false }),
-      rea_listings_bb_buy: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers', maxListingsTotal: 500 }),
-      rea_listings_bb_rent: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&source=refinement', maxListingsTotal: 500 }),
-      rea_listings_bb_sold: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement', maxListingsTotal: 500 }),
-      // Domain listings run PER SUBURB (fatihtahta times out on city-wide), 50 per suburb
-      domain_listings_buy: (subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: subs[0] || 'Strathfield', domainListingsSaleType: 'buy', maxDomainListings: 50 }),
-      domain_listings_rent: (subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: subs[0] || 'Strathfield', domainListingsSaleType: 'rent', maxDomainListings: 50 }),
-      domain_listings_sold: (subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: subs[0] || 'Strathfield', domainListingsSaleType: 'sold', maxDomainListings: 50 }),
+      rea_agents: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipListings: true }),
+      rea_listings: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipListings: false }),
+      rea_listings_bb_buy: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers', maxListingsTotal: 500 }),
+      rea_listings_bb_rent: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&source=refinement', maxListingsTotal: 500 }),
+      rea_listings_bb_sold: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement', maxListingsTotal: 500 }),
     };
 
     const paramBuilder = SOURCE_PARAMS[source_id];
@@ -82,18 +74,13 @@ Deno.serve(async (req) => {
 
     const SOURCE_LABELS: Record<string, string> = {
       rea_agents: 'REA Agent Intelligence',
-      domain_agents: 'Domain Agent Data',
-      domain_agencies: 'Domain Agency Intelligence',
       rea_listings: 'REA Listings Market Data',
       rea_listings_bb_buy: 'REA New Sales (Greater Sydney)',
       rea_listings_bb_rent: 'REA New Rentals (Greater Sydney)',
       rea_listings_bb_sold: 'REA Recently Sold (Greater Sydney)',
-      domain_listings_buy: 'Domain Sales Listings (Sydney)',
-      domain_listings_rent: 'Domain Rental Listings (Sydney)',
-      domain_listings_sold: 'Domain Recently Sold (Sydney)',
     };
 
-    // ── Log audit trail: scheduled run started ──
+    // Log audit trail
     await admin.from('pulse_timeline').insert({
       entity_type: 'system',
       event_type: 'scheduled_scrape_started',
@@ -104,10 +91,10 @@ Deno.serve(async (req) => {
       source: 'cron',
     }).catch(() => {});
 
-    // ── Batch suburbs and call pulseDataSync for each ──
+    // Batch suburbs
     const batches: string[][] = [];
     if (isBoundingBox) {
-      batches.push([]); // single empty batch — bounding box doesn't need suburbs
+      batches.push([]);
     } else {
       for (let i = 0; i < suburbNames.length && batches.length < max_batches; i += batch_size) {
         batches.push(suburbNames.slice(i, i + batch_size));
@@ -131,11 +118,9 @@ Deno.serve(async (req) => {
           triggered_by_name: 'Scheduled Cron',
         };
 
-        // Call pulseDataSync — this creates its own sync log with raw_payload
         const result = await invokeFunction('pulseDataSync', params) as any;
-
         const d = result || {};
-        totalAgents += d.agents_merged || 0;
+        totalAgents += d.agents_processed || d.agents_merged || 0;
         totalAgencies += d.agencies_extracted || 0;
         totalListings += d.listings_stored || 0;
         totalMovements += d.movements_detected || 0;
@@ -146,7 +131,7 @@ Deno.serve(async (req) => {
           batch: b + 1,
           suburbs: batch,
           status: 'ok',
-          agents: d.agents_merged || 0,
+          agents: d.agents_processed || d.agents_merged || 0,
           agencies: d.agencies_extracted || 0,
           listings: d.listings_stored || 0,
           sync_log_id: d.sync_log_id || null,
@@ -163,7 +148,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── Log audit trail: scheduled run completed ──
+    // Log completion
     await admin.from('pulse_timeline').insert({
       entity_type: 'system',
       event_type: 'scheduled_scrape_completed',
@@ -178,13 +163,13 @@ Deno.serve(async (req) => {
       source: 'cron',
     }).catch(() => {});
 
-    // ── Update source config last_run_at ──
+    // Update source config last_run_at
     await admin.from('pulse_source_configs')
       .update({ last_run_at: now })
       .eq('source_id', source_id)
       .then(() => {}).catch(() => {});
 
-    // ── Notify admins if failures ──
+    // Notify admins if failures
     if (batchesFailed > 0) {
       const users = await entities.User.list('-created_date', 200).catch(() => []);
       const admins = (users as any[]).filter((u: any) => u.role === 'master_admin' || u.role === 'admin');

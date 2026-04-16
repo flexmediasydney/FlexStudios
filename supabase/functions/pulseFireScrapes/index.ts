@@ -1,17 +1,14 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 /**
- * Pulse Fire Scrapes — Lightweight cron dispatcher
+ * Pulse Fire Scrapes — Lightweight cron dispatcher (v2 REA-only)
  *
  * Reads active suburbs from pulse_target_suburbs, then fires INDIVIDUAL
  * net.http_post calls to pulseDataSync for each suburb. Each call is
  * fire-and-forget — no waiting, no timeout cascade.
  *
- * This replaces the old pulseScheduledScrape orchestrator which timed out
- * because it tried to await each batch sequentially.
- *
  * Body params:
- *   source_id: string    — which source to fire (rea_agents, domain_agents, etc.)
+ *   source_id: string    — rea_agents, rea_listings, rea_listings_bb_buy/rent/sold
  *   min_priority: number — minimum suburb priority (default 0)
  *   max_suburbs: number  — safety cap (default 20)
  */
@@ -28,7 +25,7 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
 
     if (body?._health_check) {
-      return jsonResponse({ _version: 'v1.0', _fn: 'pulseFireScrapes' });
+      return jsonResponse({ _version: 'v2.0', _fn: 'pulseFireScrapes', _arch: 'rea-only' });
     }
 
     const {
@@ -43,35 +40,32 @@ Deno.serve(async (req) => {
 
     const now = new Date().toISOString();
 
-    // Source param builders (same as frontend — maps source_id to pulseDataSync params)
+    // REA-only source param builders
     const SOURCE_PARAMS: Record<string, (suburb: string) => Record<string, any>> = {
-      rea_agents: (s) => ({ suburbs: [s], state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true }),
-      domain_agents: (s) => ({ suburbs: [s], state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipDomain: false, skipDomainAgencies: true, skipListings: true }),
-      domain_agencies: (s) => ({ suburbs: [s], state: 'NSW', maxAgentsPerSuburb: 0, maxAgenciesPerSuburb: 50, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: false, skipListings: true }),
-      rea_listings: (s) => ({ suburbs: [s], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipDomain: true, skipDomainAgencies: true, skipListings: false }),
-      domain_listings_buy: (s) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: s, domainListingsSaleType: 'buy', maxDomainListings: 50 }),
-      domain_listings_rent: (s) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: s, domainListingsSaleType: 'rent', maxDomainListings: 50 }),
+      rea_agents: (s) => ({ suburbs: [s], state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipListings: true }),
+      rea_listings: (s) => ({ suburbs: [s], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipListings: false }),
       // Bounding box sources — single call, no suburb iteration
-      rea_listings_bb_buy: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers', maxListingsTotal: 500 }),
-      rea_listings_bb_rent: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&source=refinement', maxListingsTotal: 500 }),
-      rea_listings_bb_sold: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement', maxListingsTotal: 500 }),
+      rea_listings_bb_buy: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers', maxListingsTotal: 500 }),
+      rea_listings_bb_rent: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&source=refinement', maxListingsTotal: 500 }),
+      rea_listings_bb_sold: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement', maxListingsTotal: 500 }),
     };
 
     const paramBuilder = SOURCE_PARAMS[source_id];
     if (!paramBuilder) {
-      return errorResponse(`Unknown source_id: ${source_id}`, 400);
+      return errorResponse(`Unknown source_id: ${source_id}. Valid: ${Object.keys(SOURCE_PARAMS).join(', ')}`, 400);
     }
 
     const SOURCE_LABELS: Record<string, string> = {
-      rea_agents: 'REA Agents', domain_agents: 'Domain Agents', domain_agencies: 'Domain Agencies',
-      rea_listings: 'REA Listings', domain_listings_buy: 'Domain Sales', domain_listings_rent: 'Domain Rentals',
-      rea_listings_bb_buy: 'REA Sales BB', rea_listings_bb_rent: 'REA Rentals BB', rea_listings_bb_sold: 'REA Sold BB',
+      rea_agents: 'REA Agents',
+      rea_listings: 'REA Listings',
+      rea_listings_bb_buy: 'REA Sales BB',
+      rea_listings_bb_rent: 'REA Rentals BB',
+      rea_listings_bb_sold: 'REA Sold BB',
     };
 
     const isBoundingBox = source_id.startsWith('rea_listings_bb');
 
     if (isBoundingBox) {
-      // Single fire-and-forget call for bounding box sources
       const params = {
         ...paramBuilder(''),
         source_id,
@@ -79,7 +73,6 @@ Deno.serve(async (req) => {
         triggered_by_name: 'Cron',
       };
 
-      // Fire and forget via net.http_post equivalent (fetch without await on response body)
       fetch(`${SUPABASE_URL}/functions/v1/pulseDataSync`, {
         method: 'POST',
         headers: {
@@ -88,9 +81,8 @@ Deno.serve(async (req) => {
           'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         },
         body: JSON.stringify(params),
-      }).catch(() => {}); // fire and forget
+      }).catch(() => {});
 
-      // Log timeline
       try {
         await admin.from('pulse_timeline').insert({
           entity_type: 'system', event_type: 'cron_dispatched', event_category: 'system',
@@ -119,7 +111,6 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: true, source_id, dispatched: 0, message: 'No active suburbs' });
     }
 
-    // Fire each suburb as a separate pulseDataSync call (fire-and-forget)
     let dispatched = 0;
     for (const suburb of suburbs) {
       const params = {
@@ -137,12 +128,11 @@ Deno.serve(async (req) => {
           'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         },
         body: JSON.stringify(params),
-      }).catch(() => {}); // fire and forget
+      }).catch(() => {});
 
       dispatched++;
     }
 
-    // Log timeline
     try {
       await admin.from('pulse_timeline').insert({
         entity_type: 'system', event_type: 'cron_dispatched', event_category: 'system',
