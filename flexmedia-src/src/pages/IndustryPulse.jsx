@@ -1139,23 +1139,40 @@ export default function IndustryPulse() {
                 };
               });
 
+              // Batch suburbs into chunks to avoid edge function timeouts.
+              // Each chunk runs as a separate invocation (~10 suburbs per batch).
+              const SUBURB_BATCH_SIZE = 10;
+
               const runSource = async (source) => {
                 if (!source.is_enabled || activeSuburbNames.length === 0) return;
                 setRunningSources(prev => new Set([...prev, source.source_id]));
                 try {
-                  toast.info(`Running ${source.label} across ${activeSuburbNames.length} suburbs...`);
-                  const params = {
-                    ...source.runParams(activeSuburbNames, source.max_results_per_suburb),
-                    source_id: source.source_id,
-                    source_label: source.label,
-                    triggered_by: user?.id || null,
-                    triggered_by_name: user?.full_name || null,
-                  };
-                  const result = await api.functions.invoke("pulseDataSync", params);
+                  const batches = [];
+                  for (let i = 0; i < activeSuburbNames.length; i += SUBURB_BATCH_SIZE) {
+                    batches.push(activeSuburbNames.slice(i, i + SUBURB_BATCH_SIZE));
+                  }
+                  toast.info(`Running ${source.label} — ${batches.length} batch${batches.length > 1 ? "es" : ""} (${activeSuburbNames.length} suburbs)...`);
+
+                  let totalAgents = 0, totalAgencies = 0, totalListings = 0;
+                  for (let b = 0; b < batches.length; b++) {
+                    const batch = batches[b];
+                    if (batches.length > 1) toast.info(`${source.label}: batch ${b + 1}/${batches.length} (${batch.join(", ").substring(0, 60)}...)`);
+                    const params = {
+                      ...source.runParams(batch, source.max_results_per_suburb),
+                      source_id: source.source_id,
+                      source_label: source.label,
+                      triggered_by: user?.id || null,
+                      triggered_by_name: user?.full_name || null,
+                    };
+                    const result = await api.functions.invoke("pulseDataSync", params);
+                    const d = result.data || {};
+                    totalAgents += d.agents_merged || 0;
+                    totalAgencies += d.agencies_extracted || 0;
+                    totalListings += d.listings_stored || 0;
+                  }
                   refetchEntityList("PulseAgent"); refetchEntityList("PulseListing"); refetchEntityList("PulseAgency");
                   refetchEntityList("PulseSyncLog"); refetchEntityList("PulseTimeline"); refetchEntityList("PulseCrmMapping");
-                  const d = result.data || {};
-                  toast.success(`${source.label}: ${d.agents_merged || 0} agents, ${d.agencies_extracted || 0} agencies, ${d.listings_stored || 0} listings`);
+                  toast.success(`${source.label}: ${totalAgents} agents, ${totalAgencies} agencies, ${totalListings} listings`);
                 } catch (err) {
                   toast.error(`${source.label} failed: ${err?.message || "unknown"}`);
                 } finally {

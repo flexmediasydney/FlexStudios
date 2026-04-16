@@ -307,7 +307,7 @@ Deno.serve(async (req) => {
         rea_agent_id: rea.salesperson_id ? String(rea.salesperson_id) : null,
         domain_agent_id: domainMatch?.agentIdV2 ? String(domainMatch.agentIdV2) : (domainMatch?.id ? String(domainMatch.id) : null),
         rea_profile_url: rea.profile_url || null,
-        domain_profile_url: domainMatch?.profileUrl ? `https://www.domain.com.au${domainMatch.profileUrl}` : (domainMatch?.url || null),
+        domain_profile_url: domainMatch?.profileUrl ? (domainMatch.profileUrl.startsWith('http') ? domainMatch.profileUrl : `https://www.domain.com.au${domainMatch.profileUrl}`) : (domainMatch?.url || null),
         profile_image: domainMatch?.profilePhoto || domainMatch?.profileImage || null,
         source: domainMatch ? 'rea+domain' : 'rea',
         data_sources: JSON.stringify(sources),
@@ -345,7 +345,7 @@ Deno.serve(async (req) => {
         reviews_count: dom.reviewCount || 0,
         reviews_avg: dom.rating || null,
         domain_agent_id: dom.agentIdV2 ? String(dom.agentIdV2) : (dom.id ? String(dom.id) : null),
-        domain_profile_url: dom.profileUrl ? `https://www.domain.com.au${dom.profileUrl}` : (dom.url || null),
+        domain_profile_url: dom.profileUrl ? (dom.profileUrl.startsWith('http') ? dom.profileUrl : `https://www.domain.com.au${dom.profileUrl}`) : (dom.url || null),
         profile_image: dom.profilePhoto || dom.profileImage || null,
         source: 'domain',
         data_sources: JSON.stringify(['domain']),
@@ -444,7 +444,7 @@ Deno.serve(async (req) => {
       if (domAgency.logoSmall) agency.logo_url = agency.logo_url || domAgency.logoSmall;
       // Domain-specific fields stored on the map for later
       agency.domain_agency_id = domAgency.id ? String(domAgency.id) : null;
-      agency.domain_profile_url = domAgency.profileUrl ? `https://www.domain.com.au${domAgency.profileUrl}` : null;
+      agency.domain_profile_url = domAgency.profileUrl ? (domAgency.profileUrl.startsWith('http') ? domAgency.profileUrl : `https://www.domain.com.au${domAgency.profileUrl}`) : null;
       agency.profile_tier = domAgency.profileTier || null;
       agency.brand_colour = domAgency.brandColour || null;
       agency.domain_total_for_sale = domAgency.totalForSale || 0;

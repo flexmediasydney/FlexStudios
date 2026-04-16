@@ -420,8 +420,10 @@ const entitiesProxyAdmin = new Proxy({}, {
  */
 async function invokeFunction(client, functionName, params = {}) {
   // Timeout: Edge Functions should not hang indefinitely on slow networks.
-  // 45s covers the Supabase default 30s function timeout + network overhead.
-  const FUNCTION_TIMEOUT = 45000;
+  // pulseDataSync runs Apify actors which can take 2-3 min per batch.
+  // Other functions use 45s (Supabase default 30s + network overhead).
+  const LONG_RUNNING_FUNCTIONS = ['pulseDataSync'];
+  const FUNCTION_TIMEOUT = LONG_RUNNING_FUNCTIONS.includes(functionName) ? 180000 : 45000;
   let timeoutId;
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(
