@@ -164,6 +164,10 @@ Deno.serve(async (req) => {
       // Bounding box mode: single URL covers entire region (no per-suburb loop)
       listingsStartUrl = null,
       maxListingsTotal = 0,
+      // Domain listings mode (fatihtahta actor — provides listing dates + media)
+      domainListingsLocation = null,
+      domainListingsSaleType = null, // buy, rent, sold
+      maxDomainListings = 0,
     } = body;
 
     const now = new Date().toISOString();
@@ -201,6 +205,86 @@ Deno.serve(async (req) => {
       allListings.push(...bbResult.items);
       if (bbResult.runId) apifyRunIds['listings-boundingbox'] = bbResult.runId;
       console.log(`[bounding-box] ${bbResult.items.length} listings from bounding box`);
+    }
+
+    // ── Step 0b: Domain listings via fatihtahta (provides createdDate + media galleries) ──
+    const allDomainListings: any[] = [];
+    if (domainListingsLocation && maxDomainListings > 0) {
+      console.log(`[domain-listings] Running fatihtahta for ${domainListingsLocation} (${domainListingsSaleType || 'buy'}), max ${maxDomainListings}...`);
+      const dlResult = await runApifyActor('fatihtahta/domain-com-au-scraper', {
+        location: domainListingsLocation,
+        saleType: domainListingsSaleType || 'buy',
+        limit: maxDomainListings,
+      }, 'domain-listings', 300);
+      dlResult.items.forEach(l => { l._source = 'domain_listings'; });
+      allDomainListings.push(...dlResult.items);
+      if (dlResult.runId) apifyRunIds['domain-listings'] = dlResult.runId;
+      console.log(`[domain-listings] ${dlResult.items.length} listings from Domain`);
+
+      // Convert fatihtahta Domain listing format to our unified format
+      // Actual structure: { listing_id, listing: { listed_at, headline, ... }, property: { address, image_urls, ... },
+      //   contacts: { agents: [{ name, photo, mobile }], agency_id, agency_logo, agency_name },
+      //   location: { latitude, longitude, suburb, street, postcode, state },
+      //   media: { gallery: [...] }, inspection: { inspections: [...] }, search_result, source }
+      for (const dl of allDomainListings) {
+        const listing = dl.listing || {};
+        const prop = dl.property || {};
+        const contacts = dl.contacts || {};
+        const loc = dl.location || {};
+        const insp = dl.inspection || {};
+        const media = dl.media || {};
+        const searchResult = dl.search_result || {};
+        const contactAgents = contacts.agents || [];
+        const imageUrls = prop.image_urls || [];
+        const gallery = media.gallery || [];
+        const inspList = insp.inspections || [];
+
+        const objective = (listing.objective || domainListingsSaleType || 'SALE').toUpperCase();
+
+        allListings.push({
+          address: prop.address || (loc.street ? `${loc.streetNumber || ''} ${loc.street}, ${loc.suburb}`.trim() : null),
+          suburb: loc.suburb || null,
+          postcode: loc.postcode || null,
+          state: loc.state || null,
+          propertyType: prop.property_type || prop.primary_property_type || null,
+          bedrooms: prop.bedroom_count || null,
+          bathrooms: prop.bathroom_count || null,
+          carSpaces: prop.parking_count || null,
+          landSize: prop.land_size || null,
+          price: prop.price_text || null,
+          isBuy: objective === 'SALE' || objective === 'BUY',
+          isRent: objective === 'RENT',
+          isSold: objective === 'SOLD',
+          url: prop.canonical_url || null,
+          listingId: dl.listing_id ? String(dl.listing_id) : null,
+          agencyName: contacts.agency_name || null,
+          agents: contactAgents.map((a: any) => ({
+            name: a.name || null,
+            phoneNumber: a.mobile || a.phone || null,
+            image: a.photo || null,
+            emails: a.email ? [a.email] : [],
+          })),
+          images: imageUrls,
+          mainImage: imageUrls[0] || (gallery[0]?.images?.original?.url) || null,
+          description: listing.headline || listing.description?.substring(0, 500) || null,
+          inspections: inspList.map((i: any) => ({ startTime: i.isoDate || i.closingDateTime?.isoDate || null })).filter((i: any) => i.startTime),
+          status: searchResult.listing_type || listing.channel || null,
+          agencyLogo: contacts.agency_logo || null,
+          agencyPhone: contacts.agency_phone || null,
+          agencyEmail: null,
+          hasVideo: !!(media.gallery || []).some((m: any) => m.mediaType === 'video'),
+          latitude: loc.latitude || null,
+          longitude: loc.longitude || null,
+          promoLevel: null,
+          agentPhoto: contactAgents[0]?.photo || null,
+          brandColour: null,
+          // KEY FIELD: actual listing date from Domain
+          listedDate: listing.listed_at || listing.created_at || null,
+          auctionDate: null,
+          _suburb: loc.suburb || 'Greater Sydney',
+          _source: 'domain_listings',
+        });
+      }
     }
 
     // ── Step 1: Run Apify actors per suburb ─────────────────────────────
@@ -712,18 +796,32 @@ Deno.serve(async (req) => {
         asking_price: parsePrice(l.price),
         sold_price: parsePrice(l.soldPrice),
         listed_date: l.listedDate || l.dateAvailable || null,
+        created_date: l.listedDate || null, // Actual platform listing date (Domain provides this)
         sold_date: l.soldDate || null,
+        auction_date: l.auctionDate || null,
         days_on_market: l.daysOnMarket || null,
         status: l.status || null,
         next_inspection: nextInspection,
         agent_name: primaryAgent.name || null,
         agent_phone: primaryAgent.phoneNumber || null,
+        agent_photo: primaryAgent.image || l.agentPhoto || null,
         agency_name: l.agencyName || null,
+        agency_logo: l.agencyLogo || null,
+        agency_brand_colour: l.brandColour || null,
         description: l.description ? String(l.description).substring(0, 500) : null,
-        image_url: l.mainImage || (l.images && l.images[0]) || null,
-        source: l._source === 'rea_boundingbox' ? 'rea_boundingbox' : 'rea',
+        image_url: l.mainImage || (Array.isArray(l.images) && l.images[0]) || null,
+        hero_image: l.mainImage || (Array.isArray(l.images) && l.images[0]) || null,
+        images: Array.isArray(l.images) ? l.images.slice(0, 20) : null,
+        has_video: l.hasVideo || false,
+        latitude: l.latitude || null,
+        longitude: l.longitude || null,
+        features: l.propertyFeatures ? l.propertyFeatures : null,
+        promo_level: l.promoLevel || l.productDepth || null,
+        domain_listing_url: l._source === 'domain_listings' ? (l.url || null) : null,
+        domain_listing_id: l._source === 'domain_listings' ? listingId : null,
+        source: l._source || 'rea',
         source_url: l.url || null,
-        source_listing_id: listingId,
+        source_listing_id: l._source === 'domain_listings' ? null : listingId,
         last_synced_at: now,
         _isNew: isNew,
         // Cross-enrichment data (stripped before DB insert, used for agent enrichment)
@@ -1099,7 +1197,7 @@ Deno.serve(async (req) => {
     if (syncLogId) {
       await entities.PulseSyncLog.update(syncLogId, {
         status: 'completed',
-        records_fetched: allReaAgents.length + allDomainAgents.length + allListings.length + allDomainAgencies.length,
+        records_fetched: allReaAgents.length + allDomainAgents.length + allListings.length + allDomainAgencies.length + allDomainListings.length,
         records_new: agentsInserted + agenciesInserted + listingsInserted,
         completed_at: new Date().toISOString(),
         apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
@@ -1107,6 +1205,7 @@ Deno.serve(async (req) => {
           rea_agents: allReaAgents,
           domain_agents: allDomainAgents,
           domain_agencies: allDomainAgencies,
+          domain_listings: allDomainListings,
           listings: allListings,
         },
         result_summary: {

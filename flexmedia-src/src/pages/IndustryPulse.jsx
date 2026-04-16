@@ -1238,6 +1238,15 @@ export default function IndustryPulse() {
                 { source_id: "rea_listings_bb_sold", label: "REA Recently Sold (Greater Sydney)", description: "azzouzana — Recently sold properties across Greater Sydney", icon: DollarSign, color: "text-emerald-600",
                   defaultMax: 500, schedule: "Daily (6am)", scheduleDetail: "Bounding box — sold",
                   runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: "https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement", maxListingsTotal: max }) },
+                { source_id: "domain_listings_buy", label: "Domain Sales Listings (Sydney)", description: "fatihtahta — Sales listings with listing dates, media galleries, geolocation from domain.com.au", icon: Globe, color: "text-violet-600",
+                  defaultMax: 500, schedule: "Daily (7am)", scheduleDetail: "With actual listing creation dates + image galleries",
+                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: "Sydney", domainListingsSaleType: "buy", maxDomainListings: max }) },
+                { source_id: "domain_listings_rent", label: "Domain Rental Listings (Sydney)", description: "fatihtahta — Rental listings with listing dates, media galleries from domain.com.au", icon: Globe, color: "text-violet-500",
+                  defaultMax: 500, schedule: "Daily (8am)", scheduleDetail: "With actual listing creation dates",
+                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: "Sydney", domainListingsSaleType: "rent", maxDomainListings: max }) },
+                { source_id: "domain_listings_sold", label: "Domain Recently Sold (Sydney)", description: "fatihtahta — Sold properties with sale dates, media from domain.com.au", icon: Globe, color: "text-violet-400",
+                  defaultMax: 500, schedule: "Weekly (Thu 5am)", scheduleDetail: "With actual sale dates",
+                  runParams: (_subs, max) => ({ suburbs: [], state: "NSW", maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: "Sydney", domainListingsSaleType: "sold", maxDomainListings: max }) },
               ].map(s => {
                 const db = sourceConfigs.find(c => c.source_id === s.source_id);
                 return { ...s,
@@ -1659,6 +1668,7 @@ export default function IndustryPulse() {
                 { key: "rea_agents", label: "REA Agents", data: payload.rea_agents || [] },
                 { key: "domain_agents", label: "Domain Agents", data: payload.domain_agents || [] },
                 { key: "domain_agencies", label: "Domain Agencies", data: payload.domain_agencies || [] },
+                { key: "domain_listings", label: "Domain Listings", data: payload.domain_listings || [] },
                 { key: "listings", label: "Listings", data: payload.listings || [] },
               ].filter(t => t.data.length > 0);
               const activeTab = tabs.find(t => t.key === drillPayloadTab) || tabs[0];
@@ -2044,8 +2054,31 @@ export default function IndustryPulse() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
-              {/* Image */}
-              {l.image_url && <img src={l.image_url} alt="" className="w-full h-40 object-cover rounded-lg" />}
+              {/* Media Gallery */}
+              {(() => {
+                const imgs = Array.isArray(l.images) ? l.images.filter(Boolean).slice(0, 12) : l.image_url ? [l.image_url] : [];
+                if (imgs.length === 0) return null;
+                return (
+                  <div className="space-y-1.5">
+                    {/* Hero image */}
+                    <img src={typeof imgs[0] === 'string' ? imgs[0] : imgs[0]?.url || imgs[0]} alt="" className="w-full h-44 object-cover rounded-lg" />
+                    {/* Thumbnail strip */}
+                    {imgs.length > 1 && (
+                      <div className="flex gap-1 overflow-x-auto pb-1">
+                        {imgs.slice(1, 8).map((img, i) => (
+                          <img key={i} src={typeof img === 'string' ? img : img?.url || img} alt="" className="h-14 w-20 object-cover rounded shrink-0" />
+                        ))}
+                        {imgs.length > 8 && <div className="h-14 w-20 rounded bg-muted/60 flex items-center justify-center shrink-0 text-[10px] text-muted-foreground font-medium">+{imgs.length - 8}</div>}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2 text-[9px] text-muted-foreground">
+                      <span>{imgs.length} photo{imgs.length !== 1 ? "s" : ""}</span>
+                      {l.has_video && <Badge variant="outline" className="text-[8px] px-1 py-0">Video</Badge>}
+                      {l.promo_level && <Badge variant="outline" className="text-[8px] px-1 py-0 capitalize">{l.promo_level}</Badge>}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Property Details */}
               <div className="space-y-1.5">
@@ -2056,6 +2089,7 @@ export default function IndustryPulse() {
                   {l.parking && <div className="bg-muted/40 rounded-lg p-2 text-center"><p className="text-lg font-bold">{l.parking}</p><p className="text-[9px] text-muted-foreground">Parking</p></div>}
                 </div>
                 {l.land_size && <p className="text-xs text-muted-foreground">Land: {l.land_size}</p>}
+                {l.property_type && <p className="text-xs text-muted-foreground">Type: {l.property_type}</p>}
               </div>
 
               {/* Pricing */}
@@ -2071,10 +2105,12 @@ export default function IndustryPulse() {
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase">Timeline</p>
                 <div className="space-y-1 text-xs">
+                  {l.created_date && <div className="flex items-center justify-between bg-blue-50 dark:bg-blue-950/20 rounded px-2.5 py-1.5 border border-blue-200 dark:border-blue-800"><span className="font-medium">Listed on Platform</span><span className="text-blue-700 dark:text-blue-400 font-medium">{new Date(l.created_date).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span></div>}
                   {l.first_seen_at && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>First Detected</span><span className="text-muted-foreground">{new Date(l.first_seen_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span></div>}
-                  {l.listed_date && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Listed</span><span className="text-muted-foreground">{fmtDate(l.listed_date)}</span></div>}
+                  {l.listed_date && !l.created_date && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Listed</span><span className="text-muted-foreground">{fmtDate(l.listed_date)}</span></div>}
                   {l.next_inspection && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Next Inspection</span><span className="text-muted-foreground">{new Date(l.next_inspection).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span></div>}
-                  {l.sold_date && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Sold</span><span className="text-muted-foreground">{fmtDate(l.sold_date)}</span></div>}
+                  {l.auction_date && <div className="flex items-center justify-between bg-amber-50 dark:bg-amber-950/20 rounded px-2.5 py-1.5 border border-amber-200 dark:border-amber-800"><span className="font-medium">Auction</span><span className="text-amber-700 dark:text-amber-400 font-medium">{fmtDate(l.auction_date)}</span></div>}
+                  {l.sold_date && <div className="flex items-center justify-between bg-green-50 dark:bg-green-950/20 rounded px-2.5 py-1.5 border border-green-200 dark:border-green-800"><span className="font-medium">Sold</span><span className="text-green-700 dark:text-green-400 font-medium">{fmtDate(l.sold_date)}</span></div>}
                   {l.days_on_market > 0 && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Days on Market</span><span className="font-medium tabular-nums">{l.days_on_market}</span></div>}
                   {l.status && <div className="flex items-center justify-between bg-muted/30 rounded px-2.5 py-1.5"><span>Status</span><Badge variant="outline" className="text-[9px]">{l.status}</Badge></div>}
                 </div>
@@ -2085,11 +2121,16 @@ export default function IndustryPulse() {
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase">Listing Agent</p>
                   <div className="border rounded-lg p-3 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">{l.agent_name}</span>
-                      {agentInCrm && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">In CRM</Badge>}
+                    <div className="flex items-center gap-2.5">
+                      {l.agent_photo ? <img src={l.agent_photo} alt="" className="h-8 w-8 rounded-full object-cover shrink-0" /> : null}
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium">{l.agent_name}</span>
+                          {agentInCrm && <Badge className="text-[8px] bg-green-100 text-green-700 border-0 px-1 py-0">In CRM</Badge>}
+                        </div>
+                        {l.agent_phone && <div className="flex items-center gap-2 text-xs"><Phone className="h-3 w-3 text-muted-foreground" /><a href={`tel:${l.agent_phone}`} className="text-primary hover:underline">{l.agent_phone}</a></div>}
+                      </div>
                     </div>
-                    {l.agent_phone && <div className="flex items-center gap-2 text-xs"><Phone className="h-3 w-3 text-muted-foreground" /><a href={`tel:${l.agent_phone}`} className="text-primary hover:underline">{l.agent_phone}</a></div>}
                     {agentMatch && (
                       <button className="text-[10px] text-primary hover:underline mt-1" onClick={() => { setSelectedListing(null); setSelectedAgent(agentMatch); }}>
                         View full agent dossier →
@@ -2104,12 +2145,17 @@ export default function IndustryPulse() {
                 <div className="space-y-1.5">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase">Agency</p>
                   <div className="border rounded-lg p-3">
-                    <span className="font-medium text-xs">{l.agency_name}</span>
-                    {agencyMatch && (
-                      <button className="text-[10px] text-primary hover:underline ml-2" onClick={() => { setSelectedListing(null); setSelectedAgency(agencyMatch); }}>
-                        View agency profile →
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2.5">
+                      {l.agency_logo ? <img src={l.agency_logo} alt="" className="h-6 w-16 object-contain shrink-0" /> : null}
+                      <div className="flex-1">
+                        <span className="font-medium text-xs">{l.agency_name}</span>
+                        {agencyMatch && (
+                          <button className="text-[10px] text-primary hover:underline ml-2" onClick={() => { setSelectedListing(null); setSelectedAgency(agencyMatch); }}>
+                            View agency profile →
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2124,8 +2170,11 @@ export default function IndustryPulse() {
 
               {/* Links */}
               <div className="space-y-1.5 pt-2 border-t">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Links</p>
-                {l.source_url && <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />View on realestate.com.au</a>}
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase">Platform Links</p>
+                <div className="flex flex-col gap-1">
+                  {l.source_url && l.source !== 'domain_listings' && <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />realestate.com.au</a>}
+                  {(l.domain_listing_url || (l.source === 'domain_listings' && l.source_url)) && <a href={l.domain_listing_url || l.source_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />domain.com.au</a>}
+                </div>
               </div>
 
               {/* Metadata */}

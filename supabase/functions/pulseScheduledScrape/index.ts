@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
     }
 
     // Bounding box sources don't need suburbs — single call
-    const isBoundingBox = source_id.startsWith('rea_listings_bb');
+    const isBoundingBox = source_id.startsWith('rea_listings_bb') || source_id.startsWith('domain_listings');
 
     const { data: suburbs, error: suburbErr } = await query;
     if (suburbErr) throw new Error(`Failed to load suburbs: ${suburbErr.message}`);
@@ -69,6 +69,9 @@ Deno.serve(async (req) => {
       rea_listings_bb_buy: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers', maxListingsTotal: 500 }),
       rea_listings_bb_rent: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&source=refinement', maxListingsTotal: 500 }),
       rea_listings_bb_sold: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement', maxListingsTotal: 500 }),
+      domain_listings_buy: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: 'Sydney', domainListingsSaleType: 'buy', maxDomainListings: 500 }),
+      domain_listings_rent: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: 'Sydney', domainListingsSaleType: 'rent', maxDomainListings: 500 }),
+      domain_listings_sold: (_subs) => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipDomain: true, skipDomainAgencies: true, skipListings: true, domainListingsLocation: 'Sydney', domainListingsSaleType: 'sold', maxDomainListings: 500 }),
     };
 
     const paramBuilder = SOURCE_PARAMS[source_id];
@@ -84,6 +87,9 @@ Deno.serve(async (req) => {
       rea_listings_bb_buy: 'REA New Sales (Greater Sydney)',
       rea_listings_bb_rent: 'REA New Rentals (Greater Sydney)',
       rea_listings_bb_sold: 'REA Recently Sold (Greater Sydney)',
+      domain_listings_buy: 'Domain Sales Listings (Sydney)',
+      domain_listings_rent: 'Domain Rental Listings (Sydney)',
+      domain_listings_sold: 'Domain Recently Sold (Sydney)',
     };
 
     // ── Log audit trail: scheduled run started ──
