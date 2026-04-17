@@ -1,9 +1,9 @@
-import { getAdminClient, getUserFromReq, getUserClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, getUserClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 
 // Manual test to simulate a Tonomo webhook
 // Usage: Call this function from the frontend or via API to test webhook processing
 
-Deno.serve(async (req) => {
+serveWithAudit('testTonomoWebhook', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

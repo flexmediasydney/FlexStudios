@@ -1,9 +1,9 @@
-import { handleCors, jsonResponse, getAdminClient, getUserFromReq, errorResponse } from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, getAdminClient, getUserFromReq, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 import { domainGet, transformDomainListing, addressMatch, getSimulatedListings } from '../_shared/domain.ts';
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
 
-Deno.serve(async (req) => {
+serveWithAudit('domainAgentMonitor', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, isQuietHours } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, isQuietHours, serveWithAudit } from '../_shared/supabase.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NOTIFICATION TYPE REGISTRY
@@ -314,7 +314,7 @@ async function createNotificationsForRoles(
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN HANDLER
 // ═══════════════════════════════════════════════════════════════════════════
-Deno.serve(async (req) => {
+serveWithAudit('notificationService', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   if (req.method !== 'POST') {

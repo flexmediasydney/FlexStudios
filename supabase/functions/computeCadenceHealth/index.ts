@@ -1,12 +1,4 @@
-import {
-  handleCors,
-  jsonResponse,
-  errorResponse,
-  getAdminClient,
-  getUserFromReq,
-  createEntities,
-  isQuietHours,
-} from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, errorResponse, getAdminClient, getUserFromReq, createEntities, isQuietHours, serveWithAudit } from '../_shared/supabase.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -137,7 +129,7 @@ async function canNotify(entities: any, userId: string, type: string, category: 
 
 // ─── Main handler ────────────────────────────────────────────────────────────
 
-Deno.serve(async (req) => {
+serveWithAudit('computeCadenceHealth', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

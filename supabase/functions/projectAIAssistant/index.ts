@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Tool Definitions (9 tools for Claude)
@@ -350,7 +350,7 @@ function stripNulls(obj: Record<string, any>): Record<string, any> {
 // Main Handler
 // ═══════════════════════════════════════════════════════════════════════════════
 
-Deno.serve(async (req) => {
+serveWithAudit('projectAIAssistant', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

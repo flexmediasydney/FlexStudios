@@ -1,9 +1,9 @@
-import { handleCors, jsonResponse, errorResponse, invokeFunction, getUserFromReq } from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, errorResponse, invokeFunction, getUserFromReq, serveWithAudit } from '../_shared/supabase.ts';
 
 // Invoked from the frontend "Process Queue Now" button.
 // Delegates to processTonomoQueue via cross-function call.
 
-Deno.serve(async (req) => {
+serveWithAudit('triggerTonomoProcessing', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
