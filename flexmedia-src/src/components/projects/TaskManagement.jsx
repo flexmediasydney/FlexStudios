@@ -19,6 +19,8 @@ import TaskListView from "./TaskListView";
 import { toast } from "sonner";
 import ConfirmDialog from "@/components/common/ConfirmDialog";
 import { createNotification, writeFeedEvent } from "@/components/notifications/createNotification";
+import { useTaskTakeover } from "./hooks/useTaskTakeover";
+import TaskTakeoverDialog from "./TaskTakeoverDialog";
 
 export function getCountdownState({ dueDate, thresholds }) {
   if (!dueDate) return "normal";
@@ -163,6 +165,9 @@ export default function TaskManagement({ projectId, project, canEdit }) {
      queryKey: ["currentUser"],
      queryFn: () => api.auth.me()
    });
+
+   // Task ownership takeover prompt for completion (mirrors timer-start behavior)
+   const { pendingTakeover, requestTakeover, approveTakeover, cancelTakeover } = useTaskTakeover();
 
    const logActivity = (action, description) => {
      if (!projectId || !project) return;
@@ -529,6 +534,27 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
     // Race condition fix: capture the value at call time to prevent stale closure reads
     const wasCompleted = task.is_completed;
+
+    // Ownership-takeover check: if we're about to MARK COMPLETE a task owned by
+    // someone else (or by a team), prompt the user. Mirrors timer-start behavior.
+    // Re-opening (wasCompleted === true) never prompts.
+    if (!wasCompleted) {
+      const needsTakeover =
+        (task.assigned_to_team_id && !task.assigned_to) ||
+        (task.assigned_to && user?.id && task.assigned_to !== user.id);
+      if (needsTakeover) {
+        requestTakeover(task, user, () => { runToggleComplete(task, wasCompleted); });
+        return;
+      }
+    }
+
+    runToggleComplete(task, wasCompleted);
+  };
+
+  // Actual completion body, invoked either directly (no takeover) or
+  // post-ownership-transfer from the takeover approval flow.
+  const runToggleComplete = async (task, wasCompleted) => {
+    if (togglingRef.current.has(task.id)) return;
     togglingRef.current.add(task.id);
 
     // Optimistic update: flip completion state immediately for responsive UI

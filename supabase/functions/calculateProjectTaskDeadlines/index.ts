@@ -192,9 +192,34 @@ function calculateTaskState(task: any, project: any, allTasks: any[], timezone =
   if (hasTrigger) {
     if (task.timer_trigger === 'dependencies_cleared') {
       blockedByTrigger = blockedByDependencies;
-      if (!blockedByDependencies && !task.due_date) {
-        result.due_date = calculateDeadlineForTask(task, new Date().toISOString(), timezone);
-        result.shouldUpdate = true;
+      if (!blockedByDependencies) {
+        // Use max(dep.completed_at) as the trigger — idempotent and reproducible.
+        // Falling back to now() only when task has no deps (an empty depends_on_task_ids
+        // is "always unblocked", so current time is the most honest reference).
+        const depCompletionTimes = (task.depends_on_task_ids || [])
+          .map((depId: string) => allTasks.find(t => t.id === depId))
+          .filter((t: any) => t?.completed_at)
+          .map((t: any) => new Date(t.completed_at).getTime())
+          .filter((ms: number) => Number.isFinite(ms));
+        const triggerTime = depCompletionTimes.length > 0
+          ? new Date(Math.max(...depCompletionTimes)).toISOString()
+          : new Date().toISOString();
+
+        const computedDueDate = calculateDeadlineForTask(task, triggerTime, timezone);
+
+        // Self-heal: recompute whenever the task has no due_date yet, OR when the
+        // stored value drifts materially from the canonical value (>1 min tolerance).
+        // Respect manually-set due dates via the is_manually_set_due_date flag.
+        const currentMs = task.due_date ? new Date(task.due_date).getTime() : NaN;
+        const computedMs = computedDueDate ? new Date(computedDueDate).getTime() : NaN;
+        const driftMs = Number.isFinite(currentMs) && Number.isFinite(computedMs)
+          ? Math.abs(currentMs - computedMs)
+          : Infinity;
+        const shouldUpdate = !task.is_manually_set_due_date && (!task.due_date || driftMs > 60_000);
+        if (shouldUpdate) {
+          result.due_date = computedDueDate;
+          result.shouldUpdate = true;
+        }
       }
     } else {
       const triggerMet = isTriggerConditionMet(task.timer_trigger, project);

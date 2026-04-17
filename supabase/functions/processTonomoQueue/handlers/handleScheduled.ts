@@ -190,11 +190,38 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   if (p.order?.deliverable_path) sharedData.tonomo_deliverable_path = p.order.deliverable_path;
   if (agentId) {
     sharedData.agent_id = agentId;
-    // Resolve agency_id from the agent record
+    // Resolve agency_id from the agent record, with fallback to Tonomo brokerage_obj
     try {
       const agentRecord = await entities.Agent.get(agentId);
-      if (agentRecord?.current_agency_id) sharedData.agency_id = agentRecord.current_agency_id;
+      let agencyIdToUse: string | null = agentRecord?.current_agency_id || null;
       if (agentRecord?.name) sharedData.agent_name = agentRecord.name;
+
+      // Fallback: if agent has no agency yet, try to resolve from payload's brokerage_obj
+      if (!agencyIdToUse) {
+        const brokerage = p.listingAgents?.[0]?.brokerage_obj || p.order?.listingAgents?.[0]?.brokerage_obj;
+        const brokerageName = p.listingAgents?.[0]?.brokerage || p.order?.listingAgents?.[0]?.brokerage;
+        if (brokerage?.id || brokerageName) {
+          const allAgencies = await entities.Agency.list('-updated_date', 500).catch(() => []);
+          const normalize = (s: string) => (s || '').toLowerCase().replace(/[-_\s]+/g, ' ').trim();
+          const normBrokerageName = normalize(brokerageName || '');
+          const match = normBrokerageName ? allAgencies.find((a: any) => {
+            const aName = normalize(a.name || '');
+            return aName === normBrokerageName || aName.includes(normBrokerageName) || normBrokerageName.includes(aName);
+          }) : null;
+          if (match) {
+            agencyIdToUse = match.id;
+            // Also backfill on the agent record for future use
+            if (agentRecord && !agentRecord.current_agency_id) {
+              await entities.Agent.update(agentId, {
+                current_agency_id: match.id,
+                current_agency_name: match.name,
+              }).catch(() => {});
+            }
+          }
+        }
+      }
+
+      if (agencyIdToUse) sharedData.agency_id = agencyIdToUse;
     } catch { /* non-fatal */ }
   }
 

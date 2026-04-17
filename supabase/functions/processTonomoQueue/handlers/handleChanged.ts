@@ -87,9 +87,33 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
         const agentRecord = await entities.Agent.get(agentId);
         if (agentRecord) {
           updates.agent_name = agentRecord.name || null;
-          if (agentRecord.current_agency_id) {
-            updates.agency_id = agentRecord.current_agency_id;
+          let agencyIdToUse: string | null = agentRecord.current_agency_id || null;
+
+          // Fallback: if agent has no agency yet, try to resolve from payload's brokerage_obj
+          if (!agencyIdToUse) {
+            const brokerage = p.listingAgents?.[0]?.brokerage_obj || p.order?.listingAgents?.[0]?.brokerage_obj;
+            const brokerageName = p.listingAgents?.[0]?.brokerage || p.order?.listingAgents?.[0]?.brokerage;
+            if (brokerage?.id || brokerageName) {
+              const allAgencies = await entities.Agency.list('-updated_date', 500).catch(() => []);
+              const normalize = (s: string) => (s || '').toLowerCase().replace(/[-_\s]+/g, ' ').trim();
+              const normBrokerageName = normalize(brokerageName || '');
+              const match = normBrokerageName ? allAgencies.find((a: any) => {
+                const aName = normalize(a.name || '');
+                return aName === normBrokerageName || aName.includes(normBrokerageName) || normBrokerageName.includes(aName);
+              }) : null;
+              if (match) {
+                agencyIdToUse = match.id;
+                if (!agentRecord.current_agency_id) {
+                  await entities.Agent.update(agentId, {
+                    current_agency_id: match.id,
+                    current_agency_name: match.name,
+                  }).catch(() => {});
+                }
+              }
+            }
           }
+
+          if (agencyIdToUse) updates.agency_id = agencyIdToUse;
         }
       } catch { /* non-fatal */ }
     } else if (!agentId) reviewReasons.push(`Agent reassigned to "${agent.displayName || agent.email || 'unknown'}" but not found — manual assignment required`);

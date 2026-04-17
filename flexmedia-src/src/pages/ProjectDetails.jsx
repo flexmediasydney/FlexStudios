@@ -326,7 +326,9 @@ export default function ProjectDetails() {
    // Use calculated_price (matrix-adjusted) with fallback to stored price
    const displayPrice = project?.calculated_price || project?.price || 0;
    const { data: agent } = useSmartEntityData('Agent', project?.agent_id, { priority: 5 });
-   const { data: agency } = useSmartEntityData('Agency', project?.agency_id, { priority: 5 });
+   // Dynamic fallback: use agent's current_agency_id when project's own agency_id is null/stale
+   const effectiveAgencyId = project?.agency_id || agent?.current_agency_id || null;
+   const { data: agency } = useSmartEntityData('Agency', effectiveAgencyId, { priority: 5 });
    const { data: allAgents = [] } = useSmartEntityList('Agent');
    const { data: productsData = [] } = useSmartEntityList('Product');
    const { data: packagesData = [] } = useSmartEntityList('Package');
