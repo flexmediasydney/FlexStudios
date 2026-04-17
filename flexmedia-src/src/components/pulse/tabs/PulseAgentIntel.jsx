@@ -203,7 +203,7 @@ function SortIcon({ col, sort }) {
 
 /* ── Mini listing table (inside slideout) ────────────────────────────────── */
 
-function MiniListingTable({ listings, emptyMsg }) {
+function MiniListingTable({ listings, emptyMsg, onOpenListing }) {
   if (!listings.length)
     return <p className="text-xs text-muted-foreground py-2">{emptyMsg}</p>;
   return (
@@ -218,7 +218,14 @@ function MiniListingTable({ listings, emptyMsg }) {
         </thead>
         <tbody>
           {listings.slice(0, 10).map((l) => (
-            <tr key={l.id} className="border-b border-border/40 hover:bg-muted/40">
+            <tr
+              key={l.id}
+              className={cn(
+                "border-b border-border/40 hover:bg-muted/40 transition-colors",
+                onOpenListing && "cursor-pointer"
+              )}
+              onClick={onOpenListing ? () => onOpenListing(l) : undefined}
+            >
               <td className="py-1.5 pr-3 max-w-[220px] truncate text-foreground">
                 {l.address || l.suburb || "—"}
               </td>
@@ -462,7 +469,20 @@ function AddToCrmDialog({ agent, crmAgents, crmAgencies, pulseMappings, onClose,
 
 /* ── Agent Slideout ──────────────────────────────────────────────────────── */
 
-function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgencies, pulseMappings, onClose, onAddToCrm }) {
+export function AgentSlideout({
+  agent,
+  pulseAgencies = [],
+  pulseListings,
+  pulseTimeline,
+  crmAgents,
+  crmAgencies,
+  pulseMappings,
+  onClose,
+  onAddToCrm,
+  onOpenEntity,
+  hasHistory = false,
+  onBack,
+}) {
   const position = mapPosition(agent.job_title);
 
   const agentListings = useMemo(() => {
@@ -480,6 +500,20 @@ function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgen
       sold: all.filter((l) => l.listing_type === "sold"),
     };
   }, [agent.rea_agent_id, pulseListings]);
+
+  // Cross-reference: find pulse agency record
+  const linkedAgency = useMemo(() => {
+    if (agent.agency_rea_id) {
+      const byId = pulseAgencies.find((a) => a.rea_agency_id === agent.agency_rea_id);
+      if (byId) return byId;
+    }
+    if (agent.agency_name) {
+      return pulseAgencies.find(
+        (a) => normAgencyKey(a.name) === normAgencyKey(agent.agency_name)
+      );
+    }
+    return null;
+  }, [agent.agency_rea_id, agent.agency_name, pulseAgencies]);
 
   const suburbs = useMemo(() => {
     try {
@@ -505,6 +539,15 @@ function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgen
         {/* ── Header ── */}
         <div className="sticky top-0 z-10 bg-background border-b border-border px-5 pt-5 pb-4">
           <div className="flex items-start gap-4">
+            {hasHistory && onBack && (
+              <button
+                onClick={onBack}
+                className="text-muted-foreground hover:text-foreground transition-colors p-1 -ml-1 rounded-md hover:bg-muted"
+                title="Back"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+            )}
             <AgentAvatar agent={agent} size={56} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
@@ -571,24 +614,56 @@ function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgen
             <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Agency
             </h3>
-            <div className="flex flex-wrap items-center gap-3 text-sm">
-              <div className="flex items-center gap-1.5">
-                <Building2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                <span className="font-medium">{agent.agency_name || "—"}</span>
+            {linkedAgency ? (
+              <button
+                onClick={() => onOpenEntity?.({ type: "agency", id: linkedAgency.id })}
+                className="w-full flex flex-wrap items-center gap-3 text-sm text-left p-2 -m-2 rounded-md hover:bg-muted/50 transition-colors group"
+                title="Open agency profile"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Building2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  <span className="font-medium group-hover:text-primary">
+                    {agent.agency_name || linkedAgency.name || "—"}
+                  </span>
+                  <ChevronRight className="h-3 w-3 text-muted-foreground/50 group-hover:text-primary" />
+                </div>
+                {agent.agency_suburb && (
+                  <div className="flex items-center gap-1">
+                    <MapPin className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    <span className="text-muted-foreground">{agent.agency_suburb}</span>
+                  </div>
+                )}
+                {linkedAgency.live_agent_count || linkedAgency.agent_count ? (
+                  <span className="text-[10px] text-muted-foreground">
+                    ({linkedAgency.live_agent_count || linkedAgency.agent_count} agents)
+                  </span>
+                ) : null}
+              </button>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <div className="flex items-center gap-1.5">
+                  <Building2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  <span className="font-medium">{agent.agency_name || "—"}</span>
+                </div>
+                {agent.agency_suburb && (
+                  <div className="flex items-center gap-1">
+                    <MapPin className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    <span className="text-muted-foreground">{agent.agency_suburb}</span>
+                  </div>
+                )}
+                {agent.agency_rea_id && (
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Hash className="h-3 w-3" />
+                    <span className="font-mono">{agent.agency_rea_id}</span>
+                  </div>
+                )}
+                {agent.agency_name && !linkedAgency && (
+                  <span className="text-[10px] text-muted-foreground/60">
+                    Not yet synced — limited data
+                  </span>
+                )}
               </div>
-              {agent.agency_suburb && (
-                <div className="flex items-center gap-1">
-                  <MapPin className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                  <span className="text-muted-foreground">{agent.agency_suburb}</span>
-                </div>
-              )}
-              {agent.agency_rea_id && (
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Hash className="h-3 w-3" />
-                  <span className="font-mono">{agent.agency_rea_id}</span>
-                </div>
-              )}
-            </div>
+            )}
           </section>
 
           {/* ── Stats ── */}
@@ -750,6 +825,7 @@ function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgen
             <MiniListingTable
               listings={agentListings.active}
               emptyMsg="No active listings found"
+              onOpenListing={onOpenEntity ? (l) => onOpenEntity({ type: "listing", id: l.id }) : undefined}
             />
           </section>
 
@@ -761,6 +837,7 @@ function AgentSlideout({ agent, pulseListings, pulseTimeline, crmAgents, crmAgen
             <MiniListingTable
               listings={agentListings.sold}
               emptyMsg="No sold listings found"
+              onOpenListing={onOpenEntity ? (l) => onOpenEntity({ type: "listing", id: l.id }) : undefined}
             />
           </section>
 
@@ -838,6 +915,7 @@ export default function PulseAgentIntel({
   stats = {},
   addToCrmFromCommand,
   onClearAddToCrmFromCommand,
+  onOpenEntity,
 }) {
   // ── UI state ──────────────────────────────────────────────────────────────
   const [agentFilter, setAgentFilter] = useState("all"); // all | not_in_crm | in_crm
@@ -1133,7 +1211,11 @@ export default function PulseAgentIntel({
                   <tr
                     key={agent.id}
                     className="border-b border-border/60 hover:bg-muted/40 cursor-pointer transition-colors"
-                    onClick={() => setSelectedAgent(agent)}
+                    onClick={() =>
+                      onOpenEntity
+                        ? onOpenEntity({ type: "agent", id: agent.id })
+                        : setSelectedAgent(agent)
+                    }
                   >
                     {/* Photo */}
                     <td className="py-2 pl-3 pr-2">

@@ -164,9 +164,76 @@ const StatBox = ({ label, value, sub }) => (
 
 /* ── Listing row ─────────────────────────────────────────────────────────── */
 
-const ListingRow = ({ l }) => {
+const ListingRow = ({ l, onOpen }) => {
   const isSold = l.listing_type === "sold";
   const isRent = l.listing_type === "for_rent";
+
+  if (onOpen) {
+    return (
+      <button
+        onClick={() => onOpen(l)}
+        className="w-full flex items-center gap-2 text-xs p-1.5 rounded hover:bg-muted/30 transition-colors text-left"
+      >
+        {l.image_url ? (
+          <img
+            src={l.image_url}
+            alt=""
+            className="h-9 w-14 object-cover rounded shrink-0"
+          />
+        ) : (
+          <div className="h-9 w-14 bg-muted rounded shrink-0 flex items-center justify-center">
+            <Home className="h-3.5 w-3.5 text-muted-foreground/40" />
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <p className="font-medium truncate">{l.address || l.suburb || "—"}</p>
+          <div className="flex items-center gap-2 text-muted-foreground flex-wrap">
+            {l.suburb && <span>{l.suburb}</span>}
+            {isSold ? (
+              <>
+                {l.sold_price > 0 && (
+                  <span className="font-medium text-foreground">{fmtPrice(l.sold_price)}</span>
+                )}
+                {l.sold_date && (
+                  <span className="text-[9px]">Sold {fmtDate(l.sold_date)}</span>
+                )}
+              </>
+            ) : (
+              <>
+                {l.asking_price > 0 && (
+                  <span className="font-medium text-foreground">
+                    {fmtPrice(l.asking_price)}
+                    {isRent && "/wk"}
+                  </span>
+                )}
+                {l.bedrooms > 0 && <span>{l.bedrooms}bd</span>}
+                {l.bathrooms > 0 && <span>{l.bathrooms}ba</span>}
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {isSold && (
+            <Badge className="text-[7px] py-0 px-1 bg-emerald-100 text-emerald-700 border-0">
+              Sold
+            </Badge>
+          )}
+          {isRent && (
+            <Badge
+              variant="outline"
+              className="text-[7px] py-0 px-1 text-purple-600 border-purple-200"
+            >
+              Rent
+            </Badge>
+          )}
+          {!isSold && !isRent && (
+            <ChevronRight className="h-3 w-3 text-primary" />
+          )}
+        </div>
+      </button>
+    );
+  }
+
   return (
     <a
       href={l.source_url || "#"}
@@ -410,7 +477,18 @@ const AgentMiniProfile = ({ agent, onClose }) => {
 /* ═══ AGENCY SLIDEOUT ══════════════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
-function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crmAgencies, pulseMappings, onClose }) {
+export function AgencySlideout({
+  agency,
+  pulseAgents,
+  pulseListings,
+  pulseTimeline,
+  crmAgencies,
+  pulseMappings,
+  onClose,
+  onOpenEntity,
+  hasHistory = false,
+  onBack,
+}) {
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [metaOpen, setMetaOpen] = useState(false);
   const [addingToCrm, setAddingToCrm] = useState(false);
@@ -543,6 +621,16 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crm
           <DialogHeader>
             <DialogTitle asChild>
               <div className="flex items-start gap-3">
+                {/* Back */}
+                {hasHistory && onBack && (
+                  <button
+                    onClick={onBack}
+                    className="p-1.5 -ml-1 rounded-lg hover:bg-muted transition-colors shrink-0"
+                    title="Back"
+                  >
+                    <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+                  </button>
+                )}
                 {/* Logo */}
                 <div className="h-12 w-12 rounded-xl overflow-hidden bg-muted flex items-center justify-center shrink-0 border">
                   {agency.logo_url ? (
@@ -727,10 +815,14 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crm
                       agent={agent}
                       isInCrm={agent.is_in_crm}
                       isSelected={selectedAgent?.id === agent.id}
-                      onSelect={setSelectedAgent}
+                      onSelect={
+                        onOpenEntity
+                          ? (a) => a && onOpenEntity({ type: "agent", id: a.id })
+                          : setSelectedAgent
+                      }
                       crmEntityId={agent.is_in_crm ? getCrmEntityIdForAgent(agent) : null}
                     />
-                    {selectedAgent?.id === agent.id && (
+                    {!onOpenEntity && selectedAgent?.id === agent.id && (
                       <AgentMiniProfile
                         agent={agent}
                         onClose={() => setSelectedAgent(null)}
@@ -763,7 +855,11 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crm
                     </p>
                     <div className="space-y-0.5">
                       {forSale.map((l) => (
-                        <ListingRow key={l.id} l={l} />
+                        <ListingRow
+                          key={l.id}
+                          l={l}
+                          onOpen={onOpenEntity ? (lst) => onOpenEntity({ type: "listing", id: lst.id }) : undefined}
+                        />
                       ))}
                     </div>
                   </div>
@@ -775,7 +871,11 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crm
                     </p>
                     <div className="space-y-0.5">
                       {forRent.map((l) => (
-                        <ListingRow key={l.id} l={l} />
+                        <ListingRow
+                          key={l.id}
+                          l={l}
+                          onOpen={onOpenEntity ? (lst) => onOpenEntity({ type: "listing", id: lst.id }) : undefined}
+                        />
                       ))}
                     </div>
                   </div>
@@ -787,7 +887,11 @@ function AgencySlideout({ agency, pulseAgents, pulseListings, pulseTimeline, crm
                     </p>
                     <div className="space-y-0.5">
                       {sold.map((l) => (
-                        <ListingRow key={l.id} l={l} />
+                        <ListingRow
+                          key={l.id}
+                          l={l}
+                          onOpen={onOpenEntity ? (lst) => onOpenEntity({ type: "listing", id: lst.id }) : undefined}
+                        />
                       ))}
                     </div>
                   </div>
@@ -899,6 +1003,7 @@ export default function PulseAgencyIntel({
   pulseMappings = [],
   search = "",
   stats = {},
+  onOpenEntity,
 }) {
   /* ── Local state ─────────────────────────────────────────────────────── */
   const [agencyFilter, setAgencyFilter] = useState("all"); // all | not_in_crm | in_crm
@@ -1133,7 +1238,11 @@ export default function PulseAgencyIntel({
                 pageRows.map((ag, idx) => (
                   <tr
                     key={ag.id || idx}
-                    onClick={() => setSelectedAgency(ag)}
+                    onClick={() =>
+                      onOpenEntity
+                        ? onOpenEntity({ type: "agency", id: ag.id })
+                        : setSelectedAgency(ag)
+                    }
                     className="border-b last:border-b-0 hover:bg-muted/30 cursor-pointer transition-colors"
                   >
                     {/* Logo */}

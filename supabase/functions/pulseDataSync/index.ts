@@ -1,4 +1,11 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import {
+  cleanEmailList,
+  pickPrimaryEmail,
+  parseEmailString,
+  rejectedEmailList,
+  isMiddlemanEmail,
+} from '../_shared/emailCleanup.ts';
 
 /**
  * Pulse Data Sync — REA-Only 2-Actor Merge Engine (v3 DB-driven config)
@@ -135,6 +142,81 @@ function parseListingStatus(priceText: string | null, defaultType: string): stri
   if (s.includes('sold')) return 'sold';
   if (s.includes('auction')) return defaultType; // Still active, just auction method
   return defaultType;
+}
+
+/**
+ * Extract a listing date from an Apify payload, trying many field name variations.
+ * Returns an ISO date string (YYYY-MM-DD) or null.
+ *
+ * Priorities:
+ *   Sold listings: soldDate → listedDate → dateSold
+ *   Active/rent:   listedDate → dateListed → listDate → dateAvailable → dateCreated → createdAt
+ *
+ * REA (azzouzana) does NOT return a date field — the payload has no dates at all.
+ * Domain returns `listedDate` as ISO datetime. The fallback chain also uses inspection
+ * dates (startTime) and auction dates as a last resort.
+ */
+function extractListingDate(l: any, listingType: string): string | null {
+  const pick = (v: any): string | null => {
+    if (!v) return null;
+    try {
+      const dt = new Date(v);
+      if (isNaN(dt.getTime())) return null;
+      // Return as ISO date (YYYY-MM-DD)
+      return dt.toISOString().slice(0, 10);
+    } catch {
+      return null;
+    }
+  };
+
+  if (listingType === 'sold') {
+    return pick(l.soldDate) || pick(l.sold_date) || pick(l.dateSold)
+      || pick(l.listedDate) || pick(l.listed_date) || pick(l.dateListed);
+  }
+  // Active/rent/other
+  return pick(l.listedDate)
+    || pick(l.listed_date)
+    || pick(l.dateListed)
+    || pick(l.listDate)
+    || pick(l.listingDate)
+    || pick(l.dateAvailable)
+    || pick(l.date_available)
+    || pick(l.dateCreated)
+    || pick(l.createdAt)
+    || pick(l.created_at)
+    || null;
+}
+
+/**
+ * Extract sold date specifically. Returns ISO date or null.
+ * REA sold payloads don't include a date, but `soldDate` may appear in enriched
+ * sources. For REA sold listings with no date, the caller will fall back to
+ * first_seen_at (which is when we first scraped it — a useful proxy).
+ */
+function extractSoldDate(l: any): string | null {
+  const pick = (v: any): string | null => {
+    if (!v) return null;
+    try {
+      const dt = new Date(v);
+      if (isNaN(dt.getTime())) return null;
+      return dt.toISOString().slice(0, 10);
+    } catch {
+      return null;
+    }
+  };
+  return pick(l.soldDate) || pick(l.sold_date) || pick(l.dateSold) || pick(l.sold_at) || null;
+}
+
+/**
+ * Parse "Days on Market: N" from description text (common in REA sold listings).
+ * Returns the integer or null.
+ */
+function extractDaysOnMarketFromText(text: string | null): number | null {
+  if (!text) return null;
+  const m = String(text).match(/Days on Market[:\s]+(\d+)/i);
+  if (!m) return null;
+  const n = parseInt(m[1]);
+  return n > 0 && n < 3650 ? n : null; // sanity: 0-10yr
 }
 
 function fmtPriceShort(v: number | null): string {
@@ -767,6 +849,17 @@ Deno.serve(async (req) => {
       // Override with status from price text (catches "Under Contract" in buy results)
       const listingType = parseListingStatus(l.price, rawType);
 
+      // Extract dates with robust multi-field fallback
+      const extractedListedDate = extractListingDate(l, listingType);
+      const extractedSoldDate = extractSoldDate(l);
+      // Days on Market: explicit field first, then parse from description (REA sold often has "Days on Market: N")
+      const extractedDom = l.daysOnMarket
+        || extractDaysOnMarketFromText(l.description)
+        || null;
+
+      // For sold listings with DOM but no listed_date, derive listed_date from first_seen_at - DOM
+      // (done in post-processing when first_seen_at is known; here we just capture DOM)
+
       return {
         address: l.address || null,
         suburb: l.suburb || l._suburb || null,
@@ -779,11 +872,11 @@ Deno.serve(async (req) => {
         listing_type: listingType,
         asking_price: parsePrice(l.price),
         sold_price: parsePrice(l.soldPrice),
-        listed_date: l.listedDate || l.dateAvailable || null,
-        created_date: l.listedDate || null,
-        sold_date: l.soldDate || null,
+        listed_date: extractedListedDate,
+        created_date: extractedListedDate,
+        sold_date: extractedSoldDate,
         auction_date: l.auctionDate || null,
-        days_on_market: l.daysOnMarket || null,
+        days_on_market: extractedDom,
         status: l.status || null,
         price_text: l.price || null,
         next_inspection: nextInspection,
@@ -793,7 +886,7 @@ Deno.serve(async (req) => {
         agency_name: l.agencyName || null,
         agency_logo: l.agencyLogo || null,
         agency_brand_colour: l.brandColour || null,
-        description: l.description ? String(l.description).substring(0, 500) : null,
+        description: l.description ? String(l.description).substring(0, 2000) : null,
         image_url: l.mainImage || (Array.isArray(l.images) && l.images[0]) || null,
         hero_image: l.mainImage || (Array.isArray(l.images) && l.images[0]) || null,
         images: Array.isArray(l.images) ? l.images.slice(0, 20) : null,
@@ -951,11 +1044,15 @@ Deno.serve(async (req) => {
         for (const la of agents) {
           if (!la.name) continue;
 
+          // Expand raw email string (scraper gives comma-joined: "real@agency,capture@agency.agentboxmail.com.au")
+          const rawParts = parseEmailString(la.email);
+
           // Primary: keyed by REA agent ID (strongest match)
           if (la.reaId) {
             const existing = enrichByReaId.get(la.reaId) || { listingCount: 0, allEmails: [] };
-            if (la.email && !existing.email) existing.email = la.email;
-            if (la.email && !existing.allEmails.includes(la.email)) existing.allEmails.push(la.email);
+            for (const part of rawParts) {
+              if (!existing.allEmails.includes(part)) existing.allEmails.push(part);
+            }
             if (la.photo && !existing.photo) existing.photo = la.photo;
             if (la.phone && !existing.phone) existing.phone = la.phone;
             if (la.jobTitle && !existing.jobTitle) existing.jobTitle = la.jobTitle;
@@ -966,8 +1063,9 @@ Deno.serve(async (req) => {
           // Secondary: keyed by normalized name (weaker, for agents without REA ID in listings)
           const nameKey = la.name.toLowerCase().trim();
           const existingByName = enrichByName.get(nameKey) || { listingCount: 0, allEmails: [] };
-          if (la.email && !existingByName.email) existingByName.email = la.email;
-          if (la.email && !existingByName.allEmails.includes(la.email)) existingByName.allEmails.push(la.email);
+          for (const part of rawParts) {
+            if (!existingByName.allEmails.includes(part)) existingByName.allEmails.push(part);
+          }
           if (la.photo && !existingByName.photo) existingByName.photo = la.photo;
           if (la.phone && !existingByName.phone) existingByName.phone = la.phone;
           if (la.reaId && !existingByName.reaId) existingByName.reaId = la.reaId;
@@ -981,7 +1079,7 @@ Deno.serve(async (req) => {
 
       if (enrichByReaId.size > 0 || enrichByName.size > 0) {
         const { data: existingAgentsForEnrich = [] } = await admin.from('pulse_agents')
-          .select('id, full_name, email, mobile, profile_image, rea_agent_id, job_title, total_listings_active, data_integrity_score');
+          .select('id, full_name, email, mobile, profile_image, rea_agent_id, agency_name, job_title, total_listings_active, data_integrity_score');
 
         let enriched = 0;
         for (const pa of existingAgentsForEnrich) {
@@ -1003,36 +1101,60 @@ Deno.serve(async (req) => {
           if (!enrichData) continue;
 
           const updates: Record<string, any> = {};
-          // Smart email update: fill blank, or update if domain changed (agency move)
-          if (enrichData.email) {
-            if (!pa.email) {
-              updates.email = enrichData.email;
-            } else if (pa.email !== enrichData.email) {
-              const existingDomain = (pa.email).split('@')[1] || '';
-              const newDomain = (enrichData.email).split('@')[1] || '';
+
+          // Build the cleaned pool of emails: existing stored + freshly scraped.
+          // Always filter middleman before writing. See _shared/emailCleanup.ts.
+          const existingPool = parseEmailString(pa.email);
+          const rawPool: string[] = [...existingPool, ...(enrichData.allEmails || [])];
+          const cleanedList = cleanEmailList(rawPool);
+          const rejectedList = rejectedEmailList(rawPool);
+          const freshPrimary = pickPrimaryEmail(
+            enrichData.allEmails || [],
+            pa.agency_name,
+          );
+
+          // Primary email: prefer a clean fresh pick over a middleman-polluted
+          // stored value. If the stored value is already clean and the fresh
+          // pick is at a different domain (agency move), record previous_email.
+          if (freshPrimary) {
+            if (!pa.email || isMiddlemanEmail(pa.email)) {
+              updates.email = freshPrimary;
+            } else if (pa.email.toLowerCase() !== freshPrimary) {
+              const existingDomain = pa.email.toLowerCase().split('@')[1] || '';
+              const newDomain = freshPrimary.split('@')[1] || '';
               if (existingDomain !== newDomain) {
                 updates.previous_email = pa.email;
-                updates.email = enrichData.email;
+                updates.email = freshPrimary;
               }
             }
           }
+
+          // all_emails: always store the cleaned list (jsonb array of strings)
+          if (cleanedList.length > 0) {
+            updates.all_emails = JSON.stringify(cleanedList);
+          }
+          // rejected_emails: audit trail of everything we filtered out
+          if (rejectedList.length > 0) {
+            updates.rejected_emails = JSON.stringify(rejectedList);
+          }
+
           // Photo: only fill blank (don't thrash)
           if (enrichData.photo && !pa.profile_image) updates.profile_image = enrichData.photo;
           if (enrichData.phone && !pa.mobile) updates.mobile = enrichData.phone;
           if (enrichData.reaId && !pa.rea_agent_id) updates.rea_agent_id = enrichData.reaId;
           if (enrichData.jobTitle && !pa.job_title) updates.job_title = enrichData.jobTitle;
           if (enrichData.listingCount > 0) updates.total_listings_active = enrichData.listingCount;
-          if (enrichData.allEmails && enrichData.allEmails.length > 0) {
-            updates.all_emails = JSON.stringify(enrichData.allEmails);
-          }
 
           // Recalculate integrity score from scratch (avoids competing Math.max paths)
           if (Object.keys(updates).length > 0) {
+            const finalEmail = updates.email || pa.email;
+            const finalEmailIsClean = finalEmail && !isMiddlemanEmail(finalEmail);
             let newScore = 50; // base: exists in REA
             if (pa.mobile || updates.mobile) newScore += 10;
-            if (updates.email || pa.email) newScore += 15;
+            // Only award points for a clean primary email
+            if (finalEmailIsClean) newScore += 15;
             if (updates.profile_image || pa.profile_image) newScore += 10;
-            if ((updates.email || pa.email) && (updates.profile_image || pa.profile_image)) newScore += 5;
+            if (finalEmailIsClean && (updates.profile_image || pa.profile_image)) newScore += 5;
             if (pa.rea_agent_id) newScore += 10;
             updates.data_integrity_score = newScore;
 

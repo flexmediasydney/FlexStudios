@@ -21,9 +21,9 @@ import { cn } from "@/lib/utils";
 // ── Tab components ────────────────────────────────────────────────────────────
 
 import PulseCommandCenter from "@/components/pulse/tabs/PulseCommandCenter";
-import PulseAgentIntel from "@/components/pulse/tabs/PulseAgentIntel";
-import PulseAgencyIntel from "@/components/pulse/tabs/PulseAgencyIntel";
-import PulseListingsTab from "@/components/pulse/tabs/PulseListings";
+import PulseAgentIntel, { AgentSlideout } from "@/components/pulse/tabs/PulseAgentIntel";
+import PulseAgencyIntel, { AgencySlideout } from "@/components/pulse/tabs/PulseAgencyIntel";
+import PulseListingsTab, { ListingSlideout } from "@/components/pulse/tabs/PulseListings";
 import PulseEventsTab from "@/components/pulse/tabs/PulseEvents";
 import PulseMarketData from "@/components/pulse/tabs/PulseMarketData";
 import PulseDataSources from "@/components/pulse/tabs/PulseDataSources";
@@ -165,6 +165,29 @@ export default function IndustryPulse() {
   const [search, setSearch] = useState("");
   const [addToCrmFromCommand, setAddToCrmFromCommand] = useState(null);
 
+  // ── Cross-tab drill-through stack ───────────────────────────────────────────
+  // Each entry: { type: 'agent' | 'agency' | 'listing', id: string }
+  const [entityStack, setEntityStack] = useState([]);
+  const currentEntity = entityStack[entityStack.length - 1] || null;
+
+  const openEntity = useCallback((entity) => {
+    if (!entity || !entity.type || !entity.id) return;
+    // Don't push a duplicate of the current top
+    setEntityStack((s) => {
+      const top = s[s.length - 1];
+      if (top && top.type === entity.type && top.id === entity.id) return s;
+      return [...s, entity];
+    });
+  }, []);
+
+  const popEntity = useCallback(() => {
+    setEntityStack((s) => s.slice(0, -1));
+  }, []);
+
+  const closeAllEntities = useCallback(() => {
+    setEntityStack([]);
+  }, []);
+
   // Handler: CommandCenter "Add" button switches to agents tab and triggers dialog
   const handleAddToCrmFromCommand = useCallback((agent) => {
     setTab("agents");
@@ -264,7 +287,22 @@ export default function IndustryPulse() {
     onAddToCrm: handleAddToCrmFromCommand,
     addToCrmFromCommand,
     onClearAddToCrmFromCommand: handleClearAddToCrmFromCommand,
+    onOpenEntity: openEntity,
   };
+
+  // ── Resolve current entity from stack to actual record ────────────────────
+  const currentEntityRecord = useMemo(() => {
+    if (!currentEntity) return null;
+    if (currentEntity.type === "listing")
+      return pulseListings.find((l) => l.id === currentEntity.id) || null;
+    if (currentEntity.type === "agent")
+      return pulseAgents.find((a) => a.id === currentEntity.id) || null;
+    if (currentEntity.type === "agency")
+      return pulseAgencies.find((a) => a.id === currentEntity.id) || null;
+    return null;
+  }, [currentEntity, pulseListings, pulseAgents, pulseAgencies]);
+
+  const hasEntityHistory = entityStack.length > 1;
 
   // ── Early return: loading skeleton ───────────────────────────────────────────
   if (isLoading) return <LoadingSkeleton />;
@@ -443,6 +481,58 @@ export default function IndustryPulse() {
           </ErrorBoundary>
         </TabsContent>
       </Tabs>
+
+      {/* ── Central drill-through dispatcher ── */}
+      {currentEntity && currentEntityRecord && (
+        <ErrorBoundary>
+          {currentEntity.type === "listing" && (
+            <ListingSlideout
+              listing={currentEntityRecord}
+              pulseAgents={pulseAgents}
+              pulseAgencies={pulseAgencies}
+              onClose={closeAllEntities}
+              onOpenEntity={openEntity}
+              hasHistory={hasEntityHistory}
+              onBack={popEntity}
+            />
+          )}
+          {currentEntity.type === "agent" && (
+            <AgentSlideout
+              agent={currentEntityRecord}
+              pulseAgencies={pulseAgencies}
+              pulseListings={pulseListings}
+              pulseTimeline={pulseTimeline}
+              crmAgents={crmAgents}
+              crmAgencies={crmAgencies}
+              pulseMappings={pulseMappings}
+              onClose={closeAllEntities}
+              onAddToCrm={(a) => {
+                // Close stack + switch to agents tab + trigger add-to-CRM
+                closeAllEntities();
+                setTab("agents");
+                setAddToCrmFromCommand(a);
+              }}
+              onOpenEntity={openEntity}
+              hasHistory={hasEntityHistory}
+              onBack={popEntity}
+            />
+          )}
+          {currentEntity.type === "agency" && (
+            <AgencySlideout
+              agency={currentEntityRecord}
+              pulseAgents={pulseAgents}
+              pulseListings={pulseListings}
+              pulseTimeline={pulseTimeline}
+              crmAgencies={crmAgencies}
+              pulseMappings={pulseMappings}
+              onClose={closeAllEntities}
+              onOpenEntity={openEntity}
+              hasHistory={hasEntityHistory}
+              onBack={popEntity}
+            />
+          )}
+        </ErrorBoundary>
+      )}
     </div>
   );
 }

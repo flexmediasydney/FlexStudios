@@ -56,6 +56,53 @@ function fmtDate(d) {
   }
 }
 
+/**
+ * Get a display date for a listing with smart fallback, returning both the
+ * date and its source so the UI can indicate if it's an approximation.
+ *
+ * Priority:
+ *   sold   → sold_date → derived from days_on_market → listed_date → first_seen_at
+ *   other  → listed_date → derived from days_on_market + first_seen_at → created_date → first_seen_at
+ *
+ * Returns: { date: string|null, source: 'listed' | 'sold' | 'derived' | 'first_seen' | null }
+ */
+function getListingDisplayDate(listing) {
+  if (!listing) return { date: null, source: null };
+
+  const isSold = listing.listing_type === "sold";
+
+  if (isSold) {
+    if (listing.sold_date) return { date: listing.sold_date, source: "sold" };
+    if (listing.listed_date) return { date: listing.listed_date, source: "listed" };
+    // For sold listings, first_seen_at is when we first saw it in the "sold" section
+    // on REA — so it's a reasonable proxy for sold date (within a sync cycle).
+    if (listing.first_seen_at) return { date: listing.first_seen_at, source: "first_seen" };
+    return { date: null, source: null };
+  }
+
+  if (listing.listed_date) return { date: listing.listed_date, source: "listed" };
+
+  // Derive from DOM + first_seen_at for REA listings missing listed_date
+  if (listing.days_on_market > 0 && listing.first_seen_at) {
+    const seen = new Date(listing.first_seen_at);
+    if (!isNaN(seen.getTime())) {
+      const derived = new Date(seen.getTime() - listing.days_on_market * 86400000);
+      return { date: derived.toISOString(), source: "derived" };
+    }
+  }
+
+  if (listing.created_date) return { date: listing.created_date, source: "listed" };
+  if (listing.first_seen_at) return { date: listing.first_seen_at, source: "first_seen" };
+  return { date: null, source: null };
+}
+
+const DATE_SOURCE_LABEL = {
+  listed: "Listed date",
+  sold: "Sold date",
+  derived: "Estimated from Days-on-Market (scraped value)",
+  first_seen: "First seen on our platform — actual listing date unknown",
+};
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 50;
@@ -114,7 +161,7 @@ function SortIcon({ col, sort }) {
 
 // ── Listing slideout ──────────────────────────────────────────────────────────
 
-function ListingSlideout({ listing, pulseAgents, onClose }) {
+export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onClose, onOpenEntity, hasHistory = false, onBack }) {
   const [heroErr, setHeroErr] = useState(false);
 
   if (!listing) return null;
@@ -130,6 +177,14 @@ function ListingSlideout({ listing, pulseAgents, onClose }) {
   const linkedAgent = listing.agent_rea_id
     ? pulseAgents.find((a) => a.rea_agent_id === listing.agent_rea_id)
     : null;
+
+  // Cross-reference: find pulse agency record
+  const linkedAgency = listing.agency_rea_id
+    ? pulseAgencies.find((a) => a.rea_agency_id === listing.agency_rea_id)
+    : null;
+
+  // Display date with fallback + source indicator
+  const { date: displayDate, source: dateSource } = getListingDisplayDate(listing);
 
   // Parse images array safely
   let images = [];
@@ -164,9 +219,22 @@ function ListingSlideout({ listing, pulseAgents, onClose }) {
         <div className="p-5 space-y-4">
           <DialogHeader className="pb-0">
             <div className="flex items-start justify-between gap-2">
-              <DialogTitle className="text-base font-semibold leading-tight">
-                {address || "Unknown address"}
-              </DialogTitle>
+              <div className="flex items-start gap-2 flex-1 min-w-0">
+                {hasHistory && onBack && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 flex-shrink-0 -ml-1"
+                    onClick={onBack}
+                    title="Back"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                )}
+                <DialogTitle className="text-base font-semibold leading-tight">
+                  {address || "Unknown address"}
+                </DialogTitle>
+              </div>
               <Button
                 variant="ghost"
                 size="icon"
@@ -244,71 +312,164 @@ function ListingSlideout({ listing, pulseAgents, onClose }) {
 
           {/* Agent + Agency */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-border/60 pt-3">
-            {/* Agent */}
-            <div className="flex items-center gap-3">
-              {listing.agent_photo ? (
-                <img
-                  src={listing.agent_photo}
-                  alt={listing.agent_name}
-                  className="h-10 w-10 rounded-full object-cover border border-border"
-                />
-              ) : (
-                <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center border border-border flex-shrink-0">
-                  <User className="h-4 w-4 text-muted-foreground/50" />
-                </div>
-              )}
-              <div className="min-w-0">
-                <p className="text-xs font-medium truncate">
-                  {listing.agent_name || "—"}
-                </p>
-                {listing.agent_phone && (
-                  <a
-                    href={`tel:${listing.agent_phone}`}
-                    className="text-[10px] text-muted-foreground hover:text-primary flex items-center gap-0.5"
-                  >
-                    <Phone className="h-2.5 w-2.5" />
-                    {listing.agent_phone}
-                  </a>
+            {/* Agent — clickable if linked pulse agent exists */}
+            {linkedAgent ? (
+              <button
+                onClick={() => onOpenEntity?.({ type: "agent", id: linkedAgent.id })}
+                className="flex items-center gap-3 text-left p-1.5 -m-1.5 rounded-md hover:bg-muted/50 transition-colors group"
+                title="Open agent profile"
+              >
+                {listing.agent_photo ? (
+                  <img
+                    src={listing.agent_photo}
+                    alt={listing.agent_name}
+                    className="h-10 w-10 rounded-full object-cover border border-border"
+                  />
+                ) : (
+                  <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center border border-border flex-shrink-0">
+                    <User className="h-4 w-4 text-muted-foreground/50" />
+                  </div>
                 )}
-                {linkedAgent && (
-                  <p className="text-[10px] text-blue-500 mt-0.5">
-                    In Pulse: {linkedAgent.full_name}
+                <div className="min-w-0">
+                  <p className="text-xs font-medium truncate group-hover:text-primary flex items-center gap-1">
+                    {listing.agent_name || linkedAgent.full_name || "—"}
+                    <ChevronRight className="h-3 w-3 opacity-40 group-hover:opacity-100" />
                   </p>
-                )}
-              </div>
-            </div>
-
-            {/* Agency */}
-            <div className="flex items-center gap-3">
-              {listing.agency_logo ? (
-                <img
-                  src={listing.agency_logo}
-                  alt={listing.agency_name}
-                  className="h-8 w-auto max-w-[80px] object-contain"
-                />
-              ) : (
-                <div className="h-8 w-8 rounded bg-muted flex items-center justify-center flex-shrink-0">
-                  <Building2 className="h-4 w-4 text-muted-foreground/50" />
+                  {listing.agent_phone && (
+                    <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                      <Phone className="h-2.5 w-2.5" />
+                      {listing.agent_phone}
+                    </span>
+                  )}
+                  <p className="text-[10px] text-blue-500 mt-0.5">
+                    In Pulse · click to drill in
+                  </p>
                 </div>
-              )}
-              <p className="text-xs font-medium truncate">
-                {listing.agency_name || "—"}
-              </p>
-            </div>
+              </button>
+            ) : (
+              <div className="flex items-center gap-3">
+                {listing.agent_photo ? (
+                  <img
+                    src={listing.agent_photo}
+                    alt={listing.agent_name}
+                    className="h-10 w-10 rounded-full object-cover border border-border"
+                  />
+                ) : (
+                  <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center border border-border flex-shrink-0">
+                    <User className="h-4 w-4 text-muted-foreground/50" />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-medium truncate">
+                    {listing.agent_name || "—"}
+                  </p>
+                  {listing.agent_phone && (
+                    <a
+                      href={`tel:${listing.agent_phone}`}
+                      className="text-[10px] text-muted-foreground hover:text-primary flex items-center gap-0.5"
+                    >
+                      <Phone className="h-2.5 w-2.5" />
+                      {listing.agent_phone}
+                    </a>
+                  )}
+                  {listing.agent_name && (
+                    <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                      Not yet synced — limited data
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Agency — clickable if linked */}
+            {linkedAgency ? (
+              <button
+                onClick={() => onOpenEntity?.({ type: "agency", id: linkedAgency.id })}
+                className="flex items-center gap-3 text-left p-1.5 -m-1.5 rounded-md hover:bg-muted/50 transition-colors group"
+                title="Open agency profile"
+              >
+                {listing.agency_logo ? (
+                  <img
+                    src={listing.agency_logo}
+                    alt={listing.agency_name}
+                    className="h-8 w-auto max-w-[80px] object-contain"
+                  />
+                ) : (
+                  <div className="h-8 w-8 rounded bg-muted flex items-center justify-center flex-shrink-0">
+                    <Building2 className="h-4 w-4 text-muted-foreground/50" />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-medium truncate group-hover:text-primary flex items-center gap-1">
+                    {listing.agency_name || linkedAgency.name || "—"}
+                    <ChevronRight className="h-3 w-3 opacity-40 group-hover:opacity-100" />
+                  </p>
+                  <p className="text-[10px] text-blue-500 mt-0.5">
+                    In Pulse · click to drill in
+                  </p>
+                </div>
+              </button>
+            ) : (
+              <div className="flex items-center gap-3">
+                {listing.agency_logo ? (
+                  <img
+                    src={listing.agency_logo}
+                    alt={listing.agency_name}
+                    className="h-8 w-auto max-w-[80px] object-contain"
+                  />
+                ) : (
+                  <div className="h-8 w-8 rounded bg-muted flex items-center justify-center flex-shrink-0">
+                    <Building2 className="h-4 w-4 text-muted-foreground/50" />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-medium truncate">
+                    {listing.agency_name || "—"}
+                  </p>
+                  {listing.agency_name && (
+                    <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                      Not yet synced — limited data
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Dates */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border-t border-border/60 pt-3 text-[11px]">
-            {listing.listed_date && (
+            {displayDate && (
               <div>
-                <p className="text-muted-foreground">Listed</p>
+                <p className="text-muted-foreground">
+                  {dateSource === "sold" ? "Sold" : "Listed"}
+                  {dateSource === "derived" && (
+                    <span className="text-amber-500 ml-1" title={DATE_SOURCE_LABEL.derived}>(est.)</span>
+                  )}
+                  {dateSource === "first_seen" && (
+                    <span className="text-amber-500 ml-1" title={DATE_SOURCE_LABEL.first_seen}>(first seen)</span>
+                  )}
+                </p>
+                <p
+                  className={cn(
+                    "font-medium",
+                    (dateSource === "derived" || dateSource === "first_seen") && "text-muted-foreground"
+                  )}
+                  title={DATE_SOURCE_LABEL[dateSource] || ""}
+                >
+                  {fmtDate(displayDate)}
+                </p>
+              </div>
+            )}
+            {listing.listing_type === "sold" && listing.listed_date && dateSource !== "listed" && (
+              <div>
+                <p className="text-muted-foreground">Originally Listed</p>
                 <p className="font-medium">{fmtDate(listing.listed_date)}</p>
               </div>
             )}
-            {listing.sold_date && (
+            {listing.days_on_market > 0 && (
               <div>
-                <p className="text-muted-foreground">Sold</p>
-                <p className="font-medium">{fmtDate(listing.sold_date)}</p>
+                <p className="text-muted-foreground">Days on Market</p>
+                <p className="font-medium">{listing.days_on_market}d</p>
               </div>
             )}
             {listing.auction_date && (
@@ -403,6 +564,7 @@ export default function PulseListingsTab({
   pulseListings = [],
   crmAgents = [],
   search = "",
+  onOpenEntity,
 }) {
   const [listingFilter, setListingFilter] = useState("all");
   const [listingSort, setListingSort] = useState({ col: "listed_date", dir: "desc" });
@@ -463,6 +625,15 @@ export default function PulseListingsTab({
         return mult * ((Number(a[col]) || 0) - (Number(b[col]) || 0));
       }
       if (dateCols.has(col)) {
+        // For listed_date, sort by the displayed fallback value so rows without
+        // a raw listed_date still sort meaningfully (not all at 0).
+        if (col === "listed_date") {
+          const da = getListingDisplayDate(a).date;
+          const db = getListingDisplayDate(b).date;
+          const ta = da ? new Date(da).getTime() : 0;
+          const tb = db ? new Date(db).getTime() : 0;
+          return mult * (ta - tb);
+        }
         const da = a[col] ? new Date(a[col]).getTime() : 0;
         const db = b[col] ? new Date(b[col]).getTime() : 0;
         return mult * (da - db);
@@ -585,7 +756,11 @@ export default function PulseListingsTab({
                     <tr
                       key={l.id}
                       className="hover:bg-muted/30 cursor-pointer transition-colors"
-                      onClick={() => setSelectedListing(l)}
+                      onClick={() =>
+                        onOpenEntity
+                          ? onOpenEntity({ type: "listing", id: l.id })
+                          : setSelectedListing(l)
+                      }
                     >
                       {/* Thumbnail */}
                       <td className="px-2 py-1.5">
@@ -645,14 +820,38 @@ export default function PulseListingsTab({
                         <p className="truncate text-muted-foreground">{l.agency_name || "—"}</p>
                       </td>
 
-                      {/* Listed date */}
+                      {/* Listed date — with fallback chain */}
                       <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
-                        {fmtDate(l.listed_date)}
+                        {(() => {
+                          const { date, source } = getListingDisplayDate(l);
+                          if (!date) return "—";
+                          const isApprox = source === "derived" || source === "first_seen";
+                          return (
+                            <span
+                              className={cn(isApprox && "text-muted-foreground/60 italic")}
+                              title={DATE_SOURCE_LABEL[source] || ""}
+                            >
+                              {fmtDate(date)}
+                              {isApprox && <span className="ml-1 text-[9px] text-amber-500">≈</span>}
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       {/* Sold date */}
                       <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground hidden sm:table-cell">
-                        {l.listing_type === "sold" && l.sold_date ? fmtDate(l.sold_date) : "—"}
+                        {l.listing_type === "sold"
+                          ? (l.sold_date ? fmtDate(l.sold_date)
+                            : l.first_seen_at ? (
+                              <span
+                                className="text-muted-foreground/60 italic"
+                                title={DATE_SOURCE_LABEL.first_seen}
+                              >
+                                {fmtDate(l.first_seen_at)}
+                                <span className="ml-1 text-[9px] text-amber-500">≈</span>
+                              </span>
+                            ) : "—")
+                          : "—"}
                       </td>
 
                       {/* Status */}
