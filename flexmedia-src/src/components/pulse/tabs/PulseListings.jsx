@@ -1,11 +1,33 @@
 /**
  * PulseListings — Listings tab for Industry Pulse.
- * Filterable / sortable / paginated table with a slideout detail panel.
+ *
+ * Server-side pagination (BG PP refactor):
+ *   The table fetches ONE page at a time via .range() + count:exact directly
+ *   against `pulse_listings`. This removes any dependency on the parent
+ *   Pulse page's cached `pulseListings` array for table rendering — so the
+ *   table scales to tens of thousands of rows without OOM.
+ *
+ *   Filters moved to server-side:
+ *     - listing_type filter → .eq("listing_type", ...)
+ *     - global search + column filter → .or(ilike on address/suburb/agency_name/agent_name)
+ *     - sort column + direction → .order(col, { ascending })
+ *
+ *   The parent's `pulseListings` prop is kept but now only used by the
+ *   slideout for cross-referencing agents/agencies and by the parent's
+ *   stat cards. Drill-through to a listing still works because the central
+ *   dispatcher in IndustryPulse.jsx resolves by id against the cached array
+ *   (bump the cap in useEntityData.jsx if you lift the ceiling).
+ *
+ *   CSV export fetches the ENTIRE filtered set server-side (separate query,
+ *   limit 10000 safety cap), not just the current page.
  */
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -30,6 +52,7 @@ import {
   Phone,
   Clock,
   Download,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -604,9 +627,42 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+// Columns that exist in `pulse_listings` and can be passed to PostgREST .order().
+// Anything NOT in this set falls back to `created_at desc` server-side; the
+// sort UI still tracks the user's intent but the list stays deterministic.
+const SERVER_SORTABLE = new Set([
+  "listed_date", "sold_date", "auction_date", "created_at",
+  "asking_price", "sold_price", "days_on_market",
+  "bedrooms", "bathrooms", "parking", "land_size",
+  "listing_type", "agent_name", "agency_name", "address",
+]);
+
+// Safety cap on the CSV export of the FULL filtered set. 10k × ~40 columns ≈ 4MB,
+// which downloads cleanly. Beyond this we'd need a streaming edge fn.
+const CSV_EXPORT_CAP = 10000;
+
+// localStorage keys — persisted across reload / tab switches.
+const LS_PAGE_SIZE_KEY = "pulse_listings_page_size";
+const LS_AUTO_REFRESH_KEY = "pulse_listings_auto_refresh";
+// Listings are "less urgent than Sources/inbox" per spec — default OFF.
+const AUTO_REFRESH_INTERVAL_MS = 60_000;
+
+/** Read a numeric setting from localStorage, falling back to a default. */
+function readStoredPageSize() {
+  if (typeof window === "undefined") return 50;
+  const raw = Number(window.localStorage.getItem(LS_PAGE_SIZE_KEY));
+  return PAGE_SIZE_OPTIONS.includes(raw) ? raw : 50;
+}
+function readStoredAutoRefresh() {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(LS_AUTO_REFRESH_KEY) === "1";
+}
+
 export default function PulseListingsTab({
   pulseAgents = [],
   pulseAgencies = [],
+  // pulseListings prop is kept for slideout cross-reference and the parent's
+  // stat cards, but the TABLE no longer reads from it — we fetch per-page below.
   pulseListings = [],
   crmAgents = [],
   search = "",
@@ -616,8 +672,29 @@ export default function PulseListingsTab({
   const [listingSort, setListingSort] = useState({ col: "listed_date", dir: "desc" });
   const [listingColFilter, setListingColFilter] = useState("");
   const [listingPage, setListingPage] = useState(0);
-  const [pageSize, setPageSize] = useState(50);
+  // Page size persists in localStorage so the user's choice survives reloads
+  // and tab switches. Default 50 matches the previous hardcoded value.
+  const [pageSize, setPageSize] = useState(readStoredPageSize);
   const [selectedListing, setSelectedListing] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  // Auto-refresh: opt-in, default off. "Less urgent than Sources/inbox"
+  // per spec — listings change every few minutes at most.
+  const [autoRefresh, setAutoRefresh] = useState(readStoredAutoRefresh);
+
+  // Persist page-size changes the moment they happen.
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_PAGE_SIZE_KEY, String(pageSize)); } catch { /* quota / SSR */ }
+  }, [pageSize]);
+
+  // Persist auto-refresh toggle.
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_AUTO_REFRESH_KEY, autoRefresh ? "1" : "0"); } catch { /* quota / SSR */ }
+  }, [autoRefresh]);
+
+  // Reset to page 0 when filters/sort/search change so we never page past the
+  // new result window. Must happen AFTER a filter change and BEFORE the
+  // useQuery fires (React runs state updates before committing).
+  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, pageSize, search, listingSort.col, listingSort.dir]);
 
   // ── Sorting helper ──────────────────────────────────────────────────────────
   const handleSort = useCallback(
@@ -632,83 +709,113 @@ export default function PulseListingsTab({
     []
   );
 
-  // ── Filtered + sorted + paginated listings ──────────────────────────────────
-  const { rows, filtered, total } = useMemo(() => {
-    const lc = (s) => (s || "").toLowerCase();
-    const globalQ = lc(search);
-    const colQ = lc(listingColFilter);
+  // ── Server-side query builder ──────────────────────────────────────────────
+  const buildQuery = useCallback((baseSelect, withCount) => {
+    let q = api._supabase
+      .from("pulse_listings")
+      .select(baseSelect, withCount ? { count: "exact" } : undefined);
 
-    let filtered = pulseListings.filter((l) => {
-      // Type filter
-      if (listingFilter !== "all" && l.listing_type !== listingFilter) return false;
+    // Type filter (server-side equality)
+    if (listingFilter !== "all") {
+      q = q.eq("listing_type", listingFilter);
+    }
 
-      // Column text filter
-      if (colQ) {
-        const hay = [l.suburb, l.agency_name, l.agent_name, l.address]
-          .map(lc)
-          .join(" ");
-        if (!hay.includes(colQ)) return false;
+    // Column filter (server-side ilike OR across likely fields)
+    const colQ = (listingColFilter || "").trim();
+    if (colQ) {
+      const s = colQ.replace(/[%_]/g, "\\$&");
+      q = q.or(`address.ilike.%${s}%,suburb.ilike.%${s}%,agency_name.ilike.%${s}%,agent_name.ilike.%${s}%`);
+    }
+
+    // Global search (same pattern; also matches price_text)
+    const globalQ = (search || "").trim();
+    if (globalQ) {
+      const s = globalQ.replace(/[%_]/g, "\\$&");
+      q = q.or(`address.ilike.%${s}%,suburb.ilike.%${s}%,agency_name.ilike.%${s}%,agent_name.ilike.%${s}%,price_text.ilike.%${s}%`);
+    }
+
+    // Server-side sort — falls back to created_at desc for columns PostgREST
+    // can't sort on (derived/display-only fields like getListingDisplayDate).
+    const sortCol = SERVER_SORTABLE.has(listingSort.col) ? listingSort.col : "created_at";
+    q = q.order(sortCol, { ascending: listingSort.dir === "asc", nullsFirst: false });
+
+    return q;
+  }, [listingFilter, listingColFilter, search, listingSort]);
+
+  // ── Page fetch via react-query ─────────────────────────────────────────────
+  const queryKey = useMemo(
+    () => ["pulse-listings-page", {
+      listingFilter, listingColFilter, search,
+      sortCol: listingSort.col, sortDir: listingSort.dir,
+      page: listingPage, pageSize,
+    }],
+    [listingFilter, listingColFilter, search, listingSort, listingPage, pageSize],
+  );
+
+  const { data, isLoading, isFetching, refetch } = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const from = listingPage * pageSize;
+      const to = from + pageSize - 1;
+      const q = buildQuery("*", true).range(from, to);
+      const { data: rows, count, error } = await q;
+      if (error) throw error;
+      return { rows: rows || [], count: count || 0 };
+    },
+    keepPreviousData: true,
+    staleTime: 30_000,
+    // Refetch on an interval when autoRefresh is on — react-query handles
+    // the pause while the tab is hidden in the background.
+    refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
+
+  const rows = data?.rows || [];
+  const total = data?.count || 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  // CSV export: fetch the ENTIRE filtered set (up to CSV_EXPORT_CAP) — not
+  // just the current page. Two-step: hit count:exact first to decide whether
+  // to warn, then page through in chunks of 1000 (PostgREST cap).
+  const handleExportCsv = useCallback(async () => {
+    setExporting(true);
+    try {
+      // Count first so we can warn if > cap
+      const headQ = buildQuery("id", true).limit(1);
+      const { count: totalCount, error: countErr } = await headQ;
+      if (countErr) throw countErr;
+      const cap = Math.min(totalCount || 0, CSV_EXPORT_CAP);
+      if ((totalCount || 0) > CSV_EXPORT_CAP) {
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+          `Your filter matches ${totalCount.toLocaleString()} listings. ` +
+          `Only the first ${CSV_EXPORT_CAP.toLocaleString()} will export. Continue?`,
+        );
+        if (!ok) { setExporting(false); return; }
       }
-
-      // Global search
-      if (globalQ) {
-        const hay = [l.suburb, l.agency_name, l.agent_name, l.address, l.price_text]
-          .map(lc)
-          .join(" ");
-        if (!hay.includes(globalQ)) return false;
+      const all = [];
+      for (let off = 0; off < cap; off += 1000) {
+        const end = Math.min(off + 999, cap - 1);
+        const q = buildQuery("*", false).range(off, end);
+        const { data: chunk, error } = await q;
+        if (error) throw error;
+        all.push(...(chunk || []));
+        if (!chunk || chunk.length < 1000) break;
       }
-
-      return true;
-    });
-
-    // Sort
-    const { col, dir } = listingSort;
-    const numericCols = new Set(["asking_price", "sold_price", "bedrooms", "bathrooms", "parking", "land_size", "days_on_market"]);
-    const dateCols = new Set(["listed_date", "sold_date", "auction_date", "created_at"]);
-    const mult = dir === "asc" ? 1 : -1;
-
-    filtered = [...filtered].sort((a, b) => {
-      if (numericCols.has(col)) {
-        return mult * ((Number(a[col]) || 0) - (Number(b[col]) || 0));
-      }
-      if (dateCols.has(col)) {
-        // For listed_date, sort by the displayed fallback value so rows without
-        // a raw listed_date still sort meaningfully (not all at 0).
-        if (col === "listed_date") {
-          const da = getListingDisplayDate(a).date;
-          const db = getListingDisplayDate(b).date;
-          const ta = da ? new Date(da).getTime() : 0;
-          const tb = db ? new Date(db).getTime() : 0;
-          return mult * (ta - tb);
-        }
-        const da = a[col] ? new Date(a[col]).getTime() : 0;
-        const db = b[col] ? new Date(b[col]).getTime() : 0;
-        return mult * (da - db);
-      }
-      return mult * (a[col] || "").localeCompare(b[col] || "");
-    });
-
-    const total = filtered.length;
-    const rows = filtered.slice(listingPage * pageSize, (listingPage + 1) * pageSize);
-    return { rows, filtered, total };
-  }, [pulseListings, listingFilter, listingColFilter, listingSort, listingPage, pageSize, search]);
-
-  const totalPages = Math.ceil(total / pageSize);
-
-  // CSV export of filtered set
-  const handleExportCsv = useCallback(() => {
-    const header = [
-      "address", "suburb", "postcode", "listing_type", "asking_price", "sold_price",
-      "bedrooms", "bathrooms", "parking", "land_size", "days_on_market",
-      "agent_name", "agency_name", "listed_date", "sold_date",
-      "property_key", "source_url", "last_synced_at",
-    ];
-    exportCsv(
-      `pulse_listings_${new Date().toISOString().slice(0, 10)}.csv`,
-      header,
-      filtered
-    );
-  }, [filtered]);
+      const header = [
+        "address", "suburb", "postcode", "listing_type", "asking_price", "sold_price",
+        "bedrooms", "bathrooms", "parking", "land_size", "days_on_market",
+        "agent_name", "agency_name", "listed_date", "sold_date",
+        "property_key", "source_url", "last_synced_at",
+      ];
+      exportCsv(`pulse_listings_${new Date().toISOString().slice(0, 10)}.csv`, header, all);
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      window.alert(`CSV export failed: ${err?.message || err}`);
+    } finally {
+      setExporting(false);
+    }
+  }, [buildQuery]);
 
   // ── Column header helper ────────────────────────────────────────────────────
   const Th = ({ col, children, className }) => (
@@ -772,20 +879,44 @@ export default function PulseListingsTab({
             size="sm"
             className="h-7 px-2 text-xs gap-1"
             onClick={handleExportCsv}
-            disabled={total === 0}
-            title="Export filtered listings as CSV"
+            disabled={total === 0 || exporting}
+            title="Export filtered listings as CSV (server-side, up to 10k rows)"
           >
-            <Download className="h-3 w-3" />
+            {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
             CSV
           </Button>
+          {/* Auto-refresh toggle — opt-in, default off. Listings change slowly
+              so we don't want to hammer the DB by default. */}
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none"
+            title="Auto-refresh every 60s"
+          >
+            <Switch
+              checked={autoRefresh}
+              onCheckedChange={setAutoRefresh}
+              aria-label="Auto-refresh every 60s"
+            />
+            <span>Auto-refresh</span>
+          </label>
           <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-            Showing {rows.length} of {total} listings
+            {isFetching ? (
+              <Loader2 className="inline h-3 w-3 animate-spin" />
+            ) : total === 0 ? (
+              <>Showing 0 of 0 listings</>
+            ) : (
+              <>Showing {Math.min(listingPage * pageSize + 1, total).toLocaleString()}–{Math.min((listingPage + 1) * pageSize, total).toLocaleString()} of {total.toLocaleString()} listings</>
+            )}
           </span>
         </div>
       </div>
 
       {/* ── Table ── */}
-      {total === 0 ? (
+      {isLoading && total === 0 ? (
+        <div className="rounded-xl border border-border/60 bg-card p-12 text-center">
+          <Loader2 className="h-6 w-6 mx-auto text-muted-foreground/40 mb-3 animate-spin" />
+          <p className="text-sm font-medium text-muted-foreground">Loading listings…</p>
+        </div>
+      ) : total === 0 ? (
         <div className="rounded-xl border border-border/60 bg-card p-12 text-center">
           <Home className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3" />
           <p className="text-sm font-medium text-muted-foreground">No listings found</p>
