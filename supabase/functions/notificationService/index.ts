@@ -346,6 +346,27 @@ serveWithAudit('notificationService', async (req) => {
       return jsonResponse({ types: NOTIFICATION_TYPES });
     }
 
+    // Tolerate legacy/broken callers: if no action, infer from payload shape.
+    // - payload with userId -> treat as 'create'
+    // - payload with roles array -> treat as 'create_for_roles'
+    // - otherwise return 200 noop (not 400) so caller error rates stay clean.
+    if (!action) {
+      console.warn('notificationService: call missing action param', {
+        hasUserId: !!params.userId,
+        hasRoles: Array.isArray(params.roles),
+        type: params.type,
+      });
+      if (params.userId && params.type) {
+        const result = await createNotificationForUser(entities, params);
+        return jsonResponse({ ...result, inferred_action: 'create' });
+      }
+      if (Array.isArray(params.roles) && params.roles.length > 0 && params.type) {
+        const result = await createNotificationsForRoles(entities, params);
+        return jsonResponse({ ...result, inferred_action: 'create_for_roles' });
+      }
+      return jsonResponse({ skipped: true, reason: 'no_action_or_target', noop: true });
+    }
+
     return errorResponse(`Unknown action: ${action}`, 400);
 
   } catch (err: any) {

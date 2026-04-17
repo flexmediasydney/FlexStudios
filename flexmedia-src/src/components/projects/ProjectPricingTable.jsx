@@ -355,15 +355,18 @@ export default function ProjectPricingTable({
         const pctDelta = oldPrice > 0 ? (priceDelta / oldPrice) * 100 : 0;
         if (oldPrice > 0 && (priceDelta >= 50 || pctDelta >= 5)) {
           api.functions.invoke('notificationService', {
+            action: 'create_for_roles',
+            roles: ['project_owner', 'master_admin'],
             type: 'project_pricing_changed',
             category: 'project',
             severity: 'info',
             title: `Pricing updated — ${projectName}`,
             message: `Price changed to $${Math.round(newPrice).toLocaleString()} (was $${Math.round(oldPrice).toLocaleString()}).`,
-            project_id: projectId,
-            project_name: projectName,
-            cta_label: 'View Project',
+            projectId: projectId,
+            projectName: projectName,
+            ctaLabel: 'View Project',
             source: 'pricing',
+            idempotencyKeySuffix: `price_${Math.round(newPrice)}_${Date.now()}`,
           }).catch(() => {});
         }
       }).catch(() => {});
