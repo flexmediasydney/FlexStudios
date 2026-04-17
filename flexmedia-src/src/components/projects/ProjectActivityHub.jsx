@@ -5,7 +5,7 @@ import { useCurrentUser } from '@/components/auth/PermissionGuard';
 import {
   MessageSquare, Mail, Pin,
   ChevronDown, ChevronRight, Lightbulb,
-  FileText, Zap, ListChecks, ArrowUpDown
+  FileText, Zap, ListChecks, ArrowUpDown, Home
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -23,6 +23,7 @@ const FILTER_CHIPS = [
   { key: 'status',    label: 'Status Changes', icon: ArrowUpDown },
   { key: 'tasks',     label: 'Task Updates',   icon: ListChecks },
   { key: 'tonomo',    label: 'Tonomo',         icon: Zap },
+  { key: 'pulse',     label: 'Pulse Signals',  icon: Home },
 ];
 
 // Actions that count as "status changes"
@@ -38,6 +39,10 @@ const TASK_ACTIONS = new Set([
 const TONOMO_ACTIONS = new Set([
   'tonomo_booking_created', 'tonomo_booking_updated', 'tonomo_rescheduled',
   'tonomo_changed', 'tonomo_cancelled', 'tonomo_delivered',
+]);
+// Pulse re-engagement signals (REA detected a re-listing of an address we shot)
+const PULSE_ACTIONS = new Set([
+  'pulse_relisting_detected',
 ]);
 
 // ── Empty state messages per filter ──────────────────────────────────────────
@@ -363,6 +368,7 @@ export default function ProjectActivityHub({ projectId, project }) {
         if (activeFilters.has('status') && item.type === 'activity' && STATUS_ACTIONS.has(item.action)) return true;
         if (activeFilters.has('tasks') && item.type === 'activity' && TASK_ACTIONS.has(item.action)) return true;
         if (activeFilters.has('tonomo') && item.type === 'activity' && (TONOMO_ACTIONS.has(item.action) || item._raw?.actor_type === 'tonomo')) return true;
+        if (activeFilters.has('pulse') && item.type === 'activity' && PULSE_ACTIONS.has(item.action)) return true;
         return false;
       });
     }
@@ -388,6 +394,7 @@ export default function ProjectActivityHub({ projectId, project }) {
     status: allItems.filter(i => i.type === 'activity' && STATUS_ACTIONS.has(i.action)).length,
     tasks: allItems.filter(i => i.type === 'activity' && TASK_ACTIONS.has(i.action)).length,
     tonomo: allItems.filter(i => i.type === 'activity' && (TONOMO_ACTIONS.has(i.action) || i._raw?.actor_type === 'tonomo')).length,
+    pulse: allItems.filter(i => i.type === 'activity' && PULSE_ACTIONS.has(i.action)).length,
   }), [allItems]);
 
   const isLoading = notesLoading || activitiesLoading || emailsLoading;

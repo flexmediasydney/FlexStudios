@@ -4,7 +4,7 @@ import {
   Calendar, DollarSign, Activity, MessageSquare, ArrowUpDown,
   ListPlus, ListChecks, FileX, Trophy, CreditCard, UserCheck,
   FileText, RefreshCw, XOctagon, MailCheck, Zap, Cog, Bot,
-  ClipboardList, AlertTriangle, StickyNote, Timer, Archive, UserCog
+  ClipboardList, AlertTriangle, StickyNote, Timer, Archive, UserCog, Home
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
@@ -42,6 +42,8 @@ const ACTION_CONFIG = {
   task_owner_changed:      { label: "Task owner changed",  color: "bg-sky-500",     textColor: "text-sky-700",     bg: "bg-sky-50 border-sky-200",        icon: UserCog,        iconBg: "bg-sky-100" },
   task_due_date_changed:   { label: "Due dates recalculated", color: "bg-blue-500", textColor: "text-blue-700",    bg: "bg-blue-50 border-blue-200",      icon: Calendar,       iconBg: "bg-blue-100" },
   task_auto_archived:      { label: "Tasks auto-archived", color: "bg-slate-500",   textColor: "text-slate-700",   bg: "bg-slate-50 border-slate-200",    icon: Archive,        iconBg: "bg-slate-100" },
+  // Property re-engagement signals
+  pulse_relisting_detected: { label: "Re-listing detected", color: "bg-emerald-500", textColor: "text-emerald-700", bg: "bg-emerald-50 border-emerald-200", icon: Home,         iconBg: "bg-emerald-100" },
 };
 
 // Fields to completely ignore in delta display
