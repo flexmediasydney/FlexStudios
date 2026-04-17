@@ -320,6 +320,7 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsRevisionTemplates") && { name: "Request Templates", href: "SettingsRevisionTemplates" },
           // Integrations removed — use Tonomo Integration page instead
           can("EmailSyncSettings") && { name: "Email Sync", href: "EmailSyncSettings" },
+          can("SettingsEmailSyncHealth") && { name: "Email Sync Health", href: "SettingsEmailSyncHealth" },
           can("SettingsTonomoIntegration") && { name: "Bookings Setup", href: "SettingsTonomoIntegration" },
           can("SettingsTonomoMappings") && { name: "Mappings", href: "SettingsTonomoMappings" },
           can("SettingsNotifications") && { name: "Notifications", href: "SettingsNotifications" },

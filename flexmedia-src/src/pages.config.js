@@ -50,6 +50,7 @@
 import AdminTodoList from './pages/AdminTodoList';
 import BountyBoard from './pages/BountyBoard';
 import EmailSyncSettings from './pages/EmailSyncSettings';
+import SettingsEmailSyncHealth from './pages/SettingsEmailSyncHealth';
 import HierarchyVisualization from './pages/HierarchyVisualization';
 import Inbox from './pages/Inbox';
 import InternalRoadmap from './pages/InternalRoadmap';
@@ -127,6 +128,7 @@ export const PAGES = {
     "SalesMap": SalesMap,
     "Dashboard": Dashboard,
     "EmailSyncSettings": EmailSyncSettings,
+    "SettingsEmailSyncHealth": SettingsEmailSyncHealth,
     "FieldMode": FieldMode,
     "GoalDetails": GoalDetails,
     "Goals": Goals,

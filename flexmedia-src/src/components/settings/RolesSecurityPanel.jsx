@@ -33,7 +33,7 @@ const PAGE_SECTIONS = [
   { label: "Products & Pricing", pages: ["Products","Packages","PriceMatrix","SettingsProductsPackages","SettingsPriceMatrix"] },
   { label: "Bookings", pages: ["TonomoIntegrationDashboard","TonomoPulse"] },
   { label: "Public & Gallery", pages: ["ClientGallery","MarketingWithFlex","SoldWithFlex","BountyBoard","InternalRoadmap","Favorites"] },
-  { label: "Settings", pages: ["Settings","SettingsOrganisation","SettingsAutomationRules","SettingsRevisionTemplates","SettingsIntegrations","EmailSyncSettings","SettingsTonomoIntegration","SettingsTonomoMappings","SettingsNotifications","SettingsClients","SettingsProjectRulebook","SettingsTonomoWebhooks","SettingsAI","BusinessRequirementsDocument","HierarchyVisualization","SettingsTeamsUsers"] },
+  { label: "Settings", pages: ["Settings","SettingsOrganisation","SettingsAutomationRules","SettingsRevisionTemplates","SettingsIntegrations","EmailSyncSettings","SettingsEmailSyncHealth","SettingsTonomoIntegration","SettingsTonomoMappings","SettingsNotifications","SettingsClients","SettingsProjectRulebook","SettingsTonomoWebhooks","SettingsAI","BusinessRequirementsDocument","HierarchyVisualization","SettingsTeamsUsers"] },
   { label: "Owner Only", pages: ["Users","NotificationsPulse","AdminTodoList","AIAuditLog"] },
 ];
 
