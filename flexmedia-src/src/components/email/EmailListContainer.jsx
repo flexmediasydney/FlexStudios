@@ -19,6 +19,7 @@ export default function EmailListContainer({
   onCompose,
   labelData,
   emailAccounts = [],
+  showAccount = false,
   onLinkProject,
   onToggleVisibility,
   onContextMenu,
@@ -154,6 +155,7 @@ export default function EmailListContainer({
                   onOpen={onOpenThread}
                   labelData={labelData}
                   emailAccounts={emailAccounts}
+                  showAccount={showAccount}
                   onLinkProject={onLinkProject}
                   onToggleVisibility={onToggleVisibility}
                   onContextMenu={onContextMenu}

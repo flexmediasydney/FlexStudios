@@ -126,6 +126,18 @@ function shortProjectLabel(title) {
   return title;
 }
 
+// Compact label for the connected-inbox indicator shown in "All Inboxes" view.
+// We prefer the email's local-part (before @) since names like "joseph", "janet",
+// "david", "info", "dom" are what the user recognises at a glance. Truncate
+// anything long so it stays on a single line in the dense 52px row.
+function getAccountLabel(account) {
+  if (!account) return '';
+  const email = account.email_address || '';
+  const local = email.split('@')[0] || account.display_name || '';
+  if (!local) return '';
+  return local.length > 10 ? local.slice(0, 9) + '…' : local;
+}
+
 // ---------------------------------------------------------------------------
 // Row component
 // ---------------------------------------------------------------------------
@@ -138,6 +150,7 @@ const EmailListRow = React.memo(function EmailListRow({
   onOpen,
   labelData = [],
   emailAccounts = [],
+  showAccount = false,
   onLinkProject,
   onToggleVisibility,
   onContextMenu,
@@ -165,7 +178,13 @@ const EmailListRow = React.memo(function EmailListRow({
   const accountColor = emailAccounts.length > 1 && accountIndex >= 0
     ? ACCOUNT_COLORS[accountIndex % ACCOUNT_COLORS.length]
     : null;
-  const accountEmail = emailAccounts.length > 1 ? emailAccounts[accountIndex]?.email_address : null;
+  const account = accountIndex >= 0 ? emailAccounts[accountIndex] : null;
+  const accountEmail = emailAccounts.length > 1 ? account?.email_address : null;
+
+  // Inline account indicator — shown only in the aggregated "All Inboxes" view.
+  // Uses the account's stripe color so stripe + suffix read as one visual cue.
+  const accountLabel = showAccount ? getAccountLabel(account) : '';
+  const accountLabelColor = accountColor || '#6b7280'; // slate-500 fallback
 
   // Last message drives preview + actor avatar
   const lastMsg = thread.messages[thread.messages.length - 1] || thread.messages[0];
@@ -271,6 +290,16 @@ const EmailListRow = React.memo(function EmailListRow({
                     title={`${thread.messages.length} messages`}
                   >
                     {thread.messages.length}
+                  </span>
+                )}
+                {accountLabel && (
+                  <span
+                    className="flex-shrink-0 text-[10px] leading-tight whitespace-nowrap opacity-80 group-hover:opacity-100 transition-opacity"
+                    style={{ color: accountLabelColor }}
+                    title={account?.email_address || accountLabel}
+                  >
+                    <span className="text-muted-foreground/50">·&nbsp;</span>
+                    {accountLabel}
                   </span>
                 )}
               </div>
