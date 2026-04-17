@@ -688,90 +688,24 @@ async function syncViaHistory(
 }
 
 // --- Upsert email_conversations summary table ---
-async function upsertConversations(admin: any, accountId: string) {
-  try {
-    const { data: threadMessages } = await admin
-      .from('email_messages')
-      .select('gmail_thread_id, subject, from, from_name, is_unread, is_starred, received_at, attachments, project_id, project_title, agent_id, agency_id, to, cc')
-      .eq('email_account_id', accountId)
-      .or('is_deleted.is.null,is_deleted.eq.false')  // Exclude deleted messages (include null and false)
-      .order('received_at', { ascending: false });
-
-    if (threadMessages && threadMessages.length > 0) {
-      const threads = new Map<string, any[]>();
-      for (const msg of threadMessages) {
-        const tid = msg.gmail_thread_id;
-        if (!threads.has(tid)) threads.set(tid, []);
-        threads.get(tid)!.push(msg);
-      }
-
-      const conversationRows: any[] = [];
-      for (const [threadId, msgs] of threads) {
-        const latest = msgs[0];
-        const oldest = msgs[msgs.length - 1];
-        const participantSet = new Set<string>();
-        let hasAttachments = false;
-        for (const m of msgs) {
-          if (m.from) participantSet.add(m.from);
-          if (Array.isArray(m.to)) m.to.forEach((e: string) => participantSet.add(e));
-          if (Array.isArray(m.cc)) m.cc.forEach((e: string) => participantSet.add(e));
-          if (m.attachments && Array.isArray(m.attachments) && m.attachments.length > 0) hasAttachments = true;
-        }
-        // Pick the best message for each field independently — don't let one
-        // un-linked message wipe out an agent/agency link set by another.
-        const projectMsg = msgs.find((m: any) => m.project_id);
-        const agentMsg = msgs.find((m: any) => m.agent_id);
-        const agencyMsg = msgs.find((m: any) => m.agency_id);
-        conversationRows.push({
-          email_account_id: accountId,
-          gmail_thread_id: threadId,
-          subject: latest.subject,
-          snippet: (latest.subject || '').substring(0, 200),
-          first_message_at: oldest.received_at,
-          last_message_at: latest.received_at,
-          message_count: msgs.length,
-          unread_count: msgs.filter((m: any) => m.is_unread).length,
-          participant_count: participantSet.size,
-          participants: JSON.stringify([...participantSet]),
-          is_starred: msgs.some((m: any) => m.is_starred),
-          has_attachments: hasAttachments,
-          last_sender: latest.from,
-          last_sender_name: latest.from_name,
-          project_id: projectMsg?.project_id || null,
-          project_title: projectMsg?.project_title || null,
-          agent_id: agentMsg?.agent_id || null,
-          agency_id: agencyMsg?.agency_id || null,
-        });
-      }
-      for (let i = 0; i < conversationRows.length; i += 50) {
-        const batch = conversationRows.slice(i, i + 50);
-        await admin
-          .from('email_conversations')
-          .upsert(batch, { onConflict: 'email_account_id,gmail_thread_id' });
-      }
-
-      // Clean up stale conversations for threads where all messages have been deleted
-      const activeThreadIds = [...threads.keys()];
-      if (activeThreadIds.length > 0) {
-        // Delete conversation rows that no longer have any active (non-deleted) messages
-        const { data: existingConvos } = await admin
-          .from('email_conversations')
-          .select('id, gmail_thread_id')
-          .eq('email_account_id', accountId);
-        if (existingConvos) {
-          const activeSet = new Set(activeThreadIds);
-          const staleIds = existingConvos
-            .filter((c: any) => !activeSet.has(c.gmail_thread_id))
-            .map((c: any) => c.id);
-          if (staleIds.length > 0) {
-            await admin.from('email_conversations').delete().in('id', staleIds);
-          }
-        }
-      }
-    }
-  } catch (convError: any) {
-    console.error('Error upserting email_conversations:', convError?.message);
-  }
+//
+// NOTE: as of migration 071, a DB trigger (`email_messages_refresh_conversation`)
+// keeps `email_conversations` in sync automatically on every message insert,
+// update, and delete. The previous implementation of this function SELECTed
+// all messages for an account without a limit — but PostgREST's default cap is
+// 1000 rows, so for accounts with >1000 messages (info@ has 2265, joseph@ has
+// 1159), the function only saw the first 1000 threads and DELETED every other
+// conversation row as "stale". That was the structural cause of the "only 45
+// emails showing" bug observed in production.
+//
+// Now this function is a no-op — the trigger handles everything. Left in place
+// (as a stub) so existing callers don't need to change.
+async function upsertConversations(_admin: any, _accountId: string) {
+  // Intentionally empty — replaced by DB trigger in migration 071.
+  // The trigger (`email_messages_refresh_conversation`) fires per-row on
+  // INSERT/UPDATE/DELETE of email_messages and calls refresh_email_conversation
+  // which upserts (or deletes) the corresponding email_conversations row.
+  return;
 }
 
 Deno.serve(async (req) => {
