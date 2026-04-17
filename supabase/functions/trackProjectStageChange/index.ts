@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 import { MAX_USERS_FETCH } from '../_shared/constants.ts';
 
 const MAX_STAGE_DURATION_SECONDS = 90 * 24 * 3600; // 90 days hard cap
@@ -41,7 +41,7 @@ const retryWithBackoff = async <T>(fn: () => Promise<T>, maxRetries = 2): Promis
   throw new Error('Retry exhausted');
 };
 
-Deno.serve(async (req) => {
+serveWithAudit('trackProjectStageChange', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
@@ -344,7 +344,7 @@ Deno.serve(async (req) => {
     invokeFunction('calculateProjectTaskDeadlines', {
       project_id: project.id,
       trigger_event: `stage_change_to_${newStatus}`,
-    }).catch((err: any) => {
+    }, 'trackProjectStageChange').catch((err: any) => {
       console.warn('calculateProjectTaskDeadlines fire-and-forget failed:', err?.message);
     });
 
@@ -354,7 +354,7 @@ Deno.serve(async (req) => {
       trigger: 'stage_change',
       new_stage: newStatus,
       old_stage: oldStatus,
-    }).catch(() => {});
+    }, 'trackProjectStageChange').catch(() => {});
 
     // Auto-complete onsite effort tasks when project reaches uploaded or beyond
     const STAGE_ORDER_LOG = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','submitted','in_progress','in_production','ready_for_partial','in_revision','delivered'];
@@ -364,7 +364,7 @@ Deno.serve(async (req) => {
       invokeFunction('logOnsiteEffortOnUpload', {
         project_id: project.id,
         old_status: oldStatus,
-      }).catch((err: any) => {
+      }, 'trackProjectStageChange').catch((err: any) => {
         console.warn('logOnsiteEffortOnUpload fire-and-forget failed:', err?.message);
       });
     }
@@ -439,7 +439,7 @@ Deno.serve(async (req) => {
       invokeFunction('calculateEmployeeUtilization', {
         trigger: 'project_closed',
         project_id: project.id,
-      }).catch(() => {});
+      }, 'trackProjectStageChange').catch(() => {});
     }
 
     // Stop all running timers when project is cancelled or delivered

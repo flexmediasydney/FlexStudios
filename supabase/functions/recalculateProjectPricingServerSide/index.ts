@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, invokeFunction, handleCors, jsonResponse, errorResponse, isQuietHours } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, invokeFunction, handleCors, jsonResponse, errorResponse, isQuietHours, serveWithAudit } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -12,7 +12,7 @@ async function _canNotify(entities: any, userId: string, type: string, category:
   } catch { return true; }
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('recalculateProjectPricingServerSide', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
@@ -48,7 +48,7 @@ Deno.serve(async (req) => {
         discount_type: project.discount_type || 'fixed',
         discount_value: project.discount_value || 0,
         discount_mode: project.discount_mode || 'discount',
-      });
+      }, 'recalculateProjectPricingServerSide');
     } catch (invokeErr: any) {
       console.error('calculateProjectPricing invoke failed:', invokeErr?.message);
       return errorResponse('Pricing calculation failed', 500);
@@ -168,9 +168,9 @@ Deno.serve(async (req) => {
       }).catch(() => {});
     }
 
-    invokeFunction('syncProjectTasksFromProducts', { project_id }).catch(() => {});
-    invokeFunction('syncOnsiteEffortTasks', { project_id }).catch(() => {});
-    invokeFunction('cleanupOrphanedProjectTasks', { project_id }).catch(() => {});
+    invokeFunction('syncProjectTasksFromProducts', { project_id }, 'recalculateProjectPricingServerSide').catch(() => {});
+    invokeFunction('syncOnsiteEffortTasks', { project_id }, 'recalculateProjectPricingServerSide').catch(() => {});
+    invokeFunction('cleanupOrphanedProjectTasks', { project_id }, 'recalculateProjectPricingServerSide').catch(() => {});
 
     return jsonResponse({ success: true, project_id, calculated_price: newPrice, pricing_tier: tier, used_matrix: !!calcResult.price_matrix_snapshot, delegated_to: 'calculateProjectPricing' });
   } catch (error: any) {

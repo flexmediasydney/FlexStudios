@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, serveWithAudit } from '../_shared/supabase.ts';
 import { PROCESSOR_VERSION, BATCH_SIZE, LOCK_TTL_SECONDS } from './types.ts';
 import {
   extractOrderIdFromPayload,
@@ -53,7 +53,7 @@ async function processItem(entities: any, item: any, payload: any) {
 }
 
 // Entry point
-Deno.serve(async (req) => {
+serveWithAudit('processTonomoQueue', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   const admin = getAdminClient();

@@ -428,10 +428,55 @@ const entitiesProxyAdmin = new Proxy({}, {
 // ─── Functions (invoke) ──────────────────────────────────────────────────────
 
 /**
+ * Fire-and-forget fallback audit log for frontend→edge-function failures.
+ *
+ * When the server-side `serveWithAudit` wrapper runs successfully, it records
+ * the invocation itself — so the success case is already covered. But if the
+ * function can never be reached (network drop, Supabase outage, DNS, CORS,
+ * auth failure at the edge gateway before the function runs), the server
+ * wrapper never executes. Those are exactly the failures we most want to
+ * detect (the 2026-04-16 auth-key outage was this class of failure).
+ *
+ * The audit table has a permissive INSERT policy so the anon client can write.
+ * Best-effort — never throws.
+ */
+async function _logFrontendFailure(functionName, errorMessage, durationMs) {
+  try {
+    // Skip audit-table recursion & health-check noise.
+    if (functionName === 'edgeFunctionHealth') return;
+    if ((functionName || '').toLowerCase().includes('audit')) return;
+    // Resolve user_id best-effort so outage diagnostics can slice by user.
+    let userId = null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      userId = user?.id || null;
+    } catch { /* unauthenticated */ }
+    await supabase.from('edge_fn_call_audit').insert({
+      fn_name: functionName,
+      caller: 'frontend',
+      status: 'error',
+      http_status: null,
+      duration_ms: typeof durationMs === 'number' ? Math.max(0, Math.floor(durationMs)) : null,
+      error_message: typeof errorMessage === 'string' ? errorMessage.slice(0, 2000) : String(errorMessage).slice(0, 2000),
+      request_id: null,
+      user_id: userId,
+    });
+  } catch (e) {
+    // Never crash the caller — audit is best-effort.
+    console.warn('[audit] frontend fallback log failed:', e?.message);
+  }
+}
+
+/**
  * Invoke a Supabase Edge Function.
  * Signature: api.functions.invoke(functionName, params) → response data
  *
  * Maps to: supabase.functions.invoke(functionName, { body: params })
+ *
+ * Sends `x-caller-context: frontend` so the server's serveWithAudit wrapper
+ * can attribute the call. On errors where the server wrapper could not run
+ * (network failure, CORS, auth-gate rejection), we also write a fallback
+ * audit row directly from the client.
  */
 async function invokeFunction(client, functionName, params = {}) {
   // Timeout: Edge Functions should not hang indefinitely on slow networks.
@@ -447,18 +492,36 @@ async function invokeFunction(client, functionName, params = {}) {
     );
   });
 
+  const startMs = Date.now();
+  let loggedFailure = false;
   try {
     const { data, error } = await Promise.race([
-      client.functions.invoke(functionName, { body: params }),
+      client.functions.invoke(functionName, {
+        body: params,
+        headers: { 'x-caller-context': 'frontend' },
+      }),
       timeoutPromise,
     ]);
     clearTimeout(timeoutId);
-    if (error) throw new Error(error.message || `Function ${functionName} failed`);
+    if (error) {
+      // The server wrapper may or may not have recorded this — depends on how
+      // far the request got. Record a frontend-side audit row regardless;
+      // duplicates are fine for outage diagnostics and the volume is low.
+      const msg = error.message || `Function ${functionName} failed`;
+      loggedFailure = true;
+      _logFrontendFailure(functionName, msg, Date.now() - startMs);
+      throw new Error(msg);
+    }
     // Wrap in { data } to match Base44's response format:
     // Frontend code does: result.data.someField
     return { data };
   } catch (err) {
     clearTimeout(timeoutId);
+    // Timeout or network-level failure — server wrapper definitely did not run.
+    // This path is the most valuable signal for an outage (e.g. 2026-04-16).
+    if (!loggedFailure) {
+      _logFrontendFailure(functionName, err?.message || String(err), Date.now() - startMs);
+    }
     throw err;
   }
 }

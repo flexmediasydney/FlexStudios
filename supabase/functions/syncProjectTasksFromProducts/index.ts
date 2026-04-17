@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, invokeFunction, handleCors, jsonResponse, errorResponse, isQuietHours } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, invokeFunction, handleCors, jsonResponse, errorResponse, isQuietHours, serveWithAudit } from '../_shared/supabase.ts';
 
 function hasCycle(taskId: string, depsMap: Map<string, string[]>, visited = new Set<string>(), stack = new Set<string>()): boolean {
   if (stack.has(taskId)) return true;
@@ -24,7 +24,7 @@ async function _canNotify(entities: any, userId: string, type: string, category:
   } catch { return true; }
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('syncProjectTasksFromProducts', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
@@ -652,7 +652,7 @@ Deno.serve(async (req) => {
           else { await entities.ProjectEffort.create(effortPayload); }
         } catch (e: any) {
           console.warn('Effort recalc after sync failed:', e.message);
-          invokeFunction('reconcileProjectEffort', { project_id }).catch(() => {});
+          invokeFunction('reconcileProjectEffort', { project_id }, 'syncProjectTasksFromProducts').catch(() => {});
         }
       }
     }
@@ -728,7 +728,7 @@ Deno.serve(async (req) => {
     // any earlier races with the two-pass create → update-deps flow and stamps
     // dependencies_cleared tasks with "now()"-based due_dates.
     if (createdCount > 0 || tasksToReactivate.length > 0 || tierMigrationTasks.length > 0) {
-      invokeFunction('calculateProjectTaskDeadlines', { project_id, trigger_event: 'tasks_synced' }).catch(() => {});
+      invokeFunction('calculateProjectTaskDeadlines', { project_id, trigger_event: 'tasks_synced' }, 'syncProjectTasksFromProducts').catch(() => {});
     }
 
     return jsonResponse({

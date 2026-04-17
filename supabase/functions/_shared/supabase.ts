@@ -247,6 +247,178 @@ export function createEntities(client: SupabaseClient) {
   });
 }
 
+// ─── Edge-function call audit ────────────────────────────────────────────────
+//
+// Motivation: 2026-04-16 Supabase platform auth-key migration silently broke
+// 23 edge functions for 18+ hours because every call site was fire-and-forget
+// and errors were swallowed by `.catch(err => console.warn(...))`. We now log
+// every invocation outcome to `edge_fn_call_audit` (see migration 079).
+//
+// Design:
+//   - `serveWithAudit(fnName, handler)` wraps Deno.serve. Start time is
+//     captured, handler runs, outcome (success / error / timeout / http_status /
+//     duration_ms / error_message) is recorded in a `finally` block.
+//   - The audit INSERT is itself wrapped in try/catch — if the audit table is
+//     down, the function response is not affected.
+//   - Callee-only logging. `invokeFunction()` does NOT log on the caller side
+//     because the callee's `serveWithAudit` wrapper logs the same invocation
+//     and double-logging would inflate counts. The `x-caller-context` header
+//     carries caller identity to the callee for denormalisation.
+//   - Health-check probes (`body._health_check === true`) are skipped to avoid
+//     noise. `edgeFunctionHealth` and any fn_name containing 'audit' are also
+//     skipped to avoid recursion.
+//   - TODO (Phase 2): migrate the remaining ~105 functions from raw
+//     `Deno.serve(...)` to `serveWithAudit(...)` in a follow-up scripted PR.
+//     Phase 1 wraps only 5 pilot functions (trackProjectStageChange,
+//     syncProjectTasksFromProducts, calculateProjectTaskDeadlines,
+//     recalculateProjectPricingServerSide, processTonomoQueue).
+
+type EdgeFnStatus = 'success' | 'error' | 'timeout';
+
+interface AuditRow {
+  fn_name: string;
+  caller: string | null;
+  status: EdgeFnStatus;
+  http_status: number | null;
+  duration_ms: number;
+  error_message: string | null;
+  request_id: string | null;
+  user_id: string | null;
+}
+
+/** Best-effort user_id extraction from the Authorization header. Silent on failure. */
+async function _extractUserId(req: Request): Promise<string | null> {
+  try {
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return null;
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+    if (!token) return null;
+    // Service-role / sb_secret_* tokens aren't tied to a user_id.
+    if (token === SUPABASE_SERVICE_ROLE_KEY) return null;
+    if (token.startsWith('sb_secret_')) return null;
+    // Peek at the JWT payload without verifying (verification costs an RTT
+    // and we already do the real verification downstream via getUserFromReq).
+    const payloadB64 = token.split('.')[1];
+    if (!payloadB64) return null;
+    const payload = JSON.parse(atob(payloadB64));
+    if (payload.role === 'service_role') return null;
+    return payload.sub || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fire-and-forget audit insert. Never throws. */
+function _recordAudit(row: AuditRow): void {
+  // Skip recursion-prone function names.
+  if (row.fn_name === 'edgeFunctionHealth') return;
+  if (row.fn_name.toLowerCase().includes('audit')) return;
+  // Non-blocking: do not await. Admin client bypasses RLS.
+  queueMicrotask(() => {
+    try {
+      const admin = getAdminClient();
+      admin.from('edge_fn_call_audit').insert(row).then(({ error }) => {
+        if (error) console.warn(`[audit] insert failed for ${row.fn_name}:`, error.message);
+      }).catch((err: any) => {
+        console.warn(`[audit] insert threw for ${row.fn_name}:`, err?.message);
+      });
+    } catch (err: any) {
+      console.warn(`[audit] queueMicrotask handler failed for ${row.fn_name}:`, err?.message);
+    }
+  });
+}
+
+/**
+ * Wrap an Edge Function handler with automatic audit logging.
+ *
+ * Usage:
+ *   serveWithAudit('trackProjectStageChange', async (req) => {
+ *     // ... existing handler body, unchanged ...
+ *     return jsonResponse({ ok: true });
+ *   });
+ *
+ * Guarantees:
+ *   - Response body/headers are passed through untouched.
+ *   - Audit row is inserted fire-and-forget in the `finally` block — if the
+ *     audit table is unreachable, the function still returns normally.
+ *   - OPTIONS preflight and _health_check probes are NOT logged (noise).
+ */
+export function serveWithAudit(
+  fnName: string,
+  handler: (req: Request) => Promise<Response> | Response,
+): void {
+  Deno.serve(async (req: Request) => {
+    // Skip audit for preflight entirely — these never reach our handlers and
+    // logging them would bloat the table. `handleCors(req)` still runs inside
+    // the handler, so semantics are preserved.
+    const isPreflight = req.method === 'OPTIONS';
+
+    const startMs = Date.now();
+    const requestId = req.headers.get('cf-ray') || req.headers.get('x-request-id') || null;
+    const caller = req.headers.get('x-caller-context') || 'unknown';
+
+    // Peek body to detect health-check probes without consuming the stream.
+    // We clone before any handler touches it. If JSON parse fails (binary/empty),
+    // we simply don't skip — we still log the outcome.
+    let isHealthCheck = false;
+    try {
+      const clone = req.clone();
+      const text = await clone.text();
+      if (text) {
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed && parsed._health_check === true) isHealthCheck = true;
+        } catch { /* not JSON — not a health check */ }
+      }
+    } catch { /* stream already consumed or not readable — ignore */ }
+
+    let response: Response;
+    let errorMessage: string | null = null;
+    let status: EdgeFnStatus = 'success';
+
+    try {
+      response = await handler(req);
+      if (!response.ok) {
+        status = 'error';
+        // Best-effort extract error message without consuming the response
+        // body the caller will receive. We use the status text as a safe proxy.
+        errorMessage = `HTTP ${response.status} ${response.statusText || ''}`.trim();
+      }
+    } catch (err: any) {
+      status = 'error';
+      errorMessage = err?.message || String(err);
+      // Re-emit a 500 so the caller still gets a proper response — matches
+      // the behaviour of a raw `Deno.serve` handler that throws.
+      response = new Response(
+        JSON.stringify({ error: errorMessage }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } },
+      );
+    } finally {
+      // Audit last — after we've decided on the response.
+      if (!isPreflight && !isHealthCheck) {
+        try {
+          const userId = await _extractUserId(req);
+          _recordAudit({
+            fn_name: fnName,
+            caller,
+            status,
+            http_status: response!.status,
+            duration_ms: Date.now() - startMs,
+            error_message: errorMessage,
+            request_id: requestId,
+            user_id: userId,
+          });
+        } catch (auditErr: any) {
+          // Last-ditch — audit prep itself failed. Do not impact the response.
+          console.warn(`[audit] prep failed for ${fnName}:`, auditErr?.message);
+        }
+      }
+    }
+
+    return response!;
+  });
+}
+
 // ─── Function invocation (cross-function calls) ──────────────────────────────
 
 // Supabase has migrated from legacy JWT keys (`eyJ...`) to the new opaque
@@ -279,20 +451,38 @@ function _fnAuthToken(): string {
 /**
  * Invoke another Edge Function by name.
  * Replaces base44.asServiceRole.functions.invoke(name, params).
+ *
+ * Audit logging:
+ *   We send `x-caller-context: cross_fn:{callerFnName?}` so the callee's
+ *   `serveWithAudit` wrapper can attribute the call correctly. We do NOT log
+ *   on this side — the callee already logs the same invocation and double-
+ *   logging would inflate counts. See the block comment at the top of the
+ *   "Edge-function call audit" section.
+ *
+ * @param functionName  Target function to invoke.
+ * @param params        JSON payload.
+ * @param callerFnName  Optional: name of the calling function, for audit
+ *                      attribution. E.g. 'trackProjectStageChange'.
  */
-export async function invokeFunction(functionName: string, params: Record<string, unknown> = {}): Promise<unknown> {
+export async function invokeFunction(
+  functionName: string,
+  params: Record<string, unknown> = {},
+  callerFnName?: string,
+): Promise<unknown> {
   const url = `${SUPABASE_URL}/functions/v1/${functionName}`;
   const authToken = _fnAuthToken();
   // The apikey header expects the anon key (needed for DB REST path-through).
   // The Authorization header must be a valid JWT on verify_jwt=true targets,
   // so we fall back to LEGACY_ANON_JWT / legacy SUPABASE_*_KEY when the current
   // runtime-injected env keys are in the new sb_secret_* / sb_publishable_* format.
+  const callerContext = callerFnName ? `cross_fn:${callerFnName}` : 'cross_fn:unknown';
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'apikey': SUPABASE_ANON_KEY,
       'Authorization': `Bearer ${authToken}`,
+      'x-caller-context': callerContext,
     },
     body: JSON.stringify(params),
   });
