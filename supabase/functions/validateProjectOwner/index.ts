@@ -1,6 +1,6 @@
-import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
-Deno.serve(async (req) => {
+serveWithAudit('validateProjectOwner', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).

@@ -1,10 +1,4 @@
-import {
-  getAdminClient,
-  getUserFromReq,
-  handleCors,
-  jsonResponse,
-  errorResponse,
-} from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 const ADMIN_ROLES = ['master_admin', 'admin'];
 
@@ -18,7 +12,7 @@ const ADMIN_ROLES = ['master_admin', 'admin'];
  *   - update_mine          (any authenticated user)
  *   - reset_daily_counters (admin / cron)
  */
-Deno.serve(async (req) => {
+serveWithAudit('aiSettingsManager', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

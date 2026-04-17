@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { handleCors, getCorsHeaders, getUserFromReq, errorResponse as sharedErrorResponse } from '../_shared/supabase.ts';
+import { handleCors, getCorsHeaders, getUserFromReq, errorResponse as sharedErrorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
-Deno.serve(async (req) => {
+serveWithAudit('adminAuthActions', async (req) => {
   const _cors = handleCors(req); if (_cors) return _cors;
   const corsHeaders = getCorsHeaders(req);
 

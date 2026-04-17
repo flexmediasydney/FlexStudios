@@ -1,6 +1,6 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, getUserFromReq } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, getUserFromReq, serveWithAudit } from '../_shared/supabase.ts';
 
-Deno.serve(async (req) => {
+serveWithAudit('seedAutomationRules', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     // ── Auth: require master_admin; allow cron/service-role calls without user context ──

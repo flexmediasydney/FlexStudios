@@ -1,10 +1,10 @@
-import { getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Gatekeeper function for admin-only settings endpoints.
  * Prevents unauthorized users from accessing pricing, products, users, etc.
  */
-Deno.serve(async (req) => {
+serveWithAudit('validateSettingsAccess', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const user = await getUserFromReq(req);
