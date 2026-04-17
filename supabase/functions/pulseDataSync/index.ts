@@ -1534,16 +1534,24 @@ serveWithAudit('pulseDataSync', async (req) => {
 
   } catch (error: any) {
     console.error('pulseDataSync error:', error);
-    // Update sync log to failed so it doesn't block future runs
+    // CRITICAL: Always mark the sync log as failed so pulseFireScrapes' 30-min
+    // "already running" guard doesn't block subsequent scrapes. Use a DIRECT
+    // admin client update (not the PulseSyncLog entity helper) so wrapper
+    // errors can't swallow this. Wrap in try/catch so a log-update failure
+    // doesn't prevent us from returning an error response to the caller.
     if (syncLogId) {
       try {
+        const errMsg = (error?.message || String(error) || 'unknown error').substring(0, 2000);
         await admin.from('pulse_sync_logs').update({
           status: 'failed',
           completed_at: new Date().toISOString(),
-          result_summary: { error: error.message?.substring(0, 500) },
+          error_message: errMsg,
+          result_summary: { error: errMsg },
         }).eq('id', syncLogId);
-      } catch { /* last resort */ }
+      } catch (logErr) {
+        console.error('pulseDataSync: failed to mark sync log as failed:', logErr);
+      }
     }
-    return errorResponse(error.message);
+    return errorResponse(error?.message || 'pulseDataSync failed');
   }
 });
