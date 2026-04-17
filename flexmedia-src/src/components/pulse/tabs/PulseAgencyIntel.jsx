@@ -2,12 +2,14 @@
  * PulseAgencyIntel — Agency Intelligence Tab
  * REA-only. Tabular agency roster with live agent counts, full-detail slideout.
  */
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -39,6 +41,7 @@ import {
   UserPlus,
   Download,
   Clock,
+  Loader2,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 
@@ -1031,6 +1034,37 @@ export function AgencySlideout({
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
+// UI sort-col → DB column. `live_agent_count` is a client-enrichment over
+// `agent_count` that includes only "live" agents; PostgREST can only sort
+// on real columns so we sort by `agent_count` as the closest equivalent.
+const AGENCY_SERVER_SORT_MAP = {
+  live_agent_count: "agent_count",
+  agent_count: "agent_count",
+  active_listings: "active_listings",
+  total_sold_12m: "total_sold_12m",
+  avg_sold_price: "avg_sold_price",
+  avg_agent_rating: "avg_agent_rating",
+  name: "name",
+  suburb: "suburb",
+};
+
+const CSV_EXPORT_CAP_AGENCIES = 10000;
+
+// localStorage — page-size choice + auto-refresh toggle persist per-tab.
+const LS_PAGE_SIZE_KEY = "pulse_agencies_page_size";
+const LS_AUTO_REFRESH_KEY = "pulse_agencies_auto_refresh";
+const AUTO_REFRESH_INTERVAL_MS = 60_000;
+
+function readStoredPageSize() {
+  if (typeof window === "undefined") return 50;
+  const raw = Number(window.localStorage.getItem(LS_PAGE_SIZE_KEY));
+  return PAGE_SIZE_OPTIONS.includes(raw) ? raw : 50;
+}
+function readStoredAutoRefresh() {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(LS_AUTO_REFRESH_KEY) === "1";
+}
+
 export default function PulseAgencyIntel({
   pulseAgents = [],
   pulseAgencies = [],
@@ -1048,8 +1082,18 @@ export default function PulseAgencyIntel({
   const [agencySort, setAgencySort] = useState({ col: "live_agent_count", dir: "desc" });
   const [agencyColFilter, setAgencyColFilter] = useState(""); // suburb text filter
   const [agencyPage, setAgencyPage] = useState(0);
-  const [pageSize, setPageSize] = useState(50);
+  // Page size persists in localStorage so user choice survives reloads.
+  const [pageSize, setPageSize] = useState(readStoredPageSize);
   const [selectedAgency, setSelectedAgency] = useState(null);
+  // Auto-refresh — opt-in 60s. Agency data changes slowly.
+  const [autoRefresh, setAutoRefresh] = useState(readStoredAutoRefresh);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_PAGE_SIZE_KEY, String(pageSize)); } catch { /* quota / SSR */ }
+  }, [pageSize]);
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_AUTO_REFRESH_KEY, autoRefresh ? "1" : "0"); } catch { /* quota / SSR */ }
+  }, [autoRefresh]);
 
   /* ── Build agent count map keyed by rea_agency_id or normalised name ──── */
   const agentCountMap = useMemo(() => {
@@ -1062,74 +1106,126 @@ export default function PulseAgencyIntel({
     return m;
   }, [pulseAgents]);
 
-  /* ── Enrich agencies with live_agent_count ──────────────────────────── */
-  const enrichedAgencies = useMemo(
-    () =>
-      pulseAgencies.map((ag) => ({
+  /* ── Reset page on any filter/sort change (server-pagination refactor) ── */
+  useEffect(() => {
+    setAgencyPage(0);
+  }, [agencyFilter, agencyColFilter, search, agencySort.col, agencySort.dir, pageSize]);
+
+  /* ── Server-side query builder ──────────────────────────────────────── */
+  const buildQuery = useCallback((selectCols, withCount) => {
+    let q = api._supabase
+      .from("pulse_agencies")
+      .select(selectCols, withCount ? { count: "exact" } : undefined);
+
+    if (agencyFilter === "in_crm") q = q.eq("is_in_crm", true);
+    else if (agencyFilter === "not_in_crm") q = q.eq("is_in_crm", false);
+
+    const sc = (agencyColFilter || "").trim();
+    if (sc) {
+      q = q.ilike("suburb", `%${sc.replace(/[%_]/g, "\\$&")}%`);
+    }
+
+    const globalQ = (search || "").trim();
+    if (globalQ) {
+      const s = globalQ.replace(/[%_]/g, "\\$&");
+      q = q.or(`name.ilike.%${s}%,suburb.ilike.%${s}%,phone.ilike.%${s}%,email.ilike.%${s}%`);
+    }
+
+    const sortCol = AGENCY_SERVER_SORT_MAP[agencySort.col] || "agent_count";
+    q = q.order(sortCol, { ascending: agencySort.dir === "asc", nullsFirst: false });
+
+    return q;
+  }, [agencyFilter, agencyColFilter, search, agencySort]);
+
+  /* ── Page fetch ─────────────────────────────────────────────────────── */
+  const queryKey = useMemo(
+    () => ["pulse-agencies-page", {
+      agencyFilter, agencyColFilter, search,
+      sortCol: agencySort.col, sortDir: agencySort.dir,
+      page: agencyPage, pageSize,
+    }],
+    [agencyFilter, agencyColFilter, search, agencySort, agencyPage, pageSize],
+  );
+
+  const { data: pageData, isLoading, isFetching } = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const from = agencyPage * pageSize;
+      const to = from + pageSize - 1;
+      const q = buildQuery("*", true).range(from, to);
+      const { data: rows, count, error } = await q;
+      if (error) throw error;
+      return { rows: rows || [], count: count || 0 };
+    },
+    keepPreviousData: true,
+    staleTime: 30_000,
+    refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
+
+  /* ── Enrich ONLY the fetched page with live_agent_count ─────────────── */
+  const pageRows = useMemo(() => {
+    const rows = pageData?.rows || [];
+    return rows.map((ag) => ({
+      ...ag,
+      live_agent_count:
+        agentCountMap[ag.rea_agency_id || normAgencyKey(ag.name)] ||
+        ag.agent_count ||
+        0,
+    }));
+  }, [pageData, agentCountMap]);
+
+  const totalCount = pageData?.count || 0;
+  const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
+  const safePage = Math.min(agencyPage, pageCount - 1);
+
+  // For the "X of Y" display in the filter bar, show server total.
+  const sorted = { length: totalCount }; // kept as object for minimal downstream churn
+
+  const [exporting, setExporting] = useState(false);
+
+  /* ── CSV export — fetch entire filtered set from server ──────────────── */
+  const handleExportCsv = useCallback(async () => {
+    setExporting(true);
+    try {
+      const cap = Math.min(totalCount, CSV_EXPORT_CAP_AGENCIES);
+      if (totalCount > CSV_EXPORT_CAP_AGENCIES) {
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+          `Filter matches ${totalCount.toLocaleString()} agencies. Only the first ${CSV_EXPORT_CAP_AGENCIES.toLocaleString()} will export. Continue?`,
+        );
+        if (!ok) { setExporting(false); return; }
+      }
+      const all = [];
+      for (let off = 0; off < cap; off += 1000) {
+        const end = Math.min(off + 999, cap - 1);
+        const { data: chunk, error } = await buildQuery("*", false).range(off, end);
+        if (error) throw error;
+        all.push(...(chunk || []));
+        if (!chunk || chunk.length < 1000) break;
+      }
+      // Enrich with live_agent_count before serialising
+      const enriched = all.map((ag) => ({
         ...ag,
         live_agent_count:
           agentCountMap[ag.rea_agency_id || normAgencyKey(ag.name)] ||
           ag.agent_count ||
           0,
-      })),
-    [pulseAgencies, agentCountMap]
-  );
-
-  /* ── Filter: CRM status + suburb text + global search ──────────────── */
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    const sc = agencyColFilter.toLowerCase();
-    return enrichedAgencies.filter((ag) => {
-      if (agencyFilter === "in_crm" && !ag.is_in_crm) return false;
-      if (agencyFilter === "not_in_crm" && ag.is_in_crm) return false;
-      if (sc && !(ag.suburb || "").toLowerCase().includes(sc)) return false;
-      if (q) {
-        const haystack = [ag.name, ag.suburb, ag.phone, ag.email]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [enrichedAgencies, agencyFilter, agencyColFilter, search]);
-
-  /* ── Sort ────────────────────────────────────────────────────────────── */
-  const sorted = useMemo(() => {
-    const { col, dir } = agencySort;
-    const mul = dir === "asc" ? 1 : -1;
-    return [...filtered].sort((a, b) => {
-      let va = a[col];
-      let vb = b[col];
-      if (typeof va === "string") va = va.toLowerCase();
-      if (typeof vb === "string") vb = vb.toLowerCase();
-      if (va == null) va = col === "name" ? "zzz" : -Infinity;
-      if (vb == null) vb = col === "name" ? "zzz" : -Infinity;
-      if (va < vb) return -1 * mul;
-      if (va > vb) return 1 * mul;
-      return 0;
-    });
-  }, [filtered, agencySort]);
-
-  /* ── Pagination ──────────────────────────────────────────────────────── */
-  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const safePage = Math.min(agencyPage, pageCount - 1);
-  const pageRows = sorted.slice(safePage * pageSize, safePage * pageSize + pageSize);
-
-  /* ── CSV export of filtered rows ────────────────────────────────────── */
-  const handleExportCsv = useCallback(() => {
-    const header = [
-      "name", "suburb", "state", "phone", "email", "website",
-      "live_agent_count", "active_listings", "total_sold_12m",
-      "avg_sold_price", "avg_agent_rating", "is_in_crm",
-      "rea_agency_id", "last_synced_at",
-    ];
-    exportCsv(
-      `pulse_agencies_${new Date().toISOString().slice(0, 10)}.csv`,
-      header,
-      sorted
-    );
-  }, [sorted]);
+      }));
+      const header = [
+        "name", "suburb", "state", "phone", "email", "website",
+        "live_agent_count", "active_listings", "total_sold_12m",
+        "avg_sold_price", "avg_agent_rating", "is_in_crm",
+        "rea_agency_id", "last_synced_at",
+      ];
+      exportCsv(`pulse_agencies_${new Date().toISOString().slice(0, 10)}.csv`, header, enriched);
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      window.alert(`CSV export failed: ${err?.message || err}`);
+    } finally {
+      setExporting(false);
+    }
+  }, [buildQuery, totalCount, agentCountMap]);
 
   /* ── Sort toggle ──────────────────────────────────────────────────────── */
   function toggleSort(col) {
@@ -1190,11 +1286,11 @@ export default function PulseAgencyIntel({
               )}
             >
               {label}
-              {value === "all" && ` (${enrichedAgencies.length})`}
+              {value === "all" && ` (${pulseAgencies.length})`}
               {value === "not_in_crm" &&
-                ` (${enrichedAgencies.filter((a) => !a.is_in_crm).length})`}
+                ` (${pulseAgencies.filter((a) => !a.is_in_crm).length})`}
               {value === "in_crm" &&
-                ` (${enrichedAgencies.filter((a) => a.is_in_crm).length})`}
+                ` (${pulseAgencies.filter((a) => a.is_in_crm).length})`}
             </button>
           ))}
         </div>
@@ -1219,21 +1315,41 @@ export default function PulseAgencyIntel({
           )}
         </div>
 
-        {/* CSV export + count */}
+        {/* CSV export + count + auto-refresh */}
         <div className="ml-auto flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
             className="h-7 px-2 text-xs gap-1"
             onClick={handleExportCsv}
-            disabled={sorted.length === 0}
-            title="Export filtered agencies as CSV"
+            disabled={totalCount === 0 || exporting}
+            title="Export filtered agencies as CSV (server-side, up to 10k rows)"
           >
-            <Download className="h-3 w-3" />
+            {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
             CSV
           </Button>
+          {/* Auto-refresh toggle — opt-in 60s. */}
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none"
+            title="Auto-refresh every 60s"
+          >
+            <Switch
+              checked={autoRefresh}
+              onCheckedChange={setAutoRefresh}
+              aria-label="Auto-refresh every 60s"
+            />
+            <span>Auto-refresh</span>
+          </label>
           <span className="text-xs text-muted-foreground tabular-nums">
-            {filtered.length.toLocaleString()} agenc{filtered.length === 1 ? "y" : "ies"}
+            {isFetching ? (
+              <Loader2 className="inline h-3 w-3 animate-spin" />
+            ) : totalCount === 0 ? (
+              <>0 agencies</>
+            ) : (
+              <>
+                {Math.min(agencyPage * pageSize + 1, totalCount).toLocaleString()}–{Math.min((agencyPage + 1) * pageSize, totalCount).toLocaleString()} of {totalCount.toLocaleString()}
+              </>
+            )}
           </span>
         </div>
       </div>
@@ -1295,7 +1411,17 @@ export default function PulseAgencyIntel({
               </tr>
             </thead>
             <tbody>
-              {pageRows.length === 0 ? (
+              {isLoading && pageRows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={10}
+                    className="text-center py-12 text-muted-foreground"
+                  >
+                    <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
+                    <p className="text-sm">Loading agencies…</p>
+                  </td>
+                </tr>
+              ) : pageRows.length === 0 ? (
                 <tr>
                   <td
                     colSpan={10}
