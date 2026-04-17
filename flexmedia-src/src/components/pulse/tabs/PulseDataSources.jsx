@@ -321,6 +321,49 @@ function usePulseSyncRuns(sourceId, limit = 10) {
   return { runs, loading };
 }
 
+// ── pulse_source_card_stats RPC hook ──────────────────────────────────────────
+
+/**
+ * Fetches "last cron dispatch" coverage stats for every source in one call
+ * (see migration 083_pulse_source_card_stats.sql). Each row tells the Source
+ * Card how many suburbs the LAST CRON dispatched, vs how many were eligible.
+ *
+ * This is fundamentally different from pulse_sync_runs (which counts how many
+ * sync_log rows exist in the latest 15-min bucket — a number that includes
+ * manual fan-outs and double-counts when crons fire mid-bucket). The RPC
+ * answers "did the most recent CRON cover the suburb pool?", not "how many
+ * sync_log rows landed".
+ *
+ * Returns a map keyed by source_id for O(1) lookup in <SourceCard>.
+ * Refreshes every 60s (cron_dispatched events are infrequent).
+ */
+function usePulseSourceCardStats() {
+  const [byId, setById] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStats = async () => {
+      try {
+        const { data, error } = await api._supabase.rpc("pulse_source_card_stats");
+        if (error) throw error;
+        if (!cancelled) {
+          const map = {};
+          for (const r of (data || [])) map[r.source_id] = r;
+          setById(map);
+        }
+      } catch (err) {
+        // Silent — RPC may not yet be deployed. Card falls back to no-coverage display.
+        console.warn("pulse_source_card_stats RPC failed:", err.message);
+      }
+    };
+    fetchStats();
+    const id = setInterval(fetchStats, 60000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  return byId;
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 // --- Triggered-by badge ---
@@ -766,6 +809,74 @@ function DispatchedNoLogs() {
   );
 }
 
+// --- Suburb-coverage block (cron dispatch view) ---
+//
+// Reads the row from pulse_source_card_stats() RPC for this source and renders:
+//   1. "X / Y suburbs covered" line — colored green/amber/red on the ratio
+//   2. "Last dispatch: Xh ago" line
+//   3. Red "Last cron did not dispatch" badge if dispatched is null/0
+// This is intentionally separate from RunSummary (which shows the latest
+// pulse_sync_runs row — i.e. the records-fetched/new counts of one suburb).
+// Both blocks coexist on the card.
+
+function SuburbCoverageBlock({ stats, isBoundingBox }) {
+  // No RPC data yet (deploying or pre-rollout). Render nothing — the card
+  // still works using the legacy RunSummary block below.
+  if (!stats) return null;
+
+  const { dispatched, eligible_at_run, last_cron_at, status } = stats;
+  const cronMissed = dispatched === null || dispatched === 0;
+  const eligible = Math.max(eligible_at_run || 0, 1);
+  const ratio = cronMissed ? 0 : (dispatched / eligible);
+
+  // Color tint for the coverage line — mirrors the status returned by the RPC.
+  let coverColor = "text-emerald-700 dark:text-emerald-400";
+  let coverBorder = "border-emerald-300/50 bg-emerald-50/40 dark:bg-emerald-950/20";
+  if (status === "never") {
+    coverColor = "text-muted-foreground";
+    coverBorder = "border-dashed";
+  } else if (cronMissed) {
+    coverColor = "text-red-700 dark:text-red-400";
+    coverBorder = "border-red-400/60 bg-red-50/60 dark:bg-red-950/20";
+  } else if (status === "low" || ratio < 0.5) {
+    coverColor = "text-red-700 dark:text-red-400";
+    coverBorder = "border-red-400/60 bg-red-50/60 dark:bg-red-950/20";
+  } else if (status === "partial" || ratio < 0.9) {
+    coverColor = "text-amber-700 dark:text-amber-400";
+    coverBorder = "border-amber-400/60 bg-amber-50/60 dark:bg-amber-950/20";
+  }
+
+  return (
+    <div className={cn("rounded-md border px-2.5 py-1.5 text-[10px] space-y-1", coverBorder)}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 text-muted-foreground uppercase tracking-wide font-semibold">
+          <MapPin className="h-3 w-3" />
+          {isBoundingBox ? "Region coverage" : "Suburb coverage"}
+        </span>
+        <span className="text-muted-foreground tabular-nums">
+          {last_cron_at ? `last dispatch ${fmtRelativeTs(last_cron_at)}` : "no cron yet"}
+        </span>
+      </div>
+      <div className={cn("flex items-center gap-2 flex-wrap font-medium", coverColor)}>
+        {status === "never" ? (
+          <span>No cron dispatch recorded yet</span>
+        ) : cronMissed ? (
+          <Badge variant="outline" className="text-[9px] px-1.5 py-0 uppercase font-semibold border-red-500/60 text-red-700 bg-red-100/60 dark:bg-red-900/40 dark:text-red-300">
+            <AlertTriangle className="h-2.5 w-2.5 mr-1" />
+            Last cron did not dispatch — config issue?
+          </Badge>
+        ) : (
+          <span className="tabular-nums">
+            <span className="font-bold text-base leading-none">{dispatched}</span>
+            <span className="opacity-70"> / {eligible_at_run}</span>{" "}
+            {isBoundingBox ? "region call" : "suburbs covered"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // --- Source Card (enhanced, DB-driven) ---
 //
 // Everything the user sees on each source card reads from the DB row
@@ -774,7 +885,7 @@ function DispatchedNoLogs() {
 // (never truncated), has a Copy button, and an Edit button that opens the
 // editor dialog.
 
-function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch, onViewHistory }) {
+function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, cardStats, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch, onViewHistory }) {
   const meta = getSourceMeta(sourceConfig.source_id);
   const Icon = meta.icon;
   const lastStatus = lastLog?.status;
@@ -986,7 +1097,14 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, i
           )}
         </div>
 
-        {/* Last run summary */}
+        {/* Suburb coverage (last cron dispatch) — answers "did the cron cover the
+            pool?". Distinct from the per-suburb fetch counts in RunSummary
+            below, which describe what ONE suburb returned. */}
+        <SuburbCoverageBlock stats={cardStats} isBoundingBox={isBoundingBox} />
+
+        {/* Last run summary — per-suburb fetched/new counts from the most
+            recent pulse_sync_runs bucket (records the actor returned, not the
+            suburb dispatch coverage). */}
         {latestRun ? (
           <RunSummary
             run={latestRun}
@@ -2238,6 +2356,10 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
 
   const activeSuburbCount = useMemo(() => targetSuburbs.filter((s) => s.is_active).length, [targetSuburbs]);
 
+  // Last-cron-dispatch coverage stats per source_id (one RPC call, refreshes 60s).
+  // Powers the "X / Y suburbs covered" line on each Source Card.
+  const cardStatsById = usePulseSourceCardStats();
+
   // Open the drill dialog for a given sync_log id (looked up in the list first,
   // else fetched directly). Used by the per-suburb DispatchTable row clicks —
   // we only have IDs in the pulse_sync_runs view, not full payloads.
@@ -2381,6 +2503,7 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
               lastLog={lastLogBySource[config.source_id]}
               pulseTimeline={pulseTimeline}
               activeSuburbCount={activeSuburbCount}
+              cardStats={cardStatsById[config.source_id]}
               isRunning={runningSources.has(config.source_id)}
               onRun={runSource}
               onOpenPayload={setDrillLog}
