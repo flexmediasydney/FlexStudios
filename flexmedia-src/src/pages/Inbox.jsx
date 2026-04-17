@@ -12,8 +12,12 @@ export default function Inbox() {
         <div className="px-6 pt-4 pb-2 border-b bg-gradient-to-b from-muted/10">
           <Breadcrumb items={[{ label: "Inbox" }]} className="mb-2" />
         </div>
-        <div className="flex-1 overflow-auto">
-          {/* Inner: generic boundary — compact "Try Again" for sub-component failures */}
+        {/* overflow-hidden (not overflow-auto) so EmailInboxMain's internal
+            flex-col h-full actually constrains: the virtualized list scrolls
+            inside, and the pagination bar stays pinned to the viewport bottom.
+            Previous overflow-auto let content push past h-screen, and the
+            pagination bar ended up ~y=2886 — invisible and unclickable. */}
+        <div className="flex-1 overflow-hidden min-h-0">
           <ErrorBoundary fallbackLabel="Email Messages" compact>
             <EmailInboxMain />
           </ErrorBoundary>
