@@ -139,23 +139,51 @@ export class AgentLookup {
     }
   }
 
-  /** Preload domain→agency map by looking at which agencies the agents belong to */
+  /**
+   * Preload domain→agency map.
+   * Primary source: `agencies.email_domains` (direct, admin-curated).
+   * Fallback: derive from any agents whose email domain isn't already covered.
+   */
   async preloadDomains(): Promise<void> {
-    const { data } = await this.admin
+    // Primary: direct from agencies.email_domains
+    const { data: agenciesData } = await this.admin
+      .from('agencies')
+      .select('id, name, email_domains');
+    const agencyNameById = new Map<string, string | null>();
+    if (agenciesData) {
+      for (const ag of agenciesData) {
+        agencyNameById.set(ag.id, ag.name ?? null);
+        const domains: unknown = (ag as { email_domains?: unknown }).email_domains;
+        if (!Array.isArray(domains)) continue;
+        for (const raw of domains) {
+          const d = String(raw || '').toLowerCase().trim();
+          if (!d || GENERIC_DOMAINS.has(d) || OWN_DOMAINS.has(d)) continue;
+          if (!this.agencyByDomain.has(d)) {
+            this.agencyByDomain.set(d, { id: ag.id, name: ag.name ?? null });
+          }
+        }
+      }
+    }
+
+    // Fallback: derive from agents whose email domain isn't covered yet
+    const { data: agentsData } = await this.admin
       .from('agents')
       .select('email, current_agency_id, current_agency_name')
       .not('email', 'is', null)
       .not('current_agency_id', 'is', null);
-    if (data) {
-      // Count occurrences of each (domain, agency_id) pair; keep the most common agency per domain
+    if (agentsData) {
       const tally = new Map<string, Map<string, { count: number; name: string | null }>>();
-      for (const a of data) {
+      for (const a of agentsData) {
         const d = getDomain((a.email || '').toLowerCase());
         if (!d || GENERIC_DOMAINS.has(d) || OWN_DOMAINS.has(d)) continue;
         if (!a.current_agency_id) continue;
+        if (this.agencyByDomain.has(d)) continue; // already covered by agencies.email_domains
         if (!tally.has(d)) tally.set(d, new Map());
         const inner = tally.get(d)!;
-        const prev = inner.get(a.current_agency_id) || { count: 0, name: a.current_agency_name };
+        const prev = inner.get(a.current_agency_id) || {
+          count: 0,
+          name: a.current_agency_name ?? agencyNameById.get(a.current_agency_id) ?? null,
+        };
         prev.count += 1;
         inner.set(a.current_agency_id, prev);
       }
@@ -196,7 +224,19 @@ export class AgentLookup {
     if (!domain || GENERIC_DOMAINS.has(domain) || OWN_DOMAINS.has(domain)) return null;
     if (this.agencyByDomain.has(domain)) return this.agencyByDomain.get(domain) || null;
     try {
-      // Find any agent with this domain, return their agency
+      // Primary: direct lookup on agencies.email_domains
+      const { data: agencyHit } = await this.admin
+        .from('agencies')
+        .select('id, name')
+        .contains('email_domains', [domain])
+        .limit(1)
+        .maybeSingle();
+      if (agencyHit?.id) {
+        const out = { id: agencyHit.id, name: agencyHit.name ?? null };
+        this.agencyByDomain.set(domain, out);
+        return out;
+      }
+      // Fallback: derive from any agent at this domain
       const { data } = await this.admin
         .from('agents')
         .select('current_agency_id, current_agency_name')

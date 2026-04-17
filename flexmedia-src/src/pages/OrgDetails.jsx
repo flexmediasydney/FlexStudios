@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
 import { useEntityList, refetchEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
-import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search, Shield, Activity, Rss } from "lucide-react";
+import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, AtSign, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search, Shield, Activity, Rss } from "lucide-react";
 import BrandingPreferencesModule from "@/components/agencies/BrandingPreferencesModule";
+import AgencyEmailDomainsModule from "@/components/agencies/AgencyEmailDomainsModule";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +49,7 @@ const TABS = [
   { id: 'calendar', label: 'Activities', icon: Calendar },
   { id: 'hierarchy', label: 'Hierarchy', icon: Network },
   { id: 'branding', label: 'Branding', icon: Palette },
+  { id: 'email-sync', label: 'Email Sync', icon: AtSign },
   { id: 'touchpoints', label: 'Touchpoints', icon: Activity },
   { id: 'retention', label: 'Retention', icon: Shield },
   { id: 'intelligence', label: 'Intelligence', icon: Rss },
@@ -635,6 +637,12 @@ export default function OrgDetails() {
             {activeTab === 'branding' && (
               <div className="h-full overflow-y-auto p-6">
                 <BrandingPreferencesModule agency={agency} />
+              </div>
+            )}
+
+            {activeTab === 'email-sync' && (
+              <div className="h-full overflow-y-auto">
+                <AgencyEmailDomainsModule agency={agency} />
               </div>
             )}
 
