@@ -1,9 +1,9 @@
-import { handleCors, jsonResponse, getAdminClient, getUserFromReq, errorResponse } from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, getAdminClient, getUserFromReq, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 const VALID_STATUSES = ['identified', 'investigating', 'passed', 'checked', 'red_flag'];
 const RESOLVED_STATUSES = ['passed', 'checked', 'red_flag'];
 
-Deno.serve(async (req) => {
+serveWithAudit('updateRetentionAlert', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

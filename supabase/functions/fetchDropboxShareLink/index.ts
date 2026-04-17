@@ -1,8 +1,8 @@
-import { getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 const DROPBOX_TIMEOUT_MS = 15_000; // 15s timeout for Dropbox API calls
 
-Deno.serve(async (req) => {
+serveWithAudit('fetchDropboxShareLink', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   if (req.method !== 'POST') {

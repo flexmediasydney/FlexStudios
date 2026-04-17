@@ -1,7 +1,7 @@
-import { handleCors, jsonResponse, getAdminClient, getUserFromReq, errorResponse } from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, getAdminClient, getUserFromReq, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 import { domainGet, transformDomainListing, addressMatch, getSimulatedListings, computeRiskLevel } from '../_shared/domain.ts';
 
-Deno.serve(async (req) => {
+serveWithAudit('retentionSweep', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

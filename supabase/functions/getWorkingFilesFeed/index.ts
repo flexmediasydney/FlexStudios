@@ -1,4 +1,4 @@
-import { handleCors, getCorsHeaders, jsonResponse, getAdminClient, getUserFromReq } from '../_shared/supabase.ts';
+import { handleCors, getCorsHeaders, jsonResponse, getAdminClient, getUserFromReq, serveWithAudit } from '../_shared/supabase.ts';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -515,7 +515,7 @@ function buildResponse(files: WorkingFile[], truncated?: boolean) {
 
 // ─── Main handler ───────────────────────────────────────────────────────────
 
-Deno.serve(async (req) => {
+serveWithAudit('getWorkingFilesFeed', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

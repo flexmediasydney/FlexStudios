@@ -1,6 +1,6 @@
-import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
-Deno.serve(async (req) => {
+serveWithAudit('searchAustralianAddresses', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {

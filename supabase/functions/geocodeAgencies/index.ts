@@ -1,6 +1,6 @@
-import { handleCors, jsonResponse, errorResponse, getAdminClient, getUserFromReq } from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, errorResponse, getAdminClient, getUserFromReq, serveWithAudit } from '../_shared/supabase.ts';
 
-Deno.serve(async (req) => {
+serveWithAudit('geocodeAgencies', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   if (req.method !== 'POST') return errorResponse('POST only', 405, req);
