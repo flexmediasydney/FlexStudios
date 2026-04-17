@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours, serveWithAudit } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -27,7 +27,7 @@ const retryWithBackoff = async <T>(fn: () => Promise<T>, maxRetries = 3): Promis
   throw new Error('Retry exhausted');
 };
 
-Deno.serve(async (req) => {
+serveWithAudit('reconcileProjectEffort', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
@@ -35,12 +35,9 @@ Deno.serve(async (req) => {
 
     // Auth: allow service-role (internal/cron calls) or authenticated users
     const user = await getUserFromReq(req).catch(() => null);
-    if (!user) {
-      const authHeader = req.headers.get('authorization') || '';
-      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-      if (!serviceKey || !authHeader.includes(serviceKey)) {
-        return errorResponse('Authentication required', 401);
-      }
+    const isServiceRole = user?.id === '__service_role__';
+    if (!isServiceRole) {
+      if (!user) return errorResponse('Authentication required', 401);
     }
 
     const body = await req.json().catch(() => ({}));

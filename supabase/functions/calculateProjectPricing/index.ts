@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Canonical pricing engine — single source of truth for all project pricing calculations.
@@ -29,7 +29,7 @@ function roundToNearestFive(value: number): number {
   return Math.ceil(value / 5) * 5;
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('calculateProjectPricing', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

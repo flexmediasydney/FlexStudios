@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours, getUserFromReq } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours, getUserFromReq, serveWithAudit } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -21,7 +21,7 @@ async function _canNotify(entities: any, userId: string, type: string, category:
  * IMPORTANT: Only acts on status TRANSITIONS to uploaded stages, not on every update.
  * After completing tasks + creating logs, explicitly triggers effort recalculation.
  */
-Deno.serve(async (req) => {
+serveWithAudit('logOnsiteEffortOnUpload', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {
@@ -35,11 +35,9 @@ Deno.serve(async (req) => {
 
     // ── Auth: require any authenticated user or service role ──
     const user = await getUserFromReq(req).catch(() => null);
-    if (!user) {
-      const authHeader = req.headers.get('authorization') || '';
-      if (!authHeader.includes(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '___')) {
-        return errorResponse('Authentication required', 401);
-      }
+    const isServiceRole = user?.id === '__service_role__';
+    if (!isServiceRole) {
+      if (!user) return errorResponse('Authentication required', 401);
     }
 
     // Support entity automation payload or direct call
