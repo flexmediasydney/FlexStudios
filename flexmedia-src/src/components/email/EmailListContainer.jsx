@@ -3,6 +3,11 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -42,6 +47,9 @@ export default function EmailListContainer({
   onNextPage,
   onPageSizeChange,
   allowedPageSizes = [25, 50, 100, 200],
+  // Colored legend of accounts on the current page:
+  // [{ accountId, label: 'David', color: '#3b82f6', count: 7 }, ...]
+  pageAccountBreakdown = [],
 }) {
   const allSelected =
     selectedMessages.size === filteredThreads.length && filteredThreads.length > 0;
@@ -96,10 +104,16 @@ export default function EmailListContainer({
     );
   }
 
-  // Range labels for the footer: "1-50 of 2,248"
+  // Range labels for the footer. "Showing X–Y of Z" now lives in the top-right
+  // of the inbox header (see EmailInboxMain), so the bottom bar shows the
+  // per-account color legend instead of the duplicate range.
   const total = totalThreadCount ?? filteredThreads.length;
-  const startIdx = total === 0 ? 0 : (page - 1) * pageSize + 1;
-  const endIdx = Math.min(page * pageSize, total);
+
+  // Collapse the legend to 5 visible entries; the rest go into a popover
+  // triggered by "+N more". Keeps the bar tidy when many accounts overlap.
+  const MAX_VISIBLE_ACCOUNTS = 5;
+  const visibleAccounts = pageAccountBreakdown.slice(0, MAX_VISIBLE_ACCOUNTS);
+  const hiddenAccounts = pageAccountBreakdown.slice(MAX_VISIBLE_ACCOUNTS);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -167,17 +181,75 @@ export default function EmailListContainer({
         </div>
       </div>
 
-      {/* Pagination bar — left: "Showing X-Y of Z"; center: prev/page/next; right: page size */}
-      <div className="flex-shrink-0 flex items-center justify-between gap-4 px-4 py-1.5 border-t bg-muted/10 text-[12px] text-muted-foreground">
-        <span className="tabular-nums">
-          {total > 0 ? (
-            <>
-              Showing {startIdx.toLocaleString()}-{endIdx.toLocaleString()} of {total.toLocaleString()} conversation{total !== 1 ? 's' : ''}
-            </>
+      {/* Pagination bar
+          Left:   per-account color legend for the CURRENT PAGE (dots match
+                  the row stripe color), e.g. "● David 7 · ● Janet 10 · …"
+          Center: prev / Page N of M / next
+          Right:  per-page selector
+          Top-right of header has the absolute range ("Showing X–Y of Z").    */}
+      <div
+        data-testid="inbox-pagination-bar"
+        className="flex-shrink-0 flex items-center justify-between gap-4 px-4 py-1.5 border-t bg-muted/10 text-[12px] text-muted-foreground"
+      >
+        {/* Legend — only meaningful in "All Inboxes" view (i.e. when the
+            parent passes a non-empty breakdown). Falls back to an empty flex
+            cell so the center/right columns stay aligned. */}
+        <div
+          className="flex items-center gap-x-3 gap-y-1 flex-wrap tabular-nums text-[11px]"
+          data-testid="inbox-page-legend"
+        >
+          {visibleAccounts.length === 0 ? (
+            <span className="opacity-50">
+              {total > 0 ? `${total.toLocaleString()} conversation${total !== 1 ? 's' : ''}` : ''}
+            </span>
           ) : (
-            '0 conversations'
+            <>
+              {visibleAccounts.map((a) => (
+                <span
+                  key={a.accountId}
+                  className="inline-flex items-center gap-1.5"
+                  title={`${a.label} — ${a.count} on this page`}
+                >
+                  <span
+                    className="h-2 w-2 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: a.color }}
+                    aria-hidden="true"
+                  />
+                  <span className="text-foreground/75">{a.label}</span>
+                  <span className="opacity-70">{a.count}</span>
+                </span>
+              ))}
+              {hiddenAccounts.length > 0 && (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      className="text-[11px] text-muted-foreground/80 hover:text-foreground underline-offset-2 hover:underline focus:outline-none focus:ring-1 focus:ring-primary rounded px-0.5"
+                      aria-label={`Show ${hiddenAccounts.length} more inbox${hiddenAccounts.length !== 1 ? 'es' : ''}`}
+                    >
+                      +{hiddenAccounts.length} more
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-2 space-y-1" side="top" align="start">
+                    {hiddenAccounts.map((a) => (
+                      <div
+                        key={a.accountId}
+                        className="flex items-center gap-2 text-[11px] tabular-nums"
+                      >
+                        <span
+                          className="h-2 w-2 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: a.color }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-foreground/80">{a.label}</span>
+                        <span className="opacity-70 ml-auto">{a.count}</span>
+                      </div>
+                    ))}
+                  </PopoverContent>
+                </Popover>
+              )}
+            </>
           )}
-        </span>
+        </div>
 
         <div className="flex items-center gap-1">
           <Button

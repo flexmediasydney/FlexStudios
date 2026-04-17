@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import EmailListContainer from "./EmailListContainer";
+import { ACCOUNT_COLORS } from "./EmailListRow";
 import EmailListControls from "./EmailListControls";
 import { useColumnManager } from "./useColumnManager";
 import FolderButton from "./FolderButton";
@@ -244,6 +245,28 @@ export default function EmailInboxMain() {
     try { localStorage.setItem('inbox_page_size', String(pageSize)); } catch {}
   }, [pageSize]);
 
+  // True inbox summary counts (per-folder + per-account totals across the WHOLE
+  // mailbox — not just the current page). The sidebar "All Inboxes: 2,248" and
+  // per-account totals come from here, not from the paginated thread slice.
+  // 60s stale/refetch keeps DB load trivial while counts stay fresh enough.
+  const { data: summaryCounts } = useQuery({
+    queryKey: ['inbox-summary-counts'],
+    queryFn: () => api.rpc('get_inbox_summary_counts', { p_account_ids: null }),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const folderCounts = summaryCounts?.folder_counts || {};
+  const accountCountMap = useMemo(() => {
+    const map = new Map();
+    for (const ac of summaryCounts?.account_counts || []) {
+      map.set(ac.account_id, ac);
+    }
+    return map;
+  }, [summaryCounts]);
+  const allInboxesCount = summaryCounts?.all_inboxes?.total ?? null;
+  const allInboxesUnread = summaryCounts?.all_inboxes?.unread ?? null;
+
   // Map our internal filterView + feature filters to RPC parameters.
   // The RPC accepts: folder, account_ids, search, unread_only, limit, offset.
   const rpcParamsForCurrentView = useCallback((limit, offset) => {
@@ -423,6 +446,7 @@ export default function EmailInboxMain() {
       queryClient.invalidateQueries({ queryKey: ['email-messages'] });
       queryClient.invalidateQueries({ queryKey: ['email-accounts'] });
       queryClient.invalidateQueries({ queryKey: ['email-conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['inbox-summary-counts'] });
       const acctSummary = accountNames?.length > 1
         ? ` across ${accountNames.length} accounts`
         : accountNames?.length === 1 ? ` (${accountNames[0]})` : '';
@@ -480,6 +504,7 @@ export default function EmailInboxMain() {
               queryClient.invalidateQueries({ queryKey: ['email-messages'] });
               queryClient.invalidateQueries({ queryKey: ['email-conversations'] });
               queryClient.invalidateQueries({ queryKey: ['email-accounts'] });
+              queryClient.invalidateQueries({ queryKey: ['inbox-summary-counts'] });
             }
           }).catch(() => {});
         }, idx * 1500);
@@ -529,6 +554,7 @@ export default function EmailInboxMain() {
     },
     onSuccess: ({ _undoContext }) => {
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
+      queryClient.invalidateQueries({ queryKey: ['inbox-summary-counts'] });
       if (_undoContext) {
         setUndoStack(prev => [...prev, {
           type: 'delete',
@@ -1066,6 +1092,34 @@ export default function EmailInboxMain() {
       return sum;
     }, 0);
   }, [threads, filterView]);
+
+  // Per-inbox breakdown of the CURRENT PAGE — used for the colored legend at
+  // the bottom of the list. Mirrors the per-account stripe palette from
+  // EmailListRow so users learn "purple row stripe = dom@flexmedia.sydney".
+  // Ordered by email account index (same order the sidebar + row stripes use)
+  // so the colors stay stable page-to-page.
+  const pageAccountBreakdown = useMemo(() => {
+    if (emailAccounts.length <= 1) return [];
+    const countByAccountId = new Map();
+    for (const t of filteredThreads) {
+      countByAccountId.set(t.email_account_id, (countByAccountId.get(t.email_account_id) || 0) + 1);
+    }
+    const out = [];
+    emailAccounts.forEach((account, idx) => {
+      const count = countByAccountId.get(account.id);
+      if (!count) return;
+      const local = (account.email_address || '').split('@')[0] || account.display_name || 'Unknown';
+      out.push({
+        accountId: account.id,
+        label: local.charAt(0).toUpperCase() + local.slice(1),
+        color: ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length],
+        count,
+      });
+    });
+    // Sort biggest first so the legend reads "Info 22 · Joseph 14 · …"
+    out.sort((a, b) => b.count - a.count);
+    return out;
+  }, [filteredThreads, emailAccounts]);
   
   const totalEmailCount = threads.length;
 
@@ -1124,14 +1178,15 @@ export default function EmailInboxMain() {
             Compose
           </Button>
 
-          {/* Folders */}
+          {/* Folders — counts here are TRUE totals across the whole mailbox
+              (from the get_inbox_summary_counts RPC), not from the current
+              page of threads. Falls back to null while counts load. */}
           <div className="space-y-1">
             <p className="text-[9px] font-semibold text-muted-foreground/70 px-2 uppercase tracking-widest">Folders</p>
             <FolderButton
               folder={FOLDER_FILTERS.inbox}
               isActive={filterView === "inbox" && !filterUnread}
-              count={unreadCount}
-              countClassName={unreadCount > 0 ? "bg-primary text-primary-foreground font-bold" : undefined}
+              count={folderCounts.inbox?.total ?? null}
               onClick={() => applyFolderFilter('inbox', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
@@ -1141,7 +1196,7 @@ export default function EmailInboxMain() {
             <FolderButton
               folder={FOLDER_FILTERS.draft}
               isActive={filterView === "draft"}
-              count={filterView === "draft" ? threads.length : null}
+              count={folderCounts.draft?.total ?? null}
               onClick={() => applyFolderFilter('draft', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
@@ -1151,7 +1206,7 @@ export default function EmailInboxMain() {
             <FolderButton
               folder={FOLDER_FILTERS.sent}
               isActive={filterView === "sent"}
-              count={filterView === "sent" ? threads.length : null}
+              count={folderCounts.sent?.total ?? null}
               onClick={() => applyFolderFilter('sent', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
@@ -1161,7 +1216,7 @@ export default function EmailInboxMain() {
             <FolderButton
               folder={FOLDER_FILTERS.archived}
               isActive={filterView === "archived"}
-              count={filterView === "archived" ? threads.length : null}
+              count={folderCounts.archived?.total ?? null}
               onClick={() => applyFolderFilter('archived', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
@@ -1171,28 +1226,37 @@ export default function EmailInboxMain() {
             <FolderButton
               folder={FOLDER_FILTERS.deleted}
               isActive={filterView === "deleted"}
-              count={filterView === "deleted" ? threads.length : null}
+              count={folderCounts.deleted?.total ?? null}
               onClick={() => applyFolderFilter('deleted', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
                 setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Deleted"
             />
-            <button 
+            <button
               onClick={() => setFilterUnread(!filterUnread)}
               className={cn(
-                "w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
+                "w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 flex items-center gap-2",
                 filterUnread && filterView === "inbox"
-                  ? "bg-primary/90 text-primary-foreground shadow-sm" 
+                  ? "bg-primary/90 text-primary-foreground shadow-sm"
                   : "hover:bg-muted/80 text-muted-foreground hover:text-foreground"
               )}
               title="Filter unread emails in current folder"
             >
-              🔔 Unread
+              <span>🔔 Unread</span>
+              {folderCounts.unread?.total > 0 && (
+                <Badge variant="secondary" className="ml-auto text-[10px] h-4 px-1.5 tabular-nums">
+                  {folderCounts.unread.total.toLocaleString()}
+                </Badge>
+              )}
             </button>
           </div>
 
-          {/* Email Accounts - View All or Single Account */}
+          {/* Email Accounts — totals come from the get_inbox_summary_counts RPC
+              (true per-account thread totals across the whole inbox), not from
+              the current page of threads. Matches EmailListRow's ACCOUNT_COLORS
+              palette so the sidebar dot + row stripe + bottom legend all share
+              the same color per account. */}
           <div className="space-y-2 border-t pt-4">
             <p className="text-[10px] font-semibold text-muted-foreground/80 px-2 uppercase tracking-wide">Accounts</p>
             {emailAccounts.length > 1 && (
@@ -1206,12 +1270,18 @@ export default function EmailInboxMain() {
                 )}
                 >
                 <p className="text-xs font-semibold">All Inboxes</p>
-                <p className="text-[10px] opacity-75">{threads.length} total</p>
+                <p className="text-[10px] opacity-75 tabular-nums">
+                  {allInboxesCount != null
+                    ? `${allInboxesCount.toLocaleString()} total`
+                    : '…'}
+                </p>
               </div>
             )}
-            {emailAccounts.map(account => {
-              const accountThreads = threads.filter(t => t.email_account_id === account.id);
-              const accountUnread = accountThreads.reduce((sum, t) => sum + t.unreadCount, 0);
+            {emailAccounts.map((account, idx) => {
+              const ac = accountCountMap.get(account.id);
+              const acctTotal = ac?.total ?? null;
+              const acctUnread = ac?.unread ?? 0;
+              const dotColor = ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length];
               return (
                 <div
                   key={account.id}
@@ -1223,13 +1293,27 @@ export default function EmailInboxMain() {
                       : 'hover:bg-muted/80 border-border/60 hover:border-border'
                   )}
                 >
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold truncate">{account.email_address}</p>
-                    {accountUnread > 0 && <Badge className="text-[9px] h-4 px-1.5">{accountUnread}</Badge>}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className="h-2 w-2 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: dotColor }}
+                        aria-hidden="true"
+                      />
+                      <p className="text-xs font-semibold truncate">{account.email_address}</p>
+                    </div>
+                    {acctUnread > 0 && (
+                      <Badge className="text-[9px] h-4 px-1.5 tabular-nums flex-shrink-0">
+                        {acctUnread.toLocaleString()}
+                      </Badge>
+                    )}
                   </div>
-                  {account.display_name && account.display_name !== account.email_address && (
-                    <p className="text-[10px] opacity-75 truncate">{account.display_name}</p>
-                  )}
+                  <p className="text-[10px] opacity-75 tabular-nums mt-0.5 pl-4">
+                    {acctTotal != null ? `${acctTotal.toLocaleString()} total` : '…'}
+                    {account.display_name && account.display_name !== account.email_address && (
+                      <span className="opacity-70"> · {account.display_name}</span>
+                    )}
+                  </p>
                 </div>
               );
             })}
@@ -1406,12 +1490,25 @@ export default function EmailInboxMain() {
                      ) : null}
                 </div>
 
-                <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap hidden sm:inline">
-                  {filteredThreads.length !== threads.length
-                    ? `${filteredThreads.length} of ${threads.length}`
-                    : `${threads.length}`}{' '}
-                  {threads.length === 1 ? 'thread' : 'threads'}
-                </span>
+                {/* Top-right range indicator — replaces the old "50 emails /
+                    50 threads / 50 conversations" ribbon that was misleading
+                    (it counted the current page, not the mailbox). This shows
+                    the TRUE slice you're looking at: "Showing 1-50 of 2,248". */}
+                {(() => {
+                  const total = totalThreadCount ?? filteredThreads.length;
+                  const startIdx = total === 0 ? 0 : (page - 1) * pageSize + 1;
+                  const endIdx = Math.min(page * pageSize, total);
+                  if (total === 0) return null;
+                  return (
+                    <span
+                      className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap hidden sm:inline"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      Showing {startIdx.toLocaleString()}–{endIdx.toLocaleString()} of {total.toLocaleString()}
+                    </span>
+                  );
+                })()}
 
                 <TooltipProvider delayDuration={300}>
                   <Tooltip>
@@ -1427,7 +1524,13 @@ export default function EmailInboxMain() {
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      <p>{syncMutation.isPending ? "Syncing..." : "Refresh inbox"}</p>
+                      <p>
+                        {syncMutation.isPending
+                          ? 'Syncing…'
+                          : syncCountdown != null && syncCountdown > 0
+                            ? `Refresh inbox (auto-sync in ${Math.floor(syncCountdown / 60)}:${String(syncCountdown % 60).padStart(2, '0')})`
+                            : 'Refresh inbox'}
+                      </p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
@@ -1527,22 +1630,21 @@ export default function EmailInboxMain() {
                 </div>
               )}
 
-              {/* Filter Results Info */}
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-               <span className="font-semibold text-foreground/70">
-                 {filteredThreads.length === totalEmailCount 
-                   ? `${totalEmailCount} conversation${totalEmailCount !== 1 ? 's' : ''}` 
-                   : `${filteredThreads.length} of ${totalEmailCount}`}
-               </span>
-               {searchQuery && <Badge variant="secondary" className="text-[10px] h-4">Search active</Badge>}
-                {unreadCount > 0 && <span className="text-[10px]">• {unreadCount} unread</span>}
-                {showAttachmentsOnly && <Badge variant="secondary" className="text-[10px] h-4">Attachments only</Badge>}
-                {syncCountdown != null && syncCountdown > 0 && (
-                  <span className="text-[10px] opacity-50" title="Next auto-sync">
-                    sync {Math.floor(syncCountdown / 60)}:{String(syncCountdown % 60).padStart(2, '0')}
-                  </span>
-                )}
-               </div>
+              {/* Filter/search status — only shows if a filter is active, so the
+                  header stays clean in the common case. True counts live in the
+                  sidebar ("Inbox 2,248") and the top-right range indicator
+                  ("Showing 1–50 of 2,248"), not here. */}
+              {(searchQuery || showAttachmentsOnly || filteredThreads.length !== threads.length) && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {filteredThreads.length !== threads.length && (
+                    <span className="font-semibold text-foreground/70 tabular-nums">
+                      {filteredThreads.length.toLocaleString()} of {threads.length.toLocaleString()} on page
+                    </span>
+                  )}
+                  {searchQuery && <Badge variant="secondary" className="text-[10px] h-4">Search active</Badge>}
+                  {showAttachmentsOnly && <Badge variant="secondary" className="text-[10px] h-4">Attachments only</Badge>}
+                </div>
+              )}
 
                {/* Action Bar */}
                {selectedMessages.size > 0 && (
@@ -1626,6 +1728,7 @@ export default function EmailInboxMain() {
                 onNextPage={handleNextPage}
                 onPageSizeChange={handlePageSizeChange}
                 allowedPageSizes={ALLOWED_PAGE_SIZES}
+                pageAccountBreakdown={pageAccountBreakdown}
                 onContextMenu={async (thread, action) => {
                   try {
                     if (action === 'archive') {

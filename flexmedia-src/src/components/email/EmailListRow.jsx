@@ -47,8 +47,10 @@ import {
 import { formatInboxTime } from "./emailDateUtils";
 import { PRIORITY_LIST_STYLES } from "./emailConstants";
 
-// Distinct colors for the multi-account left-edge stripe
-const ACCOUNT_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#14b8a6'];
+// Distinct colors for the multi-account left-edge stripe.
+// Exported so the inbox sidebar legend + bottom pagination legend can use
+// exactly the same palette the row stripe uses (shared visual language).
+export const ACCOUNT_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#14b8a6'];
 
 // ---------------------------------------------------------------------------
 // Helpers
