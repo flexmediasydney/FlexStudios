@@ -87,6 +87,17 @@ export async function handleRescheduled(entities: any, orderId: string, p: any) 
       updates.status = 'pending_review';
       updates.pending_review_type = 'staff_change';
       updates.pending_review_reason = `Photographer reassigned during reschedule but not found: ${unresolvedPhotographers.join(', ')}`;
+      // Record unresolved photographers in mapping_gaps so recheckMappingGaps
+      // can re-resolve them once the operator links the mapping.
+      const existingGaps = safeJsonParse(project.mapping_gaps, [] as string[]);
+      const newGaps = rescheduledPhotographers
+        .filter((ph: any) => unresolvedPhotographers.includes(ph.name) || unresolvedPhotographers.includes(ph.id))
+        .map((ph: any) => `photographer:${ph.email || ph.name || ph.id}`);
+      if (newGaps.length > 0) {
+        const merged = Array.from(new Set([...existingGaps, ...newGaps]));
+        updates.mapping_gaps = JSON.stringify(merged);
+        if (project.mapping_confidence === 'full') updates.mapping_confidence = 'partial';
+      }
     }
   }
 

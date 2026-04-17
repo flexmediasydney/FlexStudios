@@ -44,6 +44,10 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
   const reviewReasons: string[] = [];
   const allMappings = await loadMappingTable(entities);
 
+  // Track staff gaps discovered in this change event so they surface in
+  // mapping_gaps — recheckMappingGaps needs them to re-resolve later.
+  const changeStaffGaps: string[] = [];
+
   const servicesA = p.order?.services_a_la_cart || p.services_a_la_cart || [];
   const servicesB = p.order?.services || p.services || [];
   const services = [...new Set([...servicesA, ...servicesB])].filter(Boolean);
@@ -75,6 +79,14 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     if (unresolvedPhotographers.length > 0) {
       reviewReasons.push(`Photographer(s) reassigned but not found: ${unresolvedPhotographers.join(', ')} — manual assignment required`);
       updates.pending_review_type = 'staff_change';
+      // Record unresolved photographers as mapping_gaps so recheckMappingGaps
+      // can re-resolve them once the operator links the mapping.
+      for (const ph of photographers) {
+        const name = ph.name || ph.email || ph.id;
+        if (unresolvedPhotographers.includes(name) || unresolvedPhotographers.includes(ph.name)) {
+          changeStaffGaps.push(`photographer:${ph.email || ph.name || ph.id}`);
+        }
+      }
     }
   }
 
@@ -116,7 +128,22 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
           if (agencyIdToUse) updates.agency_id = agencyIdToUse;
         }
       } catch { /* non-fatal */ }
-    } else if (!agentId) reviewReasons.push(`Agent reassigned to "${agent.displayName || agent.email || 'unknown'}" but not found — manual assignment required`);
+    } else if (!agentId) {
+      reviewReasons.push(`Agent reassigned to "${agent.displayName || agent.email || 'unknown'}" but not found — manual assignment required`);
+      // Record the unresolved agent so recheckMappingGaps can re-resolve it
+      // once the operator links the mapping.
+      changeStaffGaps.push(`agent:${agent.email || agent.displayName || agent.uid}`);
+    }
+  }
+
+  // Merge any unresolved-staff gaps into mapping_gaps. Preserve existing gaps
+  // from earlier events (e.g. services) and deduplicate.
+  if (changeStaffGaps.length > 0) {
+    const existingGaps = safeJsonParse(project.mapping_gaps, [] as string[]);
+    const merged = Array.from(new Set([...existingGaps, ...changeStaffGaps]));
+    updates.mapping_gaps = JSON.stringify(merged);
+    // Downgrade confidence so dashboards flag the project correctly.
+    if (project.mapping_confidence === 'full') updates.mapping_confidence = 'partial';
   }
 
   // Update address if changed in Tonomo
@@ -331,6 +358,17 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     if (project.status !== 'pending_review') updates.pre_revision_stage = project.status;
     updates.status = 'pending_review';
     updates.pending_review_reason = reviewReasons.join(' | ');
+  } else if (project.status === 'pending_review' && (updates.agent_id || (photographers.length > 0 && !updates.pending_review_type))) {
+    // Clear stale agent/staff review reasons once resolution succeeds. Leaves
+    // the review type intact so operators can still approve — only the message
+    // is refreshed so it no longer misleads about the already-fixed gap.
+    const staleReason = project.pending_review_reason || '';
+    if (
+      staleReason.includes('Agent reassigned') ||
+      staleReason.includes('Photographer(s) reassigned')
+    ) {
+      updates.pending_review_reason = null;
+    }
   }
 
   if (Object.keys(updates).length) await entities.Project.update(project.id, updates);

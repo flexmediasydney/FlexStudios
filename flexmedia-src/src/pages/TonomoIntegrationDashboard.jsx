@@ -320,8 +320,23 @@ export default function TonomoIntegrationDashboard() {
                 toast.info("Rechecking all mapping gaps...");
                 const res = await api.functions.invoke('recheckMappingGaps', {});
                 const d = res.data || {};
-                toast.success(`Recheck complete: ${d.gaps_cleared || 0} gaps resolved, ${d.still_gapped || 0} remaining`);
+                const cleared = d.gaps_cleared || 0;
+                const stillGapped = d.still_gapped || 0;
+                const replayed = d.total_replayed || 0;
+                const parts = [`${cleared} gap${cleared === 1 ? '' : 's'} resolved`];
+                if (replayed > 0) parts.push(`${replayed} booking${replayed === 1 ? '' : 's'} re-processed`);
+                parts.push(`${stillGapped} remaining`);
+                toast.success(`Recheck complete: ${parts.join(', ')}`);
+                // Projects take a moment to reprocess through the queue before
+                // the UI reflects the new agent/photographer. Give it ~3s then
+                // invalidate again to refresh the dashboard.
                 queryClient.invalidateQueries();
+                if (replayed > 0) {
+                  setTimeout(() => {
+                    queryClient.invalidateQueries();
+                    setLastRefresh(new Date());
+                  }, 3500);
+                }
                 setLastRefresh(new Date());
               } catch (err) {
                 toast.error("Recheck failed: " + (err?.message || "unknown error"));
