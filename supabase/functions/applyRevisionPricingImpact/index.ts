@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, isQuietHours, serveWithAudit } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -21,7 +21,7 @@ function deduplicateProjectItems(products: any[], packages: any[]) {
   return products.filter((p: any) => !packageProductIds.has(p.product_id));
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('applyRevisionPricingImpact', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
