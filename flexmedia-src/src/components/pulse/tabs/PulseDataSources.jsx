@@ -276,9 +276,18 @@ function BoundingBoxDiagram({ region = "Greater Sydney", maxItems = 500 }) {
  */
 function usePulseSyncRuns(sourceId, limit = 10) {
   const [runs, setRuns] = useState([]);
+  const [activeBatch, setActiveBatch] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const hasActive = useMemo(() => runs.some((r) => (r.in_progress || 0) > 0), [runs]);
+  // An operation is active if there's a non-terminal batch row OR if any run has
+  // per-suburb dispatches still firing. The batch check matters during the
+  // handoff gap between batches (30-60s each) when no sync_logs are in 'running'
+  // state but the chunked operation is still progressing — prevents the card
+  // from flickering "in progress" ↔ "complete" on every batch handoff.
+  const hasActive = useMemo(
+    () => (activeBatch != null) || runs.some((r) => (r.in_progress || 0) > 0),
+    [runs, activeBatch]
+  );
 
   useEffect(() => {
     if (!sourceId) return;
@@ -286,16 +295,28 @@ function usePulseSyncRuns(sourceId, limit = 10) {
 
     const fetchRuns = async () => {
       try {
-        const { data, error } = await api._supabase
-          .from("pulse_sync_runs")
-          .select("*")
-          .eq("source_id", sourceId)
-          .order("run_started_at", { ascending: false })
-          .limit(limit);
-        if (error) throw error;
-        if (!cancelled) setRuns(data || []);
+        const [runsRes, batchRes] = await Promise.all([
+          api._supabase
+            .from("pulse_sync_runs")
+            .select("*")
+            .eq("source_id", sourceId)
+            .order("run_started_at", { ascending: false })
+            .limit(limit),
+          api._supabase
+            .from("pulse_fire_batches")
+            .select("id,status,total_count,dispatched_count,current_offset,batch_size,started_at,last_batch_at")
+            .eq("source_id", sourceId)
+            .eq("status", "running")
+            .order("started_at", { ascending: false })
+            .limit(1),
+        ]);
+        if (runsRes.error) throw runsRes.error;
+        if (cancelled) return;
+        setRuns(runsRes.data || []);
+        // Batch fetch failures are non-fatal — `pulse_fire_batches` table is new
+        // (migration 084) and might not exist in older environments.
+        setActiveBatch(batchRes.error ? null : (batchRes.data?.[0] || null));
       } catch (err) {
-        // Silent — view may not yet be deployed. Card still renders from lastLog.
         console.warn("pulse_sync_runs fetch failed:", err.message);
       } finally {
         if (!cancelled) setLoading(false);
@@ -312,7 +333,7 @@ function usePulseSyncRuns(sourceId, limit = 10) {
     };
   }, [sourceId, limit, hasActive]);
 
-  return { runs, loading };
+  return { runs, activeBatch, loading };
 }
 
 // ── pulse_source_card_stats RPC hook ──────────────────────────────────────────
@@ -950,8 +971,9 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
   const [showInput, setShowInput] = useState(false);
   const [runExpanded, setRunExpanded] = useState(false);
 
-  // Pull aggregated runs from the view. First run is the "latest"; rest are history.
-  const { runs: syncRuns } = usePulseSyncRuns(sourceConfig.source_id, 10);
+  // Pull aggregated runs from the view + active chunked batch (for cross-batch
+  // "in progress" continuity that sync_logs alone can't tell us about).
+  const { runs: syncRuns, activeBatch } = usePulseSyncRuns(sourceConfig.source_id, 10);
   const latestRun = syncRuns[0] || null;
   const historyRuns = syncRuns.slice(1);
   const isBoundingBox = sourceConfig.approach === "bounding_box";
@@ -995,9 +1017,13 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
     lastLog?.started_at ||
     null;
 
-  // Status traffic light
+  // Status traffic light. activeBatch trumps everything — if a chunked dispatch
+  // is still firing, always show blue pulse regardless of whether the current
+  // moment is a batch handoff gap (sync_logs momentarily 0 in_progress).
   let statusDot = "bg-gray-300";
-  if (latestRun) {
+  if (activeBatch) {
+    statusDot = "bg-blue-500 animate-pulse";
+  } else if (latestRun) {
     if (latestRun.in_progress > 0) statusDot = "bg-blue-500 animate-pulse";
     else if (latestRun.failed === latestRun.total_dispatches) statusDot = "bg-red-500";
     else if (latestRun.failed > 0) statusDot = "bg-amber-500";
@@ -1036,6 +1062,11 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
               <div className="flex items-center gap-1.5 flex-wrap">
                 <p className="text-sm font-semibold leading-tight truncate">{sourceConfig.label}</p>
                 <span className={cn("inline-block h-1.5 w-1.5 rounded-full shrink-0", statusDot)} title={lastStatus || "never run"} />
+                {activeBatch && (
+                  <Badge variant="outline" className="text-[9px] px-1.5 py-0 uppercase border-blue-400/60 text-blue-700 dark:text-blue-400 bg-blue-50/60 dark:bg-blue-950/30 tabular-nums">
+                    {activeBatch.dispatched_count}/{activeBatch.total_count} dispatched
+                  </Badge>
+                )}
                 {isDisabled && (
                   <Badge variant="outline" className="text-[9px] px-1 py-0 uppercase border-muted-foreground/40 text-muted-foreground">
                     Disabled
