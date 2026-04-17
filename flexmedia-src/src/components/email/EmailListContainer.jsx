@@ -1,6 +1,14 @@
-import { useRef, useCallback, useEffect } from "react";
+import { useRef, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import EmailListHeader from "./EmailListHeader";
 import EmailListRow from "./EmailListRow";
 import EmailListEmpty from "./EmailListEmpty";
@@ -25,10 +33,15 @@ export default function EmailListContainer({
   onContextMenu,
   onReorderColumns,
   onResizeColumn,
-  onLoadMore,
-  hasMore = false,
-  loadingMore = false,
-  totalAvailable = null,
+  // Pagination props (replaces onLoadMore / hasMore / loadingMore / totalAvailable)
+  page = 1,
+  pageSize = 50,
+  totalPages = 1,
+  totalThreadCount = null,
+  onPrevPage,
+  onNextPage,
+  onPageSizeChange,
+  allowedPageSizes = [25, 50, 100, 200],
 }) {
   const allSelected =
     selectedMessages.size === filteredThreads.length && filteredThreads.length > 0;
@@ -42,41 +55,14 @@ export default function EmailListContainer({
     overscan: 10,
   });
 
-  // Reset scroll position when the user actively switches folders/views or changes search.
-  // CRITICAL: do NOT include filteredThreads.length here — loadMore() appending threads
-  // would reset scroll to top, hiding the sentinel and breaking the intersection observer
-  // (user would see only the first page of 50 threads forever).
+  // Reset scroll position when the user switches folders/views, changes search,
+  // or changes page. New page should start at the top, not wherever the previous
+  // page's scroll position was.
   useEffect(() => {
     if (parentRef.current) {
       parentRef.current.scrollTop = 0;
     }
-  }, [filterView, searchQuery, filterUnread]);
-
-  // Intersection observer: trigger loadMore when user scrolls near the bottom
-  const loadMoreRef = useRef(null);
-  useEffect(() => {
-    if (!onLoadMore || !hasMore) return;
-    const el = loadMoreRef.current;
-    if (!el) return;
-
-    // Observe against the viewport (root: null). The inner role="list" container
-    // doesn't actually scroll — Inbox.jsx wraps EmailInboxMain in
-    // `<div class="flex-1 overflow-auto">` so the user scrolls that outer div,
-    // and the inner parentRef stays at scrollHeight === clientHeight. If we set
-    // `root: parentRef.current` the observer never fires after the first call.
-    // Viewport-root guarantees the sentinel triggers when user scrolls near bottom.
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loadingMore) {
-          onLoadMore();
-        }
-      },
-      { root: null, rootMargin: '400px' }
-    );
-
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [onLoadMore, hasMore, loadingMore]);
+  }, [filterView, searchQuery, filterUnread, page, pageSize]);
 
   if (messagesLoading) {
     return (
@@ -109,6 +95,11 @@ export default function EmailListContainer({
       />
     );
   }
+
+  // Range labels for the footer: "1-50 of 2,248"
+  const total = totalThreadCount ?? filteredThreads.length;
+  const startIdx = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endIdx = Math.min(page * pageSize, total);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -174,37 +165,65 @@ export default function EmailListContainer({
             );
           })}
         </div>
-
-        {/* Load-more sentinel — triggers intersection observer */}
-        {hasMore && (
-          <div ref={loadMoreRef} className="flex items-center justify-center py-3">
-            {loadingMore ? (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Loading more...
-              </div>
-            ) : (
-              <div className="h-1" />
-            )}
-          </div>
-        )}
       </div>
 
-      {/* Count footer — shows "Showing X of Y" so pagination regressions are instantly visible */}
-      {filteredThreads.length > 0 && (
-        <div className="flex-shrink-0 px-4 py-1 border-t bg-muted/10 text-[11px] text-muted-foreground/50 text-right">
-          {totalAvailable != null && totalAvailable > filteredThreads.length ? (
+      {/* Pagination bar — left: "Showing X-Y of Z"; center: prev/page/next; right: page size */}
+      <div className="flex-shrink-0 flex items-center justify-between gap-4 px-4 py-1.5 border-t bg-muted/10 text-[12px] text-muted-foreground">
+        <span className="tabular-nums">
+          {total > 0 ? (
             <>
-              Showing {filteredThreads.length.toLocaleString()} of {totalAvailable.toLocaleString()} conversation{totalAvailable !== 1 ? "s" : ""}
-              {hasMore && <span className="ml-1 opacity-70">(scroll to load more)</span>}
+              Showing {startIdx.toLocaleString()}-{endIdx.toLocaleString()} of {total.toLocaleString()} conversation{total !== 1 ? 's' : ''}
             </>
           ) : (
-            <>
-              {filteredThreads.length.toLocaleString()} conversation{filteredThreads.length !== 1 ? "s" : ""}
-            </>
+            '0 conversations'
           )}
+        </span>
+
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onPrevPage}
+            disabled={page <= 1}
+            aria-label="Previous page"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <span className="px-2 tabular-nums" aria-live="polite" aria-atomic="true">
+            Page {page} of {totalPages}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onNextPage}
+            disabled={page >= totalPages}
+            aria-label="Next page"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
         </div>
-      )}
+
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted-foreground/70">Per page</span>
+          <Select
+            value={String(pageSize)}
+            onValueChange={(v) => onPageSizeChange?.(v)}
+          >
+            <SelectTrigger className="h-7 w-[68px] text-xs px-2">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {allowedPageSizes.map((n) => (
+                <SelectItem key={n} value={String(n)} className="text-xs">
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
     </div>
   );
 }

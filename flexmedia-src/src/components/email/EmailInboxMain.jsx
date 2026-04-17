@@ -222,14 +222,27 @@ export default function EmailInboxMain() {
   // Fix: server-side RPC `get_inbox_threads` returns N WHOLE threads with
   // their messages pre-aggregated as JSONB. One RPC call = N complete threads,
   // and pagination advances by thread count — not message count.
-  const THREAD_PAGE_SIZE = 50;
+  const ALLOWED_PAGE_SIZES = [25, 50, 100, 200];
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const stored = parseInt(localStorage.getItem('inbox_page_size') || '', 10);
+      return ALLOWED_PAGE_SIZES.includes(stored) ? stored : 50;
+    } catch {
+      return 50;
+    }
+  });
+  const [page, setPage] = useState(1); // 1-indexed
   const [messages, setMessages] = useState([]);
   const [messagesLoading, setMessagesLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMoreMessages, setHasMoreMessages] = useState(true);
-  const [totalThreadCount, setTotalThreadCount] = useState(null); // Diagnostic: total threads available
-  const threadOffsetRef = useRef(0);
+  const [totalThreadCount, setTotalThreadCount] = useState(null);
   const messageFilterKeyRef = useRef(null);
+
+  const totalPages = Math.max(1, Math.ceil((totalThreadCount || 0) / pageSize));
+
+  // Persist page size in localStorage (but NOT page number — always start at 1 on reload)
+  useEffect(() => {
+    try { localStorage.setItem('inbox_page_size', String(pageSize)); } catch {}
+  }, [pageSize]);
 
   // Map our internal filterView + feature filters to RPC parameters.
   // The RPC accepts: folder, account_ids, search, unread_only, limit, offset.
@@ -261,28 +274,37 @@ export default function EmailInboxMain() {
     return out;
   };
 
-  // Initial fetch + reset when filters change
+  // Reset to page 1 when filters change (prevents stale offsets when switching views).
+  // This runs BEFORE the fetch effect below so the fetch picks up page=1 on the next tick.
+  useEffect(() => {
+    setPage(1);
+  }, [JSON.stringify(messageFilters)]);
+
+  // Reset to page 1 when page size changes (so offsets stay sane).
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize]);
+
+  // Initial + page-change fetch.
+  // Subscribes to realtime creates/updates/deletes so new mail appears immediately
+  // on the current page; full pagination offset is recomputed on every page/size/filter change.
   useEffect(() => {
     let isMounted = true;
     const filterKey = JSON.stringify(messageFilters);
-
-    // Reset pagination state when filters change
     messageFilterKeyRef.current = filterKey;
-    threadOffsetRef.current = 0;
-    setMessages([]);
-    setMessagesLoading(true);
-    setHasMoreMessages(true);
-    setTotalThreadCount(null);
 
-    const fetchInitial = async () => {
+    setMessagesLoading(true);
+
+    const offset = (page - 1) * pageSize;
+
+    const fetchPage = async () => {
       try {
-        const result = await api.rpc('get_inbox_threads', rpcParamsForCurrentView(THREAD_PAGE_SIZE, 0));
+        const result = await api.rpc('get_inbox_threads', rpcParamsForCurrentView(pageSize, offset));
         if (isMounted && messageFilterKeyRef.current === filterKey) {
           const fetchedThreads = result?.threads || [];
+          // REPLACE, not append — this is traditional pagination.
           setMessages(flattenThreadsToMessages(fetchedThreads));
-          setHasMoreMessages(Boolean(result?.has_more));
           setTotalThreadCount(result?.total_count ?? null);
-          threadOffsetRef.current = fetchedThreads.length;
           setMessagesLoading(false);
         }
       } catch (error) {
@@ -291,12 +313,11 @@ export default function EmailInboxMain() {
       }
     };
 
-    fetchInitial();
+    fetchPage();
 
-    // Real-time subscription: new emails appear at top instantly.
-    // The DB trigger keeps email_conversations in sync, so the next
-    // pagination fetch will reflect changes; this subscription handles
-    // the between-fetches state for immediate feedback.
+    // Real-time subscription: new emails appear in the visible page instantly.
+    // They shift into page 1 on the next refetch (filter/page change), which
+    // matches user expectation (a classic paginated list is a snapshot).
     const unsubscribe = api.entities.EmailMessage.subscribe((event) => {
       if (!isMounted || messageFilterKeyRef.current !== filterKey) return;
 
@@ -328,46 +349,38 @@ export default function EmailInboxMain() {
       isMounted = false;
       unsubscribe();
     };
-  }, [JSON.stringify(messageFilters)]);
+  }, [JSON.stringify(messageFilters), page, pageSize, rpcParamsForCurrentView]);
 
-  const loadMoreMessages = useCallback(async () => {
-    if (loadingMore || !hasMoreMessages) return;
-    setLoadingMore(true);
-    try {
-      const result = await api.rpc(
-        'get_inbox_threads',
-        rpcParamsForCurrentView(THREAD_PAGE_SIZE, threadOffsetRef.current)
-      );
-      const newThreads = result?.threads || [];
-      const newMessages = flattenThreadsToMessages(newThreads);
-      setMessages(prev => {
-        const existingIds = new Set(prev.map(m => m.id));
-        const toAdd = newMessages.filter(m => !existingIds.has(m.id));
-        return [...prev, ...toAdd];
-      });
-      setHasMoreMessages(Boolean(result?.has_more));
-      if (result?.total_count != null) setTotalThreadCount(result.total_count);
-      threadOffsetRef.current += newThreads.length;
-    } catch (error) {
-      console.error('Failed to load more threads:', error);
-    } finally {
-      setLoadingMore(false);
+  const handlePrevPage = useCallback(() => {
+    setPage(p => Math.max(1, p - 1));
+  }, []);
+
+  const handleNextPage = useCallback(() => {
+    setPage(p => {
+      const maxPage = Math.max(1, Math.ceil((totalThreadCount || 0) / pageSize));
+      return Math.min(maxPage, p + 1);
+    });
+  }, [totalThreadCount, pageSize]);
+
+  const handlePageSizeChange = useCallback((newSize) => {
+    const n = parseInt(newSize, 10);
+    if (ALLOWED_PAGE_SIZES.includes(n)) {
+      setPageSize(n);
+      // page reset to 1 is handled by the useEffect above
     }
-  }, [loadingMore, hasMoreMessages, rpcParamsForCurrentView]);
+  }, []);
 
   const refetchMessages = useCallback(async () => {
     try {
-      threadOffsetRef.current = 0;
-      const result = await api.rpc('get_inbox_threads', rpcParamsForCurrentView(THREAD_PAGE_SIZE, 0));
+      const offset = (page - 1) * pageSize;
+      const result = await api.rpc('get_inbox_threads', rpcParamsForCurrentView(pageSize, offset));
       const fetchedThreads = result?.threads || [];
       setMessages(flattenThreadsToMessages(fetchedThreads));
-      setHasMoreMessages(Boolean(result?.has_more));
       if (result?.total_count != null) setTotalThreadCount(result.total_count);
-      threadOffsetRef.current = fetchedThreads.length;
     } catch (error) {
       console.error('Failed to refetch threads:', error);
     }
-  }, [rpcParamsForCurrentView]);
+  }, [rpcParamsForCurrentView, page, pageSize]);
 
 
 
@@ -1605,10 +1618,14 @@ export default function EmailInboxMain() {
                 }}
                 onReorderColumns={reorderColumns}
                 onResizeColumn={resizeColumn}
-                onLoadMore={loadMoreMessages}
-                hasMore={hasMoreMessages}
-                loadingMore={loadingMore}
-                totalAvailable={totalThreadCount}
+                page={page}
+                pageSize={pageSize}
+                totalPages={totalPages}
+                totalThreadCount={totalThreadCount}
+                onPrevPage={handlePrevPage}
+                onNextPage={handleNextPage}
+                onPageSizeChange={handlePageSizeChange}
+                allowedPageSizes={ALLOWED_PAGE_SIZES}
                 onContextMenu={async (thread, action) => {
                   try {
                     if (action === 'archive') {
