@@ -10,13 +10,40 @@ serveWithAudit('resetPackages', async (req) => {
     const user = await getUserFromReq(req);
 
     if (!user || user.role !== 'master_admin') {
-      return errorResponse('Forbidden: Admin access required', 403);
+      return errorResponse('Forbidden: Admin access required', 403, req);
     }
 
-    // Delete all packages
+    // Tolerate empty body and require an explicit confirmation. This is a
+    // destructive operation (deletes ALL packages and re-seeds defaults).
+    // Without the confirm flag, probes / accidental calls fall to a 400 instead
+    // of nuking production data.
+    const payload = await req.json().catch(() => ({} as any));
+    if (payload?.confirm !== true) {
+      return errorResponse(
+        'Refusing to run destructive reset without { "confirm": true } in payload',
+        400,
+        req,
+      );
+    }
+
+    // Delete all packages. Some installs have triggers that cascade into
+    // soft-deleted project_tasks and raise; surface those as 409 with a clear
+    // message instead of a generic 500.
     const allPackages = await entities.Package.list();
     for (const pkg of allPackages) {
-      await entities.Package.delete(pkg.id);
+      try {
+        await entities.Package.delete(pkg.id);
+      } catch (delErr: any) {
+        const msg = delErr?.message || String(delErr);
+        if (msg.includes('Cannot update a deleted task') || msg.includes('Restore it first')) {
+          return errorResponse(
+            `Cannot reset packages: package ${pkg.id} is referenced by a soft-deleted project_task. Restore or hard-delete the affected tasks first. (${msg})`,
+            409,
+            req,
+          );
+        }
+        throw delErr;
+      }
     }
 
     // Seed default packages
@@ -58,8 +85,8 @@ serveWithAudit('resetPackages', async (req) => {
       deleted: allPackages.length,
       seeded: defaultPackages.length,
       message: `Deleted ${allPackages.length} packages and seeded ${defaultPackages.length} default packages`
-    });
+    }, 200, req);
   } catch (error: any) {
-    return errorResponse(error.message);
+    return errorResponse(error?.message || String(error), 500, req);
   }
 });

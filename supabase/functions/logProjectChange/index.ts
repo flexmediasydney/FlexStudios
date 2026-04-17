@@ -13,6 +13,18 @@ serveWithAudit('logProjectChange', async (req) => {
     if (!user) return errorResponse('Unauthorized', 401, req);
     if (!event?.type) return errorResponse('event.type required', 400, req);
 
+    // Validate entity_id is a UUID — without this, downstream insert raises
+    // an FK-violation that surfaces as a generic 500. Health probes / clients
+    // that omit a real project id should get a clear 400.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!event.entity_id || typeof event.entity_id !== 'string' || !UUID_RE.test(event.entity_id)) {
+      return errorResponse('event.entity_id must be a valid project UUID', 400, req);
+    }
+    const ALLOWED_TYPES = new Set(['create', 'update', 'delete']);
+    if (!ALLOWED_TYPES.has(event.type)) {
+      return errorResponse(`event.type must be one of: ${[...ALLOWED_TYPES].join(', ')}`, 400, req);
+    }
+
     const changedFields: any[] = [];
     let description = '';
 
@@ -84,19 +96,30 @@ serveWithAudit('logProjectChange', async (req) => {
       description = `Project deleted`;
     }
 
-    await entities.ProjectActivity.create({
-      project_id: event.entity_id,
-      project_title: data?.title || old_data?.title || 'Unknown',
-      action: event.type,
-      changed_fields: changedFields.slice(0, 20),
-      description: description.slice(0, 1000),
-      user_name: user.full_name,
-      user_email: user.email,
-      timestamp: new Date().toISOString(),
-    });
+    try {
+      await entities.ProjectActivity.create({
+        project_id: event.entity_id,
+        project_title: data?.title || old_data?.title || 'Unknown',
+        action: event.type,
+        changed_fields: changedFields.slice(0, 20),
+        description: description.slice(0, 1000),
+        user_name: user.full_name,
+        user_email: user.email,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (insertErr: any) {
+      const msg = insertErr?.message || String(insertErr);
+      // FK violation = caller passed a project_id that does not exist. This is
+      // a client error (404), not a server fault. Without this, the upstream
+      // catch returns 500 and pollutes the edge_fn_call_audit error rate.
+      if (msg.includes('project_activities_project_id_fkey') || msg.includes('foreign key constraint')) {
+        return errorResponse(`Project ${event.entity_id} not found`, 404, req);
+      }
+      throw insertErr;
+    }
 
-    return jsonResponse({ success: true });
+    return jsonResponse({ success: true }, 200, req);
   } catch (error: any) {
-    return errorResponse(error.message);
+    return errorResponse(error?.message || String(error), 500, req);
   }
 });
