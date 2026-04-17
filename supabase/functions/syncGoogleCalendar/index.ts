@@ -106,11 +106,25 @@ serveWithAudit('syncGoogleCalendar', async (req) => {
       ? await entities.User.list('-created_date', MAX_USERS_FETCH) || []
       : [];
     const usersByEmail = new Map();
+    const validUserIds = new Set<string>();
     if (autoLinkEnabled) {
       for (const u of allUsers) {
         if (u.email) usersByEmail.set(u.email.toLowerCase(), u);
+        if (u.id) validUserIds.add(u.id);
       }
     }
+
+    // Load valid agent/agency IDs for FK validation (project rows may reference
+    // dangling agent/agency IDs post-migration — inserting those into
+    // calendar_events.{agent_id,agency_id} would violate FK constraints).
+    const [allAgentsRaw, allAgenciesRaw] = autoLinkEnabled
+      ? await Promise.all([
+          entities.Agent.list('-created_date', 2000).catch(() => []),
+          entities.Agency.list('-created_date', 2000).catch(() => []),
+        ])
+      : [[], []];
+    const validAgentIds = new Set<string>((allAgentsRaw || []).map((a: any) => a.id).filter(Boolean));
+    const validAgencyIds = new Set<string>((allAgenciesRaw || []).map((a: any) => a.id).filter(Boolean));
 
     let totalCreated = 0;
     let totalUpdated = 0;
@@ -377,6 +391,19 @@ serveWithAudit('syncGoogleCalendar', async (req) => {
               }
             }
 
+            // FK guards: drop any auto-resolved IDs that point to rows which no
+            // longer exist in their referenced tables (dangling references on
+            // projects persist post-migration — we must not forward them here or
+            // the calendar_events INSERT/UPDATE will fail with 23503).
+            // Also coerce any non-UUID garbage (e.g. literal "undefined" strings
+            // left over from broken JS code paths) to null before DB write.
+            const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            const isUuid = (v: any) => typeof v === 'string' && UUID_RE.test(v);
+            if (!isUuid(autoProjectId)) autoProjectId = null;
+            if (!isUuid(autoOwnerId) || (autoOwnerId && !validUserIds.has(autoOwnerId))) autoOwnerId = null;
+            if (!isUuid(autoAgentId) || (autoAgentId && !validAgentIds.has(autoAgentId))) autoAgentId = null;
+            if (!isUuid(autoAgencyId) || (autoAgencyId && !validAgencyIds.has(autoAgencyId))) autoAgencyId = null;
+
             if (autoProjectId) {
               eventData.project_id = autoProjectId;
               eventData.auto_linked = true;
@@ -471,11 +498,19 @@ serveWithAudit('syncGoogleCalendar', async (req) => {
         if (!LINKABLE_STAGES.includes(matchedProject.status)) continue;
 
         try {
+          // FK guards: same rationale as in the main loop above.
+          const retroOwner = matchedProject.project_owner_id && validUserIds.has(matchedProject.project_owner_id)
+            ? matchedProject.project_owner_id : null;
+          const retroAgent = matchedProject.agent_id && validAgentIds.has(matchedProject.agent_id)
+            ? matchedProject.agent_id : null;
+          const retroAgency = matchedProject.agency_id && validAgencyIds.has(matchedProject.agency_id)
+            ? matchedProject.agency_id : null;
+
           await entities.CalendarEvent.update(ev.id, {
             project_id: matchedProject.id,
-            agent_id: matchedProject.agent_id || null,
-            agency_id: matchedProject.agency_id || null,
-            owner_user_id: matchedProject.project_owner_id || null,
+            agent_id: retroAgent,
+            agency_id: retroAgency,
+            owner_user_id: retroOwner,
             auto_linked: true,
             link_source: 'google_event_id_retroactive',
             link_confidence: 'exact',
