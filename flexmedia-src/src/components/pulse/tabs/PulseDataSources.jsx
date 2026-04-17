@@ -928,15 +928,35 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
   const runSource = useCallback(async (source) => {
     setRunningSources((prev) => new Set([...prev, source.source_id]));
     try {
-      const subs = targetSuburbs.filter((s) => s.is_active).map((s) => s.name);
-      const params = {
-        ...source.runParams(subs, source.defaultMax),
-        source_id: source.source_id,
-        source_label: source.label,
-        triggered_by_name: user?.name || "Manual",
-      };
-      await api.functions.invoke("pulseDataSync", params);
-      toast.success(`${source.label} started`);
+      // Route through pulseFireScrapes (lightweight dispatcher) instead of
+      // pulseDataSync directly. pulseDataSync for per-suburb sources would
+      // iterate through 148+ active suburbs synchronously, far exceeding the
+      // ~150s edge function CPU budget. pulseFireScrapes:
+      //   - per-suburb: fires individual fire-and-forget pulseDataSync calls
+      //     (staggered 2s apart, capped via max_suburbs)
+      //   - bounding-box: fires a single pulseDataSync call
+      // It also logs cron_dispatched timeline events and updates last_run_at.
+      const isBoundingBox = source.approach === "bounding_box" ||
+                            source.source_id.startsWith("rea_listings_bb");
+      const fireParams = isBoundingBox
+        ? { source_id: source.source_id }
+        : {
+            source_id: source.source_id,
+            min_priority: 0,
+            // Cap at 20 suburbs per manual run. 20 staggered Apify calls take
+            // ~40s total to dispatch; any more risks hitting the function wall
+            // clock. Users can rerun for the next batch.
+            max_suburbs: 20,
+          };
+      const { data } = await api.functions.invoke("pulseFireScrapes", fireParams);
+      const dispatched = data?.dispatched ?? 0;
+      if (data?.success === false) {
+        toast.warning(data?.message || `${source.label}: already running`);
+      } else if (isBoundingBox) {
+        toast.success(`${source.label} dispatched — sync log will appear shortly`);
+      } else {
+        toast.success(`${source.label}: ${dispatched} suburb${dispatched === 1 ? "" : "s"} dispatched`);
+      }
       setTimeout(() => {
         refetchEntityList("PulseSyncLog");
         refetchEntityList("PulseTimeline");
