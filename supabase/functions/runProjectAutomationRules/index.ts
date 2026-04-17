@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, getUserFromReq } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, getUserFromReq, serveWithAudit } from '../_shared/supabase.ts';
 
 const PROCESSOR_VERSION = "v1.0";
 const SYDNEY_TZ = "Australia/Sydney";
@@ -452,16 +452,14 @@ async function executeAction(
 }
 
 // --- Main handler ---
-Deno.serve(async (req) => {
+serveWithAudit('runProjectAutomationRules', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     // ── Auth: require any authenticated user or service role ──
     const user = await getUserFromReq(req).catch(() => null);
-    if (!user) {
-      const authHeader = req.headers.get('authorization') || '';
-      if (!authHeader.includes(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '___')) {
-        return errorResponse('Authentication required', 401);
-      }
+    const isServiceRole = user?.id === '__service_role__';
+    if (!isServiceRole) {
+      if (!user) return errorResponse('Authentication required', 401);
     }
 
     const admin = getAdminClient();

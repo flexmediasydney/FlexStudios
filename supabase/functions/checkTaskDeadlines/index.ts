@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 // ─── NOTIFICATION HELPERS ─────────────────────────────────────────────
 const _NOTIF_ROLES: Record<string, string[]> = {
@@ -92,7 +92,7 @@ function toSydney(date: Date): Date {
   return new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`);
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('checkTaskDeadlines', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {

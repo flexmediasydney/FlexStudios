@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Validates task dependencies to prevent:
@@ -46,7 +46,7 @@ function wouldCreateCycle(task: any, newDepId: string, allTasks: any[], taskMap:
   return hasCycleDFS(newDepId);
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('validateTaskDependencies', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {

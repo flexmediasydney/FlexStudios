@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 
 const retryWithBackoff = async <T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> => {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -16,7 +16,7 @@ const retryWithBackoff = async <T>(fn: () => Promise<T>, maxRetries = 2): Promis
   throw new Error('Retry exhausted');
 };
 
-Deno.serve(async (req) => {
+serveWithAudit('cleanupOrphanedProjectTasks', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
@@ -24,14 +24,12 @@ Deno.serve(async (req) => {
 
     // Auth: allow service-role (internal/cron calls) or authenticated users with sufficient role
     const user = await getUserFromReq(req).catch(() => null);
-    if (!user) {
-      const authHeader = req.headers.get('authorization') || '';
-      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-      if (!serviceKey || !authHeader.includes(serviceKey)) {
-        return errorResponse('Authentication required', 401);
+    const isServiceRole = user?.id === '__service_role__';
+    if (!isServiceRole) {
+      if (!user) return errorResponse('Authentication required', 401);
+      if (!['master_admin', 'admin', 'manager', 'employee'].includes(user.role)) {
+        return errorResponse('Forbidden: insufficient permissions', 403);
       }
-    } else if (!['master_admin', 'admin', 'manager', 'employee'].includes(user.role)) {
-      return errorResponse('Forbidden: insufficient permissions', 403);
     }
 
     const body = await req.json().catch(() => null);
