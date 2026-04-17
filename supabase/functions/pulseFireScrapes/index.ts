@@ -59,7 +59,11 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || '';
 const DEFAULT_BATCH_SIZE = 20;
 const SELF_INVOKE_TIMEOUT_MS = 3000;
 const PER_SUBURB_DISPATCH_TIMEOUT_MS = 3000;
-const INTER_SUBURB_STAGGER_MS = 2000;
+// Default inter-suburb stagger; overridden per-source via
+// pulse_source_configs.stagger_seconds (migration 087). Sources whose upstream
+// rate-limits the scraper IP (e.g. rea_agents) set a much higher value (30s)
+// to stay under the throttle and let Apify's proxy rotation cycle IPs.
+const DEFAULT_INTER_SUBURB_STAGGER_MS = 2000;
 
 /**
  * Expand {suburb} / {suburb-slug} / {postcode} placeholders in every string
@@ -133,7 +137,7 @@ serveWithAudit('pulseFireScrapes', async (req) => {
     // ── Load config from DB (single source of truth) ─────────────────────
     const { data: config, error: cfgErr } = await admin
       .from('pulse_source_configs')
-      .select('source_id, label, actor_slug, actor_input, approach, max_results_per_suburb, max_suburbs, min_priority, is_enabled')
+      .select('source_id, label, actor_slug, actor_input, approach, max_results_per_suburb, max_suburbs, min_priority, is_enabled, stagger_seconds')
       .eq('source_id', source_id)
       .single();
 
@@ -163,12 +167,35 @@ serveWithAudit('pulseFireScrapes', async (req) => {
     // Body overrides > DB config > defaults
     const min_priority = body.min_priority ?? config.min_priority ?? 0;
     const max_suburbs = body.max_suburbs ?? config.max_suburbs ?? 20;
-    const batch_size = Math.max(1, Math.min(50, body.batch_size ?? DEFAULT_BATCH_SIZE));
     const incomingOffset: number = Number.isInteger(body.offset) ? Number(body.offset) : 0;
     const incomingBatchId: string | null = typeof body.batch_id === 'string' && body.batch_id.length > 0 ? body.batch_id : null;
 
     // Inject max_results_per_suburb as actorInput.maxItems (cap per run).
     const maxItems = config.max_results_per_suburb ?? actorInput.maxItems ?? 10;
+
+    // Per-source inter-suburb stagger (migration 087). Fall back to the legacy
+    // 2s default if the column is NULL. Allow body override for ad-hoc probes.
+    const staggerSeconds =
+      Number.isFinite(body?.stagger_seconds) ? Number(body.stagger_seconds) :
+      (Number.isFinite(config.stagger_seconds) ? Number(config.stagger_seconds) : null);
+    const interSuburbStaggerMs = staggerSeconds != null && staggerSeconds >= 0
+      ? staggerSeconds * 1000
+      : DEFAULT_INTER_SUBURB_STAGGER_MS;
+
+    // Batch size must keep each invocation well under the 150s edge-runtime
+    // cap. Budget ~130s of work per batch; each suburb costs
+    // (stagger + ~5s dispatch handshake). Cap at DEFAULT_BATCH_SIZE for the
+    // cheap-stagger sources where 20 easily fits in 150s. Body override wins
+    // for explicit probing.
+    const perSuburbCostMs = interSuburbStaggerMs + PER_SUBURB_DISPATCH_TIMEOUT_MS;
+    const maxBatchByBudget = Math.max(1, Math.floor(130000 / perSuburbCostMs));
+    const batch_size = Math.max(
+      1,
+      Math.min(
+        50,
+        body.batch_size ?? Math.min(DEFAULT_BATCH_SIZE, maxBatchByBudget),
+      ),
+    );
 
     // ── Kickoff or continuation ─────────────────────────────────────────
     let batchId: string;
@@ -291,12 +318,13 @@ serveWithAudit('pulseFireScrapes', async (req) => {
         admin,
         'cron_dispatch_started',
         `Cron started: ${sourceLabel}`,
-        `Starting batched dispatch of ${totalCount} suburbs (batch size ${batch_size})${skippedSuburbs.length > 0 ? `; skipped ${skippedSuburbs.length} missing postcode` : ''}`,
+        `Starting batched dispatch of ${totalCount} suburbs (batch size ${batch_size}, stagger ${Math.round(interSuburbStaggerMs / 1000)}s)${skippedSuburbs.length > 0 ? `; skipped ${skippedSuburbs.length} missing postcode` : ''}`,
         {
           source_id,
           batch_id: batchId,
           total_count: totalCount,
           batch_size,
+          stagger_seconds: Math.round(interSuburbStaggerMs / 1000),
           min_priority,
           max_items: maxItems,
           skipped: skippedSuburbs,
@@ -328,6 +356,12 @@ serveWithAudit('pulseFireScrapes', async (req) => {
         source_label: `${sourceLabel} - ${suburb.name} (cron)`,
         triggered_by_name: 'Cron',
         actorInput: inflated,
+        // Batch attribution (migration 088) — so pulseDataSync can stamp the
+        // per-suburb sync_logs row with "this came from batch N of M". Lets the
+        // UI filter sync history by batch and render "Batch 3/10" chips.
+        batch_id: batchId,
+        batch_number: batchNumber,
+        total_batches: totalBatches,
       };
 
       const sp = fetch(`${SUPABASE_URL}/functions/v1/pulseDataSync`, {
@@ -343,10 +377,12 @@ serveWithAudit('pulseFireScrapes', async (req) => {
 
       dispatchedInBatch++;
 
-      // Inter-suburb stagger (avoid Apify rate limit). Skip on last suburb of
-      // batch — the 2s would be wasted before we self-invoke.
-      if (i < sliceSuburbs.length - 1) {
-        await new Promise(r => setTimeout(r, INTER_SUBURB_STAGGER_MS));
+      // Inter-suburb stagger (avoid Apify / upstream rate limit). Configured
+      // per-source via pulse_source_configs.stagger_seconds (migration 087).
+      // Skip on last suburb of batch — the delay would be wasted before we
+      // self-invoke.
+      if (i < sliceSuburbs.length - 1 && interSuburbStaggerMs > 0) {
+        await new Promise(r => setTimeout(r, interSuburbStaggerMs));
       }
     }
 

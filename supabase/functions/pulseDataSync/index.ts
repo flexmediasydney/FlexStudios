@@ -360,6 +360,12 @@ serveWithAudit('pulseDataSync', async (req) => {
       // from pulse_source_configs.actor_input (already inflated for single-suburb
       // dispatches, or raw with {suburb}/{suburb-slug} for multi-suburb batches).
       actorInput = null,
+      // Batch attribution (migration 088) — set by pulseFireScrapes when this
+      // invocation is one leg of a chunked dispatch. Persisted to pulse_sync_logs
+      // so the UI can say "Batch 3/10" on each suburb's row.
+      batch_id = null,
+      batch_number = null,
+      total_batches = null,
     } = body;
 
     // ── v3 config-driven dispatch helpers ────────────────────────────────
@@ -400,6 +406,11 @@ serveWithAudit('pulseDataSync', async (req) => {
         input_config: { suburbs, state, maxAgentsPerSuburb, maxListingsPerSuburb, skipListings, actorInput, actor_slug: actorSlug, approach: configApproach },
         triggered_by: triggered_by || null,
         triggered_by_name: triggered_by_name || null,
+        // Batch attribution (migration 088). All three are nullable; when set,
+        // the UI can render a "Batch 3/10" chip on this row.
+        batch_id: typeof batch_id === 'string' && batch_id.length > 0 ? batch_id : null,
+        batch_number: Number.isInteger(batch_number) ? Number(batch_number) : null,
+        total_batches: Number.isInteger(total_batches) ? Number(total_batches) : null,
       });
       syncLogId = log.id;
     }
