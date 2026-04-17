@@ -14,6 +14,14 @@ serveWithAudit('calculateEmployeeUtilization', async (req) => {
 
     const { userId, period = 'week' } = await req.json();
 
+    // Guard: userId must be a valid UUID. Without this, undefined/empty values
+    // blow up Postgres with "invalid input syntax for type uuid: undefined"
+    // and bubble as a 500 — masking a simple caller bug behind an opaque error.
+    const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    if (!userId || !UUID_RE.test(String(userId))) {
+      return errorResponse('userId (UUID) is required', 400);
+    }
+
     // Retry helper
     const retryWithBackoff = async (fn: () => Promise<any>, maxRetries = 2) => {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
