@@ -224,10 +224,22 @@ export default function PropertyIntelligencePanel({
   if (!property) {
     return (
       <Card className="rounded-xl">
-        <CardContent className="py-6 text-center">
+        {!compact && (
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Home className="h-4 w-4 text-primary" />
+              Property Intelligence
+            </CardTitle>
+          </CardHeader>
+        )}
+        <CardContent className="py-4 text-center">
           <Home className="h-6 w-6 text-muted-foreground/40 mx-auto mb-2" />
-          <p className="text-xs text-muted-foreground">
-            No pulse intelligence yet for this property. The next REA scrape may detect it.
+          <p className="text-xs text-muted-foreground mb-2">
+            No REA listings detected yet
+          </p>
+          <p className="text-[10px] text-muted-foreground/70 leading-tight">
+            REA per-suburb scrapes catch the 10-15 newest listings.
+            This property will appear here when it's listed AND in that batch.
           </p>
         </CardContent>
       </Card>
@@ -250,17 +262,37 @@ export default function PropertyIntelligencePanel({
         </CardHeader>
       )}
       <CardContent className="space-y-3">
-        {/* Header */}
-        <div className="space-y-1">
-          <p className="text-xs font-medium flex items-center gap-1.5">
-            <MapPin className="h-3 w-3 text-muted-foreground" />
-            <span className="truncate">{property.display_address}</span>
-          </p>
-          {(property.suburb || property.postcode) && (
-            <p className="text-[10px] text-muted-foreground ml-4">
-              {property.suburb}{property.postcode ? ` · ${property.postcode}` : ""} · {property.state || "NSW"}
-            </p>
+        {/* Hero strip — image + address */}
+        <div className="flex items-start gap-2">
+          {property.hero_image && (
+            <div className="w-20 h-20 rounded-md bg-muted overflow-hidden flex-shrink-0 border border-border/40">
+              <img
+                src={property.hero_image}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
+              />
+            </div>
           )}
+          <div className="flex-1 min-w-0 space-y-1">
+            <p className="text-xs font-medium flex items-center gap-1.5">
+              <MapPin className="h-3 w-3 text-muted-foreground" />
+              <span className="truncate">{property.display_address}</span>
+            </p>
+            {(property.suburb || property.postcode) && (
+              <p className="text-[10px] text-muted-foreground ml-4">
+                {property.suburb}{property.postcode ? ` · ${property.postcode}` : ""}
+              </p>
+            )}
+            {(property.bedrooms || property.bathrooms || property.parking) && (
+              <p className="text-[10px] text-muted-foreground ml-4">
+                {property.bedrooms ? `${property.bedrooms}br` : ""}
+                {property.bathrooms ? `/${property.bathrooms}ba` : ""}
+                {property.parking ? `/${property.parking}car` : ""}
+                {property.property_type && ` · ${property.property_type}`}
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Stats */}

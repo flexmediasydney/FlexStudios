@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import {
   Home, MapPin, Tag, DollarSign, Calendar, Users, Building2,
   ExternalLink, ArrowLeft, Loader2, Camera, History, TrendingUp, RefreshCw,
+  Bed, Bath, Car, Plus, Eye,
 } from "lucide-react";
 
 function fmtPrice(v) {
@@ -205,6 +206,33 @@ export default function PropertyDetails() {
     );
   }
 
+  // Smart current-state label
+  const currentState = (() => {
+    const now = Date.now();
+    const dayMs = 86400000;
+    const listedDate = property.current_listed_date ? new Date(property.current_listed_date).getTime() : null;
+    const soldDate = property.last_sold_at ? new Date(property.last_sold_at).getTime() : null;
+
+    if (property.current_listing_type && listedDate && (now - listedDate) < 90 * dayMs) {
+      return { label: TYPE_LABEL[property.current_listing_type] || property.current_listing_type, fresh: true, cls: TYPE_BADGE[property.current_listing_type] };
+    }
+    if (soldDate && (now - soldDate) < 180 * dayMs) {
+      return { label: "Recently Sold", fresh: true, cls: TYPE_BADGE.sold };
+    }
+    if (property.current_listing_type) {
+      return { label: `Was ${TYPE_LABEL[property.current_listing_type]}`, fresh: false, cls: "bg-muted/60 text-muted-foreground border-transparent" };
+    }
+    return null;
+  })();
+
+  const facts = [];
+  if (property.bedrooms) facts.push({ icon: Bed, val: property.bedrooms });
+  if (property.bathrooms) facts.push({ icon: Bath, val: property.bathrooms });
+  if (property.parking) facts.push({ icon: Car, val: property.parking });
+
+  // CRM agent at this property (if linked via project)
+  const linkedAgentName = projects.find((p) => p.agent_name)?.agent_name;
+
   return (
     <div className="px-4 pt-3 pb-4 lg:px-6 space-y-3">
       {/* Header */}
@@ -223,10 +251,65 @@ export default function PropertyDetails() {
             </p>
           </div>
         </div>
-        <Button variant="ghost" size="sm" onClick={load}>
-          <RefreshCw className="h-3.5 w-3.5" />
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link to={`/ProjectDetails?id=new&address=${encodeURIComponent(property.display_address)}`}>
+            <Button variant="default" size="sm" className="h-8 text-xs">
+              <Plus className="h-3.5 w-3.5 mr-1" /> Create project here
+            </Button>
+          </Link>
+          <Button variant="ghost" size="sm" onClick={load}>
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
+
+      {/* Hero image + facts strip (only if hero image exists) */}
+      {property.hero_image && (
+        <Card className="rounded-xl overflow-hidden">
+          <div className="grid grid-cols-1 sm:grid-cols-3">
+            <div className="sm:col-span-1 bg-muted h-48 sm:h-auto overflow-hidden">
+              <img
+                src={property.hero_image}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
+              />
+            </div>
+            <div className="sm:col-span-2 p-4 flex flex-col justify-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {currentState && (
+                  <Badge variant="outline" className={cn("text-[10px]", currentState.cls)}>
+                    {currentState.label}
+                  </Badge>
+                )}
+                {property.property_type && (
+                  <Badge variant="outline" className="text-[10px] capitalize">{property.property_type}</Badge>
+                )}
+              </div>
+              {(property.current_asking_price || property.last_sold_price) && (
+                <p className="text-2xl font-bold tabular-nums">
+                  {fmtPrice(property.current_asking_price || property.last_sold_price)}
+                  {!currentState?.fresh && <span className="text-xs font-normal text-muted-foreground ml-2">historical</span>}
+                </p>
+              )}
+              {facts.length > 0 && (
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  {facts.map((f, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      <f.icon className="h-3.5 w-3.5" /> {f.val}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {linkedAgentName && (
+                <p className="text-xs text-muted-foreground">
+                  Last shot for: <span className="font-medium text-foreground">{linkedAgentName}</span>
+                </p>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Stats strip */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">

@@ -19,7 +19,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import {
   Home, Search, MapPin, Camera, Tag, DollarSign, Loader2, ArrowRight,
-  Filter, Building2, Users, RefreshCw,
+  Filter, Building2, Users, RefreshCw, Bed, Bath, Car,
 } from "lucide-react";
 
 const PAGE_SIZE = 50;
@@ -241,26 +241,93 @@ function StatCard({ label, value, icon: Icon, color, subtitle }) {
   );
 }
 
+/**
+ * Smart "currently" state — distinguishes recent active listings from stale ones.
+ * Returns { label, color, isFresh } for the row's status badge.
+ */
+function getCurrentState(property) {
+  const now = Date.now();
+  const dayMs = 86400000;
+  const listedDate = property.current_listed_date ? new Date(property.current_listed_date).getTime() : null;
+  const soldDate = property.last_sold_at ? new Date(property.last_sold_at).getTime() : null;
+
+  // If currently for_sale/rent and listed within 90 days → "active"
+  if (property.current_listing_type && listedDate && (now - listedDate) < 90 * dayMs) {
+    return {
+      label: TYPE_LABEL[property.current_listing_type] || property.current_listing_type,
+      cls: TYPE_BADGE[property.current_listing_type],
+      isFresh: true,
+      timeStr: fmtRelative(property.current_listed_date),
+    };
+  }
+
+  // Sold recently (within 6 months)?
+  if (soldDate && (now - soldDate) < 180 * dayMs) {
+    return {
+      label: "Sold",
+      cls: TYPE_BADGE.sold,
+      isFresh: true,
+      timeStr: fmtRelative(property.last_sold_at),
+    };
+  }
+
+  // Has any listing but it's old
+  if (property.current_listing_type) {
+    return {
+      label: `Was ${TYPE_LABEL[property.current_listing_type] || property.current_listing_type}`,
+      cls: "bg-muted/60 text-muted-foreground border-transparent",
+      isFresh: false,
+      timeStr: listedDate ? fmtRelative(property.current_listed_date) : null,
+    };
+  }
+
+  return null;
+}
+
 function PropertyRow({ property }) {
+  const facts = [];
+  if (property.bedrooms) facts.push(`${property.bedrooms}br`);
+  if (property.bathrooms) facts.push(`${property.bathrooms}ba`);
+  if (property.parking) facts.push(`${property.parking}car`);
+  const factsStr = facts.join(" · ");
+
+  const state = getCurrentState(property);
+
   return (
     <Link
       to={`/PropertyDetails?key=${encodeURIComponent(property.property_key)}`}
-      className="flex items-center gap-4 px-4 py-3 hover:bg-muted/40 transition-colors"
+      className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors"
     >
+      {/* Thumbnail */}
+      <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-md bg-muted overflow-hidden flex-shrink-0 border border-border/40">
+        {property.hero_image ? (
+          <img
+            src={property.hero_image}
+            alt=""
+            className="w-full h-full object-cover"
+            onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement.innerHTML = '<div class=\"w-full h-full flex items-center justify-center text-muted-foreground/40\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\"/><polyline points=\"9 22 9 12 15 12 15 22\"/></svg></div>'; }}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-muted-foreground/40">
+            <Home className="h-5 w-5" />
+          </div>
+        )}
+      </div>
+
       {/* Address */}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate flex items-center gap-1.5">
-          <MapPin className="h-3 w-3 text-muted-foreground shrink-0" />
           {property.display_address}
         </p>
-        <p className="text-[11px] text-muted-foreground mt-0.5">
-          {property.suburb}{property.postcode ? ` · ${property.postcode}` : ""}{" · "}
-          first seen {fmtRelative(property.first_seen_at)}
+        <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+          {property.suburb}{property.postcode ? ` · ${property.postcode}` : ""}
+          {factsStr && <> · {factsStr}</>}
+          {property.property_type && <> · {property.property_type}</>}
         </p>
       </div>
 
       {/* Listings + Projects badges */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="hidden sm:flex items-center gap-1.5 shrink-0">
         {property.project_count > 0 && (
           <Badge variant="outline" className="text-[10px] bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/30 dark:text-violet-300">
             <Camera className="h-2.5 w-2.5 mr-1" /> {property.project_count}
@@ -273,24 +340,26 @@ function PropertyRow({ property }) {
         )}
       </div>
 
-      {/* Current state */}
-      <div className="hidden md:flex items-center gap-2 text-xs shrink-0 w-44 justify-end">
-        {property.current_listing_type ? (
+      {/* Current state — smart label */}
+      <div className="hidden md:flex flex-col items-end gap-0.5 shrink-0 w-40">
+        {state ? (
           <>
-            <Badge variant="outline" className={cn("text-[10px]", TYPE_BADGE[property.current_listing_type] || "")}>
-              {TYPE_LABEL[property.current_listing_type] || property.current_listing_type}
-            </Badge>
-            {property.current_asking_price && (
-              <span className="font-semibold tabular-nums">{fmtPrice(property.current_asking_price)}</span>
+            <div className="flex items-center gap-1.5">
+              <Badge variant="outline" className={cn("text-[10px]", state.cls)}>
+                {state.label}
+              </Badge>
+              {(property.current_asking_price || property.last_sold_price) && (
+                <span className="font-semibold text-xs tabular-nums">
+                  {fmtPrice(property.current_asking_price || property.last_sold_price)}
+                </span>
+              )}
+            </div>
+            {state.timeStr && (
+              <span className="text-[9px] text-muted-foreground">{state.timeStr}</span>
             )}
           </>
-        ) : property.last_sold_price ? (
-          <>
-            <span className="text-muted-foreground">Sold</span>
-            <span className="font-semibold tabular-nums">{fmtPrice(property.last_sold_price)}</span>
-          </>
         ) : (
-          <span className="text-muted-foreground">—</span>
+          <span className="text-[10px] text-muted-foreground">—</span>
         )}
       </div>
 
