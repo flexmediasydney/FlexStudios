@@ -181,8 +181,10 @@ class ErrorBoundary extends Component {
     }
 
     // Wrap children in a keyed fragment so "Try Again" forces a remount
-    // (prevents the same broken component from immediately re-throwing)
-    return <div key={this.state.resetKey}>{this.props.children}</div>;
+    // (prevents the same broken component from immediately re-throwing).
+    // h-full + flex preserves parent flex layout constraints (needed by
+    // inbox-style full-height children with their own internal scroll).
+    return <div key={this.state.resetKey} className="h-full flex flex-col min-h-0">{this.props.children}</div>;
   }
 }
 
