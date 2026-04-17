@@ -27,6 +27,29 @@ export const formatEmailDate = (timestamp) => {
 };
 
 /**
+ * Pipedrive-style compact inbox timestamp:
+ * - Today: "9:58 am"    (lowercase meridian, no leading zero hour)
+ * - Yesterday: "Yesterday"
+ * - This year: "16 Apr"
+ * - Older: "16 Apr 25"
+ */
+export const formatInboxTime = (timestamp) => {
+  try {
+    const date = new Date(fixTimestamp(timestamp));
+    if (!date.getTime()) return '';
+    if (isToday(date)) {
+      // date-fns 'a' = 'AM'/'PM'; lowercase to match Pipedrive
+      return format(date, 'h:mm a').toLowerCase();
+    }
+    if (isYesterday(date)) return 'Yesterday';
+    if (isThisYear(date)) return format(date, 'd MMM');
+    return format(date, 'd MMM yy');
+  } catch {
+    return '';
+  }
+};
+
+/**
  * Full date-time format for detailed view
  */
 export const formatEmailDateTime = (timestamp) => {

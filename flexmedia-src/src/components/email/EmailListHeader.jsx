@@ -14,6 +14,7 @@ const COLUMN_META = {
   subject:     { label: "Subject",                          tooltip: null },
   attachments: { label: <Paperclip className="h-3 w-3" />, tooltip: "Attachments" },
   visibility:  { label: <Users className="h-3 w-3" />,     tooltip: "Visibility (shared / private)" },
+  avatar:      { label: null,                               tooltip: "Last actor" },
   date:        { label: "Date",                             tooltip: "Date received" },
   actions:     { label: "Project",                          tooltip: "Linked project — click to link or change" },
 };

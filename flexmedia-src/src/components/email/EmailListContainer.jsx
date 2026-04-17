@@ -36,7 +36,7 @@ export default function EmailListContainer({
   const rowVirtualizer = useVirtualizer({
     count: filteredThreads.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 57, // 56px row height + 1px border
+    estimateSize: () => 53, // 52px row height + 1px border
     overscan: 10,
   });
 
@@ -73,14 +73,15 @@ export default function EmailListContainer({
         {[...Array(12)].map((_, i) => (
           <div key={i} className="h-[52px] flex items-center px-3 gap-3 animate-pulse">
             <div className="h-3.5 w-3.5 bg-muted rounded flex-shrink-0" />
-            <div className="h-3.5 w-3.5 bg-muted rounded flex-shrink-0" />
             <div className="h-3 w-32 bg-muted rounded flex-shrink-0" />
-            <div className="flex-1 space-y-1.5">
+            <div className="h-4 w-16 bg-muted rounded-sm flex-shrink-0" />
+            <div className="flex-1 min-w-0">
               <div className="h-3 bg-muted rounded w-4/5" />
-              <div className="h-2.5 bg-muted/60 rounded w-3/5" />
             </div>
-            <div className="h-3 w-14 bg-muted rounded flex-shrink-0" />
-            <div className="h-7 w-16 bg-muted rounded-full flex-shrink-0" />
+            <div className="h-5 w-28 bg-muted rounded-full flex-shrink-0" />
+            <div className="h-5 w-5 bg-muted rounded-full flex-shrink-0" />
+            <div className="h-6 w-6 bg-muted rounded-full flex-shrink-0" />
+            <div className="h-3 w-12 bg-muted rounded flex-shrink-0" />
           </div>
         ))}
       </div>

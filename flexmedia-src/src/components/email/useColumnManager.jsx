@@ -1,13 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
+// Pipedrive-style inbox columns.
+// The row is now rendered as a single flex line that inlines: unread dot, checkbox,
+// sender, thread-count pill, label pills, subject, preview snippet, link-item hover
+// action, project pill, lock/visibility, attachment icon, actor avatar and timestamp.
+// We still keep a small set of resolvable "columns" so the sticky header + resize logic
+// continues to work — most cells now live inside the flex 'subject' column.
 const DEFAULT_COLUMNS = [
-  { id: 'checkbox',    label: '',        width: 36,  order: 0, resizable: false, minWidth: 36,  maxWidth: 36  },
-  { id: 'from',        label: 'From',    width: 160, order: 1, resizable: true,  minWidth: 100, maxWidth: 240 },
-  { id: 'subject',     label: 'Subject', width: 400, order: 2, resizable: true,  minWidth: 200, maxWidth: 9999, flex: true },
-  { id: 'attachments', label: '',        width: 28,  order: 3, resizable: false, minWidth: 28,  maxWidth: 28  },
-  { id: 'visibility',  label: '',        width: 32,  order: 4, resizable: false, minWidth: 32,  maxWidth: 32  },
-  { id: 'date',        label: 'Date',    width: 76,  order: 5, resizable: false, minWidth: 76,  maxWidth: 76  },
-  { id: 'actions',     label: 'Project', width: 150, order: 6, resizable: true, minWidth: 100, maxWidth: 220 },
+  { id: 'checkbox',    label: '',           width: 32,  order: 0, resizable: false, minWidth: 32,  maxWidth: 32  },
+  { id: 'from',        label: 'From',       width: 200, order: 1, resizable: true,  minWidth: 140, maxWidth: 280 },
+  { id: 'subject',     label: 'Subject',    width: 500, order: 2, resizable: true,  minWidth: 240, maxWidth: 9999, flex: true },
+  { id: 'actions',     label: 'Project',    width: 180, order: 3, resizable: true,  minWidth: 120, maxWidth: 240 },
+  { id: 'visibility',  label: '',           width: 36,  order: 4, resizable: false, minWidth: 36,  maxWidth: 36  },
+  { id: 'attachments', label: '',           width: 28,  order: 5, resizable: false, minWidth: 28,  maxWidth: 28  },
+  { id: 'avatar',      label: '',           width: 36,  order: 6, resizable: false, minWidth: 36,  maxWidth: 36  },
+  { id: 'date',        label: 'Date',       width: 72,  order: 7, resizable: false, minWidth: 72,  maxWidth: 72  },
 ];
 
 const STORAGE_KEY = 'email-inbox-columns';

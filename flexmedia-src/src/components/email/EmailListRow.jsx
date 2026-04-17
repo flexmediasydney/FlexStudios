@@ -1,7 +1,18 @@
 import React, { useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
-import { Paperclip, Lock, Users, Link2, Archive, Trash2, Copy, Eye, EyeOff } from "lucide-react";
+import {
+  Paperclip,
+  Lock,
+  Users,
+  Link2,
+  Archive,
+  Trash2,
+  Copy,
+  Eye,
+  EyeOff,
+  DollarSign,
+  ChevronDown,
+} from "lucide-react";
 import {
   HoverCard,
   HoverCardContent,
@@ -20,124 +31,105 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import LabelBadge from "./LabelBadge";
-import { FromHoverCard, AttachmentsHoverCard, ProjectHoverCard, VisibilityHoverCard } from "./EmailColumnHoverCard";
-import { formatEmailDate } from "./emailDateUtils";
-import { PRIORITY_LIST_STYLES, HOVER_CARD_DELAY_MS } from "./emailConstants";
+import {
+  FromHoverCard,
+  AttachmentsHoverCard,
+  ProjectHoverCard,
+} from "./EmailColumnHoverCard";
+import { formatInboxTime } from "./emailDateUtils";
+import { PRIORITY_LIST_STYLES } from "./emailConstants";
 
-// Distinct colors for multi-account indicator (left border + badge)
+// Distinct colors for the multi-account left-edge stripe
 const ACCOUNT_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#14b8a6'];
 
-// Bug fix: moved stripHtml outside component to avoid re-creating the function on every render.
-// This function applies ~30 regex replacements and is expensive — was previously defined inside
-// the component body, causing a new closure allocation per row per render.
-function stripHtml(html) {
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Deterministic tailwind color class for an actor's avatar. Pipedrive uses a
+// small palette; here we bias David -> sky, Joseph -> amber, Flex/team -> slate.
+const AVATAR_PALETTE = [
+  'bg-sky-600 text-white',
+  'bg-amber-500 text-white',
+  'bg-slate-800 text-white',
+  'bg-emerald-600 text-white',
+  'bg-violet-600 text-white',
+  'bg-rose-600 text-white',
+  'bg-indigo-600 text-white',
+  'bg-teal-600 text-white',
+];
+
+function getActorColor(name = '') {
+  const n = (name || '').toLowerCase();
+  if (n.startsWith('david')) return 'bg-sky-600 text-white';
+  if (n.startsWith('joseph') || n.startsWith('joe')) return 'bg-amber-500 text-white';
+  if (n.startsWith('flex')) return 'bg-slate-900 text-white';
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+}
+
+function getInitial(name = '') {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return '?';
+  // If email, take first alpha char; else first letter of first word
+  const first = trimmed.replace(/[^A-Za-z]/g, '').charAt(0);
+  return (first || trimmed.charAt(0)).toUpperCase();
+}
+
+// Cheap HTML -> text for previews. Kept lightweight (not the aggressive stripper
+// used for full-body extraction) since we only render ~120 chars here.
+function quickPreview(html, snippet) {
+  if (snippet && snippet.trim()) return snippet.trim();
   if (!html) return '';
-  let text = html
-    // Remove entire <style>...</style> blocks (dotAll via [\s\S])
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    // Remove entire <script>...</script> blocks
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    // Remove HTML comments (including conditional IE comments)
-    .replace(/<!--[\s\S]*?-->/g, '')
-    // Remove <head>...</head> blocks (contains meta, title, style)
-    .replace(/<head[\s\S]*?<\/head>/gi, '')
-    // Remove all remaining HTML tags
-    .replace(/<[^>]*>/g, ' ')
-    // Decode common HTML entities
-    .replace(/&nbsp;/g, ' ')
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&#x[0-9a-fA-F]+;/g, ' ')
-    .replace(/&#\d+;/g, ' ')
-    // Remove CSS class/id selectors (.class-name, #id-name)
-    .replace(/[.#][\w-]+(?:\s*[{,>+~])/g, ' ')
-    .replace(/\.[\w-]{2,}/g, ' ')
-    // Remove CSS property: value pairs (background-image: none, color: #fff, etc.)
-    .replace(/[\w-]+\s*:\s*[^;]{1,80};/g, ' ')
-    // Remove CSS values without semicolons (standalone property patterns)
-    .replace(/\b(background|background-image|color|font|border|margin|padding|display|position|width|height|overflow|text-decoration|vertical-align|line-height|opacity|z-index|float|clear|visibility|content|cursor|outline|transform|transition|animation|box-shadow|text-align|white-space|word-break|max-width|min-width|min-height|max-height|flex|grid|align-items|justify-content)\s*:\s*[^.!?]{1,100}/gi, ' ')
-    // Remove !important
-    .replace(/!important/gi, '')
-    // Remove CSS block remnants: braces, brackets
-    .replace(/[{}\[\]]/g, ' ')
-    // Remove CSS comment markers
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/\*\//g, ' ')
-    .replace(/\/\*/g, ' ')
-    // Remove CSS media queries and @rules
-    .replace(/@(media|import|charset|font-face|keyframes|supports|page)[^;{]*/gi, ' ')
-    // Remove CSS units and values patterns (0px, 100%, #hex, rgb(), etc.)
-    .replace(/\b\d+(px|em|rem|pt|%|vh|vw)\b/g, ' ')
-    .replace(/#[0-9a-fA-F]{3,8}\b/g, ' ')
-    .replace(/rgb\([^)]*\)/g, ' ')
-    .replace(/rgba\([^)]*\)/g, ' ')
-    .replace(/url\([^)]*\)/g, ' ')
-    // Remove "none" as standalone word (CSS value remnant)
-    .replace(/\bnone\b/g, ' ')
-    // Fix mojibake: UTF-8 smart quotes/dashes decoded as Latin-1
-    .replace(/\u00e2\u0080\u0099/g, "'")   // right single quote
-    .replace(/\u00e2\u0080\u0098/g, "'")   // left single quote
-    .replace(/\u00e2\u0080\u009c/g, '"')   // left double quote
-    .replace(/\u00e2\u0080\u009d/g, '"')   // right double quote
-    .replace(/\u00e2\u0080\u0093/g, '\u2013') // en dash
-    .replace(/\u00e2\u0080\u0094/g, '\u2014') // em dash
-    .replace(/\u00e2\u0080\u00a6/g, '...')  // ellipsis
-    .replace(/\u00c2\u00a0/g, ' ')          // non-breaking space
-    .replace(/\u00e2\u0080\u0099/g, "'")
-    .replace(/\u00e2\u0080\u0098/g, "'")
-    .replace(/\u00e2\u0080\u009c/g, '"')
-    .replace(/\u00e2\u0080\u009d/g, '"')
-    .replace(/\u00e2\u0080\u0093/g, '\u2013')
-    .replace(/\u00e2\u0080\u0094/g, '\u2014')
-    .replace(/\u00e2\u0080\u00a6/g, '...')
-    .replace(/\u00c2\u00a9/g, '\u00a9')
-    .replace(/\u00c2\u00a0/g, ' ')
-    // Remove any remaining mojibake clusters
-    .replace(/[\u00C0-\u00FF]{3,}/g, ' ')
-    // Remove "Email Truncated" markers
-    .replace(/Email\s*Truncat(ed|ion)[^.]*\.?/gi, ' ')
-    // Collapse whitespace
     .replace(/\s+/g, ' ')
     .trim();
-
-  // If after all stripping the text is mostly garbage (very short or mostly non-alpha), return empty
-  const alphaRatio = (text.match(/[a-zA-Z]/g) || []).length / (text.length || 1);
-  if (text.length < 5 || alphaRatio < 0.4) return '';
-
-  return text;
 }
 
-// Smart attachment filtering: exclude system junk but keep real files
 function isGarbageAttachment(att) {
   if (!att || !att.filename) return true;
   const name = (att.filename || '').toLowerCase();
   const size = att.size || 0;
-
-  // Common junk: signature images, tracking pixels, smime
   if (name.match(/^(image|icon|logo|flag|pixel|spacer|blank)/i)) return true;
   if (name.includes('signature') || name.includes('smime')) return true;
-
-  // Only filter by size if size is actually known (>0) and tiny
   if (size > 0 && size < 5120) {
-    // Still keep PDFs, docs, spreadsheets, calendars regardless of size
     if (name.match(/\.(pdf|doc|docx|xls|xlsx|csv|ics|zip|rar)$/)) return false;
     return true;
   }
-
-  // Tiny known-size images (tracking pixels etc)
   if (size > 0 && size < 50000 && name.match(/\.(gif|png|jpg|jpeg|webp)$/)) return true;
-
   return false;
 }
 
-// Bug fix: wrap in React.memo to prevent re-rendering every row when one row's selection
-// changes. The parent EmailListContainer re-renders on selection state change, which
-// previously caused ALL visible rows to re-render (each running stripHtml's 30 regexes).
-// With React.memo, only the row whose props actually changed will re-render.
+// Extract a short suburb/street label from a project title. The stored title
+// is typically "5A Josephine Cres, Moorebank" — we keep the full string but
+// the pill will CSS-truncate, so callers can just pass it through.
+function shortProjectLabel(title) {
+  if (!title) return '';
+  return title;
+}
+
+// ---------------------------------------------------------------------------
+// Row component
+// ---------------------------------------------------------------------------
+
 const EmailListRow = React.memo(function EmailListRow({
   thread,
   columns,
@@ -150,350 +142,432 @@ const EmailListRow = React.memo(function EmailListRow({
   onToggleVisibility,
   onContextMenu,
 }) {
-  const priorityConfig = PRIORITY_LIST_STYLES;
-
-  // Early guard: if thread has no messages, don't render
   if (!thread?.messages || thread.messages.length === 0) return null;
-  
+
   const priority = thread.messages[0]?.priority;
-  const priorityClass = priorityConfig[priority] || '';
+  const priorityClass = PRIORITY_LIST_STYLES[priority] || '';
   const isUnread = thread.unreadCount > 0;
   const labels = thread.messages[0]?.labels || [];
-  const attachments = thread.messages[0]?.attachments || [];
-  const displayDate = formatEmailDate(thread.lastMessage);
+  const displayDate = formatInboxTime(thread.lastMessage);
 
-  // Collect all real attachments across ALL messages in the thread
-  const allAttachments = thread.messages.flatMap(m => m.attachments || []);
-
-  const realAttachments = allAttachments.filter(att => !isGarbageAttachment(att));
+  // Attachments: search all messages, then drop signature/tracking junk
+  const realAttachments = useMemo(() => {
+    const all = thread.messages.flatMap(m => m.attachments || []);
+    return all.filter(a => !isGarbageAttachment(a));
+  }, [thread.messages]);
 
   const totalRowWidth = columns.reduce((sum, c) => sum + (c.width ?? 0), 0);
   const isShared = thread.messages[0]?.visibility === 'shared';
 
-  // Account indicator — only meaningful when multiple accounts exist (All Inboxes view)
+  // Account stripe (only when multiple accounts in view)
   const accountId = thread.email_account_id;
   const accountIndex = emailAccounts.findIndex(a => a.id === accountId);
-  const accountColor = emailAccounts.length > 1 && accountIndex >= 0 ? ACCOUNT_COLORS[accountIndex % ACCOUNT_COLORS.length] : null;
+  const accountColor = emailAccounts.length > 1 && accountIndex >= 0
+    ? ACCOUNT_COLORS[accountIndex % ACCOUNT_COLORS.length]
+    : null;
   const accountEmail = emailAccounts.length > 1 ? emailAccounts[accountIndex]?.email_address : null;
-  // Short account label: first part before @ (e.g. "info" from "info@flexmedia.sydney")
-  const accountShort = accountEmail ? accountEmail.split('@')[0] : null;
+
+  // Last message drives preview + actor avatar
+  const lastMsg = thread.messages[thread.messages.length - 1] || thread.messages[0];
+  const preview = quickPreview(lastMsg.body, lastMsg.snippet).slice(0, 180);
+  const cleanSubject = (thread.subject || '').replace(/^(Re:|Fwd?:)\s*/gi, '').trim();
+  const senderLabel = thread.from_name || thread.from_email || 'Unknown';
+
+  // Actor = whoever sent the latest message; use first initial of display name
+  const actorName = lastMsg.from_name || lastMsg.from || senderLabel;
+  const actorInitial = getInitial(actorName);
+  const actorColorCls = getActorColor(actorName);
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
           className={cn(
-            "group relative flex items-center gap-0 border-b cursor-pointer select-none",
-            "h-[56px] transition-[background-color,box-shadow] duration-150",
+            "group relative flex items-center gap-0 border-b border-border/60 cursor-pointer select-none",
+            "h-[52px] transition-[background-color,box-shadow] duration-150",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
             isSelected
-              ? "bg-blue-100/80 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.15)] hover:bg-blue-100"
-              : isUnread
-                ? "bg-blue-50/50 hover:bg-blue-100/50"
-                : cn("hover:bg-muted/60", priorityClass)
+              ? "bg-blue-50 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.2)] hover:bg-blue-100/80"
+              : "hover:bg-muted/40",
+            !isSelected && priorityClass
           )}
           style={{
             minWidth: `${totalRowWidth}px`,
-            borderLeftWidth: accountColor || isSelected || (isUnread && !isSelected) ? '3px' : undefined,
-            borderLeftColor: isSelected ? '#2563eb' : (isUnread && !isSelected) ? '#3b82f6' : (accountColor || undefined),
+            borderLeftWidth: accountColor ? '3px' : undefined,
+            borderLeftColor: accountColor || undefined,
           }}
           role="row"
           tabIndex={0}
           aria-selected={isSelected}
-          aria-label={`${isUnread ? 'Unread: ' : ''}${thread.from_name || thread.from_email || 'Unknown sender'} — ${thread.subject || 'No subject'}`}
+          aria-label={`${isUnread ? 'Unread: ' : ''}${senderLabel} — ${cleanSubject || 'No subject'}`}
           onClick={() => onOpen(thread)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(thread); }
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onOpen(thread);
+            }
           }}
         >
-      {/* Checkbox */}
-      {columns.some(c => c.id === 'checkbox') && (() => {
-        const col = columns.find(c => c.id === 'checkbox');
-        const w = col?.width ?? 36;
-        return (
-          <div
-            style={{ width: `${w}px`, minWidth: `${w}px` }}
-            className="flex-shrink-0 flex items-center justify-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <input
-              type="checkbox"
-              checked={isSelected}
-              onChange={() => onSelect(thread.threadId)}
-              className="h-3.5 w-3.5 cursor-pointer rounded border accent-blue-600"
-              aria-label={`Select email: ${thread.subject || 'no subject'}`}
-            />
-          </div>
-        );
-      })()}
-
-      {/* From */}
-      {columns.some(c => c.id === 'from') && (() => {
-        const col = columns.find(c => c.id === 'from');
-        const w = col?.width ?? 140;
-        return (
-        <div style={{ width: `${w}px`, minWidth: `${w}px` }} className="flex-shrink-0 px-2 text-left overflow-hidden">
-           <FromHoverCard email={thread.from_email} name={thread.from_name}>
-             <div
-               className={cn(
-                 "truncate text-[13px] cursor-help leading-tight",
-                 isUnread ? "font-semibold text-foreground" : "font-normal text-muted-foreground"
-               )}
-               title={thread.from_name ? `${thread.from_name} <${thread.from_email}>` : thread.from_email}
-             >
-               {thread.from_name || thread.from_email}
-             </div>
-           </FromHoverCard>
-           {thread.agent_name && (
-             <span
-               className="inline-flex items-center gap-0.5 mt-0.5 text-[10px] font-medium text-violet-700 bg-violet-50 rounded px-1.5 py-0 leading-4 truncate max-w-full"
-               title={thread.agency_name ? `${thread.agent_name} @ ${thread.agency_name}` : thread.agent_name}
-             >
-               {thread.agent_name}{thread.agency_name ? ` \u00b7 ${thread.agency_name}` : ''}
-             </span>
-           )}
-           {/* Account indicator — shows which inbox this email belongs to (multi-account) */}
-           {accountShort && !thread.agent_name && (
-             <span
-               className="inline-flex items-center mt-0.5 text-[9px] font-semibold rounded px-1.5 py-0 leading-4 truncate max-w-full opacity-60"
-               style={{ color: accountColor, backgroundColor: accountColor ? `${accountColor}10` : undefined }}
-               title={accountEmail}
-             >
-               {accountShort}
-             </span>
-           )}
-        </div>
-        );
-      })()}
-
-      {/* Subject + Labels + Preview */}
-      {columns.some(c => c.id === 'subject') && (() => {
-        const col = columns.find(c => c.id === 'subject');
-        const w = col?.width ?? 400;
-        const lastMsg = thread.messages[thread.messages.length - 1] || thread.messages[0];
-        const bodyText = stripHtml(lastMsg.body);
-        const preview = bodyText.substring(0, 200);
-        const cleanSubject = thread.subject?.replace(/^(Re:|Fwd?:)\s*/gi, '').trim();
-        return (
-          <div
-            style={{ width: `${w}px`, minWidth: `${w}px` }}
-            className="flex-shrink-0 px-2 overflow-hidden flex flex-col justify-center gap-0.5"
-          >
-            {/* Top line: unread dot + thread count + project link + subject */}
-            <div className="flex items-center gap-1.5 min-w-0">
-              {/* Unread dot */}
-              {isUnread && (
-                <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-blue-600" />
-              )}
-              {/* Thread count badge */}
-              {thread.messages.length > 1 && (
-                <span className={cn(
-                  "flex-shrink-0 text-[10px] font-semibold rounded-full px-1.5 leading-[18px] min-w-[20px] text-center tabular-nums",
-                  isUnread
-                    ? "text-blue-700 bg-blue-100 ring-1 ring-blue-200"
-                    : "text-muted-foreground bg-muted/80"
-                )}>
-                  {thread.messages.length}
-                </span>
-              )}
-              {/* Project link icon */}
-                {thread.project_id && (
-                  <ProjectHoverCard projectTitle={thread.project_title} projectId={thread.project_id}>
-                    <span className="flex-shrink-0 cursor-help p-1 rounded-lg bg-emerald-50/60 hover:bg-emerald-100/60 transition-colors">
-                      <Link2 className="h-4 w-4 text-emerald-600" />
-                    </span>
-                  </ProjectHoverCard>
-                )}
-              {/* Subject text */}
-              <span className={cn(
-                  "truncate text-[13px] leading-snug cursor-default min-w-0 block",
-                  isUnread ? "font-semibold text-foreground" : "font-normal text-foreground/70"
-                )}
-                title={cleanSubject}
+          {/* ---- Checkbox + unread dot rail -------------------------------- */}
+          {columns.some(c => c.id === 'checkbox') && (() => {
+            const col = columns.find(c => c.id === 'checkbox');
+            const w = col?.width ?? 32;
+            return (
+              <div
+                style={{ width: `${w}px`, minWidth: `${w}px` }}
+                className="flex-shrink-0 flex items-center justify-center relative"
+                onClick={(e) => e.stopPropagation()}
               >
-                {cleanSubject || <em className="text-muted-foreground/40 not-italic">(no subject)</em>}
-              </span>
-            </div>
+                {/* Unread dot overlaps slightly left of the checkbox */}
+                {isUnread && (
+                  <span
+                    className="absolute left-1 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-blue-600"
+                    aria-label="unread"
+                  />
+                )}
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => onSelect(thread.threadId)}
+                  className="h-3.5 w-3.5 cursor-pointer rounded border accent-blue-600"
+                  aria-label={`Select email: ${cleanSubject || 'no subject'}`}
+                />
+              </div>
+            );
+          })()}
 
-            {/* Bottom line: compact label chips + preview text */}
-            <div className="flex items-center gap-1.5 min-w-0">
-              {/* Compact label chips — tiny, inline, non-overflowing */}
-              {labels.length > 0 && (
-                <HoverCard openDelay={400}>
-                  <HoverCardTrigger asChild>
-                    <div className="flex items-center gap-1 flex-shrink-0 cursor-pointer">
-                      {labels.slice(0, 3).map((label) => {
-                        const color = labelData.find(l => l.name === label)?.color || '#6b7280';
-                        return (
-                          <span
-                            key={label}
-                            className="inline-block px-2 rounded-full text-[10px] font-bold text-white leading-5 whitespace-nowrap shadow-sm"
-                            style={{ backgroundColor: color }}
-                            title={label}
-                          >
-                            {label}
-                          </span>
-                        );
-                      })}
-                      {labels.length > 3 && (
-                        <span className="text-[10px] text-muted-foreground/70 font-semibold">+{labels.length - 3}</span>
+          {/* ---- Sender (bold when unread) + thread count pill ------------ */}
+          {columns.some(c => c.id === 'from') && (() => {
+            const col = columns.find(c => c.id === 'from');
+            const w = col?.width ?? 200;
+            return (
+              <div
+                style={{ width: `${w}px`, minWidth: `${w}px` }}
+                className="flex-shrink-0 px-3 flex items-center gap-1.5 overflow-hidden"
+              >
+                <FromHoverCard email={thread.from_email} name={thread.from_name}>
+                  <span
+                    className={cn(
+                      "truncate text-[13px] leading-tight cursor-help",
+                      isUnread
+                        ? "font-semibold text-foreground"
+                        : "font-normal text-foreground/70"
+                    )}
+                    title={thread.from_name
+                      ? `${thread.from_name} <${thread.from_email}>`
+                      : thread.from_email}
+                  >
+                    {senderLabel}
+                  </span>
+                </FromHoverCard>
+                {thread.messages.length > 1 && (
+                  <span
+                    className={cn(
+                      "flex-shrink-0 text-[11px] rounded-full px-1.5 leading-[18px] min-w-[20px] text-center tabular-nums font-medium",
+                      isUnread
+                        ? "bg-blue-100 text-blue-700 ring-1 ring-blue-200/70"
+                        : "bg-muted/70 text-muted-foreground"
+                    )}
+                    title={`${thread.messages.length} messages`}
+                  >
+                    {thread.messages.length}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ---- Labels + Subject + Preview (flex) ------------------------ */}
+          {columns.some(c => c.id === 'subject') && (() => {
+            const col = columns.find(c => c.id === 'subject');
+            const w = col?.width ?? 500;
+            return (
+              <div
+                style={{ width: `${w}px`, minWidth: `${w}px` }}
+                className="flex-shrink-0 pr-3 overflow-hidden min-w-0"
+              >
+                <div className="flex items-center gap-1.5 min-w-0 w-full">
+                  {/* Inline label pills — tight uppercase Pipedrive style */}
+                  {labels.length > 0 && (
+                    <HoverCard openDelay={400}>
+                      <HoverCardTrigger asChild>
+                        <div className="flex items-center gap-1 flex-shrink-0 cursor-pointer">
+                          {labels.slice(0, 3).map((label) => {
+                            const color = labelData.find(l => l.name === label)?.color || '#6b7280';
+                            return (
+                              <span
+                                key={label}
+                                className="inline-block px-1.5 py-0.5 rounded-sm text-[10px] font-semibold uppercase tracking-wide whitespace-nowrap max-w-[140px] truncate"
+                                style={{
+                                  backgroundColor: `${color}1a`, // 10% tint
+                                  color,
+                                }}
+                                title={label}
+                              >
+                                {label}
+                              </span>
+                            );
+                          })}
+                          {labels.length > 3 && (
+                            <span className="text-[10px] text-muted-foreground/70 font-semibold flex-shrink-0">
+                              +{labels.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      </HoverCardTrigger>
+                      <HoverCardContent side="top" align="start" className="w-56 p-3">
+                        <p className="text-[11px] font-bold text-muted-foreground mb-2 uppercase tracking-wide">
+                          Labels
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {labels.map((label) => (
+                            <LabelBadge
+                              key={label}
+                              label={label}
+                              color={labelData.find(l => l.name === label)?.color || '#6b7280'}
+                            />
+                          ))}
+                        </div>
+                      </HoverCardContent>
+                    </HoverCard>
+                  )}
+
+                  {/* Subject + preview on one line, preview muted and truncated */}
+                  <span
+                    className={cn(
+                      "truncate text-[13px] leading-tight min-w-0 block",
+                      isUnread ? "font-semibold text-foreground" : "font-normal text-foreground/80"
+                    )}
+                    title={cleanSubject}
+                  >
+                    {cleanSubject || (
+                      <em className="text-muted-foreground/40 not-italic">(no subject)</em>
+                    )}
+                    {preview && (
+                      <span className="text-muted-foreground/60 font-normal ml-1.5">
+                        &mdash; {preview}
+                      </span>
+                    )}
+                  </span>
+
+                  {/* Hover-only "Link item" quick action */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onLinkProject?.(thread);
+                    }}
+                    className="ml-auto flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-background"
+                    title="Link item to project"
+                  >
+                    <Link2 className="h-3 w-3" />
+                    Link item
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ---- Project pill (outlined, $ icon) -------------------------- */}
+          {columns.some(c => c.id === 'actions') && (() => {
+            const col = columns.find(c => c.id === 'actions');
+            const w = col?.width ?? 180;
+            return (
+              <div
+                style={{ width: `${w}px`, minWidth: `${w}px` }}
+                className="flex-shrink-0 px-2 flex items-center justify-start"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {thread.project_id ? (
+                  <ProjectHoverCard projectTitle={thread.project_title} projectId={thread.project_id}>
+                    <button
+                      onClick={() => onLinkProject?.(thread)}
+                      className="group/proj inline-flex items-center gap-1 max-w-full px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 transition-colors"
+                      title={`Linked: ${thread.project_title} (click to change)`}
+                    >
+                      <DollarSign className="h-3 w-3 flex-shrink-0" />
+                      <span className="text-[11px] font-medium truncate">
+                        {shortProjectLabel(thread.project_title)}
+                      </span>
+                    </button>
+                  </ProjectHoverCard>
+                ) : (
+                  <button
+                    onClick={() => onLinkProject?.(thread)}
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded-full border border-dashed border-muted-foreground/30"
+                    title="Link to project"
+                  >
+                    <DollarSign className="h-3 w-3" />
+                    Link
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ---- Visibility / lock dropdown ------------------------------- */}
+          {columns.some(c => c.id === 'visibility') && (() => {
+            const col = columns.find(c => c.id === 'visibility');
+            const w = col?.width ?? 36;
+            return (
+              <div
+                style={{ width: `${w}px`, minWidth: `${w}px` }}
+                className="flex-shrink-0 flex items-center justify-center"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      className={cn(
+                        "inline-flex items-center gap-0.5 rounded-md px-1.5 py-1 transition-colors",
+                        isShared
+                          ? "text-blue-600 hover:bg-blue-100/70"
+                          : "text-muted-foreground/60 hover:text-foreground hover:bg-muted/60"
                       )}
-                    </div>
-                  </HoverCardTrigger>
-                  <HoverCardContent side="top" align="start" className="w-56 p-3">
-                    <p className="text-[11px] font-bold text-muted-foreground mb-2 uppercase tracking-wide">Labels</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {labels.map((label) => (
-                        <LabelBadge
-                          key={label}
-                          label={label}
-                          color={labelData.find(l => l.name === label)?.color || '#6b7280'}
-                        />
-                      ))}
-                    </div>
-                  </HoverCardContent>
-                </HoverCard>
-              )}
-              {/* Preview snippet */}
-              {preview && (
-                <span className="text-[12px] text-muted-foreground/60 truncate min-w-0" title={preview}>
-                  {preview}
-                </span>
-              )}
-            </div>
-          </div>
-        );
-      })()}
+                      title={isShared ? "Shared with team" : "Private to you"}
+                      aria-label={isShared ? "Visibility: shared" : "Visibility: private"}
+                    >
+                      {isShared ? <Users className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+                      <ChevronDown className="h-3 w-3 opacity-60" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleVisibility?.(thread, 'shared');
+                      }}
+                    >
+                      <Users className="h-3.5 w-3.5 mr-2 text-blue-600" />
+                      Share with team
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleVisibility?.(thread, 'private');
+                      }}
+                    >
+                      <Lock className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                      Mark as confidential
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onLinkProject?.(thread);
+                      }}
+                    >
+                      <Link2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                      Link item
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            );
+          })()}
 
-      {/* Attachments */}
-      {columns.some(c => c.id === 'attachments') && (() => {
-        const col = columns.find(c => c.id === 'attachments');
-        const w = col?.width ?? 28;
-        return (
-          <div style={{ width: `${w}px`, minWidth: `${w}px` }} className="flex-shrink-0 flex items-center justify-center">
-            {realAttachments.length > 0 && (
-              <AttachmentsHoverCard attachments={realAttachments}>
-                <button
-                  className="relative w-8 h-8 rounded-lg flex items-center justify-center hover:bg-muted/80 transition-colors"
-                        onClick={(e) => e.stopPropagation()}
-                        aria-label={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
-                        title={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
-                >
-                  <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                  {realAttachments.length > 1 && (
-                    <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] rounded-full bg-slate-500 text-white text-[9px] font-bold flex items-center justify-center leading-none px-0.5">
-                      {realAttachments.length}
-                    </span>
-                  )}
-                </button>
-              </AttachmentsHoverCard>
-            )}
-          </div>
-        );
-      })()}
+          {/* ---- Attachment paperclip ------------------------------------- */}
+          {columns.some(c => c.id === 'attachments') && (() => {
+            const col = columns.find(c => c.id === 'attachments');
+            const w = col?.width ?? 28;
+            return (
+              <div
+                style={{ width: `${w}px`, minWidth: `${w}px` }}
+                className="flex-shrink-0 flex items-center justify-center"
+              >
+                {realAttachments.length > 0 && (
+                  <AttachmentsHoverCard attachments={realAttachments}>
+                    <button
+                      className="relative w-7 h-7 rounded-md flex items-center justify-center hover:bg-muted/70 transition-colors"
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
+                      title={`${realAttachments.length} attachment${realAttachments.length !== 1 ? 's' : ''}`}
+                    >
+                      <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
+                      {realAttachments.length > 1 && (
+                        <span className="absolute -top-0.5 -right-0.5 min-w-[13px] h-[13px] rounded-full bg-slate-500 text-white text-[9px] font-bold flex items-center justify-center leading-none px-0.5">
+                          {realAttachments.length}
+                        </span>
+                      )}
+                    </button>
+                  </AttachmentsHoverCard>
+                )}
+              </div>
+            );
+          })()}
 
-      {/* Visibility — clickable toggle */}
-      {columns.some(c => c.id === 'visibility') && (() => {
-        const col = columns.find(c => c.id === 'visibility');
-        const w = col?.width ?? 32;
-        return (
-          <div style={{ width: `${w}px`, minWidth: `${w}px` }} className="flex-shrink-0 flex items-center justify-center">
-            <TooltipProvider delayDuration={400}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  className={cn(
-                    "w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150 active:scale-95",
-                    isShared
-                      ? "text-blue-600 hover:bg-blue-100/60 bg-blue-50/30"
-                      : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/40"
-                  )}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleVisibility?.(thread, isShared ? 'private' : 'shared');
-                  }}
-                  aria-label={isShared ? "Make private" : "Share with team"}
-                  title={isShared ? "Shared with team" : "Private to you"}
-                >
-                  {isShared
-                    ? <Users className="h-4 w-4" />
-                    : <Lock className="h-4 w-4" />
-                  }
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left" className="text-xs max-w-[200px]">
-                {isShared
-                  ? "🌐 Shared — visible in linked projects"
-                  : "🔒 Private — only you can see"}
-              </TooltipContent>
-            </Tooltip>
-            </TooltipProvider>
-          </div>
-        );
-      })()}
+          {/* ---- Actor avatar --------------------------------------------- */}
+          {columns.some(c => c.id === 'avatar') && (() => {
+            const col = columns.find(c => c.id === 'avatar');
+            const w = col?.width ?? 36;
+            return (
+              <div
+                style={{ width: `${w}px`, minWidth: `${w}px` }}
+                className="flex-shrink-0 flex items-center justify-center"
+              >
+                <TooltipProvider delayDuration={400}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        className={cn(
+                          "w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold",
+                          actorColorCls
+                        )}
+                        aria-label={`Last actor: ${actorName}`}
+                      >
+                        {actorInitial}
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="left" className="text-xs">
+                      {actorName}
+                      {accountEmail && (
+                        <span className="block text-muted-foreground/70 text-[10px] mt-0.5">
+                          via {accountEmail}
+                        </span>
+                      )}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+            );
+          })()}
 
-      {/* Date */}
-      {columns.some(c => c.id === 'date') && (() => {
-        const col = columns.find(c => c.id === 'date');
-        const w = col?.width ?? 76;
-        return (
-          <div style={{ width: `${w}px`, minWidth: `${w}px` }} className="flex-shrink-0 px-2 flex items-center justify-end">
-            <TooltipProvider delayDuration={600}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className={cn(
-                    "text-[11px] whitespace-nowrap tabular-nums cursor-default",
-                    isUnread ? "font-semibold text-foreground" : "font-normal text-muted-foreground/60"
-                  )}>
-                    {displayDate}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="left" className="text-xs">
-                  {thread.lastMessage ? new Date(thread.lastMessage).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', dateStyle: 'medium', timeStyle: 'short' }) : 'Unknown date'}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
-        );
-      })()}
-
-      {/* Actions column — wired to onLinkProject */}
-      {columns.some(c => c.id === 'actions') && (() => {
-        const col = columns.find(c => c.id === 'actions');
-        const w = col?.width ?? 210;
-        return (
-          <div
-            style={{ width: `${w}px`, minWidth: `${w}px` }}
-            className="flex-shrink-0 px-2 flex items-center justify-between gap-2"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Project name or link button */}
-            <div className="flex-1 min-w-0 overflow-hidden flex items-center">
-              {thread.project_id ? (
-                <button
-                  onClick={() => onLinkProject?.(thread)}
-                  className="flex items-center gap-1.5 min-w-0 group/proj hover:bg-muted/50 rounded px-1.5 py-0.5 -mx-1.5 transition-colors"
-                  title={`Linked: ${thread.project_title} (click to change)`}
-                >
-                  <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span className="text-[12px] font-medium text-foreground/75 truncate group-hover/proj:text-foreground">
-                    {thread.project_title}
-                  </span>
-                </button>
-              ) : (
-                <button
-                  onClick={() => onLinkProject?.(thread)}
-                  className="text-[11px] text-muted-foreground/40 hover:text-muted-foreground flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Link to project"
-                >
-                  <Link2 className="h-3 w-3" />
-                  Link
-                </button>
-              )}
-            </div>
-          </div>
-        );
-      })()}
+          {/* ---- Timestamp (right) ---------------------------------------- */}
+          {columns.some(c => c.id === 'date') && (() => {
+            const col = columns.find(c => c.id === 'date');
+            const w = col?.width ?? 72;
+            return (
+              <div
+                style={{ width: `${w}px`, minWidth: `${w}px` }}
+                className="flex-shrink-0 px-2 flex items-center justify-end"
+              >
+                <TooltipProvider delayDuration={600}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className={cn(
+                          "text-[11px] tabular-nums whitespace-nowrap cursor-default",
+                          isUnread
+                            ? "font-semibold text-foreground"
+                            : "font-normal text-muted-foreground/70"
+                        )}
+                      >
+                        {displayDate}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="left" className="text-xs">
+                      {thread.lastMessage
+                        ? new Date(thread.lastMessage).toLocaleString('en-AU', {
+                            timeZone: 'Australia/Sydney',
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          })
+                        : 'Unknown date'}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+            );
+          })()}
         </div>
       </ContextMenuTrigger>
 
@@ -503,19 +577,24 @@ const EmailListRow = React.memo(function EmailListRow({
           Open thread
         </ContextMenuItem>
         <ContextMenuItem
-          onClick={(e) => { e.stopPropagation(); onToggleVisibility?.(thread, isShared ? 'private' : 'shared'); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleVisibility?.(thread, isShared ? 'private' : 'shared');
+          }}
         >
           {isShared
             ? <EyeOff className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
-            : <Eye className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
-          }
+            : <Eye className="h-3.5 w-3.5 mr-2 text-muted-foreground" />}
           {isShared ? "Make private" : "Share with team"}
         </ContextMenuItem>
         <ContextMenuItem
-          onClick={(e) => { e.stopPropagation(); onLinkProject?.(thread); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onLinkProject?.(thread);
+          }}
         >
           <Link2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
-          {thread.project_id ? `Change project` : "Link to project"}
+          {thread.project_id ? "Change project" : "Link to project"}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
@@ -529,14 +608,20 @@ const EmailListRow = React.memo(function EmailListRow({
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
-          onClick={(e) => { e.stopPropagation(); onContextMenu?.(thread, 'archive'); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onContextMenu?.(thread, 'archive');
+          }}
           className="text-muted-foreground"
         >
           <Archive className="h-3.5 w-3.5 mr-2" />
           Archive
         </ContextMenuItem>
         <ContextMenuItem
-          onClick={(e) => { e.stopPropagation(); onContextMenu?.(thread, 'delete'); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onContextMenu?.(thread, 'delete');
+          }}
           className="text-red-600 focus:text-red-600"
         >
           <Trash2 className="h-3.5 w-3.5 mr-2" />
