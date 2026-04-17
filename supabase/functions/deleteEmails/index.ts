@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 async function refreshAccessToken(account: any, entities: any): Promise<string> {
   const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
@@ -58,7 +58,7 @@ async function permanentDeleteInGmail(gmailMessageId: string, accessToken: strin
   return { ok: res.ok, skipped: false };
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('deleteEmails', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

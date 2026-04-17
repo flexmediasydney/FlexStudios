@@ -1,6 +1,6 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
-Deno.serve(async (req) => {
+serveWithAudit('setEmailVisibility', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {

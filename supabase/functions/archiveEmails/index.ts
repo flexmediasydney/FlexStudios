@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 async function refreshAccessToken(account: any, entities: any): Promise<string> {
   const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
@@ -49,7 +49,7 @@ async function archiveInGmail(gmailMessageId: string, accessToken: string): Prom
   return { ok: res.ok, skipped: false };
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('archiveEmails', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

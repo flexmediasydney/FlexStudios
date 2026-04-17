@@ -18,7 +18,7 @@
  * Auth: master_admin users or service-role calls.
  */
 
-import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 import {
   cleanEmailList,
   pickPrimaryEmail,
@@ -31,21 +31,19 @@ import {
 const PAGE_SIZE = 500;
 const WALL_BUDGET_MS = 55_000;
 
-Deno.serve(async (req) => {
+serveWithAudit('cleanAgentEmails', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
 
     // Auth: master_admin user or service-role
     const user = await getUserFromReq(req).catch(() => null);
-    if (!user) {
-      const authHeader = req.headers.get('authorization') || '';
-      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-      if (!serviceKey || !authHeader.includes(serviceKey)) {
-        return errorResponse('Authentication required', 401);
+    const isServiceRole = user?.id === '__service_role__';
+    if (!isServiceRole) {
+      if (!user) return errorResponse('Authentication required', 401);
+      if (user.role !== 'master_admin') {
+        return errorResponse('Forbidden: Master admin access required', 403);
       }
-    } else if (user.role !== 'master_admin') {
-      return errorResponse('Forbidden: Master admin access required', 403);
     }
 
     let body: Record<string, unknown> = {};
