@@ -39,15 +39,21 @@ serveWithAudit('calculateEmployeeUtilization', async (req) => {
       }
     };
 
-    // Fetch data in parallel with filtered queries
+    // Fetch data in parallel with filtered queries.
+    // entities.User.get() throws when no row exists ("Cannot coerce the result to a
+    // single JSON object") — wrap in catch so a missing user surfaces as 404 rather
+    // than a 500 that masks the real issue.
     const [timeLogs, employeeRoleResult, userData] = await Promise.all([
       retryWithBackoff(() => entities.TaskTimeLog.filter({ user_id: userId }, null, 1000)),
       retryWithBackoff(() => entities.EmployeeRole.filter({ user_id: userId }).then((items: any[]) => items[0])),
-      retryWithBackoff(() => entities.User.get(userId)),
+      retryWithBackoff(() => entities.User.get(userId)).catch(() => null),
     ]);
 
     const employeeRole = employeeRoleResult;
 
+    if (!userData) {
+      return errorResponse('User not found', 404);
+    }
     if (!employeeRole) {
       return errorResponse('Employee role not found', 404);
     }

@@ -233,28 +233,40 @@ async function createNotificationForUser(
     if (dup) return { skipped: true, reason: 'duplicate' };
   }
 
-  await entities.Notification.create({
-    user_id:          params.userId,
-    type:             params.type,
-    category,
-    severity,
-    title:            params.title,
-    message:          params.message,
-    project_id:       params.projectId   || null,
-    project_name:     params.projectName || null,
-    entity_type:      params.entityType  || null,
-    entity_id:        params.entityId    || null,
-    cta_url:          params.ctaUrl      || null,
-    cta_label:        params.ctaLabel    || typeConfig.cta_label,
-    cta_params:       params.ctaParams   ? JSON.stringify(params.ctaParams) : null,
-    is_read:          false,
-    is_dismissed:     false,
-    source:           params.source      || 'system',
-    source_rule_id:   params.sourceRuleId || null,
-    source_user_id:   params.sourceUserId || null,
-    idempotency_key:  params.idempotencyKey || null,
-    created_date:     new Date().toISOString(),
-  });
+  try {
+    await entities.Notification.create({
+      user_id:          params.userId,
+      type:             params.type,
+      category,
+      severity,
+      title:            params.title,
+      message:          params.message,
+      project_id:       params.projectId   || null,
+      project_name:     params.projectName || null,
+      entity_type:      params.entityType  || null,
+      entity_id:        params.entityId    || null,
+      cta_url:          params.ctaUrl      || null,
+      cta_label:        params.ctaLabel    || typeConfig.cta_label,
+      cta_params:       params.ctaParams   ? JSON.stringify(params.ctaParams) : null,
+      is_read:          false,
+      is_dismissed:     false,
+      source:           params.source      || 'system',
+      source_rule_id:   params.sourceRuleId || null,
+      source_user_id:   params.sourceUserId || null,
+      idempotency_key:  params.idempotencyKey || null,
+      created_date:     new Date().toISOString(),
+    });
+  } catch (err: any) {
+    // FK violation on user_id (or project_id) means the caller passed a stale id.
+    // That's a caller bug, not a server error — log it and skip gracefully so
+    // notification batches don't fail wholesale on one bad target.
+    const msg = String(err?.message || '');
+    if (msg.includes('foreign key') || msg.includes('violates')) {
+      console.warn('notificationService: FK skip', { userId: params.userId, type: params.type, msg });
+      return { skipped: true, reason: 'invalid_target' };
+    }
+    throw err;
+  }
 
   return { created: true };
 }

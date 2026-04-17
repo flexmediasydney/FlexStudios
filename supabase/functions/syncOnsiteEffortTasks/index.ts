@@ -17,8 +17,10 @@ serveWithAudit('syncOnsiteEffortTasks', async (req) => {
 
     if (!project_id) return jsonResponse({ success: false, error: 'project_id required' }, 400);
 
+    // entities.Project.get() throws on missing row ("Cannot coerce the result to a
+    // single JSON object"). Catch it so a stale/wrong project_id is a 404, not a 500.
     const [project, allProducts, allPackages] = await Promise.all([
-      entities.Project.get(project_id),
+      entities.Project.get(project_id).catch(() => null),
       entities.Product.filter({}, null, 1000),
       entities.Package.filter({}, null, 1000),
     ]);

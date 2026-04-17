@@ -10,6 +10,13 @@ serveWithAudit('projectPresenceHeartbeat', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
 
+    // Presence is per-real-user. Service-role callers (cron / cross-function calls)
+    // have no UUID and would crash the uuid column on insert — short-circuit cleanly.
+    const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    if (!user.id || !UUID_RE.test(String(user.id))) {
+      return jsonResponse({ success: true, viewers: [], skipped: 'service_role' });
+    }
+
     const body = await req.json().catch(() => ({}));
     const { project_id, action = 'heartbeat' } = body;
 
