@@ -97,7 +97,7 @@ export default function PropertyDetails() {
           .eq("property_key", propertyKey)
           .order("listed_date", { ascending: false, nullsFirst: false }),
         api._supabase.from("projects")
-          .select("id, property_address, status, shoot_date, created_at, primary_owner_name, agent_name, agency_id, package_name, photographer_name")
+          .select("id, property_address, status, shoot_date, created_at, project_owner_name, agent_name, agency_id, tonomo_package, photographer_name")
           .eq("property_key", propertyKey)
           .order("shoot_date", { ascending: false, nullsFirst: false }),
       ]);
@@ -428,7 +428,7 @@ export default function PropertyDetails() {
                   <div className="flex items-start gap-2">
                     <Tag className="h-3 w-3 text-violet-600 mt-1 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">{p.package_name || "Project"}</p>
+                      <p className="text-xs font-medium truncate">{p.tonomo_package || "Project"}</p>
                       <p className="text-[10px] text-muted-foreground">
                         {p.agent_name && <>{p.agent_name} · </>}
                         {fmtDate(p.shoot_date || p.created_at)}
@@ -537,7 +537,7 @@ function TimelineCard({ event }) {
           <Camera className="h-3.5 w-3.5 text-violet-600 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-xs font-medium">
-              FlexStudios shoot — {p.package_name || "Project"}
+              FlexStudios shoot — {p.tonomo_package || "Project"}
             </p>
             <p className="text-[11px] text-muted-foreground mt-0.5">
               {p.agent_name && <>Agent: {p.agent_name} · </>}

@@ -120,7 +120,7 @@ export default function PropertyIntelligencePanel({
       // 3. All projects at this property
       const projRes = await api._supabase
         .from("projects")
-        .select("id, property_address, status, shoot_date, created_at, primary_owner_name, agent_name, agency_id")
+        .select("id, property_address, status, shoot_date, created_at, project_owner_name, agent_name, agency_id")
         .eq("property_key", propertyKey)
         .order("shoot_date", { ascending: false, nullsFirst: false });
       if (projRes.error) throw projRes.error;
