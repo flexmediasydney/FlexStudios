@@ -263,6 +263,10 @@ serveWithAudit('calculateProjectTaskDeadlines', async (req) => {
       return jsonResponse({ _version: 'v2.1', _fn: 'calculateProjectTaskDeadlines', _ts: '2026-03-17' });
     }
 
+    // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Authentication required', 401, req);
+
     const { project_id, trigger_event, dry_run = false } = body;
 
     if (!project_id) return jsonResponse({ error: 'project_id is required' }, 400);

@@ -4,6 +4,10 @@ Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {
+    // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Authentication required', 401, req);
+
     const admin = getAdminClient();
     const entities = createEntities(admin);
 

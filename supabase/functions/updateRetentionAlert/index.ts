@@ -1,4 +1,4 @@
-import { handleCors, jsonResponse, getAdminClient } from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, getAdminClient, getUserFromReq, errorResponse } from '../_shared/supabase.ts';
 
 const VALID_STATUSES = ['identified', 'investigating', 'passed', 'checked', 'red_flag'];
 const RESOLVED_STATUSES = ['passed', 'checked', 'red_flag'];
@@ -8,6 +8,10 @@ Deno.serve(async (req) => {
   if (cors) return cors;
 
   try {
+    // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Authentication required', 401, req);
+
     const body = await req.json().catch(() => null);
     if (!body || !body.action) {
       return jsonResponse({ error: 'Missing action field' }, 400, req);

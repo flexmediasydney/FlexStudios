@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 // ─── NOTIFICATION HELPERS ─────────────────────────────────────────────
 const _NOTIF_ROLES: Record<string, string[]> = {
@@ -96,6 +96,11 @@ Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {
+  // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+  // Accepts user session JWT or service-role (cron).
+  const user = await getUserFromReq(req);
+  if (!user) return errorResponse('Authentication required', 401, req);
+
   const admin = getAdminClient();
   const entities = createEntities(admin);
   const now = toSydney(new Date());

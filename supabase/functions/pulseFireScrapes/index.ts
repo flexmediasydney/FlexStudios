@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 /**
  * Pulse Fire Scrapes — Lightweight cron dispatcher (v3 DB-driven config)
@@ -67,6 +67,10 @@ Deno.serve(async (req) => {
     if (body?._health_check) {
       return jsonResponse({ _version: 'v3.0', _fn: 'pulseFireScrapes', _arch: 'db-driven' });
     }
+
+    // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Authentication required', 401, req);
 
     const { source_id } = body;
 

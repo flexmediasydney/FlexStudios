@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 import {
   cleanEmailList,
   pickPrimaryEmail,
@@ -272,6 +272,11 @@ Deno.serve(async (req) => {
     if (body?._health_check) {
       return jsonResponse({ _version: 'v2.0', _fn: 'pulseDataSync', _arch: 'rea-only-2-actor', hasToken: !!APIFY_TOKEN });
     }
+
+    // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+    // Accepts user JWT or service-role (cron via pulseFireScrapes/pulseScheduledScrape).
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Authentication required', 401, req);
 
     if (!APIFY_TOKEN) {
       return errorResponse('APIFY_TOKEN not configured. Set it in Supabase Edge Function secrets.', 400);

@@ -1,4 +1,4 @@
-import { handleCors, jsonResponse, getAdminClient } from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, getAdminClient, getUserFromReq, errorResponse } from '../_shared/supabase.ts';
 import { domainGet, transformDomainListing, addressMatch, getSimulatedListings, computeRiskLevel } from '../_shared/domain.ts';
 
 Deno.serve(async (req) => {
@@ -6,6 +6,11 @@ Deno.serve(async (req) => {
   if (cors) return cors;
 
   try {
+    // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+    // Accepts user JWT or service-role (cron).
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Authentication required', 401, req);
+
     const body = await req.json().catch(() => ({}));
     const singleAgentId = body.agent_id || null;
     const admin = getAdminClient();

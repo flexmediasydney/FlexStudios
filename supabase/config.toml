@@ -386,3 +386,392 @@ s3_region = "env(S3_REGION)"
 s3_access_key = "env(S3_ACCESS_KEY)"
 # Configures AWS_SECRET_ACCESS_KEY for S3 bucket
 s3_secret_key = "env(S3_SECRET_KEY)"
+
+# ─── Per-function deploy config ──────────────────────────────────────────────
+# verify_jwt = false for every function because Supabase migrated user-session
+# JWTs to ES256 asymmetric signing (2026-04). The runtime verify_jwt=true
+# gate only supports HS256/RS256, so every user-session call returned:
+#   401 UNAUTHORIZED_UNSUPPORTED_TOKEN_ALGORITHM: Unsupported JWT algorithm ES256
+# Every function that needs auth does its own validation via getUserFromReq(),
+# which calls admin.auth.getUser(token). That path works for both HS256 and
+# ES256 because it validates server-side via the Supabase admin API.
+# These blocks keep the CLI default in sync so `supabase functions deploy <name>`
+# without explicit flags doesn't silently revert to verify_jwt=true.
+
+[functions.adminAuthActions]
+verify_jwt = false
+
+[functions.aiSettingsManager]
+verify_jwt = false
+
+[functions.analyzeCategoryImpact]
+verify_jwt = false
+
+[functions.applyLabelsToEmails]
+verify_jwt = false
+
+[functions.applyProjectRoleDefaults]
+verify_jwt = false
+
+[functions.applyRevisionPricingImpact]
+verify_jwt = false
+
+[functions.archiveEmails]
+verify_jwt = false
+
+[functions.auditProductCategoryIntegrity]
+verify_jwt = false
+
+[functions.auditProjectTypesImplementation]
+verify_jwt = false
+
+[functions.backfillEmailLinks]
+verify_jwt = false
+
+[functions.backfillEmployeeUtilization]
+verify_jwt = false
+
+[functions.bulkSyncAllProjectTasks]
+verify_jwt = false
+
+[functions.calculateDashboardStats]
+verify_jwt = false
+
+[functions.calculateEmployeeUtilization]
+verify_jwt = false
+
+[functions.calculateProjectEffort]
+verify_jwt = false
+
+[functions.calculateProjectPricing]
+verify_jwt = false
+
+[functions.calculateProjectTaskDeadlines]
+verify_jwt = false
+
+[functions.calculateTaskBlockingState]
+verify_jwt = false
+
+[functions.checkAndArchiveProject]
+verify_jwt = false
+
+[functions.checkTaskDeadlines]
+verify_jwt = false
+
+[functions.cleanAgentEmails]
+verify_jwt = false
+
+[functions.cleanupDuplicatePriceMatrices]
+verify_jwt = false
+
+[functions.cleanupExpiredPermissions]
+verify_jwt = false
+
+[functions.cleanupOrphanedBrandingPreferences]
+verify_jwt = false
+
+[functions.cleanupOrphanedCalendarEvents]
+verify_jwt = false
+
+[functions.cleanupOrphanedProjectTasks]
+verify_jwt = false
+
+[functions.cleanupProjectOnDelete]
+verify_jwt = false
+
+[functions.comprehensiveProjectTypeAudit]
+verify_jwt = false
+
+[functions.computeCadenceHealth]
+verify_jwt = false
+
+[functions.createProspectFromAgency]
+verify_jwt = false
+
+[functions.deepLogicAuditPriceMatrix]
+verify_jwt = false
+
+[functions.deepLogicAuditProjectTypes]
+verify_jwt = false
+
+[functions.deleteCalendarEventFromGoogle]
+verify_jwt = false
+
+[functions.deleteEmails]
+verify_jwt = false
+
+[functions.detectAtRiskContacts]
+verify_jwt = false
+
+[functions.diagnoseTonomoProcessor]
+verify_jwt = false
+
+[functions.domainAgentMonitor]
+verify_jwt = false
+
+[functions.edgeFunctionHealth]
+verify_jwt = false
+
+[functions.extendEmailHistory]
+verify_jwt = false
+
+[functions.fetchDropboxShareLink]
+verify_jwt = false
+
+[functions.fixOrphanedPriceMatrices]
+verify_jwt = false
+
+[functions.fixOrphanedTasksAndEfforts]
+verify_jwt = false
+
+[functions.generateMonthlyPriceMatrixSnapshots]
+verify_jwt = false
+
+[functions.generateMonthlySnapshots]
+verify_jwt = false
+
+[functions.generateProjectTypeAuditReport]
+verify_jwt = false
+
+[functions.geocodeAgencies]
+verify_jwt = false
+
+[functions.geocodeProject]
+verify_jwt = false
+
+[functions.getDeliveryMediaFeed]
+verify_jwt = false
+
+[functions.getDropboxFilePreview]
+verify_jwt = false
+
+[functions.getEmailAttachment]
+verify_jwt = false
+
+[functions.getGmailOAuthUrl]
+verify_jwt = false
+
+[functions.getGoogleCalendarOAuthUrl]
+verify_jwt = false
+
+[functions.getWorkingFilesFeed]
+verify_jwt = false
+
+[functions.handleGmailOAuthCallback]
+verify_jwt = false
+
+[functions.handleGoogleCalendarOAuthCallback]
+verify_jwt = false
+
+[functions.handleProspectingStateChange]
+verify_jwt = false
+
+[functions.handleRevisionCancellation]
+verify_jwt = false
+
+[functions.handleRevisionStuckStatus]
+verify_jwt = false
+
+[functions.initializeGmail]
+verify_jwt = false
+
+[functions.listDropboxFiles]
+verify_jwt = false
+
+[functions.listDropboxFolders]
+verify_jwt = false
+
+[functions.logEmailActivity]
+verify_jwt = false
+
+[functions.logOnsiteEffortOnUpload]
+verify_jwt = false
+
+[functions.logPackageChange]
+verify_jwt = false
+
+[functions.logPriceMatrixChange]
+verify_jwt = false
+
+[functions.logProductChange]
+verify_jwt = false
+
+[functions.logProductPackageSeed]
+verify_jwt = false
+
+[functions.logProjectChange]
+verify_jwt = false
+
+[functions.markEmailsAsRead]
+verify_jwt = false
+
+[functions.markEmailsAsUnread]
+verify_jwt = false
+
+[functions.notificationService]
+verify_jwt = false
+
+[functions.processTonomoQueue]
+verify_jwt = false
+
+[functions.projectAIAssistant]
+verify_jwt = false
+
+[functions.projectPresenceHeartbeat]
+verify_jwt = false
+
+[functions.prunePriceMatrixSnapshots]
+verify_jwt = false
+
+[functions.pulseDataSync]
+verify_jwt = false
+
+[functions.pulseFireScrapes]
+verify_jwt = false
+
+[functions.pulseScheduledScrape]
+verify_jwt = false
+
+[functions.recalculateProjectPricingServerSide]
+verify_jwt = false
+
+[functions.receiveTonomoWebhook]
+verify_jwt = false
+
+[functions.recheckMappingGaps]
+verify_jwt = false
+
+[functions.reconcileProjectEffort]
+verify_jwt = false
+
+[functions.removeLabelsFromEmails]
+verify_jwt = false
+
+[functions.repairProductCategoryIssues]
+verify_jwt = false
+
+[functions.resetPackages]
+verify_jwt = false
+
+[functions.restoreEmails]
+verify_jwt = false
+
+[functions.retentionSweep]
+verify_jwt = false
+
+[functions.revertRevisionPricingImpact]
+verify_jwt = false
+
+[functions.runMigration]
+verify_jwt = false
+
+[functions.runProjectAutomationRules]
+verify_jwt = false
+
+[functions.searchAustralianAddresses]
+verify_jwt = false
+
+[functions.secureEmailRead]
+verify_jwt = false
+
+[functions.seedAutomationRules]
+verify_jwt = false
+
+[functions.seedDefaultProductCategories]
+verify_jwt = false
+
+[functions.seedNotificationPreferences]
+verify_jwt = false
+
+[functions.seedPermissions]
+verify_jwt = false
+
+[functions.seedRoleCategoryMappings]
+verify_jwt = false
+
+[functions.seedTeamActivityFeed]
+verify_jwt = false
+
+[functions.sendGmailMessage]
+verify_jwt = false
+
+[functions.sendScheduledEmail]
+verify_jwt = false
+
+[functions.setEmailVisibility]
+verify_jwt = false
+
+[functions.setupGmailAccount]
+verify_jwt = false
+
+[functions.syncAllEmails]
+verify_jwt = false
+
+[functions.syncDenormalisedFieldsOnNameChange]
+verify_jwt = false
+
+[functions.syncDomainCalendars]
+verify_jwt = false
+
+[functions.syncGmailMessages]
+verify_jwt = false
+
+[functions.syncGmailMessagesForAccount]
+verify_jwt = false
+
+[functions.syncGoogleCalendar]
+verify_jwt = false
+
+[functions.syncOnsiteEffortTasks]
+verify_jwt = false
+
+[functions.syncProjectRevisionStatus]
+verify_jwt = false
+
+[functions.syncProjectTasksFromProducts]
+verify_jwt = false
+
+[functions.syncProspectingMetrics]
+verify_jwt = false
+
+[functions.testPermissionEngine]
+verify_jwt = false
+
+[functions.testTonomoWebhook]
+verify_jwt = false
+
+[functions.trackLinkClick]
+verify_jwt = false
+
+[functions.trackProjectStageChange]
+verify_jwt = false
+
+[functions.triggerTonomoProcessing]
+verify_jwt = false
+
+[functions.updateEmployeeUtilizationRealtime]
+verify_jwt = false
+
+[functions.updateProjectEffortRealtimeRobust]
+verify_jwt = false
+
+[functions.updateRetentionAlert]
+verify_jwt = false
+
+[functions.updateRevisionStatus]
+verify_jwt = false
+
+[functions.updateTaskEffortRealtimeRobust]
+verify_jwt = false
+
+[functions.validateProjectOwner]
+verify_jwt = false
+
+[functions.validateSettingsAccess]
+verify_jwt = false
+
+[functions.validateTaskDependencies]
+verify_jwt = false
+
+[functions.writeCalendarEventToGoogle]
+verify_jwt = false

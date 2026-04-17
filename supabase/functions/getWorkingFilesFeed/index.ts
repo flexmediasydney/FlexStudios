@@ -1,4 +1,4 @@
-import { handleCors, getCorsHeaders, jsonResponse, getAdminClient } from '../_shared/supabase.ts';
+import { handleCors, getCorsHeaders, jsonResponse, getAdminClient, getUserFromReq } from '../_shared/supabase.ts';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -531,6 +531,13 @@ Deno.serve(async (req) => {
   try {
     if (!hasValidApiKey(req)) {
       return errResponse('UNAUTHORIZED', 'Missing or invalid apikey / authorization header', 401, req);
+    }
+
+    // Additional auth gate — real user (or service-role) required since
+    // verify_jwt=false on deploy (ES256 runtime incompat).
+    const user = await getUserFromReq(req);
+    if (!user) {
+      return errResponse('UNAUTHORIZED', 'Authentication required', 401, req);
     }
 
     const body = await req.json().catch(() => ({}));

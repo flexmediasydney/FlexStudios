@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, serveWithAudit } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 import { PROCESSOR_VERSION, BATCH_SIZE, LOCK_TTL_SECONDS } from './types.ts';
 import {
   extractOrderIdFromPayload,
@@ -66,6 +66,11 @@ serveWithAudit('processTonomoQueue', async (req) => {
       return jsonResponse({ _version: PROCESSOR_VERSION, _fn: 'processTonomoQueue', _ts: '2026-03-17' });
     }
   } catch { /* not a health check */ }
+
+  // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+  // Accepts user JWT or service-role (cross-fn from triggerTonomoProcessing/cron).
+  const user = await getUserFromReq(req);
+  if (!user) return errorResponse('Authentication required', 401, req);
 
   const settings = await safeList(entities, 'TonomoIntegrationSettings', 1);
   const s = settings?.[0];

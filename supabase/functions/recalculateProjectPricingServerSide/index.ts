@@ -24,6 +24,10 @@ serveWithAudit('recalculateProjectPricingServerSide', async (req) => {
       return jsonResponse({ _version: 'v2.0', _fn: 'recalculateProjectPricingServerSide', _ts: '2026-03-17' });
     }
 
+    // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Authentication required', 401, req);
+
     const { project_id } = body;
     if (!project_id) return errorResponse('project_id required', 400);
 

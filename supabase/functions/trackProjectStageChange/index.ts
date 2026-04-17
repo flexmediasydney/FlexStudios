@@ -52,6 +52,10 @@ serveWithAudit('trackProjectStageChange', async (req) => {
       return jsonResponse({ _version: 'v2.0', _fn: 'trackProjectStageChange', _ts: '2026-03-17' });
     }
 
+    // Auth gate — required since verify_jwt=false on deploy (ES256 runtime incompat).
+    const user = await getUserFromReq(req);
+    if (!user) return errorResponse('Authentication required', 401, req);
+
     let project: any;
     if (payload.event?.entity_id) {
       project = payload.data;
