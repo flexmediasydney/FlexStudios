@@ -14,7 +14,16 @@ import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse
  */
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+// IMPORTANT: SUPABASE_SERVICE_ROLE_KEY on new Supabase projects is auto-injected
+// in the new sb_secret_... format, which is NOT a JWT and fails edge function
+// auth (UNAUTHORIZED_INVALID_JWT_FORMAT). For edge-to-edge HTTP calls we need a
+// legacy JWT service_role key. PULSE_EDGE_JWT is a user-set secret containing
+// that JWT. Falls back to SUPABASE_SERVICE_ROLE_KEY only if PULSE_EDGE_JWT is
+// missing (for backward compat with old projects).
+const SUPABASE_SERVICE_ROLE_KEY =
+  Deno.env.get('PULSE_EDGE_JWT') ||
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ||
+  '';
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || '';
 
 Deno.serve(async (req) => {
