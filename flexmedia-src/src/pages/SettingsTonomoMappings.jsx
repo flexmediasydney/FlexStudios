@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   CheckCircle2, Circle, XCircle, Search,
   Link2, Unlink, ChevronDown, Users, Wrench, Package, User, RefreshCw, Loader2, Workflow, Layers,
-  Archive, ArchiveRestore
+  Archive, ArchiveRestore, CalendarDays
 } from "lucide-react";
 import {
   AlertDialog,
@@ -25,12 +25,13 @@ import { toast } from "sonner";
 
 // Type config
 const TYPE_CONFIG = {
-  service:      { label: "Services",        icon: Wrench,    color: "#8b5cf6", rightEntity: "products"       },
-  package:      { label: "Packages",        icon: Package,   color: "#3b82f6", rightEntity: "packages"       },
-  bookingflow:  { label: "Booking Flows",   icon: Workflow,  color: "#0ea5e9", rightEntity: "bookingflows"   },
-  projecttype:  { label: "Project Types",   icon: Layers,    color: "#ec4899", rightEntity: "projecttypes"   },
-  photographer: { label: "People",          icon: Users,     color: "#10b981", rightEntity: "users"          },
-  agent:        { label: "Contacts",        icon: User,      color: "#f59e0b", rightEntity: "agents"         },
+  service:      { label: "Services",        icon: Wrench,       color: "#8b5cf6", rightEntity: "products"       },
+  package:      { label: "Packages",        icon: Package,      color: "#3b82f6", rightEntity: "packages"       },
+  bookingflow:  { label: "Booking Flows",   icon: Workflow,     color: "#0ea5e9", rightEntity: "bookingflows"   },
+  projecttype:  { label: "Project Types",   icon: Layers,       color: "#ec4899", rightEntity: "projecttypes"   },
+  workday_fee:  { label: "Weekend Fees",    icon: CalendarDays, color: "#f97316", rightEntity: "products"       },
+  photographer: { label: "People",          icon: Users,        color: "#10b981", rightEntity: "users"          },
+  agent:        { label: "Contacts",        icon: User,         color: "#f59e0b", rightEntity: "agents"         },
 };
 
 
@@ -176,10 +177,16 @@ export default function SettingsTonomoMappings() {
     const entKey = TYPE_CONFIG[activeType]?.rightEntity;
     const ents = rightEntities[entKey] || [];
     const realMappings = mappings.filter(m => m.mapping_type === activeType);
-    
+
+    // workday_fee is a closed set of Tonomo-driven fees — no virtual rows for
+    // unmapped products (would list every Product).
+    if (activeType === 'workday_fee') {
+      return realMappings;
+    }
+
     // Create a set of FlexStudios IDs that have mappings
     const mappedIds = new Set(realMappings.map(m => m.flexmedia_entity_id).filter(Boolean));
-    
+
     // For each entity without a mapping, create a virtual mapping
     const virtualMappings = ents
       .filter(e => !mappedIds.has(e.id))
@@ -242,6 +249,9 @@ export default function SettingsTonomoMappings() {
         counts[type] = projectTypeMappings.length;
       } else if (type === 'bookingflow') {
         counts[type] = bookingFlows.length;
+      } else if (type === 'workday_fee') {
+        // closed set — only real mappings, no virtual rows
+        counts[type] = mappings.filter(m => m.mapping_type === type).length;
       } else {
         const realCount = mappings.filter(m => m.mapping_type === type).length;
         counts[type] = Math.max(realCount, ents.length);
