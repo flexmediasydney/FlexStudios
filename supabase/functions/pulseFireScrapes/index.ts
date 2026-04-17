@@ -33,15 +33,23 @@ const SUPABASE_SERVICE_ROLE_KEY =
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || '';
 
 /**
- * Expand {suburb} / {suburb-slug} placeholders in every string value of the
- * actor input template. Non-string values pass through unchanged.
+ * Expand {suburb} / {suburb-slug} / {postcode} placeholders in every string
+ * value of the actor input template. Non-string values pass through unchanged.
  */
-function inflateSuburbTemplate(input: Record<string, any>, suburb: string): Record<string, any> {
+function inflateSuburbTemplate(
+  input: Record<string, any>,
+  suburb: string,
+  postcode: string | null,
+): Record<string, any> {
   const slug = suburb.toLowerCase().replace(/\s+/g, '-');
+  const postcodeStr = postcode || '';
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(input || {})) {
     if (typeof v === 'string') {
-      out[k] = v.replace(/\{suburb\}/g, suburb).replace(/\{suburb-slug\}/g, slug);
+      out[k] = v
+        .replace(/\{suburb\}/g, suburb)
+        .replace(/\{suburb-slug\}/g, slug)
+        .replace(/\{postcode\}/g, postcodeStr);
     } else {
       out[k] = v;
     }
@@ -144,7 +152,7 @@ Deno.serve(async (req) => {
 
     // ── Per-suburb: load suburbs, fire individual calls ──────────────────
     let query = admin.from('pulse_target_suburbs')
-      .select('name')
+      .select('name, postcode')
       .eq('is_active', true)
       .order('priority', { ascending: false })
       .limit(max_suburbs);
@@ -158,10 +166,32 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: true, source_id, dispatched: 0, message: 'No active suburbs' });
     }
 
+    // Per-suburb URLs require postcode — skip any suburb missing it. The REA
+    // URL pattern (e.g. /buy/in-strathfield,+nsw+2135) silently redirects or
+    // returns garbage without a postcode, so scraping without one is unsafe.
+    const actorInputUsesPostcode = JSON.stringify(actorInput).includes('{postcode}');
+    const skippedSuburbs: string[] = [];
+    const eligibleSuburbs = suburbs.filter(s => {
+      if (actorInputUsesPostcode && !s.postcode) {
+        skippedSuburbs.push(s.name);
+        return false;
+      }
+      return true;
+    });
+
+    if (skippedSuburbs.length > 0) {
+      console.warn(`[${source_id}] Skipped ${skippedSuburbs.length} suburbs missing postcode: ${skippedSuburbs.slice(0, 10).join(', ')}${skippedSuburbs.length > 10 ? '...' : ''}`);
+    }
+
+    // Inject max_results_per_suburb as actorInput.maxItems (cap per run).
+    const maxItems = config.max_results_per_suburb ?? actorInput.maxItems ?? 10;
+
     let dispatched = 0;
-    for (const suburb of suburbs) {
-      // Inflate {suburb} / {suburb-slug} placeholders in actor input template
-      const inflated = inflateSuburbTemplate(actorInput, suburb.name);
+    for (const suburb of eligibleSuburbs) {
+      // Inflate {suburb} / {suburb-slug} / {postcode} placeholders in template
+      const inflated = inflateSuburbTemplate(actorInput, suburb.name, suburb.postcode || null);
+      // Force maxItems from config so we never depend on hardcoded template value
+      inflated.maxItems = maxItems;
 
       const params = {
         suburbs: [suburb.name],
@@ -186,7 +216,7 @@ Deno.serve(async (req) => {
       dispatched++;
 
       // Stagger to avoid Apify rate limit
-      if (dispatched < suburbs.length) {
+      if (dispatched < eligibleSuburbs.length) {
         await new Promise(r => setTimeout(r, 2000));
       }
     }
@@ -195,8 +225,8 @@ Deno.serve(async (req) => {
       await admin.from('pulse_timeline').insert({
         entity_type: 'system', event_type: 'cron_dispatched', event_category: 'system',
         title: `Cron dispatched: ${sourceLabel}`,
-        description: `Fired ${dispatched} individual suburb scrapes (${suburbs.map(s => s.name).slice(0, 5).join(', ')}${suburbs.length > 5 ? '...' : ''})`,
-        new_value: { source_id, dispatched, min_priority, suburbs: suburbs.map(s => s.name), actor_input: actorInput },
+        description: `Fired ${dispatched} individual suburb scrapes (${eligibleSuburbs.map(s => s.name).slice(0, 5).join(', ')}${eligibleSuburbs.length > 5 ? '...' : ''})${skippedSuburbs.length > 0 ? ` — skipped ${skippedSuburbs.length} missing postcode` : ''}`,
+        new_value: { source_id, dispatched, min_priority, max_items: maxItems, suburbs: eligibleSuburbs.map(s => s.name), skipped: skippedSuburbs, actor_input: actorInput },
         source: 'cron',
       });
     } catch { /* non-fatal */ }
@@ -205,7 +235,7 @@ Deno.serve(async (req) => {
       await admin.from('pulse_source_configs').update({ last_run_at: now }).eq('source_id', source_id);
     } catch { /* non-fatal */ }
 
-    return jsonResponse({ success: true, source_id, dispatched, suburbs: suburbs.length });
+    return jsonResponse({ success: true, source_id, dispatched, suburbs: eligibleSuburbs.length, skipped: skippedSuburbs.length, max_items: maxItems });
 
   } catch (error: any) {
     console.error('pulseFireScrapes error:', error);
