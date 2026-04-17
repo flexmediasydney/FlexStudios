@@ -1590,7 +1590,10 @@ function downloadCsv(rows) {
 function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilter }) {
   // ── filter state ──
   const [statusFilter, setStatusFilter] = useState("all");
-  const [timeWindow, setTimeWindow] = useState("7d");
+  // Default to "all time" — the user's intent for sync history is the full
+  // audit trail, not a recent window. They can narrow with the time-window
+  // dropdown if they want.
+  const [timeWindow, setTimeWindow] = useState("all");
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -1679,7 +1682,7 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
   const filterCount =
     (filterSourceId && filterSourceId !== "all" ? 1 : 0) +
     (statusFilter !== "all" ? 1 : 0) +
-    (timeWindow !== "7d" ? 1 : 0);
+    (timeWindow !== "all" ? 1 : 0);
 
   return (
     <Card id="sync-history" className="rounded-xl border shadow-sm scroll-mt-16">
@@ -1819,7 +1822,7 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
               onClick={() => {
                 onChangeFilter?.(null);
                 setStatusFilter("all");
-                setTimeWindow("7d");
+                setTimeWindow("all");
               }}
             >
               <X className="h-3 w-3" />
