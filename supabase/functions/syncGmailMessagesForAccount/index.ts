@@ -1,34 +1,6 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 import { MS_PER_DAY, MS_PER_MINUTE, GMAIL_DEFAULT_LOOKBACK_DAYS, GMAIL_HISTORY_FALLBACK_LOOKBACK_DAYS, GMAIL_LOOKBACK_MINUTES, MAX_MESSAGES_PER_SYNC } from '../_shared/constants.ts';
-
-// --- Agent lookup cache factory (returns a request-scoped cache to avoid leaking between concurrent requests) ---
-function createAgentCache() {
-  const cache = new Map<string, any>();
-  return {
-    async findByEmail(adminClient: any, email: string) {
-      const key = email.toLowerCase();
-      if (cache.has(key)) return cache.get(key);
-      try {
-        const { data } = await adminClient
-          .from('agents')
-          .select('id, name, current_agency_id, current_agency_name')
-          .ilike('email', key)
-          .limit(1)
-          .single();
-        cache.set(key, data || null);
-        return data || null;
-      } catch {
-        cache.set(key, null);
-        return null;
-      }
-    }
-  };
-}
-
-function extractEmailAddress(fromHeader: string): string {
-  const match = fromHeader.match(/<([^>]+)>/);
-  return (match ? match[1] : fromHeader).trim().toLowerCase();
-}
+import { AgentLookup } from '../_shared/emailLinking.ts';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
@@ -167,7 +139,7 @@ async function fetchAndSaveMessage(
   account: any,
   entities: any,
   admin: any,
-  agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
+  agentLookup?: AgentLookup,
 ): Promise<'saved' | 'skipped' | 'failed'> {
   // Check if already exists
   const existing = await entities.EmailMessage.filter({
@@ -200,9 +172,16 @@ async function fetchAndSaveMessage(
     if (linked) threadProjectLink = { project_id: linked.project_id, project_title: linked.project_title || null };
   } catch { /* non-fatal */ }
 
-  // Agent/agency auto-linking
-  const fromEmail = extractEmailAddress(headers['From'] || '');
-  const agentMatch = (fromEmail && agentLookup) ? await agentLookup.findByEmail(admin, fromEmail) : null;
+  // Agent/agency auto-linking — match From: OR To: OR Cc: OR domain fallback
+  const toList = (headers['To'] || '').split(/,(?![^<]*>)/).filter(Boolean).map((e: string) => e.trim());
+  const ccList = (headers['Cc'] || '').split(/,(?![^<]*>)/).filter(Boolean).map((e: string) => e.trim());
+  const linkResult = agentLookup
+    ? await agentLookup.resolve({
+        from: headers['From'],
+        to: toList,
+        cc: ccList,
+      })
+    : { agent_id: null, agent_name: null, agency_id: null, agency_name: null, matched_via: null };
 
   // Truncate oversized bodies to prevent DB insert failures
   const MAX_BODY_SIZE = 10000;
@@ -222,8 +201,8 @@ async function fetchAndSaveMessage(
     gmail_thread_id: fullMsg.threadId,
     from: headers['From'] || 'unknown@unknown.com',
     from_name: headers['From']?.split('<')[0].trim() || 'Unknown',
-    to: (headers['To'] || '').split(',').filter(Boolean).map((e: string) => e.trim()),
-    cc: (headers['Cc'] || '').split(',').filter(Boolean).map((e: string) => e.trim()),
+    to: toList,
+    cc: ccList,
     subject: headers['Subject'] || '(no subject)',
     body: rawBody,
     is_unread: fullMsg.labelIds?.includes('UNREAD') || false,
@@ -241,11 +220,11 @@ async function fetchAndSaveMessage(
       project_title: threadProjectLink.project_title,
       visibility: 'shared'
     } : {}),
-    ...(agentMatch ? {
-      agent_id: agentMatch.id,
-      agent_name: agentMatch.name,
-      agency_id: agentMatch.current_agency_id || null,
-      agency_name: agentMatch.current_agency_name || null,
+    ...(linkResult.agent_id || linkResult.agency_id ? {
+      agent_id: linkResult.agent_id,
+      agent_name: linkResult.agent_name,
+      agency_id: linkResult.agency_id,
+      agency_name: linkResult.agency_name,
     } : {})
   });
 
@@ -295,7 +274,7 @@ async function retryFailedMessages(
   account: any,
   entities: any,
   admin: any,
-  agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
+  agentLookup?: AgentLookup,
 ): Promise<{ retried: number; stillFailed: number }> {
   let retried = 0;
   let stillFailed = 0;
@@ -324,7 +303,7 @@ async function fullSync(
   entities: any,
   admin: any,
   options?: { historyExpiredFallback?: boolean },
-  agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
+  agentLookup?: AgentLookup,
   wallClockStart?: number,
 ): Promise<{ synced: number; latestHistoryId: string | null; hitTimeBudget?: boolean }> {
   let synced = 0;
@@ -452,7 +431,7 @@ async function syncViaHistory(
   account: any,
   entities: any,
   admin: any,
-  agentLookup?: { findByEmail: (admin: any, email: string) => Promise<any> },
+  agentLookup?: AgentLookup,
   wallClockStart?: number,
 ): Promise<{ synced: number; latestHistoryId: string | null; fallbackToFull: boolean; hitTimeBudget?: boolean }> {
   let synced = 0;
@@ -738,7 +717,11 @@ async function upsertConversations(admin: any, accountId: string) {
           if (Array.isArray(m.cc)) m.cc.forEach((e: string) => participantSet.add(e));
           if (m.attachments && Array.isArray(m.attachments) && m.attachments.length > 0) hasAttachments = true;
         }
-        const linkedMsg = msgs.find((m: any) => m.project_id);
+        // Pick the best message for each field independently — don't let one
+        // un-linked message wipe out an agent/agency link set by another.
+        const projectMsg = msgs.find((m: any) => m.project_id);
+        const agentMsg = msgs.find((m: any) => m.agent_id);
+        const agencyMsg = msgs.find((m: any) => m.agency_id);
         conversationRows.push({
           email_account_id: accountId,
           gmail_thread_id: threadId,
@@ -754,10 +737,10 @@ async function upsertConversations(admin: any, accountId: string) {
           has_attachments: hasAttachments,
           last_sender: latest.from,
           last_sender_name: latest.from_name,
-          project_id: linkedMsg?.project_id || null,
-          project_title: linkedMsg?.project_title || null,
-          agent_id: linkedMsg?.agent_id || null,
-          agency_id: linkedMsg?.agency_id || null,
+          project_id: projectMsg?.project_id || null,
+          project_title: projectMsg?.project_title || null,
+          agent_id: agentMsg?.agent_id || null,
+          agency_id: agencyMsg?.agency_id || null,
         });
       }
       for (let i = 0; i < conversationRows.length; i += 50) {
@@ -798,8 +781,8 @@ Deno.serve(async (req) => {
     const entities = createEntities(admin);
     const { accountId, userId } = await req.json();
 
-    // Create a request-scoped agent lookup cache (avoids cross-request contamination)
-    const agentLookup = createAgentCache();
+    // Created below, after account lookup so we can exclude our own addresses.
+    let agentLookup: AgentLookup | undefined;
 
     if (!accountId || !userId) {
       return errorResponse('Missing accountId or userId', 400);
@@ -838,6 +821,19 @@ Deno.serve(async (req) => {
     let syncMode = 'full';
     let hitTimeBudget = false;
     const wallClockStart = Date.now();
+
+    // Gather ALL of our own email account addresses so we don't self-match them as agents
+    const { data: allAccounts } = await admin
+      .from('email_accounts')
+      .select('email_address');
+    const ownAddresses = new Set<string>();
+    for (const a of allAccounts || []) {
+      if (a.email_address) ownAddresses.add(String(a.email_address).toLowerCase());
+    }
+    agentLookup = new AgentLookup(admin, ownAddresses);
+    // Preload agents + domains once per request (cheap: 1-2 queries) so all subsequent lookups are in-memory
+    await agentLookup.preloadAgents().catch(() => {});
+    await agentLookup.preloadDomains().catch(() => {});
 
     try {
       const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
