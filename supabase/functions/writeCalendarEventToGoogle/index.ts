@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, getUserClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, getUserClient, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 const APP_TIMEZONE = 'Australia/Sydney';
 
@@ -27,7 +27,7 @@ function toGoogleDateTime(isoString: string | null, isAllDay: boolean) {
   return { dateTime: isoString, timeZone: APP_TIMEZONE };
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('writeCalendarEventToGoogle', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

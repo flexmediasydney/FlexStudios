@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, getUserClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, getUserClient, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 const GOOGLE_API_TIMEOUT_MS = 15_000; // 15s timeout for Google API calls
 
@@ -19,7 +19,7 @@ async function refreshAccessToken(clientId: string, clientSecret: string, refres
   return data.access_token;
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('deleteCalendarEventFromGoogle', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

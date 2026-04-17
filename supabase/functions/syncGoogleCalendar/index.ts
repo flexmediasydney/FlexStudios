@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 import { MAX_PROJECTS_FETCH, MAX_USERS_FETCH } from '../_shared/constants.ts';
 
 const refreshAccessToken = async (clientId: string, clientSecret: string, refreshToken: string): Promise<string> => {
@@ -30,7 +30,7 @@ async function writeCalendarAudit(entities: any, params: any) {
   }
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('syncGoogleCalendar', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

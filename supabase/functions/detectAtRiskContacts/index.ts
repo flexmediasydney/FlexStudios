@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, isQuietHours } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, isQuietHours, serveWithAudit } from '../_shared/supabase.ts';
 
 async function _canNotify(entities: any, userId: string, type: string, category: string): Promise<boolean> {
   try {
@@ -14,7 +14,7 @@ async function _canNotify(entities: any, userId: string, type: string, category:
 
 const AT_RISK_DEFAULT_DAYS = 90;
 
-Deno.serve(async (req) => {
+serveWithAudit('detectAtRiskContacts', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {
