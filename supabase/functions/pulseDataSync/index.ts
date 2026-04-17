@@ -1111,6 +1111,7 @@ Deno.serve(async (req) => {
           const freshPrimary = pickPrimaryEmail(
             enrichData.allEmails || [],
             pa.agency_name,
+            pa.full_name,
           );
 
           // Primary email: prefer a clean fresh pick over a middleman-polluted

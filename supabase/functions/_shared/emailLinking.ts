@@ -14,6 +14,7 @@
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { isMiddlemanEmail } from './emailCleanup.ts';
 
 // Our own team's domains — emails from these are NOT matched as external agents
 const OWN_DOMAINS = new Set<string>([
@@ -100,6 +101,15 @@ export function isOwnAddress(addr: string, accountAddresses?: Set<string>): bool
   if (OWN_DOMAINS.has(d)) return true;
   if (accountAddresses?.has(addr)) return true;
   return false;
+}
+
+/** True if the address is a known CRM middleman / forwarder — should not be
+ * considered a personal agent contact for matching purposes. */
+function isMatchableAddress(addr: string, accountAddresses?: Set<string>): boolean {
+  if (!addr) return false;
+  if (isOwnAddress(addr, accountAddresses)) return false;
+  if (isMiddlemanEmail(addr)) return false;
+  return true;
 }
 
 /**
@@ -268,8 +278,8 @@ export class AgentLookup {
     const toList = parseRecipientList(params.to);
     const ccList = parseRecipientList(params.cc);
 
-    // Priority 1: From: matches agent (skip if it's us)
-    if (fromAddr && !isOwnAddress(fromAddr, this.accountAddresses)) {
+    // Priority 1: From: matches agent (skip if it's us or a CRM middleman)
+    if (fromAddr && isMatchableAddress(fromAddr, this.accountAddresses)) {
       const agent = await this.findAgentByEmail(fromAddr);
       if (agent) {
         return {
@@ -284,7 +294,7 @@ export class AgentLookup {
 
     // Priority 2: Any To: matches an agent (outbound mail from us to agent)
     for (const addr of toList) {
-      if (isOwnAddress(addr, this.accountAddresses)) continue;
+      if (!isMatchableAddress(addr, this.accountAddresses)) continue;
       const agent = await this.findAgentByEmail(addr);
       if (agent) {
         return {
@@ -299,7 +309,7 @@ export class AgentLookup {
 
     // Priority 3: Any Cc: matches an agent
     for (const addr of ccList) {
-      if (isOwnAddress(addr, this.accountAddresses)) continue;
+      if (!isMatchableAddress(addr, this.accountAddresses)) continue;
       const agent = await this.findAgentByEmail(addr);
       if (agent) {
         return {
@@ -313,7 +323,7 @@ export class AgentLookup {
     }
 
     // Priority 4: Domain fallback — From:@agency-domain → that agency
-    if (fromAddr && !isOwnAddress(fromAddr, this.accountAddresses)) {
+    if (fromAddr && isMatchableAddress(fromAddr, this.accountAddresses)) {
       const d = getDomain(fromAddr);
       const agency = await this.findAgencyByDomain(d);
       if (agency) {
@@ -329,7 +339,7 @@ export class AgentLookup {
 
     // Priority 5: Domain fallback on any external To:/Cc:
     for (const addr of [...toList, ...ccList]) {
-      if (isOwnAddress(addr, this.accountAddresses)) continue;
+      if (!isMatchableAddress(addr, this.accountAddresses)) continue;
       const d = getDomain(addr);
       const agency = await this.findAgencyByDomain(d);
       if (agency) {
