@@ -59,13 +59,19 @@ export default function EmailListContainer({
     const el = loadMoreRef.current;
     if (!el) return;
 
+    // Observe against the viewport (root: null). The inner role="list" container
+    // doesn't actually scroll — Inbox.jsx wraps EmailInboxMain in
+    // `<div class="flex-1 overflow-auto">` so the user scrolls that outer div,
+    // and the inner parentRef stays at scrollHeight === clientHeight. If we set
+    // `root: parentRef.current` the observer never fires after the first call.
+    // Viewport-root guarantees the sentinel triggers when user scrolls near bottom.
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !loadingMore) {
           onLoadMore();
         }
       },
-      { root: parentRef.current, rootMargin: '200px' }
+      { root: null, rootMargin: '400px' }
     );
 
     observer.observe(el);
