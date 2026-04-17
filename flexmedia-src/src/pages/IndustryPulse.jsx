@@ -3,7 +3,8 @@
  * Thin container: loads all data hooks, computes shared stats,
  * renders header / stats strip / tab bar, delegates to tab components.
  */
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,6 +30,7 @@ import PulseMarketData from "@/components/pulse/tabs/PulseMarketData";
 import PulseDataSources from "@/components/pulse/tabs/PulseDataSources";
 import PulseMappings from "@/components/pulse/tabs/PulseMappings";
 import PulseSignals from "@/components/pulse/tabs/PulseSignals";
+import PulseTimelineTab from "@/components/pulse/tabs/PulseTimelineTab";
 
 // ── Exported helpers (re-used by tab components) ──────────────────────────────
 
@@ -134,7 +136,12 @@ const TABS = [
   { value: "sources",  label: "Sources",  badgeKey: null },
   { value: "mappings", label: "Mappings", badgeKey: "suggestedMappings" },
   { value: "signals",  label: "Signals",  badgeKey: "newSignals" },
+  { value: "timeline", label: "Timeline", badgeKey: null },
 ];
+
+// Tabs that the URL `?tab=` query param is allowed to deep-link into.
+// Limits surface area for typos/links from old emails; defaults to "command".
+const VALID_TAB_VALUES = new Set(TABS.map(t => t.value));
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -161,7 +168,35 @@ export default function IndustryPulse() {
   const isLoading = agentsLoading || agenciesLoading || listingsLoading || crmAgentsLoading;
 
   // ── UI state ────────────────────────────────────────────────────────────────
-  const [tab, setTab] = useState("command");
+  // Tab state is mirrored into the URL's `?tab=` query param so deep-links
+  // (e.g. "View full timeline" from the Command Center, bookmarks, support
+  // links shared in chat) navigate straight to the intended tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = (() => {
+    const t = searchParams.get("tab");
+    return t && VALID_TAB_VALUES.has(t) ? t : "command";
+  })();
+  const [tab, setTabState] = useState(initialTab);
+
+  // Wrapper that updates both local state and the URL (replaceState — no history spam)
+  const setTab = useCallback((next) => {
+    setTabState(next);
+    setSearchParams(prev => {
+      const np = new URLSearchParams(prev);
+      if (next === "command") np.delete("tab"); // clean URL on default tab
+      else np.set("tab", next);
+      return np;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  // If the user uses browser back/forward, sync tab state with the URL
+  useEffect(() => {
+    const t = searchParams.get("tab");
+    const want = t && VALID_TAB_VALUES.has(t) ? t : "command";
+    if (want !== tab) setTabState(want);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const [search, setSearch] = useState("");
   const [addToCrmFromCommand, setAddToCrmFromCommand] = useState(null);
 
@@ -266,6 +301,11 @@ export default function IndustryPulse() {
     };
   }, [pulseAgents, pulseAgencies, pulseListings, pulseEvents, pulseSignals, projects, pulseMappings]);
 
+  // Deep-link handler — Command Center → Timeline tab
+  const handleViewFullTimeline = useCallback(() => {
+    setTab("timeline");
+  }, [setTab]);
+
   // ── Shared props spread into every tab ──────────────────────────────────────
   const sharedProps = {
     pulseAgents,
@@ -288,6 +328,7 @@ export default function IndustryPulse() {
     addToCrmFromCommand,
     onClearAddToCrmFromCommand: handleClearAddToCrmFromCommand,
     onOpenEntity: openEntity,
+    onViewFullTimeline: handleViewFullTimeline,
   };
 
   // ── Resolve current entity from stack to actual record ────────────────────
@@ -478,6 +519,12 @@ export default function IndustryPulse() {
         <TabsContent value="signals" className="mt-2">
           <ErrorBoundary>
             <PulseSignals {...sharedProps} />
+          </ErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="timeline" className="mt-2">
+          <ErrorBoundary>
+            <PulseTimelineTab />
           </ErrorBoundary>
         </TabsContent>
       </Tabs>

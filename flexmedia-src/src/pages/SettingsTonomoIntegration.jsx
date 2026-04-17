@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { api } from "@/api/supabaseClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Copy, Check, Clock, ExternalLink, RefreshCw, TrendingUp, CheckCircle2, Clock4, Activity, Loader2 } from "lucide-react";
+import { Copy, Check, Clock, ExternalLink, RefreshCw, TrendingUp, CheckCircle2, Clock4, Activity, Loader2, ChevronLeft, ChevronRight, Filter, X, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { relativeTime, parseTS } from "@/components/tonomo/tonomoUtils";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
@@ -612,25 +612,11 @@ export default function SettingsTonomoIntegration() {
               <p className="text-xs text-muted-foreground">Mapping coverage</p>
             </div>
           </div>
-          {/* Failed queue items with error details */}
-          {queue.filter(q => q.status === 'failed' || q.status === 'dead_letter').length > 0 && (
-            <Card className="mt-4">
-              <CardHeader className="py-3">
-                <CardTitle className="text-sm">Failed Queue Items — Error Details</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 max-h-60 overflow-y-auto">
-                {queue.filter(q => q.status === 'failed' || q.status === 'dead_letter').slice(0, 20).map(item => (
-                  <div key={item.id} className="text-xs border rounded p-2 bg-red-50/50">
-                    <div className="flex justify-between">
-                      <span className="font-semibold">{item.action} — {item.order_id || 'no order'}</span>
-                      <Badge variant="outline" className="text-[9px]">{item.status} (attempt {item.retry_count})</Badge>
-                    </div>
-                    <p className="text-red-700 mt-1 font-mono break-all">{item.error_message || 'No error message'}</p>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
+          {/* Failed queue items with error details — full server-side pagination */}
+          <FailedQueueItems
+            failedTotalsHint={(queueStats?.failed || 0) + (queueStats?.dead_letter || 0)}
+          />
+
           <div className="border-t pt-4 mt-4">
             <p className="text-sm font-medium mb-3">Recent Calendar Link Activity</p>
             <CalendarLinkAuditMini />
@@ -1043,6 +1029,339 @@ function RoleDefaultsCard({ defaults, onSave, isSaving }) {
             );
           })}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Failed Queue Items (audit-style, full server-side pagination) ───────────
+// Replaces the prior `.slice(0, 20)` cap. Lets ops drill the full failed/dead-letter
+// queue with status + time-window filters, page-size selector, and prev/next paging.
+// 30s auto-refresh keeps it live during incident response.
+
+const FAILED_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+const FAILED_TIME_WINDOWS = [
+  { value: "24h", label: "Last 24 hours", ms: 24 * 60 * 60 * 1000 },
+  { value: "7d",  label: "Last 7 days",   ms: 7 * 24 * 60 * 60 * 1000 },
+  { value: "30d", label: "Last 30 days",  ms: 30 * 24 * 60 * 60 * 1000 },
+  { value: "all", label: "All time",      ms: null },
+];
+
+function FailedQueueItems({ failedTotalsHint = 0 }) {
+  const queryClient = useQueryClient();
+  const [statusFilter, setStatusFilter] = useState("all"); // all | failed | dead_letter
+  const [timeWindow, setTimeWindow] = useState("7d");
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(0);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastFetched, setLastFetched] = useState(null);
+  const [isRetryingPage, setIsRetryingPage] = useState(false);
+
+  // Reset page when filters change
+  useEffect(() => { setPage(0); }, [statusFilter, timeWindow, pageSize]);
+
+  const fetchPage = useCallback(async () => {
+    setError(null);
+    try {
+      let q = api._supabase
+        .from("tonomo_processing_queue")
+        .select(
+          "id, action, order_id, event_id, status, retry_count, error_message, " +
+          "result_summary, processed_at, last_failed_at, created_at, updated_at, processor_version",
+          { count: "exact" }
+        )
+        .order("last_failed_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false });
+
+      if (statusFilter === "all") {
+        q = q.in("status", ["failed", "dead_letter"]);
+      } else {
+        q = q.eq("status", statusFilter);
+      }
+
+      const tw = FAILED_TIME_WINDOWS.find(t => t.value === timeWindow);
+      if (tw && tw.ms != null) {
+        q = q.gte("created_at", new Date(Date.now() - tw.ms).toISOString());
+      }
+
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      q = q.range(from, to);
+
+      const { data, error: qErr, count } = await q;
+      if (qErr) throw qErr;
+      setRows(data || []);
+      setTotal(count || 0);
+      setLastFetched(new Date());
+    } catch (err) {
+      setError(err?.message || "Fetch failed");
+      setRows([]);
+      setTotal(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter, timeWindow, page, pageSize]);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchPage();
+  }, [fetchPage]);
+
+  // Auto-refresh every 30s when enabled
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => { fetchPage(); }, 30_000);
+    return () => clearInterval(id);
+  }, [autoRefresh, fetchPage]);
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const showingFrom = total === 0 ? 0 : page * pageSize + 1;
+  const showingTo = Math.min(total, (page + 1) * pageSize);
+  const hasPrev = page > 0;
+  const hasNext = (page + 1) < pageCount;
+  const filterCount = (statusFilter !== "all" ? 1 : 0) + (timeWindow !== "7d" ? 1 : 0);
+
+  const fmtRelative = useCallback((ts) => {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return "—";
+    const diff = Math.max(0, Date.now() - d.getTime());
+    if (diff < 60_000) return "Just now";
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+    if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
+    return d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+  }, []);
+
+  // Retry the visible page only — re-queues each row by setting status back to pending.
+  // The 30s auto-refresh + pulse to processTonomoQueue picks them up immediately.
+  const retryVisible = useCallback(async () => {
+    if (rows.length === 0) return;
+    setIsRetryingPage(true);
+    try {
+      await Promise.all(rows.map(r =>
+        api.entities.TonomoProcessingQueue.update(r.id, {
+          status: 'pending',
+          retry_count: 0,
+          error_message: null,
+        })
+      ));
+      toast.success(`Re-queued ${rows.length} item${rows.length === 1 ? '' : 's'}`);
+      queryClient.invalidateQueries({ queryKey: ['tonomoQueueStats'] });
+      queryClient.invalidateQueries({ queryKey: ['settingsQueue'] });
+      api.functions.invoke('processTonomoQueue', { triggered_by: 'retry' }).catch(() => {});
+      setLoading(true);
+      fetchPage();
+    } catch (err) {
+      toast.error(err?.message || 'Retry failed');
+    } finally {
+      setIsRetryingPage(false);
+    }
+  }, [rows, fetchPage, queryClient]);
+
+  // Hide the entire card when nothing's failing — keeps the Settings page clean for healthy states
+  if (total === 0 && !loading && !error && filterCount === 0 && failedTotalsHint === 0) {
+    return null;
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardHeader className="py-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-600" />
+            Failed Queue Items — Error Details
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+              {total.toLocaleString()} total
+            </Badge>
+            {filterCount > 0 && (
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
+                <Filter className="h-2.5 w-2.5" />
+                {filterCount} filter{filterCount === 1 ? "" : "s"}
+              </Badge>
+            )}
+          </CardTitle>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            {lastFetched && (
+              <span className="flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {fmtRelative(lastFetched)}
+              </span>
+            )}
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <Switch
+                checked={autoRefresh}
+                onCheckedChange={setAutoRefresh}
+                aria-label="Auto-refresh every 30s"
+              />
+              <span>Auto-refresh</span>
+            </label>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[10px] gap-1"
+              onClick={() => { setLoading(true); fetchPage(); }}
+              disabled={loading}
+              title="Refresh now"
+            >
+              <Loader2 className={loading ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[10px] gap-1"
+              onClick={retryVisible}
+              disabled={isRetryingPage || loading || rows.length === 0}
+              title="Re-queue all items shown on this page"
+            >
+              {isRetryingPage ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Retry page
+            </Button>
+          </div>
+        </div>
+
+        {/* Filter row */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
+          <div>
+            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+              Status
+            </label>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="h-8 text-xs mt-0.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All (failed + dead letter)</SelectItem>
+                <SelectItem value="failed">Failed only</SelectItem>
+                <SelectItem value="dead_letter">Dead letter only</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+              Time window
+            </label>
+            <Select value={timeWindow} onValueChange={setTimeWindow}>
+              <SelectTrigger className="h-8 text-xs mt-0.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FAILED_TIME_WINDOWS.map(tw => (
+                  <SelectItem key={tw.value} value={tw.value}>{tw.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+              Page size
+            </label>
+            <Select value={String(pageSize)} onValueChange={(v) => setPageSize(parseInt(v, 10))}>
+              <SelectTrigger className="h-8 text-xs mt-0.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FAILED_PAGE_SIZE_OPTIONS.map(n => (
+                  <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {filterCount > 0 && (
+          <div className="mt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[10px] gap-1"
+              onClick={() => {
+                setStatusFilter("all");
+                setTimeWindow("7d");
+              }}
+            >
+              <X className="h-3 w-3" />
+              Reset filters
+            </Button>
+          </div>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-2 pt-0">
+        {error && (
+          <div className="rounded-md border border-red-300 bg-red-50/60 dark:bg-red-950/20 p-3 text-xs flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-red-700 dark:text-red-400">Failed to load queue</p>
+              <p className="text-muted-foreground mt-0.5 font-mono text-[10px]">{error}</p>
+            </div>
+          </div>
+        )}
+        {!error && rows.length === 0 && !loading && (
+          <p className="text-xs text-muted-foreground text-center py-6">
+            {filterCount > 0
+              ? "No items match the current filters."
+              : "No failed or dead-letter items in this window. ✅"}
+          </p>
+        )}
+        {rows.map(item => (
+          <div key={item.id} className="text-xs border rounded p-2 bg-red-50/50 dark:bg-red-950/10">
+            <div className="flex justify-between gap-2 items-start">
+              <span className="font-semibold truncate">
+                {item.action || 'unknown action'} — {item.order_id || 'no order'}
+              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                <Badge variant="outline" className="text-[9px]">
+                  {item.status} (attempt {item.retry_count ?? 0})
+                </Badge>
+                <span className="text-[9px] text-muted-foreground tabular-nums">
+                  {fmtRelative(item.last_failed_at || item.updated_at || item.created_at)}
+                </span>
+              </div>
+            </div>
+            <p className="text-red-700 dark:text-red-400 mt-1 font-mono break-all">
+              {item.error_message || 'No error message'}
+            </p>
+          </div>
+        ))}
+
+        {/* Pagination footer */}
+        {total > 0 && (
+          <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/40">
+            <p className="text-[10px] text-muted-foreground">
+              Showing <span className="font-medium text-foreground tabular-nums">{showingFrom.toLocaleString()}</span>
+              –<span className="font-medium text-foreground tabular-nums">{showingTo.toLocaleString()}</span>{" "}
+              of <span className="font-medium text-foreground tabular-nums">{total.toLocaleString()}</span>{" "}
+              · Page <span className="tabular-nums">{page + 1}</span> of <span className="tabular-nums">{pageCount}</span>
+            </p>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 gap-1 text-[10px]"
+                disabled={!hasPrev || loading}
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="h-3 w-3" />
+                Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 gap-1 text-[10px]"
+                disabled={!hasNext || loading}
+                onClick={() => setPage(p => p + 1)}
+              >
+                Next
+                <ChevronRight className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

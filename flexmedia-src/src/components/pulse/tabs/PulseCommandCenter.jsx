@@ -12,7 +12,7 @@ import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
-import { TrendingUp, Users, ArrowRight, UserPlus, MapPin, Activity } from "lucide-react";
+import { TrendingUp, Users, ArrowRight, UserPlus, MapPin, Activity, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Tooltip styling ───────────────────────────────────────────────────────────
@@ -326,28 +326,64 @@ function SuburbDistributionCard({ pulseListings }) {
 }
 
 // ── Card 6: Recent Timeline ───────────────────────────────────────────────────
+// Compact preview only — last 10 events. The "View full timeline" link below
+// switches to the dedicated Timeline tab on IndustryPulse, which renders the full
+// audit-style view with filters + paging.
 
-function RecentTimelineCard({ pulseTimeline }) {
+function RecentTimelineCard({ pulseTimeline, onViewFullTimeline }) {
   const recentEntries = useMemo(
-    () => (pulseTimeline || []).slice(0, 20),
+    () => (pulseTimeline || []).slice(0, 10),
     [pulseTimeline]
   );
+
+  // Total events in the last 24h — gives ops the scope at a glance
+  const events24h = useMemo(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    return (pulseTimeline || []).filter(e => {
+      const d = new Date(e.created_at);
+      return !isNaN(d.getTime()) && d.getTime() >= cutoff;
+    }).length;
+  }, [pulseTimeline]);
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
       <CardHeader className="pb-2 pt-4 px-4">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <Activity className="h-4 w-4 text-cyan-500" />
-          Recent Timeline
-        </CardTitle>
-        <p className="text-[10px] text-muted-foreground">Last 20 pulse events</p>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Activity className="h-4 w-4 text-cyan-500" />
+              Recent Timeline
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-normal">
+                {events24h} in last 24h
+              </Badge>
+            </CardTitle>
+            <p className="text-[10px] text-muted-foreground mt-0.5">Latest 10 pulse events (preview)</p>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="px-4 pb-4">
         <PulseTimeline
           entries={recentEntries}
-          maxHeight="max-h-[360px]"
+          maxHeight="max-h-[300px]"
           emptyMessage="No timeline events yet"
+          compact
         />
+        {onViewFullTimeline && (pulseTimeline?.length || 0) > 0 && (
+          <div className="mt-3 pt-2 border-t border-border/40 flex items-center justify-between">
+            <span className="text-[10px] text-muted-foreground tabular-nums">
+              {(pulseTimeline?.length || 0).toLocaleString()} total events tracked
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-[11px] gap-1 text-cyan-700 dark:text-cyan-400 hover:text-cyan-800 dark:hover:text-cyan-300"
+              onClick={onViewFullTimeline}
+            >
+              View full timeline
+              <ExternalLink className="h-3 w-3" />
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -368,6 +404,7 @@ export default function PulseCommandCenter({
   stats = {},
   search = "",
   onAddToCrm,
+  onViewFullTimeline,
 }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -381,7 +418,10 @@ export default function PulseCommandCenter({
         stats={stats}
       />
       <SuburbDistributionCard pulseListings={pulseListings} />
-      <RecentTimelineCard pulseTimeline={pulseTimeline} />
+      <RecentTimelineCard
+        pulseTimeline={pulseTimeline}
+        onViewFullTimeline={onViewFullTimeline}
+      />
     </div>
   );
 }
