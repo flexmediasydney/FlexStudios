@@ -28,7 +28,7 @@ serveWithAudit('updateProjectEffortRealtimeRobust', async (req) => {
 
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     const { event, data, old_data } = body;
 
     // Resolve the projectId from whichever entity triggered this

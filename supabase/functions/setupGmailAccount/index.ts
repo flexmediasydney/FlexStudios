@@ -25,10 +25,11 @@ serveWithAudit('setupGmailAccount', async (req) => {
       return errorResponse('Forbidden: insufficient permissions', 403);
     }
 
-    const { emailAddress, displayName, teamId, accessToken, refreshToken } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { emailAddress, displayName, teamId, accessToken, refreshToken } = body;
 
     if (!emailAddress || !refreshToken) {
-      return errorResponse('emailAddress and refreshToken are required. Use the Gmail OAuth connect flow in Inbox settings.', 400);
+      return errorResponse('emailAddress and refreshToken are required. Use the Gmail OAuth connect flow in Inbox settings.', 400, req);
     }
 
     // Check if account already exists

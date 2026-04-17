@@ -11,7 +11,8 @@ serveWithAudit('searchAustralianAddresses', async (req) => {
       return errorResponse('Unauthorized', 401);
     }
 
-    const { searchText } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { searchText } = body;
 
     if (!searchText || searchText.trim().length < 1) {
       return jsonResponse({ predictions: [] });

@@ -11,10 +11,11 @@ serveWithAudit('syncDenormalisedFieldsOnNameChange', async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
 
-    const { entity_type, entity_id, new_name } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { entity_type, entity_id, new_name } = body;
 
     if (!entity_type || !entity_id || !new_name) {
-      return errorResponse('entity_type, entity_id, new_name required', 400);
+      return errorResponse('entity_type, entity_id, new_name required', 400, req);
     }
 
     let updatedCount = 0;

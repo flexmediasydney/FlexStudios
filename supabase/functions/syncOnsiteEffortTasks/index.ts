@@ -12,7 +12,8 @@ serveWithAudit('syncOnsiteEffortTasks', async (req) => {
 
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const { project_id } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { project_id } = body;
 
     if (!project_id) return jsonResponse({ success: false, error: 'project_id required' }, 400);
 

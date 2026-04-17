@@ -8,17 +8,18 @@ serveWithAudit('trackLinkClick', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
 
+    const body = await req.json().catch(() => ({} as any));
     const {
       email_message_id,
       url,
       link_text,
       clicked_by,
       clicked_by_name,
-    } = await req.json();
+    } = body;
 
     // Validate required fields
     if (!email_message_id || !url) {
-      return errorResponse('Missing required fields: email_message_id, url', 400);
+      return errorResponse('Missing required fields: email_message_id, url', 400, req);
     }
 
     // Validate URL format

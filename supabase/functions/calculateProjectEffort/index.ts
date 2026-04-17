@@ -11,7 +11,9 @@ serveWithAudit('calculateProjectEffort', async (req) => {
       return jsonResponse({ error: 'Unauthorized' }, 401);
     }
 
-    const { projectId } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { projectId } = body;
+    if (!projectId) return errorResponse('projectId required', 400, req);
 
     const [allProjects, tasks, timeLogs] = await Promise.all([
       entities.Project.filter({ id: projectId }),

@@ -12,7 +12,7 @@ serveWithAudit('updateTaskEffortRealtimeRobust', async (req) => {
 
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     // Support create/update payloads (data), delete payloads (old_data), and direct calls
     const data = body.data || body.old_data || body;
     const taskId = data?.task_id;

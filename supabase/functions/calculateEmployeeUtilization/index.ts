@@ -12,7 +12,8 @@ serveWithAudit('calculateEmployeeUtilization', async (req) => {
       return errorResponse('Forbidden', 403);
     }
 
-    const { userId, period = 'week' } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { userId, period = 'week' } = body;
 
     // Guard: userId must be a valid UUID. Without this, undefined/empty values
     // blow up Postgres with "invalid input syntax for type uuid: undefined"

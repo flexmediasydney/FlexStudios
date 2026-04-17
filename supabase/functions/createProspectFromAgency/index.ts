@@ -16,10 +16,11 @@ serveWithAudit('createProspectFromAgency', async (req) => {
       return errorResponse('Forbidden: insufficient role', 403);
     }
 
-    const { agency_id, agent_name, agent_email, agent_phone, agent_title } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { agency_id, agent_name, agent_email, agent_phone, agent_title } = body;
 
     if (!agency_id || !agent_name || !agent_email) {
-      return errorResponse('Missing required fields', 400);
+      return errorResponse('Missing required fields', 400, req);
     }
 
     // Get the agency

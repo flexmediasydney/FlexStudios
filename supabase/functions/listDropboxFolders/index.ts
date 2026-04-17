@@ -13,7 +13,7 @@ serveWithAudit('listDropboxFolders', async (req) => {
     if (!token) return errorResponse('Dropbox API token not configured', 500);
 
     // Get path from request body
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     const path = body.path ? (body.path.startsWith('/') ? body.path : '/' + body.path) : '';
 
     // Fetch folder contents from Dropbox

@@ -27,7 +27,7 @@ serveWithAudit('logOnsiteEffortOnUpload', async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const payload = await req.json();
+    const payload = await req.json().catch(() => ({} as any));
 
     if (payload?._health_check) {
       return jsonResponse({ _version: 'v1.1', _fn: 'logOnsiteEffortOnUpload', _ts: '2026-03-17' });

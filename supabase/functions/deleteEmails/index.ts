@@ -72,7 +72,8 @@ serveWithAudit('deleteEmails', async (req) => {
       return errorResponse('Forbidden: insufficient role', 403, req);
     }
 
-    const { threadIds, emailAccountId, permanently = false } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { threadIds, emailAccountId, permanently = false } = body;
 
     if (!threadIds || !Array.isArray(threadIds) || threadIds.length === 0) {
       return errorResponse('No emails to delete', 400, req);

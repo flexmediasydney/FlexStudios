@@ -15,15 +15,16 @@ serveWithAudit('secureEmailRead', async (req) => {
       return errorResponse('Unauthorized', 401);
     }
 
-    const { email_account_id, limit = 20 } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { email_account_id, limit = 20 } = body;
 
     // Validate limit to prevent memory exhaustion
     if (!Number.isFinite(limit) || limit < 1 || limit > 500) {
-      return errorResponse('Invalid limit. Must be 1-500.', 400);
+      return errorResponse('Invalid limit. Must be 1-500.', 400, req);
     }
 
     if (!email_account_id || typeof email_account_id !== 'string') {
-      return errorResponse('email_account_id is required', 400);
+      return errorResponse('email_account_id is required', 400, req);
     }
 
     // CRITICAL: Verify user owns this email account

@@ -17,10 +17,11 @@ serveWithAudit('analyzeCategoryImpact', async (req) => {
       return errorResponse('Forbidden: admin only', 403);
     }
 
-    const { categoryId, categoryName } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { categoryId, categoryName } = body;
 
     if (!categoryId && !categoryName) {
-      return errorResponse('Category ID or name required', 400);
+      return errorResponse('Category ID or name required', 400, req);
     }
 
     // Fetch the category to get definitive name

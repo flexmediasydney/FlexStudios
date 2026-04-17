@@ -14,7 +14,7 @@ serveWithAudit('logEmailActivity', async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
 
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     const {
       email_message_id,
       email_account_id,
@@ -26,7 +26,7 @@ serveWithAudit('logEmailActivity', async (req) => {
 
     // Validate required fields
     if (!email_message_id || !email_account_id || !action_type) {
-      return errorResponse('Missing required fields: email_message_id, email_account_id, action_type', 400);
+      return errorResponse('Missing required fields: email_message_id, email_account_id, action_type', 400, req);
     }
 
     // Validate action_type

@@ -104,13 +104,21 @@ async function runLogQuery(sql: string): Promise<any[]> {
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
-/** Per-function 24h aggregate stats. */
+/** Per-function 24h aggregate stats.
+ *
+ * Note: `error_count` counts only 5xx (server faults). 4xx responses are
+ * client errors — bad params, missing auth, forbidden — and are well-formed
+ * API behaviour. They're surfaced separately as `client_error_count` so we
+ * can still drill in, but they don't drag the success-rate badge down or
+ * flag the function in the "needs attention" bucket.
+ */
 const AGG_SQL = `
   SELECT
     REGEXP_EXTRACT(req.pathname, r'/functions/v1/([^/?]+)') AS function_name,
     COUNT(*) AS total_calls,
     COUNTIF(resp.status_code >= 200 AND resp.status_code < 400) AS success_count,
-    COUNTIF(resp.status_code >= 400) AS error_count,
+    COUNTIF(resp.status_code >= 400 AND resp.status_code < 500) AS client_error_count,
+    COUNTIF(resp.status_code >= 500) AS error_count,
     APPROX_QUANTILES(meta.execution_time_ms, 100)[OFFSET(50)] AS p50_ms,
     APPROX_QUANTILES(meta.execution_time_ms, 100)[OFFSET(95)] AS p95_ms
   FROM function_edge_logs
@@ -123,7 +131,8 @@ const AGG_SQL = `
 `;
 
 /**
- * Most recent error timestamp + status per function over the last 24h.
+ * Most recent server-error timestamp + status per function over the last 24h.
+ * Only tracks 5xx here — 4xx is client-caused and doesn't indicate a server issue.
  * Used to decorate the aggregate rows with a "last error" column.
  */
 const LAST_ERR_SQL = `
@@ -136,7 +145,7 @@ const LAST_ERR_SQL = `
   CROSS JOIN UNNEST(metadata) AS meta
   CROSS JOIN UNNEST(meta.request) AS req
   CROSS JOIN UNNEST(meta.response) AS resp
-  WHERE resp.status_code >= 400
+  WHERE resp.status_code >= 500
     AND req.pathname IS NOT NULL
   GROUP BY function_name
 `;
@@ -179,8 +188,9 @@ interface FunctionStat {
   function_name: string;
   total_calls: number;
   success_count: number;
-  error_count: number;
-  success_rate: number; // 0-100, 2dp
+  error_count: number;          // 5xx only (server faults)
+  client_error_count: number;   // 4xx (well-formed client errors — not counted as failures)
+  success_rate: number;         // 0-100, 2dp — server-fault rate only; treats 4xx as success
   p50_ms: number;
   p95_ms: number;
   last_error_ts: number | null; // epoch ms
@@ -202,7 +212,7 @@ function microsToMs(n: number | string | null | undefined): number | null {
 function shapeAggregates(
   aggRows: any[],
   lastErrRows: any[],
-): { stats: FunctionStat[]; summary: { total_calls: number; total_errors: number; total_success: number; overall_success_rate: number; high_error_count: number } } {
+): { stats: FunctionStat[]; summary: { total_calls: number; total_errors: number; total_client_errors: number; total_success: number; overall_success_rate: number; high_error_count: number } } {
   const lastErrByFn = new Map<string, any>();
   for (const r of lastErrRows) {
     if (r.function_name) lastErrByFn.set(r.function_name, r);
@@ -210,7 +220,8 @@ function shapeAggregates(
 
   const stats: FunctionStat[] = [];
   let gTotal = 0;
-  let gErr = 0;
+  let gErr = 0;             // 5xx only
+  let gClientErr = 0;       // 4xx
   let gSucc = 0;
 
   for (const r of aggRows) {
@@ -219,18 +230,26 @@ function shapeAggregates(
     const total = Number(r.total_calls || 0);
     const succ = Number(r.success_count || 0);
     const err = Number(r.error_count || 0);
+    const clientErr = Number(r.client_error_count || 0);
     const lastErr = lastErrByFn.get(fn);
 
     gTotal += total;
     gErr += err;
+    gClientErr += clientErr;
     gSucc += succ;
+
+    // success_rate treats 4xx as success (well-formed client error, not a fault).
+    // Denominator for health is calls that got a response we can blame on the server.
+    const faultDenom = total;
+    const successLike = succ + clientErr;
 
     stats.push({
       function_name: fn,
       total_calls: total,
       success_count: succ,
       error_count: err,
-      success_rate: total === 0 ? 100 : round2((succ / total) * 100),
+      client_error_count: clientErr,
+      success_rate: faultDenom === 0 ? 100 : round2((successLike / faultDenom) * 100),
       p50_ms: Number(r.p50_ms || 0),
       p95_ms: Number(r.p95_ms || 0),
       last_error_ts: lastErr ? microsToMs(lastErr.last_error_ts) : null,
@@ -239,7 +258,7 @@ function shapeAggregates(
     });
   }
 
-  // Sort: worst error-rate first, then highest volume among healthy
+  // Sort: worst server-error-rate first, then highest volume among healthy
   stats.sort((a, b) => {
     const aErrRate = a.total_calls === 0 ? 0 : a.error_count / a.total_calls;
     const bErrRate = b.total_calls === 0 ? 0 : b.error_count / b.total_calls;
@@ -247,7 +266,8 @@ function shapeAggregates(
     return b.total_calls - a.total_calls;
   });
 
-  const overallSuccessRate = gTotal === 0 ? 100 : round2((gSucc / gTotal) * 100);
+  // overall_success_rate counts 4xx as success — only genuine server faults drag it down.
+  const overallSuccessRate = gTotal === 0 ? 100 : round2(((gSucc + gClientErr) / gTotal) * 100);
   const highErrorCount = stats.filter(s =>
     s.total_calls >= 5 && (s.error_count / s.total_calls) > 0.05
   ).length;
@@ -257,6 +277,7 @@ function shapeAggregates(
     summary: {
       total_calls: gTotal,
       total_errors: gErr,
+      total_client_errors: gClientErr,
       total_success: gSucc,
       overall_success_rate: overallSuccessRate,
       high_error_count: highErrorCount,

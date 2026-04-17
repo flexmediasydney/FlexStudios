@@ -14,14 +14,14 @@ serveWithAudit('markEmailsAsRead', async (req) => {
       return errorResponse('Forbidden: insufficient role', 403);
     }
 
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     const { threadIds, emailAccountId } = body;
 
     if (!threadIds || !Array.isArray(threadIds) || threadIds.length === 0) {
-      return errorResponse('threadIds must be a non-empty array', 400);
+      return errorResponse('threadIds must be a non-empty array', 400, req);
     }
     if (typeof emailAccountId !== 'string' || !emailAccountId.trim()) {
-      return errorResponse('emailAccountId must be a non-empty string', 400);
+      return errorResponse('emailAccountId must be a non-empty string', 400, req);
     }
 
     // Verify the email account belongs to the authenticated user

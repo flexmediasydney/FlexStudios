@@ -24,9 +24,10 @@ serveWithAudit('checkAndArchiveProject', async (req) => {
 
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const { project_id, triggered_by } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { project_id, triggered_by } = body;
 
-    if (!project_id) return errorResponse('project_id required', 400);
+    if (!project_id) return errorResponse('project_id required', 400, req);
 
     const project = await entities.Project.get(project_id);
     if (!project) return errorResponse('Project not found', 404);

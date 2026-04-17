@@ -19,7 +19,8 @@ serveWithAudit('validateSettingsAccess', async (req) => {
       return errorResponse('You do not have permission to access this resource', 403);
     }
 
-    const { endpoint } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { endpoint } = body;
 
     // Per-endpoint permission checks
     const rules: Record<string, string[]> = {

@@ -22,7 +22,7 @@ serveWithAudit('updateRevisionStatus', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
 
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     const { event, data, function_args } = body;
 
     // Resolve event_type and revision_id from various sources

@@ -31,8 +31,9 @@ serveWithAudit('applyRevisionPricingImpact', async (req) => {
       return errorResponse('Forbidden: insufficient permissions', 403);
     }
 
-    const { revision_id, project_id } = await req.json();
-    if (!revision_id || !project_id) return errorResponse('Missing revision_id or project_id', 400);
+    const body = await req.json().catch(() => ({} as any));
+    const { revision_id, project_id } = body;
+    if (!revision_id || !project_id) return errorResponse('Missing revision_id or project_id', 400, req);
 
     const [revision, project] = await Promise.all([
       entities.ProjectRevision.get(revision_id),

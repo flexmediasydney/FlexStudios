@@ -6,11 +6,12 @@ serveWithAudit('logProjectChange', async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
     const user = await getUserFromReq(req);
-    const payload = await req.json();
+    const payload = await req.json().catch(() => ({} as any));
 
     const { event, data, old_data } = payload;
 
-    if (!user) return errorResponse('Unauthorized', 401);
+    if (!user) return errorResponse('Unauthorized', 401, req);
+    if (!event?.type) return errorResponse('event.type required', 400, req);
 
     const changedFields: any[] = [];
     let description = '';

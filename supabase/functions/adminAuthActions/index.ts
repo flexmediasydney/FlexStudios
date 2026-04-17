@@ -13,7 +13,7 @@ serveWithAudit('adminAuthActions', async (req) => {
     });
 
     // Parse body first so we can check if it's a registration (no auth needed)
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     const { action } = body;
 
     // ── Auth: require master_admin for all actions EXCEPT register_with_code ──

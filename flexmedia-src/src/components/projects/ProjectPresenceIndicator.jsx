@@ -94,11 +94,14 @@ export default function ProjectPresenceIndicator({ projectId, currentUser, label
     return () => {
       isMounted.current = false;
       clearInterval(heartbeatRef.current);
-      // Fire-and-forget leave signal
-      api.functions.invoke("projectPresenceHeartbeat", {
-        project_id: projectId,
-        action: "leave"
-      }).catch(() => {});
+      // Fire-and-forget leave signal — guard against stale projectId on rapid
+      // unmount/navigation where the captured id may have been cleared.
+      if (projectId && currentUser) {
+        api.functions.invoke("projectPresenceHeartbeat", {
+          project_id: projectId,
+          action: "leave"
+        }).catch(() => {});
+      }
     };
   }, [projectId, currentUser, sendHeartbeat]);
 

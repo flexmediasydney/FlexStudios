@@ -37,7 +37,8 @@ serveWithAudit('getEmailAttachment', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401, req);
 
-    const { messageId, attachmentId, accountId } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { messageId, attachmentId, accountId } = body;
     if (!messageId || !attachmentId || !accountId) {
       return errorResponse('messageId, attachmentId, and accountId are required', 400, req);
     }

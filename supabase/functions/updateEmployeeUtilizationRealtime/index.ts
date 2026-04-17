@@ -17,7 +17,8 @@ serveWithAudit('updateEmployeeUtilizationRealtime', async (req) => {
 
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const { event } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { event } = body;
 
     if (!event?.data?.user_id) {
       return jsonResponse({ success: true });

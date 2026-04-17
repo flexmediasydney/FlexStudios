@@ -86,7 +86,8 @@ serveWithAudit('restoreEmails', async (req) => {
       return errorResponse('Forbidden: insufficient permissions', 403, req);
     }
 
-    const { threadIds, emailAccountId } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { threadIds, emailAccountId } = body;
 
     if (!threadIds || !Array.isArray(threadIds) || !emailAccountId) {
       return errorResponse('Invalid request: threadIds (array) and emailAccountId are required', 400, req);

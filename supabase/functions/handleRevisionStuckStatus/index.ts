@@ -10,9 +10,10 @@ serveWithAudit('handleRevisionStuckStatus', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
 
-    const { revision_id, is_stuck } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { revision_id, is_stuck } = body;
 
-    if (!revision_id) return errorResponse('Missing revision_id', 400);
+    if (!revision_id) return errorResponse('Missing revision_id', 400, req);
 
     const revision = await entities.ProjectRevision.filter({ id: revision_id });
     if (!revision || revision.length === 0) return errorResponse('Revision not found', 404);

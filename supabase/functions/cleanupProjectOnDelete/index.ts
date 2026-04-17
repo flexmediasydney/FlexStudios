@@ -8,8 +8,9 @@ serveWithAudit('cleanupProjectOnDelete', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
 
-    const { project_id } = await req.json();
-    if (!project_id) return errorResponse('project_id required', 400);
+    const body = await req.json().catch(() => ({} as any));
+    const { project_id } = body;
+    if (!project_id) return errorResponse('project_id required', 400, req);
 
     // Soft-delete all project tasks (preserves TaskTimeLogs for audit trail)
     const tasks = await entities.ProjectTask.filter({ project_id }, null, 500).catch(() => [] as any[]);

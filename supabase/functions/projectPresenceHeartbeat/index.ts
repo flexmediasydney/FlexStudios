@@ -19,14 +19,19 @@ serveWithAudit('projectPresenceHeartbeat', async (req) => {
     const expiresAt = new Date(now.getTime() + PRESENCE_TTL_SECONDS * 1000);
 
     if (action === 'leave') {
-      const existing = await entities.ProjectPresence.filter({ project_id, user_id: user.id });
+      // Leave is best-effort — any DB failure here would just leave a stale record
+      // that expires naturally, so swallow errors rather than 500-ing the caller.
+      const existing = await entities.ProjectPresence.filter({ project_id, user_id: user.id }).catch(() => []);
       for (const record of existing) {
-        await entities.ProjectPresence.delete(record.id);
+        await entities.ProjectPresence.delete(record.id).catch(() => {});
       }
       return jsonResponse({ success: true, action: 'left' });
     }
 
-    // Upsert presence
+    // Upsert presence. Rapid heartbeats from the same user on the same project
+    // can race (two inserts trying to create "first" row concurrently). If the
+    // create fails because another heartbeat just won the race, fall back to
+    // update on re-fetched row — the end state is the same.
     const existing = await entities.ProjectPresence.filter({ project_id, user_id: user.id });
 
     const presenceData = {
@@ -39,21 +44,33 @@ serveWithAudit('projectPresenceHeartbeat', async (req) => {
       expires_at: expiresAt.toISOString(),
     };
 
-    if (existing && existing.length > 0) {
-      await entities.ProjectPresence.update(existing[0].id, presenceData);
-    } else {
-      await entities.ProjectPresence.create(presenceData);
+    try {
+      if (existing && existing.length > 0) {
+        await entities.ProjectPresence.update(existing[0].id, presenceData);
+      } else {
+        await entities.ProjectPresence.create(presenceData);
+      }
+    } catch (upsertErr: any) {
+      // Race condition: another concurrent heartbeat just created/updated the row.
+      // Re-fetch and update the winning row rather than bubbling a 500.
+      const retry = await entities.ProjectPresence.filter({ project_id, user_id: user.id }).catch(() => []);
+      if (retry.length > 0) {
+        await entities.ProjectPresence.update(retry[0].id, presenceData).catch(() => {});
+      } else {
+        // Genuine failure — log but don't fail the request (presence is best-effort).
+        console.warn('Presence upsert failed after retry:', upsertErr?.message);
+      }
     }
 
     // Clean up stale presence records
-    const allPresence = await entities.ProjectPresence.filter({ project_id });
+    const allPresence = await entities.ProjectPresence.filter({ project_id }).catch(() => []);
     const stale = allPresence.filter((p: any) => p.expires_at && new Date(p.expires_at) < now);
     for (const record of stale) {
       await entities.ProjectPresence.delete(record.id).catch(() => {});
     }
 
     // Return fresh active viewers
-    const fresh = await entities.ProjectPresence.filter({ project_id });
+    const fresh = await entities.ProjectPresence.filter({ project_id }).catch(() => []);
     const active = fresh.filter((p: any) => p.expires_at && new Date(p.expires_at) >= now);
 
     return jsonResponse({
@@ -69,6 +86,8 @@ serveWithAudit('projectPresenceHeartbeat', async (req) => {
     });
   } catch (error: any) {
     console.error('Presence heartbeat error:', error);
-    return errorResponse(error.message);
+    // Presence is best-effort: degrade gracefully to an empty-viewers response
+    // instead of bubbling a 500 for what is non-critical background UI.
+    return jsonResponse({ success: false, viewers: [], error: error?.message || 'presence failed' });
   }
 });

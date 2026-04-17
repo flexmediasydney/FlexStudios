@@ -16,10 +16,11 @@ serveWithAudit('handleProspectingStateChange', async (req) => {
       return errorResponse('Forbidden: insufficient role', 403);
     }
 
-    const { entity_type, entity_id, old_state, new_state } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { entity_type, entity_id, old_state, new_state } = body;
 
     if (!entity_type || !entity_id || !new_state) {
-      return errorResponse('Missing required fields', 400);
+      return errorResponse('Missing required fields', 400, req);
     }
 
     const entityMap: Record<string, any> = {
@@ -29,7 +30,7 @@ serveWithAudit('handleProspectingStateChange', async (req) => {
 
     const entity = entityMap[entity_type];
     if (!entity) {
-      return errorResponse('Invalid entity type', 400);
+      return errorResponse('Invalid entity type', 400, req);
     }
 
     // Get the entity to get its current name

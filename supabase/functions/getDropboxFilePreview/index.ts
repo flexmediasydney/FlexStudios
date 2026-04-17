@@ -9,9 +9,10 @@ serveWithAudit('getDropboxFilePreview', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
 
-    const { filePath } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { filePath } = body;
     if (!filePath) {
-      return errorResponse('filePath required', 400);
+      return errorResponse('filePath required', 400, req);
     }
 
     const token = Deno.env.get('DROPBOX_API_TOKEN');

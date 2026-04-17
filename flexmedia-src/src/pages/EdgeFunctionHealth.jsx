@@ -378,10 +378,15 @@ export default function EdgeFunctionHealth() {
             sublabel={`${fmtNum(summary.total_success)} of ${fmtNum(summary.total_calls)}`}
           />
           <StatCard
-            label="Errors (24h)"
+            label="Server errors (24h)"
             value={fmtNum(summary.total_errors)}
             icon={AlertTriangle}
             tone={summary.total_errors > 0 ? "red" : "green"}
+            sublabel={
+              summary.total_client_errors != null
+                ? `+ ${fmtNum(summary.total_client_errors)} 4xx (client)`
+                : "5xx only · 4xx tracked separately"
+            }
           />
           <StatCard
             label="High error rate (>5%)"
@@ -436,7 +441,7 @@ export default function EdgeFunctionHealth() {
                     <TableHead className="w-[220px]">Function</TableHead>
                     <TableHead className="w-[90px] text-right">Calls</TableHead>
                     <TableHead className="w-[110px] text-right">Success</TableHead>
-                    <TableHead className="w-[90px] text-right">Errors</TableHead>
+                    <TableHead className="w-[110px] text-right" title="5xx server errors (4xx client errors shown separately)">Errors</TableHead>
                     <TableHead className="w-[80px] text-right">p50</TableHead>
                     <TableHead className="w-[80px] text-right">p95</TableHead>
                     <TableHead className="w-[180px]">Last error</TableHead>
@@ -486,11 +491,21 @@ export default function EdgeFunctionHealth() {
                           </span>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {fn.error_count > 0 ? (
-                            <span className="text-red-600 font-semibold">{fmtNum(fn.error_count)}</span>
-                          ) : (
-                            <span className="text-muted-foreground">0</span>
-                          )}
+                          <div className="flex flex-col items-end">
+                            {fn.error_count > 0 ? (
+                              <span className="text-red-600 font-semibold" title="5xx server errors">{fmtNum(fn.error_count)}</span>
+                            ) : (
+                              <span className="text-muted-foreground">0</span>
+                            )}
+                            {fn.client_error_count > 0 && (
+                              <span
+                                className="text-[10px] text-amber-700/80 tabular-nums"
+                                title="4xx client errors — well-formed API behaviour (bad params, auth), not counted as failures"
+                              >
+                                +{fmtNum(fn.client_error_count)} 4xx
+                              </span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-xs">
                           {fmtMs(fn.p50_ms)}

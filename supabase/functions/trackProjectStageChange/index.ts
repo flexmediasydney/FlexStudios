@@ -46,7 +46,7 @@ serveWithAudit('trackProjectStageChange', async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const payload = await req.json();
+    const payload = await req.json().catch(() => ({} as any));
 
     if (payload?._health_check) {
       return jsonResponse({ _version: 'v2.0', _fn: 'trackProjectStageChange', _ts: '2026-03-17' });

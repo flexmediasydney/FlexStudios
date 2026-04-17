@@ -13,10 +13,11 @@ serveWithAudit('repairProductCategoryIssues', async (req) => {
       return errorResponse('Forbidden: Admin access required', 403);
     }
 
-    const { issue_id, action } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { issue_id, action } = body;
 
     if (!issue_id || !action) {
-      return errorResponse('Missing required fields: issue_id, action', 400);
+      return errorResponse('Missing required fields: issue_id, action', 400, req);
     }
 
     const [products, categories, projectTypes] = await Promise.all([

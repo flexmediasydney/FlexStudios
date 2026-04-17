@@ -329,7 +329,7 @@ serveWithAudit('notificationService', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
 
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     const { action, ...params } = body;
 
     if (action === 'create') {

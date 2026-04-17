@@ -14,21 +14,21 @@ serveWithAudit('removeLabelsFromEmails', async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
 
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
     const { threadIds, emailAccountId, labels } = body;
 
     // Validate required fields
     if (!threadIds || !emailAccountId || !labels) {
-      return errorResponse('Missing required fields: threadIds, emailAccountId, labels', 400);
+      return errorResponse('Missing required fields: threadIds, emailAccountId, labels', 400, req);
     }
 
     // Validate types
     if (!Array.isArray(threadIds) || !Array.isArray(labels)) {
-      return errorResponse('threadIds and labels must be arrays', 400);
+      return errorResponse('threadIds and labels must be arrays', 400, req);
     }
 
     if (typeof emailAccountId !== 'string' || !emailAccountId.trim()) {
-      return errorResponse('emailAccountId must be a non-empty string', 400);
+      return errorResponse('emailAccountId must be a non-empty string', 400, req);
     }
 
     // Validate threadIds are strings

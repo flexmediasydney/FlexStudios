@@ -14,10 +14,11 @@ serveWithAudit('setEmailVisibility', async (req) => {
     const admin = getAdminClient();
     const entities = createEntities(admin);
 
-    const { threadIds, emailAccountId, visibility } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { threadIds, emailAccountId, visibility } = body;
 
     if (!threadIds || !Array.isArray(threadIds) || !emailAccountId || !visibility) {
-      return errorResponse('Invalid request', 400);
+      return errorResponse('Invalid request', 400, req);
     }
 
     const validVisibilities = ['private', 'shared', 'team', 'public'];

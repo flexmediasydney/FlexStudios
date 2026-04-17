@@ -14,9 +14,10 @@ serveWithAudit('geocodeProject', async (req) => {
     const apiKey = Deno.env.get('GOOGLE_PLACES_API_KEY');
     if (!apiKey) return errorResponse('GOOGLE_PLACES_API_KEY not configured', 500);
 
-    const { projectIds } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { projectIds } = body;
     if (!Array.isArray(projectIds) || projectIds.length === 0) {
-      return errorResponse('projectIds array required', 400);
+      return errorResponse('projectIds array required', 400, req);
     }
 
     // Fetch project records

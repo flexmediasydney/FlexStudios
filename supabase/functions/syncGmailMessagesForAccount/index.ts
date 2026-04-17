@@ -713,13 +713,14 @@ serveWithAudit('syncGmailMessagesForAccount', async (req) => {
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);
-    const { accountId, userId } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
+    const { accountId, userId } = body;
 
     // Created below, after account lookup so we can exclude our own addresses.
     let agentLookup: AgentLookup | undefined;
 
     if (!accountId || !userId) {
-      return errorResponse('Missing accountId or userId', 400);
+      return errorResponse('Missing accountId or userId', 400, req);
     }
 
     // Check if this is a service-role invocation (from syncAllEmails scheduler or cron)
