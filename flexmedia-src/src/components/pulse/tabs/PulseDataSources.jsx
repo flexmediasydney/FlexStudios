@@ -18,18 +18,37 @@ import {
   Database, Users, Home, DollarSign, Clock, CheckCircle2,
   AlertTriangle, Loader2, Plus, Trash2, Settings2,
   ChevronDown, ChevronUp, Eye, MapPin, ToggleLeft, ToggleRight,
+  ExternalLink, Repeat, Globe, Calendar, Coins, FileCode2,
 } from "lucide-react";
 
 // ── Source definitions ────────────────────────────────────────────────────────
+// Shared bounding box for Greater Sydney — covers all 5 regions
+const SYDNEY_BB = "-33.524668718554146,150.02828594437534,-34.14521322911264,151.78609844437534";
 
 const SOURCES = [
   {
     source_id: "rea_agents",
     label: "REA Agent Profiles",
-    description: "websift — Agent profiles, stats, reviews, awards from realestate.com.au",
+    actor_slug: "websift/realestateau",
+    apify_url: "https://apify.com/websift/realestateau",
+    description: "Agent profiles, stats, reviews, awards from realestate.com.au",
     icon: Users,
     color: "text-red-600",
+    accentClass: "from-red-500/10 to-red-600/5 border-red-200/60 dark:border-red-800/40",
     defaultMax: 30,
+    approach: "per_suburb",
+    approachLabel: "Per-suburb iteration",
+    approachExplain: "167 active suburbs x 30 agents each ~= 5,010 agents per run",
+    perSuburb: 30,
+    schedule: "Weekly (Sunday)",
+    scheduleHint: "Sun 4am AEST",
+    cost_note: "~$0.005 per suburb x 167 ~= $0.85 per run",
+    input_params: [
+      { key: "location", value: '"{suburb} NSW"', note: "iterates 167 suburbs" },
+      { key: "maxPages", value: "3", note: "~30 agents per suburb" },
+      { key: "fullScrape", value: "true" },
+      { key: "sortBy", value: '"SUBURB_SALES_PERFORMANCE"' },
+    ],
     runParams: (subs, max) => ({
       suburbs: subs,
       state: "NSW",
@@ -41,10 +60,24 @@ const SOURCES = [
   {
     source_id: "rea_listings",
     label: "REA Listings (per suburb)",
-    description: "azzouzana — Listings with agent emails, photos, IDs from realestate.com.au",
+    actor_slug: "azzouzana/real-estate-au-scraper-pro",
+    apify_url: "https://apify.com/azzouzana/real-estate-au-scraper-pro",
+    description: "Listings with agent emails, photos, IDs from realestate.com.au",
     icon: Home,
     color: "text-blue-600",
+    accentClass: "from-blue-500/10 to-blue-600/5 border-blue-200/60 dark:border-blue-800/40",
     defaultMax: 20,
+    approach: "per_suburb",
+    approachLabel: "Per-suburb iteration",
+    approachExplain: "167 active suburbs x 20 listings each ~= 3,340 listings per run",
+    perSuburb: 20,
+    schedule: "On-demand / Weekly",
+    scheduleHint: "No active cron",
+    cost_note: "~$0.01 per suburb x 167 ~= $1.70 per run",
+    input_params: [
+      { key: "startUrl", value: '"…/buy/in-{suburb-slug},+nsw/list-1"', note: "iterates 167 suburbs" },
+      { key: "maxItems", value: "20", note: "per suburb" },
+    ],
     runParams: (subs, max) => ({
       suburbs: subs,
       state: "NSW",
@@ -56,11 +89,26 @@ const SOURCES = [
   {
     source_id: "rea_listings_bb_buy",
     label: "REA Sales (Greater Sydney)",
-    description: "azzouzana — Bounding box buy listings, sorted by newest",
+    actor_slug: "azzouzana/real-estate-au-scraper-pro",
+    apify_url: "https://apify.com/azzouzana/real-estate-au-scraper-pro",
+    description: "Bounding box buy listings, sorted by newest",
     icon: DollarSign,
     color: "text-green-600",
+    accentClass: "from-emerald-500/10 to-green-600/5 border-emerald-200/60 dark:border-emerald-800/40",
     defaultMax: 500,
-    isBoundingBox: true,
+    approach: "bounding_box",
+    approachLabel: "Bounding box",
+    approachExplain: "Single URL covers all of Greater Sydney - up to 500 listings per run",
+    schedule: "Daily 6am",
+    scheduleHint: "6am AEST",
+    cost_note: "~$0.05 per run (single call)",
+    bboxRegion: "Greater Sydney",
+    bboxCoords: { nw: { lat: -33.5247, lng: 150.0283 }, se: { lat: -34.1452, lng: 151.7861 } },
+    input_params: [
+      { key: "startUrl", value: `"…/buy/list-1?boundingBox=${SYDNEY_BB}…"` },
+      { key: "maxItems", value: "500" },
+      { key: "activeSort", value: "list-date" },
+    ],
     runParams: (_, max) => ({
       suburbs: [],
       state: "NSW",
@@ -72,11 +120,26 @@ const SOURCES = [
   {
     source_id: "rea_listings_bb_rent",
     label: "REA Rentals (Greater Sydney)",
-    description: "azzouzana — Bounding box rental listings",
+    actor_slug: "azzouzana/real-estate-au-scraper-pro",
+    apify_url: "https://apify.com/azzouzana/real-estate-au-scraper-pro",
+    description: "Bounding box rental listings",
     icon: Home,
     color: "text-teal-600",
+    accentClass: "from-teal-500/10 to-teal-600/5 border-teal-200/60 dark:border-teal-800/40",
     defaultMax: 500,
-    isBoundingBox: true,
+    approach: "bounding_box",
+    approachLabel: "Bounding box",
+    approachExplain: "Single URL covers all of Greater Sydney - up to 500 listings per run",
+    schedule: "Daily 7am",
+    scheduleHint: "7am AEST",
+    cost_note: "~$0.05 per run (single call)",
+    bboxRegion: "Greater Sydney",
+    bboxCoords: { nw: { lat: -33.5247, lng: 150.0283 }, se: { lat: -34.1452, lng: 151.7861 } },
+    input_params: [
+      { key: "startUrl", value: `"…/rent/list-1?boundingBox=${SYDNEY_BB}…"` },
+      { key: "maxItems", value: "500" },
+      { key: "activeSort", value: "list-date" },
+    ],
     runParams: (_, max) => ({
       suburbs: [],
       state: "NSW",
@@ -88,11 +151,25 @@ const SOURCES = [
   {
     source_id: "rea_listings_bb_sold",
     label: "REA Sold (Greater Sydney)",
-    description: "azzouzana — Bounding box recently sold",
+    actor_slug: "azzouzana/real-estate-au-scraper-pro",
+    apify_url: "https://apify.com/azzouzana/real-estate-au-scraper-pro",
+    description: "Bounding box recently sold",
     icon: DollarSign,
     color: "text-orange-600",
+    accentClass: "from-orange-500/10 to-orange-600/5 border-orange-200/60 dark:border-orange-800/40",
     defaultMax: 500,
-    isBoundingBox: true,
+    approach: "bounding_box",
+    approachLabel: "Bounding box",
+    approachExplain: "Single URL covers all of Greater Sydney - up to 500 listings per run",
+    schedule: "Daily 8am",
+    scheduleHint: "8am AEST",
+    cost_note: "~$0.05 per run (single call)",
+    bboxRegion: "Greater Sydney",
+    bboxCoords: { nw: { lat: -33.5247, lng: 150.0283 }, se: { lat: -34.1452, lng: 151.7861 } },
+    input_params: [
+      { key: "startUrl", value: `"…/sold/list-1?boundingBox=${SYDNEY_BB}"` },
+      { key: "maxItems", value: "500" },
+    ],
     runParams: (_, max) => ({
       suburbs: [],
       state: "NSW",
@@ -123,6 +200,24 @@ function fmtTs(d) {
       hour: "2-digit",
       minute: "2-digit",
     });
+  } catch {
+    return "—";
+  }
+}
+
+function fmtRelativeTs(d) {
+  if (!d) return "Never run";
+  try {
+    const diff = Date.now() - new Date(d).getTime();
+    if (diff < 0) return fmtTs(d);
+    const mins = Math.round(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.round(hrs / 24);
+    if (days < 14) return `${days}d ago`;
+    return fmtTs(d);
   } catch {
     return "—";
   }
@@ -176,67 +271,241 @@ function StatusBadge({ status }) {
   return <Badge variant="outline" className="text-[10px] px-1.5 py-0">{status || "—"}</Badge>;
 }
 
+// ── Approach diagrams ─────────────────────────────────────────────────────────
+
+function PerSuburbDiagram({ suburbCount, perSuburb }) {
+  const total = (suburbCount || 0) * (perSuburb || 0);
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 border">
+        <MapPin className="h-3 w-3 text-muted-foreground" />
+        <span className="font-mono font-semibold">{suburbCount || "—"}</span>
+        <span className="text-muted-foreground">suburbs</span>
+      </span>
+      <Repeat className="h-3 w-3 text-muted-foreground" />
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 border">
+        <span className="font-mono font-semibold">{perSuburb}</span>
+        <span className="text-muted-foreground">each</span>
+      </span>
+      <span className="text-muted-foreground">=</span>
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 border border-primary/20 text-primary">
+        <span className="font-mono font-semibold">~{total.toLocaleString()}</span>
+      </span>
+    </div>
+  );
+}
+
+function BoundingBoxDiagram({ region = "Greater Sydney", maxItems = 500 }) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 border">
+        <Globe className="h-3 w-3 text-muted-foreground" />
+        <span className="font-mono font-semibold">1 URL</span>
+      </span>
+      <span className="text-muted-foreground">-&gt;</span>
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 border">
+        <span className="text-muted-foreground">{region}</span>
+      </span>
+      <span className="text-muted-foreground">-&gt;</span>
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 border border-primary/20 text-primary">
+        <span className="font-mono font-semibold">up to {maxItems}</span>
+      </span>
+    </div>
+  );
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-// --- Source Card ---
+// --- Source Card (enhanced) ---
 
-function SourceCard({ source, lastLog, isRunning, onRun }) {
+function SourceCard({ source, lastLog, sourceConfig, activeSuburbCount, isRunning, onRun, onOpenPayload, onOpenSchedule }) {
   const Icon = source.icon;
   const lastStatus = lastLog?.status;
+  const [showInput, setShowInput] = useState(false);
+
+  // Use last_run_at from source_configs if available, else fallback to last log timestamp
+  const lastRunAt = sourceConfig?.last_run_at || lastLog?.completed_at || lastLog?.started_at || null;
+  const summary = lastLog?.result_summary || {};
+
+  // Status traffic light
+  let statusDot = "bg-gray-300";
+  if (lastStatus === "completed") statusDot = "bg-emerald-500";
+  else if (lastStatus === "running") statusDot = "bg-blue-500 animate-pulse";
+  else if (lastStatus === "failed") statusDot = "bg-red-500";
+
+  // Red if >2 days old for daily sources, >9 days for weekly
+  if (lastRunAt) {
+    const ageMs = Date.now() - new Date(lastRunAt).getTime();
+    const ageDays = ageMs / 86400000;
+    const limit = source.schedule?.includes("Weekly") ? 9 : 2;
+    if (ageDays > limit && lastStatus !== "failed") statusDot = "bg-amber-500";
+  }
+
+  const perRunEstimate = source.approach === "per_suburb"
+    ? (activeSuburbCount || 0) * (source.perSuburb || 0)
+    : source.defaultMax;
 
   return (
-    <Card className="rounded-xl border shadow-sm hover:shadow-md transition-shadow">
+    <Card className={cn(
+      "rounded-xl border shadow-sm hover:shadow-md transition-shadow bg-gradient-to-br",
+      source.accentClass,
+    )}>
       <CardContent className="p-4 flex flex-col gap-3">
-        {/* Header row */}
+        {/* Header row: icon + label + Apify link */}
         <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="p-1.5 rounded-lg bg-muted/60 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="p-2 rounded-lg bg-background/80 shrink-0 border shadow-sm">
               <Icon className={cn("h-4 w-4", source.color)} />
             </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold leading-tight truncate">{source.label}</p>
-              <p className="text-[10px] text-muted-foreground leading-snug mt-0.5 line-clamp-2">
-                {source.description}
-              </p>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <p className="text-sm font-semibold leading-tight truncate">{source.label}</p>
+                <span className={cn("inline-block h-1.5 w-1.5 rounded-full shrink-0", statusDot)} title={lastStatus || "never run"} />
+              </div>
+              <a
+                href={source.apify_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary transition-colors mt-0.5 font-mono"
+              >
+                {source.actor_slug}
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
             </div>
           </div>
-          {/* Last run status icon */}
-          {lastStatus === "completed" && (
-            <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
-          )}
-          {lastStatus === "failed" && (
-            <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
-          )}
         </div>
 
-        {/* Meta row */}
-        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            {lastLog ? fmtTs(lastLog.started_at) : "Never run"}
-          </span>
-          {lastLog && (
-            <span className="font-medium text-foreground/70">{recordsSummary(lastLog)}</span>
-          )}
-        </div>
-
-        {/* Run button */}
-        <Button
-          size="sm"
-          variant="outline"
-          className="w-full h-7 text-xs"
-          onClick={() => onRun(source)}
-          disabled={isRunning}
-        >
-          {isRunning ? (
-            <>
-              <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-              Running…
-            </>
+        {/* Approach section */}
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Badge
+              variant="outline"
+              className={cn(
+                "text-[9px] px-1.5 py-0 uppercase tracking-wide font-semibold",
+                source.approach === "per_suburb"
+                  ? "border-indigo-400/50 text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-300"
+                  : "border-cyan-400/50 text-cyan-700 bg-cyan-50 dark:bg-cyan-900/30 dark:text-cyan-300",
+              )}
+            >
+              {source.approach === "per_suburb" ? <Repeat className="h-2.5 w-2.5 mr-1" /> : <Globe className="h-2.5 w-2.5 mr-1" />}
+              {source.approachLabel}
+            </Badge>
+          </div>
+          {source.approach === "per_suburb" ? (
+            <PerSuburbDiagram suburbCount={activeSuburbCount} perSuburb={source.perSuburb} />
           ) : (
-            "Run Now"
+            <BoundingBoxDiagram region={source.bboxRegion} maxItems={source.defaultMax} />
           )}
-        </Button>
+        </div>
+
+        {/* Collapsible Input block */}
+        <div className="space-y-1">
+          <button
+            type="button"
+            onClick={() => setShowInput((v) => !v)}
+            className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <FileCode2 className="h-3 w-3" />
+            <span>Input</span>
+            {showInput ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+          {showInput && (
+            <div className="rounded-md bg-background/80 border p-2 space-y-0.5 font-mono text-[10px]">
+              {source.input_params.map((p) => (
+                <div key={p.key} className="flex items-start gap-2 leading-tight">
+                  <span className="text-primary/80 shrink-0">{p.key}:</span>
+                  <span className="text-foreground break-all">{p.value}</span>
+                  {p.note && (
+                    <span className="text-muted-foreground text-[9px] shrink-0 ml-auto italic">{p.note}</span>
+                  )}
+                </div>
+              ))}
+              {source.approach === "bounding_box" && source.bboxCoords && (
+                <div className="pt-1 mt-1 border-t text-[9px] text-muted-foreground">
+                  BBox NW {source.bboxCoords.nw.lat}, {source.bboxCoords.nw.lng} · SE {source.bboxCoords.se.lat}, {source.bboxCoords.se.lng}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Last run summary */}
+        <div className="rounded-md bg-background/60 border px-2.5 py-2 text-[10px] space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              Last run
+            </span>
+            <span className="font-medium">{fmtRelativeTs(lastRunAt)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1 text-muted-foreground">
+              {lastStatus === "completed" ? <CheckCircle2 className="h-3 w-3 text-emerald-500" /> :
+               lastStatus === "failed" ? <AlertTriangle className="h-3 w-3 text-red-500" /> :
+               <Database className="h-3 w-3" />}
+              Records
+            </span>
+            <span className="font-medium">{lastLog ? recordsSummary(lastLog) : "—"}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <Calendar className="h-3 w-3" />
+              Next run
+            </span>
+            <span className="font-medium">{nextCronLabel(source.schedule)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <Coins className="h-3 w-3" />
+              Est. cost
+            </span>
+            <span className="font-medium">{source.cost_note}</span>
+          </div>
+          {lastStatus === "failed" && summary.error && (
+            <div className="mt-1 pt-1 border-t border-red-500/30 text-red-600 dark:text-red-400 text-[10px] font-mono break-all">
+              {String(summary.error).substring(0, 120)}
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-1.5">
+          <Button
+            size="sm"
+            className="flex-1 h-7 text-xs"
+            onClick={() => onRun(source)}
+            disabled={isRunning}
+          >
+            {isRunning ? (
+              <>
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                Running...
+              </>
+            ) : (
+              "Run Now"
+            )}
+          </Button>
+          {lastLog && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => onOpenPayload(lastLog)}
+              title="View last payload"
+            >
+              <Eye className="h-3 w-3" />
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-[10px]"
+            onClick={() => onOpenSchedule(source)}
+            title="View schedule details"
+          >
+            <Calendar className="h-3 w-3" />
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
@@ -244,7 +513,7 @@ function SourceCard({ source, lastLog, isRunning, onRun }) {
 
 // --- Cron Schedule Table ---
 
-function CronScheduleTable({ runningSources }) {
+function CronScheduleTable({ runningSources, lastLogBySource, sourceConfigByIdMap }) {
   return (
     <Card className="rounded-xl border shadow-sm">
       <CardHeader className="pb-2 px-4 pt-4">
@@ -259,27 +528,33 @@ function CronScheduleTable({ runningSources }) {
             <tr className="border-b">
               <th className="text-left pb-2 font-medium text-muted-foreground">Source</th>
               <th className="text-left pb-2 font-medium text-muted-foreground">Schedule</th>
+              <th className="text-left pb-2 font-medium text-muted-foreground">Last Run</th>
               <th className="text-left pb-2 font-medium text-muted-foreground">Next Run</th>
               <th className="text-left pb-2 font-medium text-muted-foreground">Status</th>
             </tr>
           </thead>
           <tbody>
-            {CRON_SCHEDULE.map((row) => (
-              <tr key={row.source_id} className="border-b last:border-0">
-                <td className="py-2 pr-3 font-medium">{row.label}</td>
-                <td className="py-2 pr-3 text-muted-foreground">{row.schedule}</td>
-                <td className="py-2 pr-3 text-muted-foreground">{nextCronLabel(row.schedule)}</td>
-                <td className="py-2">
-                  {runningSources.has(row.source_id) ? (
-                    <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
-                      Running
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">Scheduled</Badge>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {CRON_SCHEDULE.map((row) => {
+              const config = sourceConfigByIdMap?.[row.source_id];
+              const lastRun = config?.last_run_at || lastLogBySource?.[row.source_id]?.started_at;
+              return (
+                <tr key={row.source_id} className="border-b last:border-0">
+                  <td className="py-2 pr-3 font-medium">{row.label}</td>
+                  <td className="py-2 pr-3 text-muted-foreground">{row.schedule}</td>
+                  <td className="py-2 pr-3 text-muted-foreground">{fmtRelativeTs(lastRun)}</td>
+                  <td className="py-2 pr-3 text-muted-foreground">{nextCronLabel(row.schedule)}</td>
+                  <td className="py-2">
+                    {runningSources.has(row.source_id) ? (
+                      <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
+                        Running
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">Scheduled</Badge>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </CardContent>
@@ -402,7 +677,7 @@ function SuburbPool({ targetSuburbs }) {
         {/* Add row */}
         <div className="flex items-center gap-2">
           <Input
-            placeholder="Add suburb…"
+            placeholder="Add suburb..."
             value={newSuburb}
             onChange={(e) => setNewSuburb(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleAdd()}
@@ -463,6 +738,48 @@ function SuburbPool({ targetSuburbs }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// --- Schedule Dialog ---
+
+function ScheduleDialog({ source, onClose }) {
+  if (!source) return null;
+  return (
+    <Dialog open={!!source} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-sm flex items-center gap-2">
+            <Calendar className="h-4 w-4" />
+            Schedule: {source.label}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-xs">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="col-span-1 text-muted-foreground">Cadence</div>
+            <div className="col-span-2 font-medium">{source.schedule}</div>
+            <div className="col-span-1 text-muted-foreground">Time</div>
+            <div className="col-span-2 font-medium">{source.scheduleHint}</div>
+            <div className="col-span-1 text-muted-foreground">Next run</div>
+            <div className="col-span-2 font-medium">{nextCronLabel(source.schedule)}</div>
+            <div className="col-span-1 text-muted-foreground">Approach</div>
+            <div className="col-span-2 font-medium">{source.approachLabel}</div>
+            <div className="col-span-1 text-muted-foreground">Actor</div>
+            <div className="col-span-2">
+              <a href={source.apify_url} target="_blank" rel="noreferrer" className="font-mono text-primary hover:underline inline-flex items-center gap-1">
+                {source.actor_slug}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+            <div className="col-span-1 text-muted-foreground">Cost estimate</div>
+            <div className="col-span-2 font-medium">{source.cost_note}</div>
+          </div>
+          <div className="rounded-md bg-muted/40 border p-2 text-[10px] text-muted-foreground">
+            <strong>Note:</strong> Cost estimates are approximate based on typical Apify pay-per-result pricing. Actual cost depends on current actor pricing and may vary.
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -560,13 +877,13 @@ function DrillPaginatedList({ items, page, setPage }) {
             variant="ghost" size="sm" className="h-5 w-5 p-0"
             disabled={page === 0}
             onClick={() => setPage((p) => Math.max(0, p - 1))}
-          >‹</Button>
+          >&lsaquo;</Button>
           <span>Page {page + 1} / {totalPages || 1}</span>
           <Button
             variant="ghost" size="sm" className="h-5 w-5 p-0"
             disabled={page >= totalPages - 1}
             onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-          >›</Button>
+          >&rsaquo;</Button>
         </div>
       </div>
       {/* Rows */}
@@ -582,6 +899,9 @@ function DrillPaginatedList({ items, page, setPage }) {
 export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], targetSuburbs = [], pulseTimeline = [], stats = {}, user }) {
   const [runningSources, setRunningSources] = useState(new Set());
   const [drillLog, setDrillLog] = useState(null);
+  const [scheduleSource, setScheduleSource] = useState(null);
+
+  const activeSuburbCount = useMemo(() => targetSuburbs.filter((s) => s.is_active).length, [targetSuburbs]);
 
   // Last log per source
   const lastLogBySource = useMemo(() => {
@@ -595,6 +915,15 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
     }
     return map;
   }, [syncLogs]);
+
+  // Source config by source_id
+  const sourceConfigByIdMap = useMemo(() => {
+    const map = {};
+    for (const c of sourceConfigs) {
+      if (c.source_id) map[c.source_id] = c;
+    }
+    return map;
+  }, [sourceConfigs]);
 
   const runSource = useCallback(async (source) => {
     setRunningSources((prev) => new Set([...prev, source.source_id]));
@@ -611,6 +940,7 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
       setTimeout(() => {
         refetchEntityList("PulseSyncLog");
         refetchEntityList("PulseTimeline");
+        refetchEntityList("PulseSourceConfig");
       }, 5000);
     } catch (err) {
       toast.error(`Failed: ${err.message}`);
@@ -623,21 +953,51 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
     }
   }, [targetSuburbs, user]);
 
+  // Totals for header summary
+  const perSuburbSources = SOURCES.filter((s) => s.approach === "per_suburb");
+  const boundingBoxSources = SOURCES.filter((s) => s.approach === "bounding_box");
+
   return (
     <div className="space-y-5">
+      {/* ── Header summary ── */}
+      <Card className="rounded-xl border shadow-sm bg-gradient-to-br from-primary/5 via-background to-background">
+        <CardContent className="p-4 flex flex-wrap items-center gap-4 text-xs">
+          <div className="flex items-center gap-2">
+            <Database className="h-4 w-4 text-primary" />
+            <span className="font-semibold text-sm">{SOURCES.length} data sources</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <Repeat className="h-3.5 w-3.5" />
+            <span>{perSuburbSources.length} per-suburb (iterates {activeSuburbCount} suburbs)</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <Globe className="h-3.5 w-3.5" />
+            <span>{boundingBoxSources.length} bounding-box (single call, Greater Sydney)</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <MapPin className="h-3.5 w-3.5" />
+            <span>{activeSuburbCount} active suburbs in pool</span>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* ── Source cards grid ── */}
       <div>
         <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
           Data Sources
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {SOURCES.map((source) => (
             <SourceCard
               key={source.source_id}
               source={source}
               lastLog={lastLogBySource[source.source_id]}
+              sourceConfig={sourceConfigByIdMap[source.source_id]}
+              activeSuburbCount={activeSuburbCount}
               isRunning={runningSources.has(source.source_id)}
               onRun={runSource}
+              onOpenPayload={setDrillLog}
+              onOpenSchedule={setScheduleSource}
             />
           ))}
         </div>
@@ -645,16 +1005,23 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
 
       {/* ── Cron schedule + Suburb pool side by side ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <CronScheduleTable runningSources={runningSources} />
+        <CronScheduleTable
+          runningSources={runningSources}
+          lastLogBySource={lastLogBySource}
+          sourceConfigByIdMap={sourceConfigByIdMap}
+        />
         <SuburbPool targetSuburbs={targetSuburbs} />
       </div>
 
       {/* ── Sync history ── */}
       <SyncHistory syncLogs={syncLogs} onDrill={setDrillLog} />
 
-      {/* ── Drill-through dialog ── */}
+      {/* ── Dialogs ── */}
       {drillLog && (
         <DrillDialog log={drillLog} onClose={() => setDrillLog(null)} />
+      )}
+      {scheduleSource && (
+        <ScheduleDialog source={scheduleSource} onClose={() => setScheduleSource(null)} />
       )}
     </div>
   );
