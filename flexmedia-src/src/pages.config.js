@@ -49,6 +49,7 @@
  */
 import AdminTodoList from './pages/AdminTodoList';
 import BountyBoard from './pages/BountyBoard';
+import EdgeFunctionHealth from './pages/EdgeFunctionHealth';
 import EmailSyncSettings from './pages/EmailSyncSettings';
 import SettingsEmailSyncHealth from './pages/SettingsEmailSyncHealth';
 import HierarchyVisualization from './pages/HierarchyVisualization';
@@ -131,6 +132,7 @@ export const PAGES = {
     "SalesCommand": SalesCommand,
     "SalesMap": SalesMap,
     "Dashboard": Dashboard,
+    "EdgeFunctionHealth": EdgeFunctionHealth,
     "EmailSyncSettings": EmailSyncSettings,
     "SettingsEmailSyncHealth": SettingsEmailSyncHealth,
     "FieldMode": FieldMode,

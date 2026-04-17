@@ -33,6 +33,7 @@ import {
   Crosshair,
   ListChecks,
   Briefcase,
+  Gauge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -324,6 +325,7 @@ function LayoutContent({ currentPageName, children }) {
           // Integrations removed — use Tonomo Integration page instead
           can("EmailSyncSettings") && { name: "Email Sync", href: "EmailSyncSettings" },
           can("SettingsEmailSyncHealth") && { name: "Email Sync Health", href: "SettingsEmailSyncHealth" },
+          can("EdgeFunctionHealth") && { name: "Edge Function Health", href: "EdgeFunctionHealth", icon: Gauge },
           can("SettingsTonomoIntegration") && { name: "Bookings Setup", href: "SettingsTonomoIntegration" },
           can("SettingsTonomoMappings") && { name: "Mappings", href: "SettingsTonomoMappings" },
           can("SettingsNotifications") && { name: "Notifications", href: "SettingsNotifications" },
