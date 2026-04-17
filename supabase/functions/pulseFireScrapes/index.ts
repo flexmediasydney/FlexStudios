@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Pulse Fire Scrapes — Lightweight cron dispatcher (v3 DB-driven config)
@@ -57,7 +57,7 @@ function inflateSuburbTemplate(
   return out;
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('pulseFireScrapes', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

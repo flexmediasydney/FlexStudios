@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Pulse Scheduled Scrape — Cron-triggered orchestrator (v3 DB-driven config)
@@ -37,7 +37,7 @@ function inflateSuburbTemplate(input: Record<string, any>, suburb: string): Reco
   return out;
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('pulseScheduledScrape', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

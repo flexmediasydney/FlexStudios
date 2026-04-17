@@ -1,10 +1,10 @@
-import { getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Comprehensive audit report generator for project types implementation
  * Documents all identified issues and fixes
  */
-Deno.serve(async (req) => {
+serveWithAudit('generateProjectTypeAuditReport', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const user = await getUserFromReq(req);

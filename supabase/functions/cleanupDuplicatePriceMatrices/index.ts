@@ -1,10 +1,10 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Remove duplicate price matrices created during migration
  * Keeps the one with actual pricing data, deletes empty duplicates
  */
-Deno.serve(async (req) => {
+serveWithAudit('cleanupDuplicatePriceMatrices', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

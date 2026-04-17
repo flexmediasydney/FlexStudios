@@ -1,10 +1,10 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Fix orphaned price matrices and invalid discount percentages
  * Cleans up dangling references in the pricing engine
  */
-Deno.serve(async (req) => {
+serveWithAudit('fixOrphanedPriceMatrices', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

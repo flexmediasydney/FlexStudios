@@ -1,11 +1,11 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Prune old price matrix snapshots stored on projects.
  * Keeps only recent snapshots per project to save storage.
  * Run monthly to keep DB lean.
  */
-Deno.serve(async (req) => {
+serveWithAudit('prunePriceMatrixSnapshots', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

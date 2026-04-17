@@ -1,9 +1,9 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Cleanup expired permissions - run daily
  */
-Deno.serve(async (req) => {
+serveWithAudit('cleanupExpiredPermissions', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
 
   try {

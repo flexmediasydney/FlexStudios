@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 import {
   cleanEmailList,
   pickPrimaryEmail,
@@ -261,7 +261,7 @@ function inflateSuburbTemplate(input: Record<string, any>, suburb: string): Reco
 
 // ── Main handler ────────────────────────────────────────────────────────────
 
-Deno.serve(async (req) => {
+serveWithAudit('pulseDataSync', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   const admin = getAdminClient();
   let syncLogId: string | null = null;

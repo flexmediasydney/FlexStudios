@@ -1,4 +1,4 @@
-import { handleCors, jsonResponse, getAdminClient } from '../_shared/supabase.ts';
+import { handleCors, jsonResponse, getAdminClient, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Recheck mapping gaps on pending_review projects.
@@ -15,7 +15,7 @@ import { handleCors, jsonResponse, getAdminClient } from '../_shared/supabase.ts
  *    repopulating mapping_gaps. Replay their latest webhook unconditionally so
  *    the newly-confirmed mapping gets applied.
  */
-Deno.serve(async (req) => {
+serveWithAudit('recheckMappingGaps', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 

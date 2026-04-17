@@ -1,11 +1,11 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * Cleanup orphaned branding preferences across all agencies
  * Removes preferences that reference deleted or inactive categories
  * Called periodically or when categories are deleted
  */
-Deno.serve(async (req) => {
+serveWithAudit('cleanupOrphanedBrandingPreferences', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

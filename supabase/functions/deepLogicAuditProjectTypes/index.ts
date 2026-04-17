@@ -1,10 +1,10 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * DEEP LOGIC AUDIT: Project Types + Projects Engine
  * Tests 30+ potential flaws across project type scoping, pricing, tasks, and efforts
  */
-Deno.serve(async (req) => {
+serveWithAudit('deepLogicAuditProjectTypes', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
