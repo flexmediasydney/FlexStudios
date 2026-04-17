@@ -33,6 +33,7 @@ import EffortLoggingTab from "@/components/projects/EffortLoggingTab";
 import ProjectCalendarEvents from "@/components/projects/ProjectCalendarEvents";
 import ProjectActivityHub from "@/components/projects/ProjectActivityHub";
 import AgencyBrandingSummary from "@/components/projects/AgencyBrandingSummary";
+import PropertyIntelligencePanel from "@/components/property/PropertyIntelligencePanel";
 import ProjectStaffBar from "@/components/projects/ProjectStaffBar";
 import ProjectPresenceIndicator from "@/components/projects/ProjectPresenceIndicator";
 import ProjectPricingTable from "@/components/projects/ProjectPricingTable";
@@ -1730,6 +1731,11 @@ export default function ProjectDetails() {
 
           {/* Agency Branding Summary */}
           <AgencyBrandingSummary agency={agency} />
+
+          {/* Property Intelligence — listings + projects at this physical address */}
+          {project?.property_key && (
+            <PropertyIntelligencePanel propertyKey={project.property_key} />
+          )}
         </div>
       </div>
 

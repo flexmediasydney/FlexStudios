@@ -25,6 +25,7 @@ import {
   Building2,
   UserRound,
   UsersRound,
+  Home,
   Rss,
   Heart,
   Sparkles,
@@ -285,6 +286,7 @@ function LayoutContent({ currentPageName, children }) {
           can("Organisations") && { name: "Organisations", href: "Organisations", icon: Building2 },
           can("Teams") && { name: "Teams", href: "Teams", icon: UsersRound },
           can("People") && { name: "People", href: "People", icon: UserRound },
+          can("Properties") && { name: "Properties", href: "Properties", icon: Home },
         ].filter(Boolean)
       },
       can("SocialMedia") && {

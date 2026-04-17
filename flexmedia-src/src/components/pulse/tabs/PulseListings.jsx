@@ -511,7 +511,7 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
 
           {/* External link */}
           {listing.source_url && (
-            <div className="border-t border-border/60 pt-3">
+            <div className="border-t border-border/60 pt-3 flex items-center gap-4 flex-wrap">
               <a
                 href={listing.source_url}
                 target="_blank"
@@ -521,6 +521,15 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
                 <ExternalLink className="h-3.5 w-3.5" />
                 View on realestate.com.au
               </a>
+              {listing.property_key && (
+                <a
+                  href={`/PropertyDetails?key=${encodeURIComponent(listing.property_key)}`}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:underline"
+                >
+                  <Home className="h-3.5 w-3.5" />
+                  Open property history
+                </a>
+              )}
             </div>
           )}
 

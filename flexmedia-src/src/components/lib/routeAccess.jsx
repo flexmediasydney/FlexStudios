@@ -34,6 +34,8 @@ export const ROUTE_ACCESS = {
   PersonDetails: EMPLOYEE_AND_ABOVE,
   OrgDetails: EMPLOYEE_AND_ABOVE,
   TeamDetails: EMPLOYEE_AND_ABOVE,
+  Properties: EMPLOYEE_AND_ABOVE,
+  PropertyDetails: EMPLOYEE_AND_ABOVE,
   Prospecting: MANAGER_AND_ABOVE,
   ProspectDetails: MANAGER_AND_ABOVE,
   ClientMonitor: MANAGER_AND_ABOVE,
