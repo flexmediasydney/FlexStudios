@@ -38,6 +38,19 @@ import {
 const APIFY_TOKEN = Deno.env.get('APIFY_TOKEN') || '';
 const APIFY_BASE = 'https://api.apify.com/v2';
 
+// ── Wall-clock budget ───────────────────────────────────────────────────────
+// Supabase edge runtime kills functions at ~150s. We track a per-invocation
+// wall budget so the cumulative cost of multiple Apify calls (one per suburb)
+// can't blow past the wall. When the budget runs out we finalize the sync log
+// as 'timed_out' and return 200 with partial results, instead of letting the
+// edge runtime issue a 504 Gateway Timeout we have no way to handle.
+const WALL_BUDGET_MS = 130_000;
+let invocationStart = 0;
+function wallRemainingMs(): number {
+  return Math.max(0, WALL_BUDGET_MS - (Date.now() - invocationStart));
+}
+function wallExceeded(): boolean { return wallRemainingMs() <= 0; }
+
 // ── Apify actor runner ──────────────────────────────────────────────────────
 
 interface ApifyRunResult {
@@ -64,13 +77,21 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 async function runApifyActor(actorSlug: string, input: any, label: string, timeoutSecs = 180): Promise<ApifyRunResult> {
   if (!APIFY_TOKEN) throw new Error('APIFY_TOKEN not set in environment');
 
+  // Respect the global wall budget — caller may have already burned most of it.
+  // Reserve 5s grace so a finalize/jsonResponse path still has time to run.
+  const remaining = Math.max(0, wallRemainingMs() - 5_000);
+  if (remaining < 5_000) {
+    console.warn(`Apify ${label}: wall budget exhausted (${wallRemainingMs()}ms left), skipping`);
+    return { items: [], runId: null, datasetId: null };
+  }
+
   const safeId = actorSlug.replace('/', '~');
   const url = `${APIFY_BASE}/acts/${safeId}/runs?timeout=${timeoutSecs}&waitForFinish=${timeoutSecs}`;
 
-  // Fetch timeout = Apify timeout + 10s grace (so we see the ACTUAL Apify response
-  // rather than the edge runtime killing us at 150s). Each individual HTTP call
-  // caps at 120s to leave budget for other suburbs in a batch.
-  const fetchTimeoutMs = Math.min(timeoutSecs * 1000 + 10_000, 120_000);
+  // Fetch timeout = min(Apify timeout + 10s grace, 120s, wall remaining).
+  // The wall cap prevents one stalled call from consuming a budget meant for
+  // multiple suburbs in a batch.
+  const fetchTimeoutMs = Math.min(timeoutSecs * 1000 + 10_000, 120_000, remaining);
 
   let resp: Response;
   try {
@@ -96,10 +117,11 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
   let datasetId = runData?.data?.defaultDatasetId || null;
 
   // Poll if still running — cap total poll time at timeoutSecs so we respect the caller's budget.
+  // Also cap by the wall remaining so we don't blow past the 150s edge runtime kill.
   if (status === 'RUNNING' || status === 'READY') {
-    const pollBudgetMs = Math.min(timeoutSecs * 1000, 120_000);
+    const pollBudgetMs = Math.min(timeoutSecs * 1000, 120_000, Math.max(0, wallRemainingMs() - 5_000));
     const pollStart = Date.now();
-    while (Date.now() - pollStart < pollBudgetMs) {
+    while (Date.now() - pollStart < pollBudgetMs && !wallExceeded()) {
       await new Promise(r => setTimeout(r, 5000));
       try {
         const pollResp = await fetchWithTimeout(`${APIFY_BASE}/actor-runs/${runId}`, {
@@ -123,9 +145,10 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
   }
 
   try {
+    const datasetTimeout = Math.min(30_000, Math.max(2_000, wallRemainingMs() - 3_000));
     const itemsResp = await fetchWithTimeout(`${APIFY_BASE}/datasets/${datasetId}/items?limit=5000`, {
       headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
-    }, 30_000);
+    }, datasetTimeout);
     if (!itemsResp.ok) {
       console.error(`Apify ${label}: dataset fetch failed (${itemsResp.status})`);
       return { items: [], runId, datasetId };
@@ -299,6 +322,9 @@ serveWithAudit('pulseDataSync', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   const admin = getAdminClient();
   let syncLogId: string | null = null;
+  // Initialize wall budget for this invocation. Reset every call so the global
+  // never carries over between cold/warm starts.
+  invocationStart = Date.now();
   try {
     const entities = createEntities(admin);
     const body = await req.json().catch(() => ({}));
@@ -416,7 +442,21 @@ serveWithAudit('pulseDataSync', async (req) => {
     // maxListingsPerSuburb body params.
     const useV3PerSuburb = hasActorInput && !isBoundingBoxFromConfig && actorSlug;
 
+    let timedOut = false;
+    const suburbsProcessed: string[] = [];
+    const suburbsSkipped: string[] = [];
+
     for (const suburb of suburbs) {
+      // Wall budget check — bail before next Apify call if we have no budget
+      // to safely run + finalize. Caller gets a 200 with timed_out=true and
+      // a partial result instead of a 504 from the edge runtime.
+      if (wallRemainingMs() < 15_000) {
+        timedOut = true;
+        suburbsSkipped.push(suburb);
+        console.warn(`pulseDataSync: wall budget low (${wallRemainingMs()}ms), skipping remaining suburbs starting at ${suburb}`);
+        continue;
+      }
+      suburbsProcessed.push(suburb);
       const suburbSlug = suburb.toLowerCase().replace(/\s+/g, '-');
 
       if (useV3PerSuburb) {
@@ -470,6 +510,46 @@ serveWithAudit('pulseDataSync', async (req) => {
         allListings.push(...listResult.items);
         if (listResult.runId) apifyRunIds[`listings-${suburb}`] = listResult.runId;
       }
+    }
+
+    // If wall budget ran out mid-loop and we haven't done the early-skip dance
+    // for all unprocessed suburbs, finalize the sync log as 'timed_out' with
+    // partial data and return 200. Skips heavy post-processing (Step 3+) since
+    // we have no budget to safely run it.
+    if (timedOut || wallExceeded()) {
+      console.warn(`pulseDataSync: timed out — processed ${suburbsProcessed.length}/${suburbs.length} suburbs, ${allReaAgents.length} agents + ${allListings.length} listings collected (skipping post-processing)`);
+      if (syncLogId) {
+        try {
+          await admin.from('pulse_sync_logs').update({
+            status: 'timed_out',
+            completed_at: new Date().toISOString(),
+            error_message: `Wall-clock budget (${WALL_BUDGET_MS}ms) exceeded after ${suburbsProcessed.length}/${suburbs.length} suburbs`,
+            apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
+            result_summary: {
+              timed_out: true,
+              suburbs_processed: suburbsProcessed,
+              suburbs_skipped: suburbsSkipped,
+              agents_collected: allReaAgents.length,
+              listings_collected: allListings.length,
+              note: 'Post-processing skipped — partial data not persisted to live tables.',
+            },
+          }).eq('id', syncLogId);
+        } catch (logErr) {
+          console.error('pulseDataSync: failed to mark sync log as timed_out:', logErr);
+        }
+      }
+      return jsonResponse({
+        success: false,
+        timed_out: true,
+        _version: 'v2.0',
+        suburbs_processed: suburbsProcessed,
+        suburbs_skipped: suburbsSkipped,
+        agents_collected: allReaAgents.length,
+        listings_collected: allListings.length,
+        sync_log_id: syncLogId,
+        apify_run_ids: apifyRunIds,
+        message: `Edge function wall budget exceeded after ${suburbsProcessed.length}/${suburbs.length} suburbs. Re-run for remaining suburbs.`,
+      });
     }
 
     console.log(`Raw data: ${allReaAgents.length} REA agents, ${allListings.length} listings`);
