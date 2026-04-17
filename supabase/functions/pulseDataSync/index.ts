@@ -1,7 +1,7 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 /**
- * Pulse Data Sync — REA-Only 2-Actor Merge Engine (v2)
+ * Pulse Data Sync — REA-Only 2-Actor Merge Engine (v3 DB-driven config)
  *
  * Architecture: 2 Apify actors, 1 ID system (rea_agent_id)
  *   - websift/realestateau: agent profiles with stats, reviews, awards
@@ -13,12 +13,19 @@ import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse
  * Body params:
  *   suburbs: string[]           — e.g. ["Strathfield", "Burwood"]
  *   state: string               — default "NSW"
- *   maxAgentsPerSuburb: number  — default 50
- *   maxListingsPerSuburb: number — default 30
+ *   actorInput: object          — (v3) Apify input template from pulse_source_configs.actor_input,
+ *                                   passed verbatim to runApifyActor. {suburb} / {suburb-slug}
+ *                                   placeholders are inflated here if they haven't been already.
+ *                                   When present, overrides maxAgentsPerSuburb/maxListingsPerSuburb/
+ *                                   listingsStartUrl/maxListingsTotal legacy params.
+ *   source_id: string           — (v3) pulse_source_configs.source_id to look up actor_slug + approach
+ *                                   from DB if actorInput not supplied
+ *   maxAgentsPerSuburb: number  — (legacy) default 50, used when actorInput not supplied
+ *   maxListingsPerSuburb: number — (legacy) default 30, used when actorInput not supplied
  *   skipListings: boolean       — skip listings scrape
  *   dryRun: boolean             — return results without saving
- *   listingsStartUrl: string    — bounding box mode: single URL for whole region
- *   maxListingsTotal: number    — max listings for bounding box mode
+ *   listingsStartUrl: string    — (legacy) bounding box mode: single URL for whole region
+ *   maxListingsTotal: number    — (legacy) max listings for bounding box mode
  */
 
 const APIFY_TOKEN = Deno.env.get('APIFY_TOKEN') || '';
@@ -152,6 +159,24 @@ function fuzzyNameMatch(a: string, b: string): boolean {
   return false;
 }
 
+/**
+ * Expand {suburb} / {suburb-slug} placeholders in every string value of the
+ * actor input template. Non-string values pass through unchanged. Safe to
+ * call multiple times — idempotent on already-inflated strings.
+ */
+function inflateSuburbTemplate(input: Record<string, any>, suburb: string): Record<string, any> {
+  const slug = suburb.toLowerCase().replace(/\s+/g, '-');
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(input || {})) {
+    if (typeof v === 'string') {
+      out[k] = v.replace(/\{suburb\}/g, suburb).replace(/\{suburb-slug\}/g, slug);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 // ── Main handler ────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -181,10 +206,38 @@ Deno.serve(async (req) => {
       source_label = null,
       triggered_by = null,
       triggered_by_name = null,
-      // Bounding box mode: single URL covers entire region
+      // Bounding box mode: single URL covers entire region (legacy params)
       listingsStartUrl = null,
       maxListingsTotal = 0,
+      // v3 DB-driven config — when supplied, this is the Apify input template
+      // from pulse_source_configs.actor_input (already inflated for single-suburb
+      // dispatches, or raw with {suburb}/{suburb-slug} for multi-suburb batches).
+      actorInput = null,
     } = body;
+
+    // ── v3 config-driven dispatch helpers ────────────────────────────────
+    // Determine actor_slug + approach from DB config when source_id given.
+    // Falls back gracefully to the 2-actor assumption for legacy callers.
+    let dbConfig: { actor_slug?: string; approach?: string } | null = null;
+    if (source_id) {
+      const { data: cfg } = await admin
+        .from('pulse_source_configs')
+        .select('actor_slug, approach')
+        .eq('source_id', source_id)
+        .maybeSingle();
+      if (cfg) dbConfig = cfg;
+    }
+
+    const actorSlug: string | null = dbConfig?.actor_slug || null;
+    const configApproach: string | null = dbConfig?.approach || null;
+    const isBoundingBoxFromConfig = configApproach === 'bounding_box';
+
+    // When actorInput is supplied, it is the single source of truth for Apify
+    // input params. It may contain {suburb}/{suburb-slug} placeholders if
+    // this is a multi-suburb batch call from pulseScheduledScrape.
+    const hasActorInput = actorInput && typeof actorInput === 'object' && Object.keys(actorInput).length > 0;
+    const isWebsiftActor = actorSlug === 'websift/realestateau';
+    const isAzzouzanaActor = actorSlug === 'azzouzana/real-estate-au-scraper-pro';
 
     const now = new Date().toISOString();
     const apifyRunIds: Record<string, string | null> = {};
@@ -197,7 +250,7 @@ Deno.serve(async (req) => {
         source_label: source_label || null,
         status: 'running',
         started_at: now,
-        input_config: { suburbs, state, maxAgentsPerSuburb, maxListingsPerSuburb, skipListings },
+        input_config: { suburbs, state, maxAgentsPerSuburb, maxListingsPerSuburb, skipListings, actorInput, actor_slug: actorSlug, approach: configApproach },
         triggered_by: triggered_by || null,
         triggered_by_name: triggered_by_name || null,
       });
@@ -208,8 +261,22 @@ Deno.serve(async (req) => {
     const allListings: any[] = [];
 
     // ── Step 1: Bounding box listings (single-URL mode) ──────────────────
-    if (listingsStartUrl && maxListingsTotal > 0) {
-      console.log(`[bounding-box] Running azzouzana with custom URL, max ${maxListingsTotal}...`);
+    // v3: if actorInput present AND config approach is bounding_box, use it directly.
+    // v2: fall back to legacy listingsStartUrl + maxListingsTotal body params.
+    if (hasActorInput && isBoundingBoxFromConfig) {
+      console.log(`[bounding-box v3] Running ${actorSlug || 'azzouzana'} with DB actor_input...`);
+      const bbResult = await runApifyActor(
+        actorSlug || 'azzouzana/real-estate-au-scraper-pro',
+        actorInput,
+        'listings-boundingbox',
+        300
+      );
+      bbResult.items.forEach(l => { l._suburb = l.suburb || 'Greater Sydney'; l._source = 'rea_boundingbox'; });
+      allListings.push(...bbResult.items);
+      if (bbResult.runId) apifyRunIds['listings-boundingbox'] = bbResult.runId;
+      console.log(`[bounding-box v3] ${bbResult.items.length} listings from bounding box`);
+    } else if (listingsStartUrl && maxListingsTotal > 0) {
+      console.log(`[bounding-box legacy] Running azzouzana with custom URL, max ${maxListingsTotal}...`);
       const bbResult = await runApifyActor('azzouzana/real-estate-au-scraper-pro', {
         startUrl: listingsStartUrl,
         maxItems: maxListingsTotal,
@@ -217,16 +284,49 @@ Deno.serve(async (req) => {
       bbResult.items.forEach(l => { l._suburb = l.suburb || 'Greater Sydney'; l._source = 'rea_boundingbox'; });
       allListings.push(...bbResult.items);
       if (bbResult.runId) apifyRunIds['listings-boundingbox'] = bbResult.runId;
-      console.log(`[bounding-box] ${bbResult.items.length} listings from bounding box`);
+      console.log(`[bounding-box legacy] ${bbResult.items.length} listings from bounding box`);
     }
 
     // ── Step 2: Run Apify actors per suburb ──────────────────────────────
+    // v3: if actorInput present AND config approach is per_suburb, use it directly
+    // (inflating {suburb}/{suburb-slug} placeholders per iteration). The config's
+    // actor_slug decides which pipeline (agents vs listings).
+    // v2: fall back to the hardcoded 2-actor pipeline using maxAgentsPerSuburb /
+    // maxListingsPerSuburb body params.
+    const useV3PerSuburb = hasActorInput && !isBoundingBoxFromConfig && actorSlug;
+
     for (const suburb of suburbs) {
       const suburbSlug = suburb.toLowerCase().replace(/\s+/g, '-');
 
+      if (useV3PerSuburb) {
+        // v3: single-actor pipeline driven by config actor_slug + actor_input
+        const inflated = inflateSuburbTemplate(actorInput, suburb);
+
+        if (isWebsiftActor) {
+          // websift = REA agent profiles pipeline
+          console.log(`[${suburb}] v3 websift with actor_input=${JSON.stringify(inflated).substring(0, 120)}...`);
+          const reaResult = await runApifyActor(actorSlug, inflated, `websift-${suburb}`, 180);
+          reaResult.items.forEach(a => { a._suburb = suburb; a._source = 'rea'; });
+          allReaAgents.push(...reaResult.items);
+          if (reaResult.runId) apifyRunIds[`websift-${suburb}`] = reaResult.runId;
+        } else if (isAzzouzanaActor) {
+          // azzouzana = REA listings pipeline
+          console.log(`[${suburb}] v3 azzouzana with actor_input=${JSON.stringify(inflated).substring(0, 120)}...`);
+          const listResult = await runApifyActor(actorSlug, inflated, `listings-${suburb}`, 120);
+          listResult.items.forEach(l => { l._suburb = suburb; l._source = 'rea'; });
+          allListings.push(...listResult.items);
+          if (listResult.runId) apifyRunIds[`listings-${suburb}`] = listResult.runId;
+        } else {
+          // Unknown actor_slug — skip with a warning, legacy path won't match either
+          console.warn(`[${suburb}] v3: unknown actor_slug '${actorSlug}', skipping`);
+        }
+        continue;
+      }
+
+      // v2 legacy: 2-actor pipeline with hardcoded params per suburb
       // 2A: websift REA agent profiles (correct input params: maxPages + fullScrape)
       if (maxAgentsPerSuburb > 0) {
-        console.log(`[${suburb}] Running websift REA agents...`);
+        console.log(`[${suburb}] Running websift REA agents (legacy)...`);
         const reaResult = await runApifyActor('websift/realestateau', {
           location: `${suburb} ${state}`,
           maxPages: Math.ceil(maxAgentsPerSuburb / 10),
@@ -240,7 +340,7 @@ Deno.serve(async (req) => {
 
       // 2B: azzouzana REA listings per suburb
       if (!skipListings && maxListingsPerSuburb > 0) {
-        console.log(`[${suburb}] Running azzouzana REA listings...`);
+        console.log(`[${suburb}] Running azzouzana REA listings (legacy)...`);
         const listResult = await runApifyActor('azzouzana/real-estate-au-scraper-pro', {
           startUrl: `https://www.realestate.com.au/buy/in-${suburbSlug},+${state.toLowerCase()}/list-1`,
           maxItems: maxListingsPerSuburb,

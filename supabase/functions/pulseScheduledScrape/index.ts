@@ -1,17 +1,41 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
 
 /**
- * Pulse Scheduled Scrape — Cron-triggered orchestrator (v2 REA-only)
+ * Pulse Scheduled Scrape — Cron-triggered orchestrator (v3 DB-driven config)
  *
- * Reads active suburbs from pulse_target_suburbs (filtered by priority tier),
- * batches them, and calls pulseDataSync for each batch.
+ * Reads source configuration from pulse_source_configs (single source of
+ * truth for all Apify input parameters). Reads active suburbs from
+ * pulse_target_suburbs (filtered by priority), batches them, and calls
+ * pulseDataSync for each batch with the inflated actor_input.
  *
  * Body params:
- *   source_id: string    — rea_agents, rea_listings, rea_listings_bb_buy/rent/sold
- *   min_priority: number — minimum suburb priority to include (default 0 = all)
+ *   source_id: string    — must exist in pulse_source_configs
+ *   min_priority: number — override config.min_priority (optional)
  *   batch_size: number   — suburbs per batch (default 10)
  *   max_batches: number  — safety limit (default 20 = 200 suburbs max)
  */
+
+/**
+ * Expand {suburb} / {suburb-slug} placeholders in every string value of the
+ * actor input template. Non-string values pass through unchanged.
+ *
+ * For batch mode (multiple suburbs in one call), we inflate per-suburb at
+ * dispatch time via pulseDataSync — so here we just pass the raw template
+ * through when the batch has multiple suburbs, and the downstream function
+ * handles per-suburb variation via suburbs[] iteration.
+ */
+function inflateSuburbTemplate(input: Record<string, any>, suburb: string): Record<string, any> {
+  const slug = suburb.toLowerCase().replace(/\s+/g, '-');
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(input || {})) {
+    if (typeof v === 'string') {
+      out[k] = v.replace(/\{suburb\}/g, suburb).replace(/\{suburb-slug\}/g, slug);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
 
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
@@ -21,19 +45,40 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
 
     if (body?._health_check) {
-      return jsonResponse({ _version: 'v2.0', _fn: 'pulseScheduledScrape', _arch: 'rea-only' });
+      return jsonResponse({ _version: 'v3.0', _fn: 'pulseScheduledScrape', _arch: 'db-driven' });
     }
 
     const {
       source_id,
-      min_priority = 0,
       batch_size = 10,
       max_batches = 20,
     } = body;
 
     if (!source_id) {
-      return errorResponse('source_id is required (rea_agents, rea_listings, rea_listings_bb_buy/rent/sold)', 400);
+      return errorResponse('source_id is required', 400);
     }
+
+    // ── Load config from DB (single source of truth) ─────────────────────
+    const { data: config, error: cfgErr } = await admin
+      .from('pulse_source_configs')
+      .select('source_id, label, actor_slug, actor_input, approach, max_results_per_suburb, max_suburbs, min_priority, is_enabled')
+      .eq('source_id', source_id)
+      .single();
+
+    if (cfgErr || !config) {
+      return errorResponse(`Unknown source_id: ${source_id}. Must exist in pulse_source_configs. ${cfgErr?.message || ''}`, 400);
+    }
+
+    if (!config.is_enabled) {
+      return errorResponse(`Source ${source_id} is disabled in pulse_source_configs.`, 400);
+    }
+
+    const actorInput = (config.actor_input || {}) as Record<string, any>;
+    const isBoundingBox = config.approach === 'bounding_box';
+    const sourceLabel = config.label || source_id;
+
+    // Body overrides > DB config > defaults
+    const min_priority = body.min_priority ?? config.min_priority ?? 0;
 
     const now = new Date().toISOString();
 
@@ -47,8 +92,6 @@ Deno.serve(async (req) => {
       query = query.gte('priority', min_priority);
     }
 
-    const isBoundingBox = source_id.startsWith('rea_listings_bb');
-
     const { data: suburbs, error: suburbErr } = await query;
     if (suburbErr) throw new Error(`Failed to load suburbs: ${suburbErr.message}`);
     if (!isBoundingBox && (!suburbs || suburbs.length === 0)) {
@@ -58,36 +101,14 @@ Deno.serve(async (req) => {
     const suburbNames = isBoundingBox ? [] : suburbs!.map(s => s.name);
     console.log(`[pulseScheduledScrape] source=${source_id} priority>=${min_priority} suburbs=${isBoundingBox ? 'bounding-box' : suburbNames.length}`);
 
-    // REA-only source param builders
-    const SOURCE_PARAMS: Record<string, (subs: string[]) => Record<string, any>> = {
-      rea_agents: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipListings: true }),
-      rea_listings: (subs) => ({ suburbs: subs, state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipListings: false }),
-      rea_listings_bb_buy: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers', maxListingsTotal: 500 }),
-      rea_listings_bb_rent: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&source=refinement', maxListingsTotal: 500 }),
-      rea_listings_bb_sold: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement', maxListingsTotal: 500 }),
-    };
-
-    const paramBuilder = SOURCE_PARAMS[source_id];
-    if (!paramBuilder) {
-      return errorResponse(`Unknown source_id: ${source_id}. Valid: ${Object.keys(SOURCE_PARAMS).join(', ')}`, 400);
-    }
-
-    const SOURCE_LABELS: Record<string, string> = {
-      rea_agents: 'REA Agent Intelligence',
-      rea_listings: 'REA Listings Market Data',
-      rea_listings_bb_buy: 'REA New Sales (Greater Sydney)',
-      rea_listings_bb_rent: 'REA New Rentals (Greater Sydney)',
-      rea_listings_bb_sold: 'REA Recently Sold (Greater Sydney)',
-    };
-
     // Log audit trail
     await admin.from('pulse_timeline').insert({
       entity_type: 'system',
       event_type: 'scheduled_scrape_started',
       event_category: 'system',
-      title: `Scheduled scrape: ${SOURCE_LABELS[source_id]}`,
+      title: `Scheduled scrape: ${sourceLabel}`,
       description: `Auto-run started for ${suburbNames.length} suburbs (priority >= ${min_priority}). Batch size: ${batch_size}.`,
-      new_value: { source_id, min_priority, suburb_count: suburbNames.length, batch_size },
+      new_value: { source_id, min_priority, suburb_count: suburbNames.length, batch_size, actor_input: actorInput },
       source: 'cron',
     }).catch(() => {});
 
@@ -107,15 +128,24 @@ Deno.serve(async (req) => {
 
     for (let b = 0; b < batches.length; b++) {
       const batch = batches[b];
-      console.log(`[pulseScheduledScrape] batch ${b + 1}/${batches.length}: ${batch.join(', ')}`);
+      console.log(`[pulseScheduledScrape] batch ${b + 1}/${batches.length}: ${batch.join(', ') || '(bounding-box)'}`);
 
-      // Move params OUTSIDE the try block so retry catch can access it
+      // Build params — actorInput is passed verbatim for bounding box,
+      // or inflated per-suburb (first suburb as sentinel) for per_suburb.
+      // pulseDataSync handles per-suburb inflation internally when suburbs[]
+      // has > 1 entry and actorInput contains placeholders.
+      const inflatedForBatch = isBoundingBox
+        ? actorInput
+        : (batch.length === 1 ? inflateSuburbTemplate(actorInput, batch[0]) : actorInput);
+
       const params = {
-        ...paramBuilder(batch),
+        suburbs: batch,
+        state: 'NSW',
         source_id,
-        source_label: `${SOURCE_LABELS[source_id]} (auto)`,
+        source_label: `${sourceLabel} (auto)`,
         triggered_by: null,
         triggered_by_name: 'Scheduled Cron',
+        actorInput: inflatedForBatch,
       };
 
       try {
@@ -175,7 +205,7 @@ Deno.serve(async (req) => {
       entity_type: 'system',
       event_type: 'scheduled_scrape_completed',
       event_category: 'system',
-      title: `Scheduled scrape completed: ${SOURCE_LABELS[source_id]}`,
+      title: `Scheduled scrape completed: ${sourceLabel}`,
       description: `${batchesSucceeded}/${batches.length} batches succeeded. ${totalAgents} agents, ${totalAgencies} agencies, ${totalListings} listings, ${totalMovements} movements, ${totalMappings} mappings.`,
       new_value: {
         source_id, min_priority, suburb_count: suburbNames.length,
@@ -198,7 +228,7 @@ Deno.serve(async (req) => {
       for (const u of admins) {
         entities.Notification.create({
           user_id: u.id, type: 'pulse_scrape_failed', category: 'system', severity: 'warning',
-          title: `Pulse scrape partial failure: ${SOURCE_LABELS[source_id]}`,
+          title: `Pulse scrape partial failure: ${sourceLabel}`,
           message: `${batchesFailed} of ${batches.length} batches failed. ${batchesSucceeded} succeeded with ${totalAgents} agents, ${totalAgencies} agencies, ${totalListings} listings.`,
           is_read: false, is_dismissed: false, source: 'pulse_cron',
           idempotency_key: `pulse_scrape_fail:${source_id}:${now.substring(0, 13)}`,

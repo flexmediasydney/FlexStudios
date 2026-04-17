@@ -1,16 +1,22 @@
 import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
 
 /**
- * Pulse Fire Scrapes — Lightweight cron dispatcher (v2 REA-only)
+ * Pulse Fire Scrapes — Lightweight cron dispatcher (v3 DB-driven config)
  *
- * Reads active suburbs from pulse_target_suburbs, then fires INDIVIDUAL
- * net.http_post calls to pulseDataSync for each suburb. Each call is
- * fire-and-forget — no waiting, no timeout cascade.
+ * Reads source configuration from pulse_source_configs (single source of truth
+ * for all Apify input parameters). For per_suburb sources, iterates active
+ * suburbs in pulse_target_suburbs and fires individual pulseDataSync calls
+ * fire-and-forget. For bounding_box sources, fires a single pulseDataSync call.
  *
  * Body params:
- *   source_id: string    — rea_agents, rea_listings, rea_listings_bb_buy/rent/sold
- *   min_priority: number — minimum suburb priority (default 0)
- *   max_suburbs: number  — safety cap (default 20)
+ *   source_id: string    — must exist in pulse_source_configs
+ *   min_priority: number — override config.min_priority (optional)
+ *   max_suburbs: number  — override config.max_suburbs (optional, safety cap)
+ *
+ * The actor input template (URL, maxItems, maxPages, etc.) lives in
+ * pulse_source_configs.actor_input (jsonb). This function inflates {suburb}
+ * and {suburb-slug} placeholders and passes the result verbatim to
+ * pulseDataSync as body.actorInput.
  */
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
@@ -26,53 +32,64 @@ const SUPABASE_SERVICE_ROLE_KEY =
   '';
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || '';
 
+/**
+ * Expand {suburb} / {suburb-slug} placeholders in every string value of the
+ * actor input template. Non-string values pass through unchanged.
+ */
+function inflateSuburbTemplate(input: Record<string, any>, suburb: string): Record<string, any> {
+  const slug = suburb.toLowerCase().replace(/\s+/g, '-');
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(input || {})) {
+    if (typeof v === 'string') {
+      out[k] = v.replace(/\{suburb\}/g, suburb).replace(/\{suburb-slug\}/g, slug);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
-    const entities = createEntities(admin);
+    const _entities = createEntities(admin);
     const body = await req.json().catch(() => ({}));
 
     if (body?._health_check) {
-      return jsonResponse({ _version: 'v2.0', _fn: 'pulseFireScrapes', _arch: 'rea-only' });
+      return jsonResponse({ _version: 'v3.0', _fn: 'pulseFireScrapes', _arch: 'db-driven' });
     }
 
-    const {
-      source_id,
-      min_priority = 0,
-      max_suburbs = 20,
-    } = body;
+    const { source_id } = body;
 
     if (!source_id) {
       return errorResponse('source_id is required', 400);
     }
 
-    const now = new Date().toISOString();
+    // ── Load config from DB (single source of truth) ─────────────────────
+    const { data: config, error: cfgErr } = await admin
+      .from('pulse_source_configs')
+      .select('source_id, label, actor_slug, actor_input, approach, max_results_per_suburb, max_suburbs, min_priority, is_enabled')
+      .eq('source_id', source_id)
+      .single();
 
-    // REA-only source param builders
-    const SOURCE_PARAMS: Record<string, (suburb: string) => Record<string, any>> = {
-      rea_agents: (s) => ({ suburbs: [s], state: 'NSW', maxAgentsPerSuburb: 30, maxListingsPerSuburb: 0, skipListings: true }),
-      rea_listings: (s) => ({ suburbs: [s], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 20, skipListings: false }),
-      // Bounding box sources — single call, no suburb iteration
-      rea_listings_bb_buy: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&sourcePage=rea:buy:srp-map&sourceElement=tab-headers', maxListingsTotal: 500 }),
-      rea_listings_bb_rent: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date&source=refinement', maxListingsTotal: 500 }),
-      rea_listings_bb_sold: () => ({ suburbs: [], state: 'NSW', maxAgentsPerSuburb: 0, maxListingsPerSuburb: 0, skipListings: true, listingsStartUrl: 'https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&source=refinement', maxListingsTotal: 500 }),
-    };
-
-    const paramBuilder = SOURCE_PARAMS[source_id];
-    if (!paramBuilder) {
-      return errorResponse(`Unknown source_id: ${source_id}. Valid: ${Object.keys(SOURCE_PARAMS).join(', ')}`, 400);
+    if (cfgErr || !config) {
+      return errorResponse(`Unknown source_id: ${source_id}. Must exist in pulse_source_configs. ${cfgErr?.message || ''}`, 400);
     }
 
-    const SOURCE_LABELS: Record<string, string> = {
-      rea_agents: 'REA Agents',
-      rea_listings: 'REA Listings',
-      rea_listings_bb_buy: 'REA Sales BB',
-      rea_listings_bb_rent: 'REA Rentals BB',
-      rea_listings_bb_sold: 'REA Sold BB',
-    };
+    if (!config.is_enabled) {
+      return errorResponse(`Source ${source_id} is disabled in pulse_source_configs.`, 400);
+    }
 
-    const isBoundingBox = source_id.startsWith('rea_listings_bb');
+    const actorInput = (config.actor_input || {}) as Record<string, any>;
+    const isBoundingBox = config.approach === 'bounding_box';
+    const sourceLabel = config.label || source_id;
+
+    // Body overrides > DB config > defaults
+    const min_priority = body.min_priority ?? config.min_priority ?? 0;
+    const max_suburbs = body.max_suburbs ?? config.max_suburbs ?? 20;
+
+    const now = new Date().toISOString();
 
     // Duplicate run check — skip if already running within last 30 min
     const { data: runningSync } = await admin.from('pulse_sync_logs')
@@ -85,12 +102,16 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: false, message: `Source ${source_id} already running`, existing_log: runningSync[0].id });
     }
 
+    // ── Bounding box: single call, no suburb iteration ──────────────────
     if (isBoundingBox) {
       const params = {
-        ...paramBuilder(''),
+        suburbs: [],
+        state: 'NSW',
         source_id,
-        source_label: `${SOURCE_LABELS[source_id]} (cron)`,
+        source_label: `${sourceLabel} (cron)`,
         triggered_by_name: 'Cron',
+        // Pass the actor input verbatim — pulseDataSync consumes it as-is.
+        actorInput,
       };
 
       const p = fetch(`${SUPABASE_URL}/functions/v1/pulseDataSync`, {
@@ -107,8 +128,9 @@ Deno.serve(async (req) => {
       try {
         await admin.from('pulse_timeline').insert({
           entity_type: 'system', event_type: 'cron_dispatched', event_category: 'system',
-          title: `Cron dispatched: ${SOURCE_LABELS[source_id]}`,
+          title: `Cron dispatched: ${sourceLabel}`,
           description: `Bounding box scrape fired`,
+          new_value: { source_id, actor_input: actorInput },
           source: 'cron',
         });
       } catch { /* non-fatal */ }
@@ -120,7 +142,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: true, source_id, dispatched: 1, type: 'bounding_box' });
     }
 
-    // Per-suburb: load suburbs, fire individual calls
+    // ── Per-suburb: load suburbs, fire individual calls ──────────────────
     let query = admin.from('pulse_target_suburbs')
       .select('name')
       .eq('is_active', true)
@@ -138,11 +160,16 @@ Deno.serve(async (req) => {
 
     let dispatched = 0;
     for (const suburb of suburbs) {
+      // Inflate {suburb} / {suburb-slug} placeholders in actor input template
+      const inflated = inflateSuburbTemplate(actorInput, suburb.name);
+
       const params = {
-        ...paramBuilder(suburb.name),
+        suburbs: [suburb.name],
+        state: 'NSW',
         source_id,
-        source_label: `${SOURCE_LABELS[source_id]} - ${suburb.name} (cron)`,
+        source_label: `${sourceLabel} - ${suburb.name} (cron)`,
         triggered_by_name: 'Cron',
+        actorInput: inflated,
       };
 
       const sp = fetch(`${SUPABASE_URL}/functions/v1/pulseDataSync`, {
@@ -167,9 +194,9 @@ Deno.serve(async (req) => {
     try {
       await admin.from('pulse_timeline').insert({
         entity_type: 'system', event_type: 'cron_dispatched', event_category: 'system',
-        title: `Cron dispatched: ${SOURCE_LABELS[source_id]}`,
+        title: `Cron dispatched: ${sourceLabel}`,
         description: `Fired ${dispatched} individual suburb scrapes (${suburbs.map(s => s.name).slice(0, 5).join(', ')}${suburbs.length > 5 ? '...' : ''})`,
-        new_value: { source_id, dispatched, min_priority, suburbs: suburbs.map(s => s.name) },
+        new_value: { source_id, dispatched, min_priority, suburbs: suburbs.map(s => s.name), actor_input: actorInput },
         source: 'cron',
       });
     } catch { /* non-fatal */ }

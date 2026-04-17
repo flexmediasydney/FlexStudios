@@ -10,8 +10,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -19,176 +22,131 @@ import {
   AlertTriangle, Loader2, Plus, Trash2, Settings2,
   ChevronDown, ChevronUp, Eye, MapPin, ToggleLeft, ToggleRight,
   ExternalLink, Repeat, Globe, Calendar, Coins, FileCode2,
-  User, XCircle, Activity,
+  User, XCircle, Activity, Copy, Edit3, Save, AlertCircle,
 } from "lucide-react";
 
-// ── Source definitions ────────────────────────────────────────────────────────
-// Shared bounding box for Greater Sydney — covers all 5 regions
-const SYDNEY_BB = "-33.524668718554146,150.02828594437534,-34.14521322911264,151.78609844437534";
+// ── Source UI metadata ────────────────────────────────────────────────────────
+// The authoritative config (actor_input, max_results_per_suburb, schedule_cron,
+// is_enabled, etc.) lives in pulse_source_configs (DB). UI metadata below is
+// purely presentational — icon, gradient, cost estimate. New sources added in
+// the DB will get sensible defaults here.
 
-const SOURCES = [
-  {
-    source_id: "rea_agents",
-    label: "REA Agent Profiles",
-    actor_slug: "websift/realestateau",
-    apify_url: "https://apify.com/websift/realestateau",
-    description: "Agent profiles, stats, reviews, awards from realestate.com.au",
+const SOURCE_UI_META = {
+  rea_agents: {
     icon: Users,
     color: "text-red-600",
     accentClass: "from-red-500/10 to-red-600/5 border-red-200/60 dark:border-red-800/40",
-    defaultMax: 30,
-    approach: "per_suburb",
-    approachLabel: "Per-suburb iteration",
-    approachExplain: "167 active suburbs x 30 agents each ~= 5,010 agents per run",
-    perSuburb: 30,
-    schedule: "Weekly (Sunday)",
-    scheduleHint: "Sun 4am AEST",
-    cost_note: "~$0.005 per suburb x 167 ~= $0.85 per run",
-    input_params: [
-      { key: "location", value: '"{suburb} NSW"', note: "iterates 167 suburbs" },
-      { key: "maxPages", value: "3", note: "~30 agents per suburb" },
-      { key: "fullScrape", value: "true" },
-      { key: "sortBy", value: '"SUBURB_SALES_PERFORMANCE"' },
-    ],
-    runParams: (subs, max) => ({
-      suburbs: subs,
-      state: "NSW",
-      maxAgentsPerSuburb: max,
-      maxListingsPerSuburb: 0,
-      skipListings: true,
-    }),
+    costNote: "~$0.005/suburb",
   },
-  {
-    source_id: "rea_listings",
-    label: "REA Listings (per suburb)",
-    actor_slug: "azzouzana/real-estate-au-scraper-pro",
-    apify_url: "https://apify.com/azzouzana/real-estate-au-scraper-pro",
-    description: "Listings with agent emails, photos, IDs from realestate.com.au",
+  rea_listings: {
     icon: Home,
     color: "text-blue-600",
     accentClass: "from-blue-500/10 to-blue-600/5 border-blue-200/60 dark:border-blue-800/40",
-    defaultMax: 20,
-    approach: "per_suburb",
-    approachLabel: "Per-suburb iteration",
-    approachExplain: "167 active suburbs x 20 listings each ~= 3,340 listings per run",
-    perSuburb: 20,
-    schedule: "On-demand / Weekly",
-    scheduleHint: "No active cron",
-    cost_note: "~$0.01 per suburb x 167 ~= $1.70 per run",
-    input_params: [
-      { key: "startUrl", value: '"…/buy/in-{suburb-slug},+nsw/list-1"', note: "iterates 167 suburbs" },
-      { key: "maxItems", value: "20", note: "per suburb" },
-    ],
-    runParams: (subs, max) => ({
-      suburbs: subs,
-      state: "NSW",
-      maxAgentsPerSuburb: 0,
-      maxListingsPerSuburb: max,
-      skipListings: false,
-    }),
+    costNote: "~$0.01/suburb",
   },
-  {
-    source_id: "rea_listings_bb_buy",
-    label: "REA Sales (Greater Sydney)",
-    actor_slug: "azzouzana/real-estate-au-scraper-pro",
-    apify_url: "https://apify.com/azzouzana/real-estate-au-scraper-pro",
-    description: "Bounding box buy listings, sorted by newest",
+  rea_listings_bb_buy: {
     icon: DollarSign,
     color: "text-green-600",
     accentClass: "from-emerald-500/10 to-green-600/5 border-emerald-200/60 dark:border-emerald-800/40",
-    defaultMax: 500,
-    approach: "bounding_box",
-    approachLabel: "Bounding box",
-    approachExplain: "Single URL covers all of Greater Sydney - up to 500 listings per run",
-    schedule: "Daily 6am",
-    scheduleHint: "6am AEST",
-    cost_note: "~$0.05 per run (single call)",
-    bboxRegion: "Greater Sydney",
-    bboxCoords: { nw: { lat: -33.5247, lng: 150.0283 }, se: { lat: -34.1452, lng: 151.7861 } },
-    input_params: [
-      { key: "startUrl", value: `"…/buy/list-1?boundingBox=${SYDNEY_BB}…"` },
-      { key: "maxItems", value: "500" },
-      { key: "activeSort", value: "list-date" },
-    ],
-    runParams: (_, max) => ({
-      suburbs: [],
-      state: "NSW",
-      listingsStartUrl:
-        "https://www.realestate.com.au/buy/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date",
-      maxListingsTotal: max,
-    }),
+    costNote: "~$0.05/run",
   },
-  {
-    source_id: "rea_listings_bb_rent",
-    label: "REA Rentals (Greater Sydney)",
-    actor_slug: "azzouzana/real-estate-au-scraper-pro",
-    apify_url: "https://apify.com/azzouzana/real-estate-au-scraper-pro",
-    description: "Bounding box rental listings",
+  rea_listings_bb_rent: {
     icon: Home,
     color: "text-teal-600",
     accentClass: "from-teal-500/10 to-teal-600/5 border-teal-200/60 dark:border-teal-800/40",
-    defaultMax: 500,
-    approach: "bounding_box",
-    approachLabel: "Bounding box",
-    approachExplain: "Single URL covers all of Greater Sydney - up to 500 listings per run",
-    schedule: "Daily 7am",
-    scheduleHint: "7am AEST",
-    cost_note: "~$0.05 per run (single call)",
-    bboxRegion: "Greater Sydney",
-    bboxCoords: { nw: { lat: -33.5247, lng: 150.0283 }, se: { lat: -34.1452, lng: 151.7861 } },
-    input_params: [
-      { key: "startUrl", value: `"…/rent/list-1?boundingBox=${SYDNEY_BB}…"` },
-      { key: "maxItems", value: "500" },
-      { key: "activeSort", value: "list-date" },
-    ],
-    runParams: (_, max) => ({
-      suburbs: [],
-      state: "NSW",
-      listingsStartUrl:
-        "https://www.realestate.com.au/rent/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534&activeSort=list-date",
-      maxListingsTotal: max,
-    }),
+    costNote: "~$0.05/run",
   },
-  {
-    source_id: "rea_listings_bb_sold",
-    label: "REA Sold (Greater Sydney)",
-    actor_slug: "azzouzana/real-estate-au-scraper-pro",
-    apify_url: "https://apify.com/azzouzana/real-estate-au-scraper-pro",
-    description: "Bounding box recently sold",
+  rea_listings_bb_sold: {
     icon: DollarSign,
     color: "text-orange-600",
     accentClass: "from-orange-500/10 to-orange-600/5 border-orange-200/60 dark:border-orange-800/40",
-    defaultMax: 500,
-    approach: "bounding_box",
-    approachLabel: "Bounding box",
-    approachExplain: "Single URL covers all of Greater Sydney - up to 500 listings per run",
-    schedule: "Daily 8am",
-    scheduleHint: "8am AEST",
-    cost_note: "~$0.05 per run (single call)",
-    bboxRegion: "Greater Sydney",
-    bboxCoords: { nw: { lat: -33.5247, lng: 150.0283 }, se: { lat: -34.1452, lng: 151.7861 } },
-    input_params: [
-      { key: "startUrl", value: `"…/sold/list-1?boundingBox=${SYDNEY_BB}"` },
-      { key: "maxItems", value: "500" },
-    ],
-    runParams: (_, max) => ({
-      suburbs: [],
-      state: "NSW",
-      listingsStartUrl:
-        "https://www.realestate.com.au/sold/list-1?boundingBox=-33.524668718554146%2C150.02828594437534%2C-34.14521322911264%2C151.78609844437534",
-      maxListingsTotal: max,
-    }),
+    costNote: "~$0.05/run",
   },
-];
+};
 
-// ── Cron schedule ─────────────────────────────────────────────────────────────
+const DEFAULT_META = {
+  icon: Database,
+  color: "text-slate-600",
+  accentClass: "from-slate-500/10 to-slate-600/5 border-slate-200/60 dark:border-slate-800/40",
+  costNote: "—",
+};
 
-const CRON_SCHEDULE = [
-  { label: "REA Agents",      schedule: "Weekly (Sunday)",  source_id: "rea_agents" },
-  { label: "REA Sales BB",    schedule: "Daily 6am",        source_id: "rea_listings_bb_buy" },
-  { label: "REA Rentals BB",  schedule: "Daily 7am",        source_id: "rea_listings_bb_rent" },
-  { label: "REA Sold BB",     schedule: "Daily 8am",        source_id: "rea_listings_bb_sold" },
-];
+function getSourceMeta(sourceId) {
+  return SOURCE_UI_META[sourceId] || DEFAULT_META;
+}
+
+// ── Cron decoder (human-readable summary of cron string) ──────────────────────
+
+function cronLabel(cronStr) {
+  if (!cronStr) return "On-demand";
+  // Handle common cron patterns
+  const parts = cronStr.trim().split(/\s+/);
+  if (parts.length !== 5) return cronStr;
+  const [min, hour, dom, month, dow] = parts;
+
+  // Weekly: "0 18 * * 0" -> "Weekly (Sun)"
+  if (dom === "*" && month === "*" && dow !== "*") {
+    const days = { "0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed", "4": "Thu", "5": "Fri", "6": "Sat" };
+    return `Weekly (${days[dow] || dow}) ${hour}:${String(min).padStart(2, "0")} UTC`;
+  }
+
+  // Daily with comma hours: "0 20,4 * * *" -> "Daily 20 + 4 UTC"
+  if (dom === "*" && month === "*" && dow === "*" && hour.includes(",")) {
+    return `Daily ${hour}:${String(min).padStart(2, "0")} UTC`;
+  }
+
+  // Daily: "0 22 * * *" -> "Daily 22:00 UTC"
+  if (dom === "*" && month === "*" && dow === "*") {
+    return `Daily ${hour}:${String(min).padStart(2, "0")} UTC`;
+  }
+
+  return cronStr;
+}
+
+function nextRunFromCron(cronStr) {
+  if (!cronStr) return "—";
+  // Best-effort: parse cron and predict next UTC occurrence.
+  const parts = cronStr.trim().split(/\s+/);
+  if (parts.length !== 5) return "—";
+  const [min, hour, dom, month, dow] = parts;
+  try {
+    const now = new Date();
+    const mins = parseInt(min, 10);
+    if (isNaN(mins)) return "—";
+
+    // Handle comma-separated hours (e.g., "20,4")
+    const hours = hour.includes(",") ? hour.split(",").map((h) => parseInt(h, 10)) : [parseInt(hour, 10)];
+    if (hours.some(isNaN)) return "—";
+
+    // Weekly
+    if (dom === "*" && month === "*" && dow !== "*") {
+      const targetDow = parseInt(dow, 10);
+      if (isNaN(targetDow)) return "—";
+      const daysUntil = (targetDow - now.getUTCDay() + 7) % 7 || 7;
+      const next = new Date(now);
+      next.setUTCDate(now.getUTCDate() + daysUntil);
+      next.setUTCHours(hours[0], mins, 0, 0);
+      return next.toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    }
+
+    // Daily (potentially multiple hours)
+    if (dom === "*" && month === "*" && dow === "*") {
+      // Find next hour today or tomorrow
+      const candidates = hours.map((h) => {
+        const d = new Date(now);
+        d.setUTCHours(h, mins, 0, 0);
+        if (d <= now) d.setUTCDate(d.getUTCDate() + 1);
+        return d;
+      });
+      candidates.sort((a, b) => a.getTime() - b.getTime());
+      return candidates[0].toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    }
+
+    return "—";
+  } catch {
+    return "—";
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -232,22 +190,14 @@ function fmtDuration(start, end) {
   return `${Math.round(ms / 60000)}m`;
 }
 
-function nextCronLabel(schedule) {
-  const now = new Date();
-  if (schedule === "Weekly (Sunday)") {
-    const daysUntilSun = (7 - now.getDay()) % 7 || 7;
-    const next = new Date(now.getTime() + daysUntilSun * 86400000);
-    next.setHours(0, 0, 0, 0);
-    return next.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" });
-  }
-  const match = schedule.match(/Daily (\d+)(am|pm)?/i);
-  if (match) {
-    let hr = parseInt(match[1], 10);
-    if (match[2] === "pm" && hr !== 12) hr += 12;
-    const next = new Date(now);
-    next.setHours(hr, 0, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-    return next.toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+// Backward-compat shim: original `nextCronLabel` took a human-readable schedule
+// string. We now prefer nextRunFromCron(cronStr). Keep this thin wrapper so
+// any residual callers still compile.
+function nextCronLabel(scheduleOrCron) {
+  if (!scheduleOrCron) return "—";
+  // Detect cron string (5 space-separated parts)
+  if (/^\S+\s+\S+\s+\S+\s+\S+\s+\S+$/.test(scheduleOrCron.trim())) {
+    return nextRunFromCron(scheduleOrCron);
   }
   return "—";
 }
@@ -812,20 +762,41 @@ function DispatchedNoLogs() {
   );
 }
 
-// --- Source Card (enhanced) ---
+// --- Source Card (enhanced, DB-driven) ---
+//
+// Everything the user sees on each source card reads from the DB row
+// `sourceConfig` (pulse_source_configs). The icon/accent are the only thing
+// pulled from local UI metadata. The card shows the FULL actor_input JSON
+// (never truncated), has a Copy button, and an Edit button that opens the
+// editor dialog.
 
-function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburbCount, isRunning, onRun, onOpenPayload, onOpenSchedule, onDrillDispatch }) {
-  const Icon = source.icon;
+function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch }) {
+  const meta = getSourceMeta(sourceConfig.source_id);
+  const Icon = meta.icon;
   const lastStatus = lastLog?.status;
   const [showInput, setShowInput] = useState(false);
   const [runExpanded, setRunExpanded] = useState(false);
 
   // Pull aggregated runs from the view. First run is the "latest"; rest are history.
-  const { runs: syncRuns } = usePulseSyncRuns(source.source_id, 10);
+  const { runs: syncRuns } = usePulseSyncRuns(sourceConfig.source_id, 10);
   const latestRun = syncRuns[0] || null;
   const historyRuns = syncRuns.slice(1);
-  const isBoundingBox =
-    source.approach === "bounding_box" || source.source_id.startsWith("rea_listings_bb");
+  const isBoundingBox = sourceConfig.approach === "bounding_box";
+  const approachLabel = isBoundingBox ? "Bounding box" : "Per-suburb iteration";
+  const cronStr = sourceConfig.schedule_cron || null;
+  const scheduleDisplay = cronLabel(cronStr);
+  const perSuburbMax = sourceConfig.max_results_per_suburb || 0;
+  const actorInput = sourceConfig.actor_input || {};
+  const actorInputJson = useMemo(() => JSON.stringify(actorInput, null, 2), [actorInput]);
+
+  const copyInput = useCallback(() => {
+    try {
+      navigator.clipboard.writeText(actorInputJson);
+      toast.success("actor_input copied to clipboard");
+    } catch {
+      toast.error("Clipboard unavailable");
+    }
+  }, [actorInputJson]);
 
   // Detect "cron_dispatched" event without a matching sync_log (queuing state)
   const hasRecentDispatchWithoutLog = useMemo(() => {
@@ -834,15 +805,14 @@ function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburb
     return pulseTimeline.some((ev) => {
       if (ev.event_type !== "cron_dispatched") return false;
       const newVal = ev.new_value;
-      if (newVal?.source_id && newVal.source_id !== source.source_id) return false;
-      // For bounding-box, match on title containing the source label
-      if (!newVal?.source_id && !(ev.title || "").includes(source.label.split(" ")[1] || "")) {
+      if (newVal?.source_id && newVal.source_id !== sourceConfig.source_id) return false;
+      if (!newVal?.source_id && !(ev.title || "").includes((sourceConfig.label || "").split(" ")[1] || "")) {
         return false;
       }
       const ageMs = now - new Date(ev.created_at).getTime();
       return ageMs < 10 * 60 * 1000; // within 10 minutes
     });
-  }, [pulseTimeline, latestRun, source]);
+  }, [pulseTimeline, latestRun, sourceConfig.source_id, sourceConfig.label]);
 
   // Use last_run_at from source_configs if available, else fallback to last log timestamp
   const lastRunAt =
@@ -863,103 +833,156 @@ function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburb
   else if (lastStatus === "running") statusDot = "bg-blue-500 animate-pulse";
   else if (lastStatus === "failed") statusDot = "bg-red-500";
 
-  // Red if >2 days old for daily sources, >9 days for weekly
+  // Staleness warning — heuristic from cron string
   if (lastRunAt && statusDot !== "bg-blue-500 animate-pulse") {
     const ageMs = Date.now() - new Date(lastRunAt).getTime();
     const ageDays = ageMs / 86400000;
-    const limit = source.schedule?.includes("Weekly") ? 9 : 2;
+    // Weekly schedules = 9 day limit; daily = 2 day limit; no schedule = no check
+    const isWeekly = cronStr && /^\S+\s+\S+\s+\*\s+\*\s+[0-6]$/.test(cronStr);
+    const limit = isWeekly ? 9 : cronStr ? 2 : Infinity;
     if (ageDays > limit && lastStatus !== "failed") statusDot = "bg-amber-500";
   }
 
-  const perRunEstimate = source.approach === "per_suburb"
-    ? (activeSuburbCount || 0) * (source.perSuburb || 0)
-    : source.defaultMax;
+  // Disabled source — visually faded
+  const isDisabled = sourceConfig.is_enabled === false;
 
   return (
     <Card className={cn(
       "rounded-xl border shadow-sm hover:shadow-md transition-shadow bg-gradient-to-br",
-      source.accentClass,
+      meta.accentClass,
+      isDisabled && "opacity-60 grayscale-[40%]",
     )}>
       <CardContent className="p-4 flex flex-col gap-3">
-        {/* Header row: icon + label + Apify link */}
+        {/* Header row: icon + label + Apify link + enabled indicator */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <div className="p-2 rounded-lg bg-background/80 shrink-0 border shadow-sm">
-              <Icon className={cn("h-4 w-4", source.color)} />
+              <Icon className={cn("h-4 w-4", meta.color)} />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <p className="text-sm font-semibold leading-tight truncate">{source.label}</p>
+                <p className="text-sm font-semibold leading-tight truncate">{sourceConfig.label}</p>
                 <span className={cn("inline-block h-1.5 w-1.5 rounded-full shrink-0", statusDot)} title={lastStatus || "never run"} />
+                {isDisabled && (
+                  <Badge variant="outline" className="text-[9px] px-1 py-0 uppercase border-muted-foreground/40 text-muted-foreground">
+                    Disabled
+                  </Badge>
+                )}
               </div>
-              <a
-                href={source.apify_url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary transition-colors mt-0.5 font-mono"
-              >
-                {source.actor_slug}
-                <ExternalLink className="h-2.5 w-2.5" />
-              </a>
+              {sourceConfig.actor_slug && (
+                <a
+                  href={sourceConfig.apify_store_url || `https://apify.com/${sourceConfig.actor_slug}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary transition-colors mt-0.5 font-mono"
+                >
+                  {sourceConfig.actor_slug}
+                  <ExternalLink className="h-2.5 w-2.5" />
+                </a>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Approach section */}
+        {/* Approach + schedule row */}
         <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <Badge
               variant="outline"
               className={cn(
                 "text-[9px] px-1.5 py-0 uppercase tracking-wide font-semibold",
-                source.approach === "per_suburb"
+                !isBoundingBox
                   ? "border-indigo-400/50 text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-300"
                   : "border-cyan-400/50 text-cyan-700 bg-cyan-50 dark:bg-cyan-900/30 dark:text-cyan-300",
               )}
             >
-              {source.approach === "per_suburb" ? <Repeat className="h-2.5 w-2.5 mr-1" /> : <Globe className="h-2.5 w-2.5 mr-1" />}
-              {source.approachLabel}
+              {!isBoundingBox ? <Repeat className="h-2.5 w-2.5 mr-1" /> : <Globe className="h-2.5 w-2.5 mr-1" />}
+              {approachLabel}
             </Badge>
+            {cronStr ? (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-mono" title={cronStr}>
+                <Clock className="h-2.5 w-2.5 mr-1" />
+                {scheduleDisplay}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
+                On-demand
+              </Badge>
+            )}
           </div>
-          {source.approach === "per_suburb" ? (
-            <PerSuburbDiagram suburbCount={activeSuburbCount} perSuburb={source.perSuburb} />
+          {!isBoundingBox ? (
+            <PerSuburbDiagram suburbCount={activeSuburbCount} perSuburb={perSuburbMax} />
           ) : (
-            <BoundingBoxDiagram region={source.bboxRegion} maxItems={source.defaultMax} />
+            <BoundingBoxDiagram region="Greater Sydney" maxItems={actorInput.maxItems || perSuburbMax} />
           )}
         </div>
 
-        {/* Collapsible Input block */}
+        {/* Input (FULL, expanded by default). Shows the exact actor_input that
+            Apify receives, unabridged. URLs wrap within the pre block. */}
         <div className="space-y-1">
-          <button
-            type="button"
-            onClick={() => setShowInput((v) => !v)}
-            className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <FileCode2 className="h-3 w-3" />
-            <span>Input</span>
-            {showInput ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-          </button>
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setShowInput((v) => !v)}
+              className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <FileCode2 className="h-3 w-3" />
+              <span>actor_input</span>
+              {showInput ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={copyInput}
+                className="inline-flex items-center gap-1 text-[9px] text-muted-foreground hover:text-foreground transition-colors"
+                title="Copy JSON"
+              >
+                <Copy className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onEdit(sourceConfig)}
+                className="inline-flex items-center gap-1 text-[9px] text-muted-foreground hover:text-primary transition-colors"
+                title="Edit config"
+              >
+                <Edit3 className="h-3 w-3" />
+                <span>Edit</span>
+              </button>
+            </div>
+          </div>
           {showInput && (
-            <div className="rounded-md bg-background/80 border p-2 space-y-0.5 font-mono text-[10px]">
-              {source.input_params.map((p) => (
-                <div key={p.key} className="flex items-start gap-2 leading-tight">
-                  <span className="text-primary/80 shrink-0">{p.key}:</span>
-                  <span className="text-foreground break-all">{p.value}</span>
-                  {p.note && (
-                    <span className="text-muted-foreground text-[9px] shrink-0 ml-auto italic">{p.note}</span>
-                  )}
-                </div>
-              ))}
-              {source.approach === "bounding_box" && source.bboxCoords && (
-                <div className="pt-1 mt-1 border-t text-[9px] text-muted-foreground">
-                  BBox NW {source.bboxCoords.nw.lat}, {source.bboxCoords.nw.lng} · SE {source.bboxCoords.se.lat}, {source.bboxCoords.se.lng}
-                </div>
-              )}
+            <pre className="rounded-md bg-background/80 border p-2 font-mono text-[10px] whitespace-pre-wrap break-all overflow-x-auto max-h-56 overflow-y-auto">
+              {actorInputJson}
+            </pre>
+          )}
+        </div>
+
+        {/* Config summary row: max_results, max_suburbs, min_priority */}
+        <div className="grid grid-cols-3 gap-1 text-[9px]">
+          <div className="rounded bg-background/60 border px-2 py-1">
+            <div className="text-muted-foreground uppercase tracking-wide">Max results</div>
+            <div className="font-mono font-semibold">{sourceConfig.max_results_per_suburb ?? "—"}</div>
+          </div>
+          {!isBoundingBox ? (
+            <>
+              <div className="rounded bg-background/60 border px-2 py-1">
+                <div className="text-muted-foreground uppercase tracking-wide">Max suburbs</div>
+                <div className="font-mono font-semibold">{sourceConfig.max_suburbs ?? "—"}</div>
+              </div>
+              <div className="rounded bg-background/60 border px-2 py-1">
+                <div className="text-muted-foreground uppercase tracking-wide">Min priority</div>
+                <div className="font-mono font-semibold">{sourceConfig.min_priority ?? 0}</div>
+              </div>
+            </>
+          ) : (
+            <div className="col-span-2 rounded bg-background/60 border px-2 py-1">
+              <div className="text-muted-foreground uppercase tracking-wide">Cost estimate</div>
+              <div className="font-mono font-semibold">{meta.costNote}</div>
             </div>
           )}
         </div>
 
-        {/* Last run summary — uses pulse_sync_runs view (multi-dispatch aware) */}
+        {/* Last run summary */}
         {latestRun ? (
           <RunSummary
             run={latestRun}
@@ -974,15 +997,15 @@ function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburb
           <NoRunsYet />
         )}
 
-        {/* Next run + cost, small line */}
+        {/* Next run — computed from DB cron string */}
         <div className="flex items-center justify-between text-[10px] text-muted-foreground px-1">
           <span className="flex items-center gap-1">
             <Calendar className="h-3 w-3" />
-            Next: <span className="font-medium text-foreground">{nextCronLabel(source.schedule)}</span>
+            Next: <span className="font-medium text-foreground">{cronStr ? nextRunFromCron(cronStr) : "—"}</span>
           </span>
           <span className="flex items-center gap-1">
             <Coins className="h-3 w-3" />
-            <span className="font-medium text-foreground">{source.cost_note}</span>
+            <span className="font-medium text-foreground">{meta.costNote}</span>
           </span>
         </div>
 
@@ -1000,8 +1023,9 @@ function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburb
           <Button
             size="sm"
             className="flex-1 h-7 text-xs"
-            onClick={() => onRun(source)}
-            disabled={isRunning}
+            onClick={() => onRun(sourceConfig)}
+            disabled={isRunning || isDisabled}
+            title={isDisabled ? "Source disabled — enable in Edit dialog" : undefined}
           >
             {isRunning ? (
               <>
@@ -1011,6 +1035,15 @@ function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburb
             ) : (
               "Run Now"
             )}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-[10px]"
+            onClick={() => onEdit(sourceConfig)}
+            title="Edit config"
+          >
+            <Edit3 className="h-3 w-3" />
           </Button>
           {lastLog && (
             <Button
@@ -1027,7 +1060,7 @@ function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburb
             size="sm"
             variant="outline"
             className="h-7 px-2 text-[10px]"
-            onClick={() => onOpenSchedule(source)}
+            onClick={() => onOpenSchedule(sourceConfig)}
             title="View schedule details"
           >
             <Calendar className="h-3 w-3" />
@@ -1038,52 +1071,424 @@ function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburb
   );
 }
 
-// --- Cron Schedule Table ---
+// --- Config Edit Dialog ---
+//
+// Allows editing: actor_input JSON (freeform, validated on save),
+// max_results_per_suburb, max_suburbs, min_priority, schedule_cron,
+// is_enabled. Persists to pulse_source_configs. A success triggers
+// refetchEntityList('PulseSourceConfig') so the card reflects changes.
 
-function CronScheduleTable({ runningSources, lastLogBySource, sourceConfigByIdMap }) {
+function EditConfigDialog({ config, onClose, onSaved }) {
+  const [form, setForm] = useState(() => ({
+    actor_input_json: JSON.stringify(config?.actor_input || {}, null, 2),
+    max_results_per_suburb: config?.max_results_per_suburb ?? "",
+    max_suburbs: config?.max_suburbs ?? "",
+    min_priority: config?.min_priority ?? 0,
+    schedule_cron: config?.schedule_cron || "",
+    is_enabled: config?.is_enabled !== false,
+    label: config?.label || "",
+    description: config?.description || "",
+    notes: config?.notes || "",
+  }));
+  const [saving, setSaving] = useState(false);
+  const [jsonError, setJsonError] = useState(null);
+
+  // Render actor_input as individual fields + a JSON textarea for power users.
+  const parsedInput = useMemo(() => {
+    try {
+      const p = JSON.parse(form.actor_input_json);
+      setJsonError(null);
+      return p;
+    } catch (e) {
+      setJsonError(e.message);
+      return null;
+    }
+  }, [form.actor_input_json]);
+
+  const updateInputField = useCallback((key, value) => {
+    setForm((f) => {
+      let current = {};
+      try {
+        current = JSON.parse(f.actor_input_json);
+      } catch {
+        // keep invalid JSON untouched — user will see the error
+        return f;
+      }
+      // Try to coerce to number if original was a number
+      const origType = typeof current[key];
+      let coerced = value;
+      if (origType === "number" && value !== "" && !isNaN(Number(value))) {
+        coerced = Number(value);
+      } else if (origType === "boolean" && (value === "true" || value === "false")) {
+        coerced = value === "true";
+      }
+      current[key] = coerced;
+      return { ...f, actor_input_json: JSON.stringify(current, null, 2) };
+    });
+  }, []);
+
+  const removeInputField = useCallback((key) => {
+    setForm((f) => {
+      let current = {};
+      try {
+        current = JSON.parse(f.actor_input_json);
+      } catch {
+        return f;
+      }
+      delete current[key];
+      return { ...f, actor_input_json: JSON.stringify(current, null, 2) };
+    });
+  }, []);
+
+  const addInputField = useCallback(() => {
+    const key = prompt("Field name (e.g. maxPages, startUrl)");
+    if (!key) return;
+    setForm((f) => {
+      let current = {};
+      try {
+        current = JSON.parse(f.actor_input_json);
+      } catch {
+        return f;
+      }
+      if (key in current) {
+        toast.error(`Field '${key}' already exists`);
+        return f;
+      }
+      current[key] = "";
+      return { ...f, actor_input_json: JSON.stringify(current, null, 2) };
+    });
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (jsonError) {
+      toast.error(`Fix JSON: ${jsonError}`);
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(form.actor_input_json);
+    } catch (e) {
+      toast.error(`Invalid JSON: ${e.message}`);
+      return;
+    }
+    setSaving(true);
+    try {
+      const updates = {
+        actor_input: parsed,
+        max_results_per_suburb: form.max_results_per_suburb === "" ? null : Number(form.max_results_per_suburb),
+        max_suburbs: form.max_suburbs === "" ? null : Number(form.max_suburbs),
+        min_priority: form.min_priority === "" ? 0 : Number(form.min_priority),
+        schedule_cron: form.schedule_cron.trim() || null,
+        is_enabled: !!form.is_enabled,
+        label: form.label,
+        description: form.description,
+        notes: form.notes || null,
+      };
+      await api.entities.PulseSourceConfig.update(config.id, updates);
+      await refetchEntityList("PulseSourceConfig");
+      toast.success(`Saved: ${form.label}`);
+      if (onSaved) onSaved();
+      onClose();
+    } catch (err) {
+      toast.error(`Save failed: ${err.message || err}`);
+    } finally {
+      setSaving(false);
+    }
+  }, [form, config?.id, jsonError, onClose, onSaved]);
+
+  if (!config) return null;
+
+  return (
+    <Dialog open={!!config} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="text-sm flex items-center gap-2">
+            <Settings2 className="h-4 w-4" />
+            Edit config: {config.label}
+            <Badge variant="outline" className="text-[9px] font-mono">{config.source_id}</Badge>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 text-xs">
+          {/* Warning callout */}
+          <div className="rounded-md border border-amber-400/50 bg-amber-50 dark:bg-amber-950/30 p-2 flex items-start gap-2 text-[11px] text-amber-800 dark:text-amber-300">
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <div>
+              Changes take effect on the next <strong>Run Now</strong> click or scheduled cron run.
+              pulseFireScrapes, pulseScheduledScrape and pulseDataSync all read from this row.
+            </div>
+          </div>
+
+          {/* Label + description */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">Label</Label>
+              <Input
+                value={form.label}
+                onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
+                className="h-8 text-xs"
+              />
+            </div>
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">Enabled</Label>
+                <div className="h-8 flex items-center gap-2">
+                  <Switch
+                    checked={!!form.is_enabled}
+                    onCheckedChange={(v) => setForm((f) => ({ ...f, is_enabled: v }))}
+                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    {form.is_enabled ? "Active" : "Disabled (cron & Run Now skip)"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">Description</Label>
+            <Input
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              className="h-8 text-xs"
+            />
+          </div>
+
+          {/* actor_input — key/value editor + raw JSON fallback */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                actor_input (passed verbatim to Apify)
+              </Label>
+              <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={addInputField}>
+                <Plus className="h-3 w-3 mr-1" />
+                Add field
+              </Button>
+            </div>
+
+            {parsedInput && (
+              <div className="rounded-md border p-2 bg-background/60 space-y-1.5">
+                {Object.keys(parsedInput).length === 0 && (
+                  <p className="text-[10px] text-muted-foreground italic">No fields. Click "Add field" or paste JSON below.</p>
+                )}
+                {Object.entries(parsedInput).map(([k, v]) => {
+                  const origType = typeof v;
+                  const isLong = typeof v === "string" && v.length > 60;
+                  return (
+                    <div key={k} className="flex items-start gap-1.5">
+                      <span className="font-mono text-[10px] font-semibold text-primary/80 w-28 shrink-0 pt-1.5 truncate" title={k}>
+                        {k}
+                      </span>
+                      {origType === "boolean" ? (
+                        <select
+                          value={String(v)}
+                          onChange={(e) => updateInputField(k, e.target.value)}
+                          className="h-7 text-[11px] font-mono rounded border bg-background px-1 flex-1"
+                        >
+                          <option value="true">true</option>
+                          <option value="false">false</option>
+                        </select>
+                      ) : isLong ? (
+                        <Textarea
+                          value={String(v ?? "")}
+                          onChange={(e) => updateInputField(k, e.target.value)}
+                          className="font-mono text-[10px] min-h-[44px] flex-1"
+                        />
+                      ) : (
+                        <Input
+                          type={origType === "number" ? "number" : "text"}
+                          value={v ?? ""}
+                          onChange={(e) => updateInputField(k, e.target.value)}
+                          className="h-7 text-[11px] font-mono flex-1"
+                        />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeInputField(k)}
+                        className="h-7 w-7 rounded hover:bg-red-50 dark:hover:bg-red-950/30 text-muted-foreground hover:text-red-600 transition-colors flex items-center justify-center shrink-0"
+                        title={`Remove ${k}`}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+                <p className="text-[9px] text-muted-foreground italic pt-1 border-t">
+                  Placeholders: <code className="font-mono">{"{suburb}"}</code> substitutes the current suburb name;{" "}
+                  <code className="font-mono">{"{suburb-slug}"}</code> substitutes the slugified form.
+                </p>
+              </div>
+            )}
+
+            <details>
+              <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground">
+                Edit as raw JSON
+              </summary>
+              <Textarea
+                value={form.actor_input_json}
+                onChange={(e) => setForm((f) => ({ ...f, actor_input_json: e.target.value }))}
+                className="font-mono text-[10px] min-h-[120px] mt-1"
+                spellCheck={false}
+              />
+              {jsonError && (
+                <p className="text-[10px] text-red-600 mt-1">JSON error: {jsonError}</p>
+              )}
+            </details>
+          </div>
+
+          {/* Run controls */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">max_results_per_suburb</Label>
+              <Input
+                type="number"
+                value={form.max_results_per_suburb}
+                onChange={(e) => setForm((f) => ({ ...f, max_results_per_suburb: e.target.value }))}
+                className="h-8 text-xs"
+              />
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">max_suburbs (cron cap)</Label>
+              <Input
+                type="number"
+                value={form.max_suburbs}
+                onChange={(e) => setForm((f) => ({ ...f, max_suburbs: e.target.value }))}
+                className="h-8 text-xs"
+                placeholder="n/a for bounding_box"
+              />
+            </div>
+            <div>
+              <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">min_priority</Label>
+              <Input
+                type="number"
+                value={form.min_priority}
+                onChange={(e) => setForm((f) => ({ ...f, min_priority: e.target.value }))}
+                className="h-8 text-xs"
+              />
+            </div>
+          </div>
+
+          {/* Cron */}
+          <div>
+            <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">schedule_cron (UTC)</Label>
+            <Input
+              value={form.schedule_cron}
+              onChange={(e) => setForm((f) => ({ ...f, schedule_cron: e.target.value }))}
+              className="h-8 text-xs font-mono"
+              placeholder="e.g. 0 18 * * 0  (leave blank for on-demand)"
+            />
+            <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
+              <span>Parsed:</span>
+              <Badge variant="outline" className="text-[9px] font-mono">
+                {form.schedule_cron ? cronLabel(form.schedule_cron) : "On-demand"}
+              </Badge>
+              {form.schedule_cron && (
+                <>
+                  <span>Next:</span>
+                  <Badge variant="outline" className="text-[9px]">
+                    {nextRunFromCron(form.schedule_cron)}
+                  </Badge>
+                </>
+              )}
+            </div>
+            <p className="text-[9px] text-muted-foreground mt-1 italic">
+              Note: editing this field updates the DB row only. The actual pg_cron job schedule lives in cron.job and must be updated separately if you change the schedule.
+            </p>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">Notes (internal)</Label>
+            <Textarea
+              value={form.notes}
+              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+              className="text-[11px] min-h-[44px]"
+              placeholder="Internal notes about this source"
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={saving || !!jsonError}>
+            {saving ? (
+              <>
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Save className="h-3 w-3 mr-1.5" />
+                Save changes
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// --- Cron Schedule Table (DB-driven) ---
+// Lists every pulse_source_configs row that has a schedule_cron. No hardcoded
+// source list.
+
+function CronScheduleTable({ runningSources, lastLogBySource, sourceConfigs }) {
+  const scheduled = useMemo(
+    () => (sourceConfigs || []).filter((c) => c.schedule_cron && c.is_enabled !== false),
+    [sourceConfigs]
+  );
   return (
     <Card className="rounded-xl border shadow-sm">
       <CardHeader className="pb-2 px-4 pt-4">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <Settings2 className="h-4 w-4 text-muted-foreground" />
           Scheduled Runs
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{scheduled.length}</Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="px-4 pb-4">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b">
-              <th className="text-left pb-2 font-medium text-muted-foreground">Source</th>
-              <th className="text-left pb-2 font-medium text-muted-foreground">Schedule</th>
-              <th className="text-left pb-2 font-medium text-muted-foreground">Last Run</th>
-              <th className="text-left pb-2 font-medium text-muted-foreground">Next Run</th>
-              <th className="text-left pb-2 font-medium text-muted-foreground">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {CRON_SCHEDULE.map((row) => {
-              const config = sourceConfigByIdMap?.[row.source_id];
-              const lastRun = config?.last_run_at || lastLogBySource?.[row.source_id]?.started_at;
-              return (
-                <tr key={row.source_id} className="border-b last:border-0">
-                  <td className="py-2 pr-3 font-medium">{row.label}</td>
-                  <td className="py-2 pr-3 text-muted-foreground">{row.schedule}</td>
-                  <td className="py-2 pr-3 text-muted-foreground">{fmtRelativeTs(lastRun)}</td>
-                  <td className="py-2 pr-3 text-muted-foreground">{nextCronLabel(row.schedule)}</td>
-                  <td className="py-2">
-                    {runningSources.has(row.source_id) ? (
-                      <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
-                        Running
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">Scheduled</Badge>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        {scheduled.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-4">No scheduled sources.</p>
+        ) : (
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b">
+                <th className="text-left pb-2 font-medium text-muted-foreground">Source</th>
+                <th className="text-left pb-2 font-medium text-muted-foreground">Schedule</th>
+                <th className="text-left pb-2 font-medium text-muted-foreground">Last Run</th>
+                <th className="text-left pb-2 font-medium text-muted-foreground">Next Run</th>
+                <th className="text-left pb-2 font-medium text-muted-foreground">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scheduled.map((config) => {
+                const lastRun = config.last_run_at || lastLogBySource?.[config.source_id]?.started_at;
+                return (
+                  <tr key={config.source_id} className="border-b last:border-0">
+                    <td className="py-2 pr-3 font-medium">{config.label}</td>
+                    <td className="py-2 pr-3 text-muted-foreground font-mono text-[10px]" title={config.schedule_cron}>
+                      {cronLabel(config.schedule_cron)}
+                    </td>
+                    <td className="py-2 pr-3 text-muted-foreground">{fmtRelativeTs(lastRun)}</td>
+                    <td className="py-2 pr-3 text-muted-foreground">{nextRunFromCron(config.schedule_cron)}</td>
+                    <td className="py-2">
+                      {runningSources.has(config.source_id) ? (
+                        <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 animate-pulse">
+                          Running
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">Scheduled</Badge>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </CardContent>
     </Card>
   );
@@ -1268,10 +1673,13 @@ function SuburbPool({ targetSuburbs }) {
   );
 }
 
-// --- Schedule Dialog ---
+// --- Schedule Dialog (DB-driven, read-only view) ---
+// Use the Edit dialog to modify. This is just a detail view.
 
 function ScheduleDialog({ source, onClose }) {
   if (!source) return null;
+  const meta = getSourceMeta(source.source_id);
+  const cronStr = source.schedule_cron;
   return (
     <Dialog open={!!source} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
@@ -1283,26 +1691,36 @@ function ScheduleDialog({ source, onClose }) {
         </DialogHeader>
         <div className="space-y-3 text-xs">
           <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-1 text-muted-foreground">Cadence</div>
-            <div className="col-span-2 font-medium">{source.schedule}</div>
-            <div className="col-span-1 text-muted-foreground">Time</div>
-            <div className="col-span-2 font-medium">{source.scheduleHint}</div>
+            <div className="col-span-1 text-muted-foreground">Cron</div>
+            <div className="col-span-2 font-mono">{cronStr || "on-demand"}</div>
+            <div className="col-span-1 text-muted-foreground">Schedule</div>
+            <div className="col-span-2 font-medium">{cronLabel(cronStr)}</div>
             <div className="col-span-1 text-muted-foreground">Next run</div>
-            <div className="col-span-2 font-medium">{nextCronLabel(source.schedule)}</div>
+            <div className="col-span-2 font-medium">{cronStr ? nextRunFromCron(cronStr) : "—"}</div>
             <div className="col-span-1 text-muted-foreground">Approach</div>
-            <div className="col-span-2 font-medium">{source.approachLabel}</div>
-            <div className="col-span-1 text-muted-foreground">Actor</div>
-            <div className="col-span-2">
-              <a href={source.apify_url} target="_blank" rel="noreferrer" className="font-mono text-primary hover:underline inline-flex items-center gap-1">
-                {source.actor_slug}
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            </div>
+            <div className="col-span-2 font-medium">{source.approach === "bounding_box" ? "Bounding box" : "Per-suburb iteration"}</div>
+            {source.actor_slug && (
+              <>
+                <div className="col-span-1 text-muted-foreground">Actor</div>
+                <div className="col-span-2">
+                  <a href={source.apify_store_url || `https://apify.com/${source.actor_slug}`} target="_blank" rel="noreferrer" className="font-mono text-primary hover:underline inline-flex items-center gap-1">
+                    {source.actor_slug}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+              </>
+            )}
             <div className="col-span-1 text-muted-foreground">Cost estimate</div>
-            <div className="col-span-2 font-medium">{source.cost_note}</div>
+            <div className="col-span-2 font-medium">{meta.costNote}</div>
+            {source.notes && (
+              <>
+                <div className="col-span-1 text-muted-foreground">Notes</div>
+                <div className="col-span-2 text-[11px]">{source.notes}</div>
+              </>
+            )}
           </div>
           <div className="rounded-md bg-muted/40 border p-2 text-[10px] text-muted-foreground">
-            <strong>Note:</strong> Cost estimates are approximate based on typical Apify pay-per-result pricing. Actual cost depends on current actor pricing and may vary.
+            To modify cadence, input params or toggles, use the <strong>Edit</strong> button on the source card.
           </div>
         </div>
       </DialogContent>
@@ -1473,37 +1891,27 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
     return map;
   }, [sourceConfigs]);
 
-  const runSource = useCallback(async (source) => {
-    setRunningSources((prev) => new Set([...prev, source.source_id]));
+  // runSource now ONLY passes source_id — pulseFireScrapes reads the full
+  // actor_input, approach, max_results, etc. from pulse_source_configs.
+  // No more hardcoded runParams or per-source branching.
+  const runSource = useCallback(async (sourceConfig) => {
+    const sid = sourceConfig.source_id;
+    setRunningSources((prev) => new Set([...prev, sid]));
     try {
-      // Route through pulseFireScrapes (lightweight dispatcher) instead of
-      // pulseDataSync directly. pulseDataSync for per-suburb sources would
-      // iterate through 148+ active suburbs synchronously, far exceeding the
-      // ~150s edge function CPU budget. pulseFireScrapes:
-      //   - per-suburb: fires individual fire-and-forget pulseDataSync calls
-      //     (staggered 2s apart, capped via max_suburbs)
-      //   - bounding-box: fires a single pulseDataSync call
-      // It also logs cron_dispatched timeline events and updates last_run_at.
-      const isBoundingBox = source.approach === "bounding_box" ||
-                            source.source_id.startsWith("rea_listings_bb");
-      const fireParams = isBoundingBox
-        ? { source_id: source.source_id }
-        : {
-            source_id: source.source_id,
-            min_priority: 0,
-            // Cap at 20 suburbs per manual run. 20 staggered Apify calls take
-            // ~40s total to dispatch; any more risks hitting the function wall
-            // clock. Users can rerun for the next batch.
-            max_suburbs: 20,
-          };
+      // Manual run cap at 20 suburbs for per-suburb sources — avoids blowing
+      // the edge function wall clock. (This can be raised in the DB config too.)
+      const fireParams = sourceConfig.approach === "bounding_box"
+        ? { source_id: sid }
+        : { source_id: sid, min_priority: sourceConfig.min_priority ?? 0, max_suburbs: sourceConfig.max_suburbs ?? 20 };
+
       const { data } = await api.functions.invoke("pulseFireScrapes", fireParams);
       const dispatched = data?.dispatched ?? 0;
       if (data?.success === false) {
-        toast.warning(data?.message || `${source.label}: already running`);
-      } else if (isBoundingBox) {
-        toast.success(`${source.label} dispatched — sync log will appear shortly`);
+        toast.warning(data?.message || `${sourceConfig.label}: already running`);
+      } else if (sourceConfig.approach === "bounding_box") {
+        toast.success(`${sourceConfig.label} dispatched — sync log will appear shortly`);
       } else {
-        toast.success(`${source.label}: ${dispatched} suburb${dispatched === 1 ? "" : "s"} dispatched`);
+        toast.success(`${sourceConfig.label}: ${dispatched} suburb${dispatched === 1 ? "" : "s"} dispatched`);
       }
       setTimeout(() => {
         refetchEntityList("PulseSyncLog");
@@ -1515,15 +1923,36 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
     } finally {
       setRunningSources((prev) => {
         const n = new Set(prev);
-        n.delete(source.source_id);
+        n.delete(sid);
         return n;
       });
     }
-  }, [targetSuburbs, user]);
+  }, []);
 
-  // Totals for header summary
-  const perSuburbSources = SOURCES.filter((s) => s.approach === "per_suburb");
-  const boundingBoxSources = SOURCES.filter((s) => s.approach === "bounding_box");
+  // Edit dialog state
+  const [editConfig, setEditConfig] = useState(null);
+
+  // Visible sources: every enabled (or all?) row from pulse_source_configs.
+  // Sorted: per-suburb first (visual group), then bounding_box, each by label.
+  const visibleSources = useMemo(() => {
+    const rows = [...(sourceConfigs || [])];
+    // Filter out legacy non-REA rows (domain_*) that are disabled — these are
+    // kept in DB for archival but don't need cards. Easy to re-include by
+    // setting is_enabled=true. We keep disabled REA sources visible so users
+    // can re-enable from the UI.
+    const isReaSource = (c) => c.source_id?.startsWith("rea_");
+    const filtered = rows.filter(isReaSource);
+    filtered.sort((a, b) => {
+      const aBB = a.approach === "bounding_box" ? 1 : 0;
+      const bBB = b.approach === "bounding_box" ? 1 : 0;
+      if (aBB !== bBB) return aBB - bBB;
+      return (a.label || "").localeCompare(b.label || "");
+    });
+    return filtered;
+  }, [sourceConfigs]);
+
+  const perSuburbCount = visibleSources.filter((s) => s.approach !== "bounding_box").length;
+  const boundingBoxCount = visibleSources.filter((s) => s.approach === "bounding_box").length;
 
   return (
     <div className="space-y-5">
@@ -1532,15 +1961,15 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
         <CardContent className="p-4 flex flex-wrap items-center gap-4 text-xs">
           <div className="flex items-center gap-2">
             <Database className="h-4 w-4 text-primary" />
-            <span className="font-semibold text-sm">{SOURCES.length} data sources</span>
+            <span className="font-semibold text-sm">{visibleSources.length} data sources</span>
           </div>
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <Repeat className="h-3.5 w-3.5" />
-            <span>{perSuburbSources.length} per-suburb (iterates {activeSuburbCount} suburbs)</span>
+            <span>{perSuburbCount} per-suburb (iterates {activeSuburbCount} suburbs)</span>
           </div>
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <Globe className="h-3.5 w-3.5" />
-            <span>{boundingBoxSources.length} bounding-box (single call, Greater Sydney)</span>
+            <span>{boundingBoxCount} bounding-box (single call, Greater Sydney)</span>
           </div>
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <MapPin className="h-3.5 w-3.5" />
@@ -1555,21 +1984,28 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
           Data Sources
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {SOURCES.map((source) => (
+          {visibleSources.map((config) => (
             <SourceCard
-              key={source.source_id}
-              source={source}
-              lastLog={lastLogBySource[source.source_id]}
-              sourceConfig={sourceConfigByIdMap[source.source_id]}
+              key={config.source_id}
+              sourceConfig={config}
+              lastLog={lastLogBySource[config.source_id]}
               pulseTimeline={pulseTimeline}
               activeSuburbCount={activeSuburbCount}
-              isRunning={runningSources.has(source.source_id)}
+              isRunning={runningSources.has(config.source_id)}
               onRun={runSource}
               onOpenPayload={setDrillLog}
               onOpenSchedule={setScheduleSource}
+              onEdit={setEditConfig}
               onDrillDispatch={handleDrillDispatch}
             />
           ))}
+          {visibleSources.length === 0 && (
+            <Card className="col-span-full">
+              <CardContent className="p-8 text-center text-muted-foreground">
+                No REA sources configured. Insert rows into <code className="font-mono text-xs">pulse_source_configs</code> to get started.
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 
@@ -1578,7 +2014,7 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
         <CronScheduleTable
           runningSources={runningSources}
           lastLogBySource={lastLogBySource}
-          sourceConfigByIdMap={sourceConfigByIdMap}
+          sourceConfigs={visibleSources}
         />
         <SuburbPool targetSuburbs={targetSuburbs} />
       </div>
@@ -1592,6 +2028,9 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
       )}
       {scheduleSource && (
         <ScheduleDialog source={scheduleSource} onClose={() => setScheduleSource(null)} />
+      )}
+      {editConfig && (
+        <EditConfigDialog config={editConfig} onClose={() => setEditConfig(null)} />
       )}
     </div>
   );
