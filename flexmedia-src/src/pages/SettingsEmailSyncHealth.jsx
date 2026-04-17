@@ -473,9 +473,14 @@ export default function SettingsEmailSyncHealth() {
   const syncMutation = useMutation({
     mutationFn: async (account) => {
       setPendingAction({ accountId: account.id, action: "sync" });
+      // Sync Health page is an admin tool — must pass the ACCOUNT's assigned user,
+      // not the current admin's user id. The edge function does
+      //   .filter({ id: accountId, assigned_to_user_id: userId, is_active: true })
+      // so passing the admin's id on an account they don't own returns empty,
+      // which is why the button was returning "Account not found or inactive".
       const res = await api.functions.invoke("syncGmailMessagesForAccount", {
         accountId: account.id,
-        userId: user?.id || account.assigned_to_user_id,
+        userId: account.assigned_to_user_id,
       });
       if (res?.data?.error) throw new Error(res.data.error);
       return res?.data;

@@ -722,18 +722,24 @@ Deno.serve(async (req) => {
       return errorResponse('Missing accountId or userId', 400);
     }
 
-    // Check if this is a service-role invocation (from syncAllEmails scheduler)
-    const authHeader = req.headers.get('Authorization') || '';
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-    const isServiceRole = authHeader === `Bearer ${serviceRoleKey}`;
+    // Check if this is a service-role invocation (from syncAllEmails scheduler or cron)
+    // getUserFromReq recognizes:
+    //   - Legacy service-role JWT (role: service_role in payload) → SERVICE_ROLE_USER
+    //   - sb_secret_* tokens → SERVICE_ROLE_USER
+    //   - SUPABASE_SERVICE_ROLE_KEY env match → SERVICE_ROLE_USER
+    // SERVICE_ROLE_USER has id === '__service_role__', so we detect it by that marker.
+    const user = await getUserFromReq(req).catch(() => null);
+    const isServiceRole = user?.id === '__service_role__';
 
     if (!isServiceRole) {
-      // Verify user authentication for direct user calls
-      const user = await getUserFromReq(req);
-      if (!user || user.id !== userId) {
+      if (!user) {
         return errorResponse('Unauthorized', 403);
       }
-
+      // Admins can sync any account on the Email Sync Health page; non-admins can only sync their own.
+      const isAdmin = user.role === 'master_admin' || user.role === 'admin';
+      if (!isAdmin && user.id !== userId) {
+        return errorResponse('Unauthorized', 403);
+      }
       if (!['master_admin', 'admin', 'manager', 'employee'].includes(user.role)) {
         return errorResponse('Forbidden: insufficient permissions', 403);
       }
