@@ -1,4 +1,4 @@
-import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, getUserFromReq } from '../_shared/supabase.ts';
+import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse, getUserFromReq, serveWithAudit } from '../_shared/supabase.ts';
 
 // ─── Sydney timezone helpers ─────────────────────────────────────────────────
 
@@ -575,7 +575,7 @@ function computeVelocity(projects: any[], now: Date): StatGroup {
 
 // ─── Main handler ────────────────────────────────────────────────────────────
 
-Deno.serve(async (req) => {
+serveWithAudit('calculateDashboardStats', async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
 
@@ -589,11 +589,9 @@ Deno.serve(async (req) => {
 
   // ── Auth: require any authenticated user or service role ──
   const user = await getUserFromReq(req).catch(() => null);
-  if (!user) {
-    const authHeader = req.headers.get('authorization') || '';
-    if (!authHeader.includes(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '___')) {
-      return errorResponse('Authentication required', 401);
-    }
+  const isServiceRole = user?.id === '__service_role__';
+  if (!isServiceRole) {
+    if (!user) return errorResponse('Authentication required', 401);
   }
 
   const start = Date.now();
