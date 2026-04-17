@@ -20,7 +20,7 @@
  *     high error rate.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { formatDistanceToNow, format } from "date-fns";
@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Activity, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Clock,
-  Gauge, Loader2, Stethoscope, Copy, ShieldAlert, Server,
+  Gauge, Loader2, Stethoscope, Copy, ShieldAlert, Server, Hourglass,
 } from "lucide-react";
 
 // ── helpers ────────────────────────────────────────────────────────
@@ -150,6 +150,15 @@ function ErrorDetailDialog({ open, onOpenChange, functionName }) {
   });
 
   const errors = data?.errors || [];
+  const rateLimited = !!data?.rate_limited;
+  const retryAfterSec = Number(data?.retry_after_sec) || 5;
+
+  // Auto-refetch shortly after the rate-limit window so the dialog recovers.
+  useEffect(() => {
+    if (!rateLimited || !open) return;
+    const t = setTimeout(() => refetch(), Math.max(retryAfterSec, 3) * 1000);
+    return () => clearTimeout(t);
+  }, [rateLimited, retryAfterSec, refetch, open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -171,6 +180,11 @@ function ErrorDetailDialog({ open, onOpenChange, functionName }) {
         ) : isError ? (
           <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             Failed to load: {error?.message || "unknown error"}
+          </div>
+        ) : rateLimited && errors.length === 0 ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-center gap-2">
+            <Hourglass className="h-4 w-4 opacity-80" />
+            Supabase Log Explorer rate-limited the query. Auto-refreshing in {retryAfterSec}s…
           </div>
         ) : errors.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
@@ -277,6 +291,8 @@ export default function EdgeFunctionHealth() {
 
   const functions = data?.functions || [];
   const summary = data?.summary || { total_calls: 0, total_errors: 0, total_success: 0, overall_success_rate: 100, high_error_count: 0 };
+  const rateLimited = !!data?.rate_limited;
+  const retryAfterSec = Number(data?.retry_after_sec) || 5;
 
   // Health-check mutation per fn
   const healthCheckMutation = useMutation({
@@ -305,6 +321,15 @@ export default function EdgeFunctionHealth() {
     if (summary.overall_success_rate >= 95) return "amber";
     return "red";
   }, [summary.overall_success_rate]);
+
+  // If the Management API rate-limited us, schedule a quick refetch shortly
+  // after Retry-After so the panel auto-recovers without waiting for the
+  // full 60s auto-refresh tick.
+  useEffect(() => {
+    if (!rateLimited) return;
+    const t = setTimeout(() => refetch(), Math.max(retryAfterSec, 3) * 1000);
+    return () => clearTimeout(t);
+  }, [rateLimited, retryAfterSec, refetch, dataUpdatedAt]);
 
   const lastRefreshedLabel = dataUpdatedAt
     ? formatDistanceToNow(new Date(dataUpdatedAt), { addSuffix: true })
@@ -337,6 +362,19 @@ export default function EdgeFunctionHealth() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {rateLimited && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-[11px] inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 text-amber-800 px-1.5 py-0.5">
+                    <Hourglass className="h-3 w-3" />
+                    Rate-limited · refreshing in {retryAfterSec}s
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Supabase Log Explorer throttled the query. Auto-retrying shortly.
+                </TooltipContent>
+              </Tooltip>
+            )}
             <span className="text-[11px] text-muted-foreground flex items-center gap-1">
               <Clock className="h-3 w-3" />
               Updated {lastRefreshedLabel}
@@ -431,9 +469,16 @@ export default function EdgeFunctionHealth() {
           </CardHeader>
           <CardContent className="p-0">
             {functions.length === 0 ? (
-              <div className="py-12 text-center text-sm text-muted-foreground">
-                No edge-function invocations recorded in the last 24 hours.
-              </div>
+              rateLimited ? (
+                <div className="py-12 text-center text-sm text-amber-700 flex flex-col items-center gap-2">
+                  <Hourglass className="h-5 w-5 opacity-70" />
+                  Supabase Log Explorer rate-limited the query. Auto-refreshing in {retryAfterSec}s…
+                </div>
+              ) : (
+                <div className="py-12 text-center text-sm text-muted-foreground">
+                  No edge-function invocations recorded in the last 24 hours.
+                </div>
+              )
             ) : (
               <Table>
                 <TableHeader>

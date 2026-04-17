@@ -53,12 +53,37 @@ const LOOKBACK_HOURS = 24;
 // ─── Log Explorer query helpers ──────────────────────────────────────────────
 
 /**
+ * Sentinel error class so the main handler can distinguish "Management API
+ * rate-limited us" (a soft, transient condition we shouldn't surface as a
+ * 500) from real internal faults.
+ */
+class RateLimitedError extends Error {
+  retryAfter: number;
+  constructor(retryAfter: number, msg = 'Log Explorer rate-limited') {
+    super(msg);
+    this.name = 'RateLimitedError';
+    this.retryAfter = retryAfter;
+  }
+}
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/**
  * Run a Log Explorer SQL query with an explicit lookback window.
  * Returns parsed result rows or throws.
  *
  * Important: the default window is only a minute or so when no
  * iso_timestamp_start/_end params are supplied. We always pass a
  * LOOKBACK_HOURS → now window to get useful data.
+ *
+ * Rate-limit handling: the Management API throttles to a few QPS per project.
+ * With this panel's 60s auto-refresh × multiple admins open + parallel
+ * AGG/LAST_ERR queries, sporadic 429 ThrottlerException is normal.
+ *   - On 429 we retry up to 2 times honouring Retry-After (default 3s) with
+ *     exponential backoff capped at 8s.
+ *   - On persistent 429 we throw RateLimitedError so the caller can return
+ *     200 + rate_limited:true instead of a 500 (the panel displays this as
+ *     a soft amber "rate-limited, refreshing shortly" badge).
  */
 async function runLogQuery(sql: string): Promise<any[]> {
   // Supabase CLI refuses secrets with SUPABASE_ prefix, so we use MANAGEMENT_API_TOKEN.
@@ -82,24 +107,50 @@ async function runLogQuery(sql: string): Promise<any[]> {
     iso_timestamp_end: end.toISOString(),
   });
 
-  const res = await fetch(`${MGMT_ENDPOINT}?${params.toString()}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-  });
+  const MAX_ATTEMPTS = 3;
+  let lastRetryAfter = 3;
 
-  if (!res.ok) {
-    // Don't leak token or full URL back to the caller — scrub the response text.
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(`${MGMT_ENDPOINT}?${params.toString()}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (res.ok) {
+      const json = await res.json().catch(() => ({ result: [], error: 'invalid JSON' }));
+      if (json.error) throw new Error(`Log Explorer: ${json.error}`);
+      return Array.isArray(json.result) ? json.result : [];
+    }
+
+    // 429 — back off & retry. Server includes Retry-After in seconds when polite.
+    if (res.status === 429) {
+      const retryHeader = res.headers.get('Retry-After');
+      const parsed = retryHeader ? Number(retryHeader) : NaN;
+      // exponential backoff: 3s, 6s, capped at 8s
+      const backoff = Number.isFinite(parsed) && parsed > 0
+        ? Math.min(parsed, 8)
+        : Math.min(3 * Math.pow(2, attempt - 1), 8);
+      lastRetryAfter = backoff;
+      // drain body so the connection can be reused
+      await res.text().catch(() => '');
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(backoff * 1000);
+        continue;
+      }
+      throw new RateLimitedError(lastRetryAfter);
+    }
+
+    // Other non-OK — surface a scrubbed error.
     const text = await res.text().catch(() => '');
     const safe = text.length > 500 ? text.slice(0, 500) + '…' : text;
     throw new Error(`Log Explorer query failed (${res.status}): ${safe}`);
   }
 
-  const json = await res.json().catch(() => ({ result: [], error: 'invalid JSON' }));
-  if (json.error) throw new Error(`Log Explorer: ${json.error}`);
-  return Array.isArray(json.result) ? json.result : [];
+  // exhausted retries without throwing — defensive
+  throw new RateLimitedError(lastRetryAfter);
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -374,7 +425,7 @@ Deno.serve(async (req) => {
     const url = new URL(req.url);
     if (!url.searchParams.has('function')) {
       return jsonResponse(
-        { status: 'ok', function: 'edgeFunctionHealth', version: 'v1.0.0' },
+        { status: 'ok', function: 'edgeFunctionHealth', version: 'v1.1.0' },
         200,
         req,
       );
@@ -390,7 +441,7 @@ Deno.serve(async (req) => {
   // Support _health_check convention so this function can appear in its own table
   if (body?._health_check) {
     return jsonResponse(
-      { _version: 'v1.0.0', _fn: 'edgeFunctionHealth', _ts: '2026-04-17' },
+      { _version: 'v1.1.0', _fn: 'edgeFunctionHealth', _ts: '2026-04-17' },
       200,
       req,
     );
@@ -416,42 +467,89 @@ Deno.serve(async (req) => {
     // ── Per-function error detail ──
     if (fnFilter) {
       const fn = validateFunctionName(fnFilter);
-      const errRows = await runLogQuery(errorDetailSql(fn));
-      const errors = errRows.map((r: any) => ({
-        timestamp_ms: microsToMs(r.timestamp),
-        status_code: Number(r.status_code || 0) || null,
-        execution_time_ms: r.execution_time_ms == null ? null : Number(r.execution_time_ms),
-        execution_id: r.execution_id || null,
-        message: r.event_message || null,
-      }));
+      try {
+        const errRows = await runLogQuery(errorDetailSql(fn));
+        const errors = errRows.map((r: any) => ({
+          timestamp_ms: microsToMs(r.timestamp),
+          status_code: Number(r.status_code || 0) || null,
+          execution_time_ms: r.execution_time_ms == null ? null : Number(r.execution_time_ms),
+          execution_id: r.execution_id || null,
+          message: r.event_message || null,
+        }));
+        return jsonResponse(
+          {
+            function: fn,
+            lookback_hours: LOOKBACK_HOURS,
+            count: errors.length,
+            errors,
+          },
+          200,
+          req,
+        );
+      } catch (err: any) {
+        if (err instanceof RateLimitedError) {
+          return jsonResponse(
+            {
+              function: fn,
+              lookback_hours: LOOKBACK_HOURS,
+              count: 0,
+              errors: [],
+              rate_limited: true,
+              retry_after_sec: err.retryAfter,
+              message: 'Supabase Log Explorer rate-limited the query. Try again shortly.',
+            },
+            200,
+            req,
+          );
+        }
+        throw err;
+      }
+    }
+
+    // ── Aggregated overview (default) ──
+    try {
+      const [aggRows, lastErrRows] = await Promise.all([
+        runLogQuery(AGG_SQL),
+        runLogQuery(LAST_ERR_SQL),
+      ]);
+      const shaped = shapeAggregates(aggRows, lastErrRows);
       return jsonResponse(
         {
-          function: fn,
           lookback_hours: LOOKBACK_HOURS,
-          count: errors.length,
-          errors,
+          generated_at: new Date().toISOString(),
+          summary: shaped.summary,
+          functions: shaped.stats,
         },
         200,
         req,
       );
+    } catch (err: any) {
+      if (err instanceof RateLimitedError) {
+        // Soft-fail: return an empty-but-valid payload so the panel can show
+        // a "rate-limited, refreshing shortly" badge instead of "Failed to load".
+        return jsonResponse(
+          {
+            lookback_hours: LOOKBACK_HOURS,
+            generated_at: new Date().toISOString(),
+            summary: {
+              total_calls: 0,
+              total_errors: 0,
+              total_client_errors: 0,
+              total_success: 0,
+              overall_success_rate: 100,
+              high_error_count: 0,
+            },
+            functions: [],
+            rate_limited: true,
+            retry_after_sec: err.retryAfter,
+            message: 'Supabase Log Explorer rate-limited the query. Refresh in a few seconds.',
+          },
+          200,
+          req,
+        );
+      }
+      throw err;
     }
-
-    // ── Aggregated overview (default) ──
-    const [aggRows, lastErrRows] = await Promise.all([
-      runLogQuery(AGG_SQL),
-      runLogQuery(LAST_ERR_SQL),
-    ]);
-    const shaped = shapeAggregates(aggRows, lastErrRows);
-    return jsonResponse(
-      {
-        lookback_hours: LOOKBACK_HOURS,
-        generated_at: new Date().toISOString(),
-        summary: shaped.summary,
-        functions: shaped.stats,
-      },
-      200,
-      req,
-    );
   } catch (err: any) {
     console.error('edgeFunctionHealth error:', err?.message);
     return errorResponse(err?.message || 'Internal error', 500, req);
