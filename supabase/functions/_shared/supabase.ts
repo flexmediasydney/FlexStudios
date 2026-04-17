@@ -35,8 +35,15 @@ function getCorsOrigin(req?: Request): string {
 export function getCorsHeaders(req?: Request) {
   return {
     'Access-Control-Allow-Origin': getCorsOrigin(req),
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    // `x-caller-context` is sent by the frontend invokeFunction wrapper and by
+    // cross-function calls for audit attribution — it MUST be listed here or
+    // the browser preflight blocks the actual POST as "Failed to fetch".
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-caller-context',
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    // supabase-js v2 `functions.invoke` uses credentials:'include' — without
+    // Allow-Credentials, browsers silently drop the POST as "Failed to fetch"
+    // after the OPTIONS preflight succeeds. Must be 'true' (string).
+    'Access-Control-Allow-Credentials': 'true',
   };
 }
 
