@@ -4,7 +4,7 @@ import {
   Calendar, DollarSign, Activity, MessageSquare, ArrowUpDown,
   ListPlus, ListChecks, FileX, Trophy, CreditCard, UserCheck,
   FileText, RefreshCw, XOctagon, MailCheck, Zap, Cog, Bot,
-  ClipboardList, AlertTriangle, StickyNote
+  ClipboardList, AlertTriangle, StickyNote, Timer, Archive, UserCog
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
@@ -36,6 +36,12 @@ const ACTION_CONFIG = {
   system_tasks_generated:  { label: "Tasks generated",     color: "bg-indigo-500",  textColor: "text-indigo-700",  bg: "bg-indigo-50 border-indigo-200",  icon: ClipboardList,  iconBg: "bg-indigo-100" },
   system_tasks_failed:     { label: "Tasks failed",        color: "bg-red-400",     textColor: "text-red-700",     bg: "bg-red-50 border-red-200",        icon: AlertTriangle,  iconBg: "bg-red-100" },
   automation_rule_fired:   { label: "Automation",          color: "bg-purple-500",  textColor: "text-purple-700",  bg: "bg-purple-50 border-purple-200",  icon: Bot,            iconBg: "bg-purple-100" },
+  // Task-level system changes
+  task_auto_completed:     { label: "Task auto-completed", color: "bg-teal-500",    textColor: "text-teal-700",    bg: "bg-teal-50 border-teal-200",      icon: CheckCircle,    iconBg: "bg-teal-100" },
+  task_effort_auto_logged: { label: "Effort auto-logged",  color: "bg-amber-500",   textColor: "text-amber-700",   bg: "bg-amber-50 border-amber-200",    icon: Timer,          iconBg: "bg-amber-100" },
+  task_owner_changed:      { label: "Task owner changed",  color: "bg-sky-500",     textColor: "text-sky-700",     bg: "bg-sky-50 border-sky-200",        icon: UserCog,        iconBg: "bg-sky-100" },
+  task_due_date_changed:   { label: "Due dates recalculated", color: "bg-blue-500", textColor: "text-blue-700",    bg: "bg-blue-50 border-blue-200",      icon: Calendar,       iconBg: "bg-blue-100" },
+  task_auto_archived:      { label: "Tasks auto-archived", color: "bg-slate-500",   textColor: "text-slate-700",   bg: "bg-slate-50 border-slate-200",    icon: Archive,        iconBg: "bg-slate-100" },
 };
 
 // Fields to completely ignore in delta display

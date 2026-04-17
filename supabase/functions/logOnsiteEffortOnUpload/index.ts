@@ -92,6 +92,7 @@ Deno.serve(async (req) => {
     // Guard: shoot_date must be present
     if (!project.shoot_date) {
       console.warn(`logOnsiteEffortOnUpload: project ${project_id} has no shoot_date — skipping time log creation.`);
+      const flaggedTasks: Array<{ id: string; title: string }> = [];
       for (const task of onsiteTasks) {
         if (!task.is_completed) {
           await entities.ProjectTask.update(task.id, {
@@ -99,7 +100,27 @@ Deno.serve(async (req) => {
             is_locked: true,
             shoot_date_missing: true,
           });
+          flaggedTasks.push({ id: task.id, title: task.title || 'Onsite task' });
         }
+      }
+      if (flaggedTasks.length > 0) {
+        try {
+          await entities.ProjectActivity.create({
+            project_id,
+            project_title: project.title || project.property_address || '',
+            action: 'task_auto_completed',
+            description: `Auto-completed ${flaggedTasks.length} onsite task${flaggedTasks.length === 1 ? '' : 's'} on upload, but shoot_date was missing — flagged for manual time entry.`,
+            actor_type: 'system',
+            actor_source: 'logOnsiteEffortOnUpload',
+            user_name: 'System',
+            user_email: 'system@flexstudios.app',
+            metadata: JSON.stringify({
+              trigger: 'project_uploaded',
+              reason: 'shoot_date_missing',
+              tasks: flaggedTasks,
+            }),
+          });
+        } catch { /* non-fatal */ }
       }
       return jsonResponse({
         success: true,
@@ -135,6 +156,7 @@ Deno.serve(async (req) => {
     })();
 
     let completed = 0;
+    const autoEffortLogged: Array<{ id: string; title: string; seconds: number; role: string }> = [];
 
     for (const task of onsiteTasks) {
       // Skip if already completed AND locked (fully processed)
@@ -198,7 +220,44 @@ Deno.serve(async (req) => {
         total_effort_logged: taskSeconds,
       });
 
+      autoEffortLogged.push({
+        id: task.id,
+        title: task.title || `${role} onsite`,
+        seconds: taskSeconds,
+        role,
+      });
+
       completed++;
+    }
+
+    // Emit a project activity entry describing the auto-logged effort
+    if (autoEffortLogged.length > 0) {
+      try {
+        const totalMinutes = Math.round(autoEffortLogged.reduce((a, t) => a + t.seconds, 0) / 60);
+        const summaryList = autoEffortLogged
+          .map(t => `${t.title} (${Math.round(t.seconds / 60)}m)`)
+          .slice(0, 6)
+          .join(', ');
+        await entities.ProjectActivity.create({
+          project_id,
+          project_title: project.title || project.property_address || '',
+          action: 'task_effort_auto_logged',
+          description: `Auto-logged effort on upload: ${autoEffortLogged.length} onsite task${autoEffortLogged.length === 1 ? '' : 's'} completed, ${totalMinutes} min total (${summaryList}${autoEffortLogged.length > 6 ? `, +${autoEffortLogged.length - 6} more` : ''}).`,
+          actor_type: 'system',
+          actor_source: 'logOnsiteEffortOnUpload',
+          user_name: 'System',
+          user_email: 'system@flexstudios.app',
+          metadata: JSON.stringify({
+            trigger: 'project_uploaded',
+            old_status,
+            new_status: project.status,
+            total_minutes: totalMinutes,
+            tasks: autoEffortLogged,
+          }),
+        });
+      } catch (actErr: any) {
+        console.warn('logOnsiteEffortOnUpload activity write failed:', actErr.message);
+      }
     }
 
     // Effort recalculation is intentionally NOT done here.

@@ -257,6 +257,7 @@ Deno.serve(async (req) => {
 
     const stateChanges: any[] = [];
     const debugInfo: any[] = [];
+    const dueDateChanges: Array<{ id: string; title: string; old: any; new: any }> = [];
 
     for (const task of allTasks) {
       if (!task?.id || !task?.title) { console.warn('Skipping malformed task:', task); continue; }
@@ -264,6 +265,14 @@ Deno.serve(async (req) => {
       if (task.is_manually_set_due_date) continue;
       const newState = calculateTaskState(task, project, allTasks, APP_TIMEZONE);
       if (newState.shouldUpdate) {
+        if (newState.due_date !== task.due_date) {
+          dueDateChanges.push({
+            id: task.id,
+            title: task.title,
+            old: task.due_date || null,
+            new: newState.due_date || null,
+          });
+        }
         stateChanges.push({
           id: task.id,
           title: task.title,
@@ -313,6 +322,37 @@ Deno.serve(async (req) => {
           console.error(`Failed to update task ${change.id}:`, err.message);
         }
       }));
+    }
+
+    // Emit activity log for due-date changes (skip pure is_blocked flips — too noisy)
+    if (dueDateChanges.length > 0 && results.success > 0) {
+      try {
+        const appliedDueDateChanges = dueDateChanges.filter(c =>
+          !results.errors.some((e: any) => e.taskId === c.id)
+        );
+        if (appliedDueDateChanges.length > 0) {
+          const summary = appliedDueDateChanges
+            .slice(0, 5)
+            .map(c => `${c.title}: ${c.old ? new Date(c.old).toLocaleDateString('en-AU') : 'none'} → ${c.new ? new Date(c.new).toLocaleDateString('en-AU') : 'cleared'}`)
+            .join('; ');
+          await entities.ProjectActivity.create({
+            project_id,
+            project_title: project.title || project.property_address || '',
+            action: 'task_due_date_changed',
+            description: `Auto-recalculated due dates for ${appliedDueDateChanges.length} task${appliedDueDateChanges.length === 1 ? '' : 's'} (${trigger_event || 'manual'}): ${summary}${appliedDueDateChanges.length > 5 ? `, +${appliedDueDateChanges.length - 5} more` : ''}.`,
+            actor_type: 'system',
+            actor_source: 'calculateProjectTaskDeadlines',
+            user_name: 'System',
+            user_email: 'system@flexstudios.app',
+            metadata: JSON.stringify({
+              trigger: trigger_event || 'manual',
+              changes: appliedDueDateChanges,
+            }),
+          });
+        }
+      } catch (actErr: any) {
+        console.warn('calculateProjectTaskDeadlines activity write failed:', actErr.message);
+      }
     }
 
     return jsonResponse({

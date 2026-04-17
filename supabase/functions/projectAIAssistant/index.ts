@@ -177,6 +177,26 @@ async function executeTool(toolName: string, input: any, context: ToolContext): 
       if (!match) return { error: `No incomplete task matching "${input.task_title}" found` };
       if (match.is_locked) return { error: `Task "${match.title}" is locked and cannot be modified` };
       await entities.ProjectTask.update(match.id, { is_completed: true, completed_at: new Date().toISOString() });
+      try {
+        const proj = await entities.Project.get(projectId).catch(() => null);
+        await entities.ProjectActivity.create({
+          project_id: projectId,
+          project_title: proj?.title || proj?.property_address || '',
+          action: 'task_auto_completed',
+          description: `Task "${match.title}" marked complete by AI assistant at request of ${user.full_name || user.email}.`,
+          actor_type: 'system',
+          actor_source: 'projectAIAssistant',
+          user_id: user.id,
+          user_name: user.full_name || 'AI Assistant',
+          user_email: user.email || 'ai@flexstudios.app',
+          metadata: JSON.stringify({
+            trigger: 'ai_assistant',
+            task_id: match.id,
+            task_title: match.title,
+            requested_by_user_id: user.id,
+          }),
+        });
+      } catch { /* non-fatal */ }
       return { success: true, task: match.title };
     }
 

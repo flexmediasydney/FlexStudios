@@ -36,15 +36,9 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
     updates.payment_status = mappedPayment;
   }
 
-  if (!overriddenFields.includes('status')) {
-    if (hasDeliverables) {
-      updates.status = 'delivered';
-    } else {
-      if (project.status !== 'pending_review') updates.pre_revision_stage = project.status;
-      updates.status = 'pending_review';
-      updates.pending_review_reason = 'Delivery event received but no deliverable links — please add manually';
-    }
-  }
+  // NOTE: Project status is intentionally NOT auto-transitioned on Tonomo delivery.
+  // Delivery metadata (links, files, invoice, delivered_at) is still captured below,
+  // but status transitions must be performed manually by staff.
 
   if (p.deliveredDate) updates.tonomo_delivered_at = new Date(p.deliveredDate).toISOString();
   if (p.deliverable_link) updates.tonomo_deliverable_link = p.deliverable_link;
@@ -55,6 +49,7 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
 
   // Auto-complete all active tasks on delivery
   const tasks = await entities.ProjectTask.filter({ project_id: project.id }, '-created_at', 500).catch(() => []);
+  const autoCompletedTasks: Array<{ id: string; title: string }> = [];
   for (const task of (tasks || [])) {
     if (!task.is_completed && !task.is_deleted) {
       try {
@@ -62,10 +57,28 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
           is_completed: true,
           completed_at: new Date().toISOString(),
         });
+        autoCompletedTasks.push({ id: task.id, title: task.title || 'Untitled task' });
       } catch (taskErr: any) {
         console.error(`Task completion failed for task ${task.id} (non-fatal):`, taskErr.message);
       }
     }
+  }
+
+  // Emit a single summary activity entry for auto-completed tasks
+  if (autoCompletedTasks.length > 0) {
+    await writeProjectActivity(entities, {
+      project_id: project.id,
+      project_title: project.title || '',
+      action: 'task_auto_completed',
+      description: `Auto-completed ${autoCompletedTasks.length} task${autoCompletedTasks.length === 1 ? '' : 's'} on Tonomo delivery: ${autoCompletedTasks.map(t => t.title).slice(0, 6).join(', ')}${autoCompletedTasks.length > 6 ? `, +${autoCompletedTasks.length - 6} more` : ''}`,
+      tonomo_order_id: orderId,
+      tonomo_event_type: 'task_auto_completed_on_delivery',
+      metadata: {
+        trigger: 'tonomo_delivery',
+        task_count: autoCompletedTasks.length,
+        tasks: autoCompletedTasks,
+      },
+    });
   }
 
   await entities.Project.update(project.id, updates);
@@ -103,15 +116,8 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
     },
   });
 
-  // Fire trackProjectStageChange so timers, notifications, task cleanup, and automation all run
-  if (updates.status && updates.status !== project.status) {
-    invokeFunction('trackProjectStageChange', {
-      projectId: project.id,
-      old_data: { status: project.status },
-      actor_id: null,
-      actor_name: 'Tonomo Delivery',
-    }).catch(() => {});
-  }
+  // Project status is no longer auto-transitioned on delivery, so trackProjectStageChange
+  // is intentionally not invoked here. Staff will change status manually when ready.
 
   // Notify staff about delivery
   const deliveryProjectName = project.title || project.property_address || 'Project';

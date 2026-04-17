@@ -479,8 +479,30 @@ Deno.serve(async (req) => {
         const incomplete = openTasks.filter(
           (t: any) => !t.is_completed && !t.is_deleted && !t.is_archived
         );
+        const archivedTasks: Array<{ id: string; title: string }> = [];
         for (const task of incomplete) {
-          await entities.ProjectTask.update(task.id, { is_archived: true }).catch(() => {});
+          try {
+            await entities.ProjectTask.update(task.id, { is_archived: true });
+            archivedTasks.push({ id: task.id, title: task.title || 'Untitled task' });
+          } catch { /* non-fatal */ }
+        }
+        if (archivedTasks.length > 0) {
+          try {
+            await entities.ProjectActivity.create({
+              project_id: project.id,
+              project_title: project.title || project.property_address || '',
+              action: 'task_auto_archived',
+              description: `Auto-archived ${archivedTasks.length} incomplete task${archivedTasks.length === 1 ? '' : 's'} on delivery: ${archivedTasks.slice(0, 5).map(t => t.title).join(', ')}${archivedTasks.length > 5 ? `, +${archivedTasks.length - 5} more` : ''}.`,
+              actor_type: 'system',
+              actor_source: 'trackProjectStageChange',
+              user_name: 'System',
+              user_email: 'system@flexstudios.app',
+              metadata: JSON.stringify({
+                trigger: 'project_delivered',
+                tasks: archivedTasks,
+              }),
+            });
+          } catch { /* non-fatal */ }
         }
       } catch { /* non-fatal */ }
     }

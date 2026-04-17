@@ -517,12 +517,29 @@ export default function TaskTimeLoggerRobust({ task, project, onTaskComplete, cu
       
       // Reassign if needed
       if (isTeamAssigned) {
+        const prevTeamName = task.assigned_to_team_name || 'team';
         await api.entities.ProjectTask.update(task.id, {
           assigned_to: currentUser.id,
           assigned_to_name: currentUser.full_name,
           assigned_to_team_id: null,
           assigned_to_team_name: null
         });
+        // Audit log: task ownership taken over from team
+        logTimerActivity(
+          'task_owner_changed',
+          `Task "${task.title}" taken over by ${currentUser.full_name} (previously assigned to ${prevTeamName}).`
+        );
+      } else if (task.assigned_to && task.assigned_to !== currentUser.id) {
+        // Individual takeover (e.g., starting a timer on someone else's task)
+        const prevName = task.assigned_to_name || 'another user';
+        await api.entities.ProjectTask.update(task.id, {
+          assigned_to: currentUser.id,
+          assigned_to_name: currentUser.full_name,
+        });
+        logTimerActivity(
+          'task_owner_changed',
+          `Task "${task.title}" taken over by ${currentUser.full_name} (previously assigned to ${prevName}).`
+        );
       }
       
       if (!componentMountedRef.current) return;

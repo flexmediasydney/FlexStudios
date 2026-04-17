@@ -28,7 +28,12 @@ const FILTER_CHIPS = [
 // Actions that count as "status changes"
 const STATUS_ACTIONS = new Set(['status_change', 'outcome_changed', 'payment_changed']);
 // Actions that count as "task updates"
-const TASK_ACTIONS = new Set(['task_added', 'task_completed', 'task_deleted']);
+const TASK_ACTIONS = new Set([
+  'task_added', 'task_completed', 'task_deleted',
+  // System/automatic task mutations
+  'task_auto_completed', 'task_effort_auto_logged', 'task_owner_changed',
+  'task_due_date_changed', 'task_auto_archived',
+]);
 // Actions from Tonomo
 const TONOMO_ACTIONS = new Set([
   'tonomo_booking_created', 'tonomo_booking_updated', 'tonomo_rescheduled',

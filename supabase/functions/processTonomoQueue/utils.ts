@@ -426,6 +426,146 @@ export async function resolveProductsFromTiers(entities: any, tiers: any[], allM
   };
 }
 
+/**
+ * Resolve workDays (weekend/day-specific fees) from Tonomo payload to FlexMedia products.
+ *
+ * Tonomo uses JS getDay() convention: 0=Sunday, 6=Saturday. We also accept 7=Sunday (ISO 8601) defensively.
+ * Each entry: { dayOfWeek, fee, feeName, id }
+ *
+ * Matching strategy (in order):
+ *  1. tonomo_mapping_tables entry with mapping_type='workday_fee' and tonomo_id=feeName (confirmed)
+ *  2. Fallback: dayOfWeek-based default mapping (Saturday Surcharge / Sunday Surcharge products)
+ *
+ * Uses Tonomo's actual `fee` as the line-item price via custom_price override (not the catalogue base_price).
+ */
+const DEFAULT_WORKDAY_PRODUCTS: Record<string, string> = {
+  // dayOfWeek -> product_id
+  '0': 'b2e68671-1d70-4bc2-b4c5-17614be4d7a2', // Sunday (JS convention)
+  '6': '30000000-0000-4000-a000-000000000041', // Saturday
+  '7': 'b2e68671-1d70-4bc2-b4c5-17614be4d7a2', // Sunday (ISO 8601 defensive)
+};
+
+const WORKDAY_FEENAME_FALLBACK: Record<string, string> = {
+  // feeName (lowercased) -> product_id
+  'saturday fee': '30000000-0000-4000-a000-000000000041',
+  'saturday surcharge': '30000000-0000-4000-a000-000000000041',
+  'sunday fee': 'b2e68671-1d70-4bc2-b4c5-17614be4d7a2',
+  'sunday surcharge': 'b2e68671-1d70-4bc2-b4c5-17614be4d7a2',
+};
+
+export async function resolveProductsFromWorkDays(entities: any, workDays: any[], allMappings: any[]) {
+  if (!Array.isArray(workDays) || workDays.length === 0) {
+    return { autoProducts: [] as any[], mappingGaps: [] as any[], allConfirmed: true };
+  }
+
+  const feeEntries = workDays.filter((w: any) => Number(w?.fee) > 0);
+  if (feeEntries.length === 0) {
+    return { autoProducts: [], mappingGaps: [], allConfirmed: true };
+  }
+
+  const autoProducts: any[] = [];
+  const mappingGaps: any[] = [];
+  const seenFeeNames = new Set<string>();
+
+  for (const w of feeEntries) {
+    const feeName = String(w.feeName || '').trim();
+    const fee = Number(w.fee);
+    const dayOfWeek = w.dayOfWeek;
+
+    // Dedup by feeName (same fee appearing twice in workDays array)
+    const dedupKey = `${feeName}:${dayOfWeek}:${fee}`;
+    if (seenFeeNames.has(dedupKey)) continue;
+    seenFeeNames.add(dedupKey);
+
+    let productId: string | null = null;
+    let matchSource: string = '';
+
+    // Priority 1: confirmed mapping table entry
+    const confirmed = allMappings.find(
+      (m: any) => m.mapping_type === 'workday_fee' &&
+                  (m.tonomo_id === feeName || (m.tonomo_name || '').toLowerCase() === feeName.toLowerCase()) &&
+                  m.is_confirmed === true &&
+                  m.flexmedia_entity_id
+    );
+
+    if (confirmed) {
+      productId = confirmed.flexmedia_entity_id;
+      matchSource = 'mapping_table';
+
+      // Bump seen_count for analytics
+      try {
+        await entities.TonomoMappingTable.update(confirmed.id, {
+          seen_count: (confirmed.seen_count || 0) + 1,
+          last_seen_at: new Date().toISOString(),
+        });
+      } catch { /* non-fatal */ }
+    }
+
+    // Priority 2: feeName fallback (catches cases where mapping table is missing)
+    if (!productId) {
+      const nameKey = feeName.toLowerCase();
+      if (WORKDAY_FEENAME_FALLBACK[nameKey]) {
+        productId = WORKDAY_FEENAME_FALLBACK[nameKey];
+        matchSource = 'feename_fallback';
+      }
+    }
+
+    // Priority 3: dayOfWeek fallback
+    if (!productId && dayOfWeek !== undefined && dayOfWeek !== null) {
+      const dayKey = String(dayOfWeek);
+      if (DEFAULT_WORKDAY_PRODUCTS[dayKey]) {
+        productId = DEFAULT_WORKDAY_PRODUCTS[dayKey];
+        matchSource = 'dayofweek_fallback';
+      }
+    }
+
+    if (productId) {
+      autoProducts.push({
+        product_id: productId,
+        quantity: 1,
+        custom_price: fee, // use Tonomo's actual fee value, not catalogue base_price
+        source: 'workday_fee',
+        source_note: `${feeName || `Day ${dayOfWeek}`} ($${fee}) [${matchSource}]`,
+      });
+    } else {
+      // No match at all — create a mapping gap so this surfaces in the UI
+      mappingGaps.push({
+        serviceId: feeName || `workday_${dayOfWeek}`,
+        serviceName: feeName || `Day-of-week fee (${dayOfWeek})`,
+        type: 'workday_fee',
+      });
+
+      // Auto-suggest a mapping based on any name match in the catalogue
+      try {
+        const allProducts = await entities.Product.list('-updated_date', 500).catch(() => []);
+        const match = allProducts.find(
+          (p: any) => (p.name || '').toLowerCase().includes((feeName || '').toLowerCase().replace(' fee', ''))
+                      && p.category === 'Fees'
+        );
+        if (match) {
+          await upsertMappingSuggestion(
+            entities,
+            feeName,
+            feeName,
+            'workday_fee',
+            'Product',
+            match.id,
+            match.name,
+            'high',
+            allMappings
+          );
+        }
+      } catch { /* non-fatal */ }
+    }
+  }
+
+  return {
+    autoProducts,
+    mappingGaps,
+    allConfirmed: mappingGaps.length === 0,
+  };
+}
+
 export async function resolveMappingsMulti(entities: any, { agent, photographers = [], agencyId = null }: any, allMappings: any[]) {
   let agentId = null;
   const resolvedPhotographers: any[] = [];

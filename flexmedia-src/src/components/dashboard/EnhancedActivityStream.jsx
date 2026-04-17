@@ -5,7 +5,7 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
-import { CheckCircle2, AlertCircle, Zap, Clock, User, Camera, Package, ArrowRight, Loader2 } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Zap, Clock, User, Camera, Package, ArrowRight, Loader2, Timer, UserCog, Calendar, Archive } from 'lucide-react';
 import { fixTimestamp } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import { formatDistanceToNow, isToday, format } from 'date-fns';
@@ -16,6 +16,11 @@ const ACTION_CONFIG = {
   project_delivered: { icon: Package, color: 'text-green-600', bg: 'bg-green-100' },
   task_added: { icon: CheckCircle2, color: 'text-cyan-600', bg: 'bg-cyan-100' },
   task_completed: { icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-100' },
+  task_auto_completed: { icon: CheckCircle2, color: 'text-teal-600', bg: 'bg-teal-100' },
+  task_effort_auto_logged: { icon: Timer, color: 'text-amber-600', bg: 'bg-amber-100' },
+  task_owner_changed: { icon: UserCog, color: 'text-sky-600', bg: 'bg-sky-100' },
+  task_due_date_changed: { icon: Calendar, color: 'text-blue-600', bg: 'bg-blue-100' },
+  task_auto_archived: { icon: Archive, color: 'text-slate-600', bg: 'bg-slate-100' },
   delete: { icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-100' },
   create: { icon: Zap, color: 'text-blue-600', bg: 'bg-blue-100' },
   default: { icon: Clock, color: 'text-muted-foreground', bg: 'bg-muted' },
