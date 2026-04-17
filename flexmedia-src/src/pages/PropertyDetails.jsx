@@ -21,8 +21,9 @@ import { cn } from "@/lib/utils";
 import {
   Home, MapPin, Tag, DollarSign, Calendar, Users, Building2,
   ExternalLink, ArrowLeft, Loader2, Camera, History, TrendingUp, RefreshCw,
-  Bed, Bath, Car, Plus, Eye,
+  Bed, Bath, Car, Plus, Eye, Images,
 } from "lucide-react";
+import AttachmentLightbox from "@/components/common/AttachmentLightbox";
 
 function fmtPrice(v) {
   if (!v || v <= 0) return "—";
@@ -82,6 +83,7 @@ export default function PropertyDetails() {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [lightboxIndex, setLightboxIndex] = useState(null); // null = closed
 
   const load = useCallback(async () => {
     if (!propertyKey) return;
@@ -91,7 +93,7 @@ export default function PropertyDetails() {
       const [pRes, lRes, prRes] = await Promise.all([
         api._supabase.from("property_full_v").select("*").eq("property_key", propertyKey).maybeSingle(),
         api._supabase.from("pulse_listings")
-          .select("id, source_listing_id, address, suburb, postcode, listing_type, asking_price, sold_price, listed_date, sold_date, agent_name, agent_rea_id, agency_name, agency_rea_id, source_url, image_url, hero_image, last_synced_at, first_seen_at, days_on_market, bedrooms, bathrooms, parking, land_size, property_type")
+          .select("id, source_listing_id, address, suburb, postcode, listing_type, asking_price, sold_price, listed_date, sold_date, agent_name, agent_rea_id, agency_name, agency_rea_id, source_url, image_url, hero_image, images, last_synced_at, first_seen_at, days_on_market, bedrooms, bathrooms, parking, land_size, property_type")
           .eq("property_key", propertyKey)
           .order("listed_date", { ascending: false, nullsFirst: false }),
         api._supabase.from("projects")
@@ -146,6 +148,33 @@ export default function PropertyDetails() {
     }
     return Array.from(groups.entries()).sort((a, b) => b[0] - a[0]);
   }, [timeline]);
+
+  // Aggregate all images across all listings → lightbox gallery
+  // Format: { file_name, file_url } to match AttachmentLightbox shape
+  const allImages = useMemo(() => {
+    const out = [];
+    for (const l of listings) {
+      let imgs = [];
+      try {
+        if (Array.isArray(l.images)) imgs = l.images;
+        else if (typeof l.images === "string") imgs = JSON.parse(l.images);
+      } catch { imgs = []; }
+      // Prefer the full images array, fallback to hero/image_url
+      const src = imgs.length > 0 ? imgs : (l.hero_image || l.image_url ? [l.hero_image || l.image_url] : []);
+      src.forEach((url, i) => {
+        if (!url) return;
+        out.push({
+          file_name: `${l.agency_name || "Listing"} — ${fmtDate(l.listed_date || l.first_seen_at)} (${i + 1})`,
+          file_url: url,
+          file_type: "image/jpeg",
+          _listing_id: l.id,
+          _agent: l.agent_name,
+          _agency: l.agency_name,
+        });
+      });
+    }
+    return out;
+  }, [listings]);
 
   // Unique agents/agencies
   const uniqueAgents = useMemo(() => {
@@ -267,14 +296,27 @@ export default function PropertyDetails() {
       {property.hero_image && (
         <Card className="rounded-xl overflow-hidden">
           <div className="grid grid-cols-1 sm:grid-cols-3">
-            <div className="sm:col-span-1 bg-muted h-48 sm:h-auto overflow-hidden">
+            <button
+              type="button"
+              onClick={() => allImages.length > 0 && setLightboxIndex(0)}
+              className="sm:col-span-1 bg-muted h-48 sm:h-auto overflow-hidden group relative cursor-pointer block"
+              disabled={allImages.length === 0}
+            >
               <img
                 src={property.hero_image}
                 alt=""
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
               />
-            </div>
+              {allImages.length > 0 && (
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs font-medium flex items-center gap-1.5 bg-black/60 rounded-full px-3 py-1.5">
+                    <Images className="h-3.5 w-3.5" />
+                    View {allImages.length} photo{allImages.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+              )}
+            </button>
             <div className="sm:col-span-2 p-4 flex flex-col justify-center gap-2">
               <div className="flex items-center gap-2 flex-wrap">
                 {currentState && (
@@ -284,6 +326,11 @@ export default function PropertyDetails() {
                 )}
                 {property.property_type && (
                   <Badge variant="outline" className="text-[10px] capitalize">{property.property_type}</Badge>
+                )}
+                {allImages.length > 0 && (
+                  <Badge variant="outline" className="text-[10px]">
+                    <Images className="h-2.5 w-2.5 mr-1" /> {allImages.length} photos
+                  </Badge>
                 )}
               </div>
               {(property.current_asking_price || property.last_sold_price) && (
@@ -309,6 +356,15 @@ export default function PropertyDetails() {
             </div>
           </div>
         </Card>
+      )}
+
+      {/* Lightbox — uses existing AttachmentLightbox component */}
+      {lightboxIndex !== null && allImages.length > 0 && (
+        <AttachmentLightbox
+          files={allImages}
+          initialIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
       )}
 
       {/* Stats strip */}
