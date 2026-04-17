@@ -642,7 +642,7 @@ serveWithAudit('pulseDataSync', async (req) => {
           active_listings: 0,
           listing_prices: [],
           suburbs: new Set<string>(),
-          sources: new Set<string>(['rea_listings']),
+          sources: new Set<string>([source_id || 'rea']),
           rea_agency_ids: new Set<string>(),
         });
       }

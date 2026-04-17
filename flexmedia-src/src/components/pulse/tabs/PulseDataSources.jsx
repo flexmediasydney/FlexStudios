@@ -42,12 +42,6 @@ const SOURCE_UI_META = {
     accentClass: "from-red-500/10 to-red-600/5 border-red-200/60 dark:border-red-800/40",
     costNote: "~$0.005/suburb",
   },
-  rea_listings: {
-    icon: Home,
-    color: "text-blue-600",
-    accentClass: "from-blue-500/10 to-blue-600/5 border-blue-200/60 dark:border-blue-800/40",
-    costNote: "~$0.01/suburb",
-  },
   rea_listings_bb_buy: {
     icon: DollarSign,
     color: "text-green-600",
