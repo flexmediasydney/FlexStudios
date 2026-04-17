@@ -796,6 +796,41 @@ function NoRunsYet() {
   );
 }
 
+// --- Empty-state: cron has never fired for this source ---
+//
+// Replaces the "Last run" RunSummary block when the source has zero
+// cron_dispatched events ever. Surfaces the more honest message that
+// any visible per-suburb counts (e.g. "1/1 records fetched" from a one-off
+// manual load) are NOT a coverage metric, and the cron has yet to run.
+function NoCronRunsYet({ hasManualRun }) {
+  return (
+    <div className="rounded-md border border-dashed border-amber-300/60 bg-amber-50/30 dark:bg-amber-950/10 px-2.5 py-2 text-[10px] text-amber-700 dark:text-amber-400 space-y-0.5">
+      <div className="font-semibold uppercase tracking-wide flex items-center gap-1">
+        <Clock className="h-3 w-3" />
+        No cron runs yet
+      </div>
+      <div className="text-muted-foreground">
+        {hasManualRun
+          ? "Only manual runs recorded. Cron has not yet fired for this source."
+          : "Click Run Now to trigger a manual scrape, or wait for the next scheduled cron."}
+      </div>
+    </div>
+  );
+}
+
+// --- Empty-state: source intentionally disabled ---
+//
+// For domain_* (and any other) sources whose `is_enabled = false`. We still
+// render the card for visibility but suppress all the run/coverage chatter so
+// users don't read into the "0 / 0" or "never" lines.
+function DisabledSourceState() {
+  return (
+    <div className="rounded-md border border-dashed px-2.5 py-3 text-[10px] text-muted-foreground italic text-center">
+      Source disabled — enable in Edit dialog to start scraping.
+    </div>
+  );
+}
+
 // --- "Dispatched but no logs" placeholder ---
 
 function DispatchedNoLogs() {
@@ -824,7 +859,15 @@ function SuburbCoverageBlock({ stats, isBoundingBox }) {
   // still works using the legacy RunSummary block below.
   if (!stats) return null;
 
-  const { dispatched, eligible_at_run, last_cron_at, status } = stats;
+  const {
+    dispatched,
+    eligible_at_run,
+    suburb_pool_size,
+    last_cron_at,
+    status,
+    config_max_suburbs,
+    config_min_priority,
+  } = stats;
   const cronMissed = dispatched === null || dispatched === 0;
   const eligible = Math.max(eligible_at_run || 0, 1);
   const ratio = cronMissed ? 0 : (dispatched / eligible);
@@ -844,6 +887,22 @@ function SuburbCoverageBlock({ stats, isBoundingBox }) {
   } else if (status === "partial" || ratio < 0.9) {
     coverColor = "text-amber-700 dark:text-amber-400";
     coverBorder = "border-amber-400/60 bg-amber-50/60 dark:bg-amber-950/20";
+  }
+
+  // Build the secondary "configured to scrape" line. Three flavors:
+  //   1. Per-suburb capped (max_suburbs < pool): "configured to scrape Y of your N-suburb pool"
+  //   2. Per-suburb uncapped (max_suburbs >= pool): "scraping full N-suburb pool"
+  //   3. Bounding box: skip this line (it's a single region call, not a pool slice)
+  let configContext = null;
+  if (!isBoundingBox && suburb_pool_size != null) {
+    const cap = config_max_suburbs;
+    const minPri = config_min_priority || 0;
+    const pri = minPri > 0 ? `, min_priority=${minPri}` : "";
+    if (cap == null || cap >= suburb_pool_size) {
+      configContext = `scraping full ${suburb_pool_size}-suburb pool${pri}`;
+    } else {
+      configContext = `configured to scrape ${cap} of your ${suburb_pool_size}-suburb pool${pri}`;
+    }
   }
 
   return (
@@ -873,6 +932,11 @@ function SuburbCoverageBlock({ stats, isBoundingBox }) {
           </span>
         )}
       </div>
+      {configContext && (
+        <div className="text-[9px] text-muted-foreground/80 italic">
+          {configContext}
+        </div>
+      )}
     </div>
   );
 }
@@ -1099,13 +1163,29 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
 
         {/* Suburb coverage (last cron dispatch) — answers "did the cron cover the
             pool?". Distinct from the per-suburb fetch counts in RunSummary
-            below, which describe what ONE suburb returned. */}
-        <SuburbCoverageBlock stats={cardStats} isBoundingBox={isBoundingBox} />
+            below, which describe what ONE suburb returned.
 
-        {/* Last run summary — per-suburb fetched/new counts from the most
-            recent pulse_sync_runs bucket (records the actor returned, not the
-            suburb dispatch coverage). */}
-        {latestRun ? (
+            Suppressed for disabled sources — the X/Y line is meaningless when
+            no cron is configured to fire. */}
+        {!isDisabled && (
+          <SuburbCoverageBlock stats={cardStats} isBoundingBox={isBoundingBox} />
+        )}
+
+        {/* Last run summary block.
+            Decision tree:
+              - disabled source: clean "Source disabled" message
+              - cron has never fired (cardStats.last_cron_at is null): suppress
+                the misleading "1/1 records" tertiary block — manual loads are
+                NOT a coverage metric. Show "No cron runs yet" instead, noting
+                if a manual run exists.
+              - latest sync_run exists: standard RunSummary
+              - very recent dispatch but no log yet (queuing): DispatchedNoLogs
+              - otherwise: NoRunsYet (rare — means no logs at all) */}
+        {isDisabled ? (
+          <DisabledSourceState />
+        ) : cardStats && cardStats.last_cron_at == null ? (
+          <NoCronRunsYet hasManualRun={!!latestRun} />
+        ) : latestRun ? (
           <RunSummary
             run={latestRun}
             isBoundingBox={isBoundingBox}

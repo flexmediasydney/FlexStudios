@@ -28,6 +28,7 @@ import PulseListingsTab, { ListingSlideout } from "@/components/pulse/tabs/Pulse
 import PulseEventsTab from "@/components/pulse/tabs/PulseEvents";
 import PulseMarketData from "@/components/pulse/tabs/PulseMarketData";
 import PulseDataSources from "@/components/pulse/tabs/PulseDataSources";
+import PulseSuburbs from "@/components/pulse/tabs/PulseSuburbs";
 import PulseMappings from "@/components/pulse/tabs/PulseMappings";
 import PulseSignals from "@/components/pulse/tabs/PulseSignals";
 import PulseTimelineTab from "@/components/pulse/tabs/PulseTimelineTab";
@@ -134,6 +135,7 @@ const TABS = [
   { value: "events",   label: "Events",   badgeKey: "upcomingEvents" },
   { value: "market",   label: "Market",   badgeKey: null },
   { value: "sources",  label: "Sources",  badgeKey: null },
+  { value: "suburbs",  label: "Suburbs",  badgeKey: null },
   { value: "mappings", label: "Mappings", badgeKey: "suggestedMappings" },
   { value: "signals",  label: "Signals",  badgeKey: "newSignals" },
   { value: "timeline", label: "Timeline", badgeKey: null },
@@ -507,6 +509,12 @@ export default function IndustryPulse() {
         <TabsContent value="sources" className="mt-2">
           <ErrorBoundary>
             <PulseDataSources {...sharedProps} />
+          </ErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="suburbs" className="mt-2">
+          <ErrorBoundary>
+            <PulseSuburbs />
           </ErrorBoundary>
         </TabsContent>
 
