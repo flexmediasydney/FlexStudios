@@ -30,6 +30,8 @@ import { cn } from "@/lib/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import AIChat from "@/components/ai/AIChat";
 import { Eye, XCircle } from "lucide-react";
+import { useTaskTakeover } from "@/components/projects/hooks/useTaskTakeover";
+import TaskTakeoverDialog from "@/components/projects/TaskTakeoverDialog";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -457,6 +459,9 @@ function ProjectQuickView({ project, user }) {
   const queryClient = useQueryClient();
   const { activeTimers } = useActiveTimers();
 
+  // Task ownership takeover prompt for completion (mirrors timer-start behavior)
+  const { pendingTakeover, requestTakeover, approveTakeover, cancelTakeover } = useTaskTakeover();
+
   // Fetch tasks for this project
   const { data: allTasks = [], isLoading: tasksLoading, refetch: refetchTasks } = useQuery({
     queryKey: ["field-mode-tasks", project.id],
@@ -544,9 +549,17 @@ function ProjectQuickView({ project, user }) {
                 project={project}
                 user={user}
                 activeTimers={activeTimers}
-                onToggleComplete={() =>
-                  toggleComplete.mutate({ taskId: task.id, currentState: task.is_completed })
-                }
+                onToggleComplete={() => {
+                  const wasCompleted = task.is_completed;
+                  const fire = () =>
+                    toggleComplete.mutate({ taskId: task.id, currentState: wasCompleted });
+                  // Takeover check only when completing (not re-opening)
+                  if (!wasCompleted) {
+                    requestTakeover(task, user, fire);
+                  } else {
+                    fire();
+                  }
+                }}
               />
             ))}
           </div>
@@ -555,6 +568,12 @@ function ProjectQuickView({ project, user }) {
 
       {/* Quick Note */}
       <QuickNote project={project} user={user} />
+
+      <TaskTakeoverDialog
+        pending={pendingTakeover}
+        onApprove={approveTakeover}
+        onCancel={cancelTakeover}
+      />
     </div>
   );
 }

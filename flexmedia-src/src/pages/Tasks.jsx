@@ -16,6 +16,8 @@ import { fixTimestamp } from "@/components/utils/dateUtils";
 import TaskDetailPanel from "@/components/projects/TaskDetailPanel";
 import TaskEffortBadge from "@/components/projects/TaskEffortBadge";
 import { CountdownTimer } from "@/components/projects/TaskManagement";
+import { useTaskTakeover } from "@/components/projects/hooks/useTaskTakeover";
+import TaskTakeoverDialog from "@/components/projects/TaskTakeoverDialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -514,6 +516,9 @@ export default function Tasks() {
   const { data: user } = useCurrentUser();
   const { activeTimers = [] } = useActiveTimers();
 
+  // Task ownership takeover prompt for completion (mirrors timer-start behavior)
+  const { pendingTakeover, requestTakeover, approveTakeover, cancelTakeover } = useTaskTakeover();
+
   // State — filters (multi-select)
   const emptyFilters = { status: new Set(), people: new Set(), teams: new Set(), projects: new Set(), products: new Set(), packages: new Set(), roles: new Set(), sources: new Set(), orgs: new Set(), projectTypes: new Set(), productCategories: new Set(), projectStages: new Set() };
   const [filters, setFilters] = useState(emptyFilters);
@@ -953,11 +958,13 @@ export default function Tasks() {
 
     // Prevent double-toggle
     if (togglingRef.current.has(taskId)) return;
-    togglingRef.current.add(taskId);
 
-    try {
-      if (destStatus === "completed") {
-        // Mark completed
+    // Helper: the actual kanban-drag-to-Completed logic. Invoked either directly
+    // (no takeover) or post-ownership-transfer from the takeover approval flow.
+    const runKanbanComplete = async () => {
+      if (togglingRef.current.has(taskId)) return;
+      togglingRef.current.add(taskId);
+      try {
         await api.entities.ProjectTask.update(taskId, {
           is_completed: true,
           completed_at: new Date().toISOString(),
@@ -976,7 +983,31 @@ export default function Tasks() {
         if (task.project_id) {
           api.functions.invoke("calculateProjectTaskDeadlines", { project_id: task.project_id, trigger_event: "task_completed" }).catch(() => {});
         }
-      } else if (sourceStatus === "completed" && destStatus !== "completed") {
+      } catch {
+        toast.error("Failed to update task");
+      } finally {
+        togglingRef.current.delete(taskId);
+      }
+    };
+
+    // Ownership-takeover check only when moving TO completed
+    if (destStatus === "completed") {
+      const needsTakeover =
+        (task.assigned_to_team_id && !task.assigned_to) ||
+        (task.assigned_to && user?.id && task.assigned_to !== user.id);
+      if (needsTakeover) {
+        requestTakeover(task, user, () => { runKanbanComplete(); });
+        return;
+      }
+      // No takeover needed — run directly
+      await runKanbanComplete();
+      return;
+    }
+
+    togglingRef.current.add(taskId);
+
+    try {
+      if (sourceStatus === "completed" && destStatus !== "completed") {
         // Reopen task
         await api.entities.ProjectTask.update(taskId, {
           is_completed: false,
@@ -1005,7 +1036,7 @@ export default function Tasks() {
     } finally {
       togglingRef.current.delete(taskId);
     }
-  }, [canEdit, filteredTasks, user]);
+  }, [canEdit, filteredTasks, user, requestTakeover]);
 
   // ── Toggle complete (list view) ─────────────────────────────────────────
 
@@ -1014,30 +1045,50 @@ export default function Tasks() {
     if (task.is_locked) { toast.info(`"${String(task.title)}" is locked`); return; }
     if (task.is_blocked) { toast.info(`"${String(task.title)}" is blocked — complete dependencies first`); return; }
     if (togglingRef.current.has(task.id)) return;
-    togglingRef.current.add(task.id);
-    try {
-      const wasCompleted = task.is_completed;
-      await api.entities.ProjectTask.update(task.id, {
-        is_completed: !wasCompleted,
-        ...(wasCompleted ? { completed_at: null } : { completed_at: new Date().toISOString() }),
-      });
-      refetchEntityList("ProjectTask");
-      toast.success(wasCompleted ? "Task reopened" : "Task completed");
-      api.entities.ProjectActivity.create({
-        project_id: task.project_id,
-        action: "task_completed",
-        activity_type: "status_change",
-        description: `Task "${String(task.title)}" ${wasCompleted ? "reopened" : "completed"} from Tasks page`,
-        user_id: user?.id,
-        user_name: user?.full_name || user?.email,
-        project_title: task._project?.title || task._project?.property_address || "",
-      }).catch(() => {});
-      if (task.project_id) {
-        api.functions.invoke("calculateProjectTaskDeadlines", { project_id: task.project_id, trigger_event: "task_toggle" }).catch(() => {});
+
+    const wasCompleted = task.is_completed;
+
+    // Actual completion body. Invoked either directly (no takeover) or
+    // post-ownership-transfer from the takeover approval flow.
+    const runListComplete = async () => {
+      if (togglingRef.current.has(task.id)) return;
+      togglingRef.current.add(task.id);
+      try {
+        await api.entities.ProjectTask.update(task.id, {
+          is_completed: !wasCompleted,
+          ...(wasCompleted ? { completed_at: null } : { completed_at: new Date().toISOString() }),
+        });
+        refetchEntityList("ProjectTask");
+        toast.success(wasCompleted ? "Task reopened" : "Task completed");
+        api.entities.ProjectActivity.create({
+          project_id: task.project_id,
+          action: "task_completed",
+          activity_type: "status_change",
+          description: `Task "${String(task.title)}" ${wasCompleted ? "reopened" : "completed"} from Tasks page`,
+          user_id: user?.id,
+          user_name: user?.full_name || user?.email,
+          project_title: task._project?.title || task._project?.property_address || "",
+        }).catch(() => {});
+        if (task.project_id) {
+          api.functions.invoke("calculateProjectTaskDeadlines", { project_id: task.project_id, trigger_event: "task_toggle" }).catch(() => {});
+        }
+      } catch { toast.error("Failed to update task"); }
+      finally { togglingRef.current.delete(task.id); }
+    };
+
+    // Ownership-takeover check only when completing (not re-opening)
+    if (!wasCompleted) {
+      const needsTakeover =
+        (task.assigned_to_team_id && !task.assigned_to) ||
+        (task.assigned_to && user?.id && task.assigned_to !== user.id);
+      if (needsTakeover) {
+        requestTakeover(task, user, () => { runListComplete(); });
+        return;
       }
-    } catch { toast.error("Failed to update task"); }
-    finally { togglingRef.current.delete(task.id); }
-  }, [canEdit, user]);
+    }
+
+    await runListComplete();
+  }, [canEdit, user, requestTakeover]);
 
   // Bulk select
   const toggleSelect = useCallback((id) => {
@@ -1524,6 +1575,12 @@ export default function Tasks() {
           <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>Clear</Button>
         </div>
       )}
+
+      <TaskTakeoverDialog
+        pending={pendingTakeover}
+        onApprove={approveTakeover}
+        onCancel={cancelTakeover}
+      />
     </div>
   );
 }

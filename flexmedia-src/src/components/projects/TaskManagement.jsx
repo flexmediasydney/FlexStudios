@@ -1047,6 +1047,12 @@ export default function TaskManagement({ projectId, project, canEdit }) {
         onConfirm={() => deleteConfirm && !deleteMutation.isPending && deleteMutation.mutate(deleteConfirm.id)}
         onCancel={() => { if (!deleteMutation.isPending) setDeleteConfirm(null); }}
       />
+
+      <TaskTakeoverDialog
+        pending={pendingTakeover}
+        onApprove={approveTakeover}
+        onCancel={cancelTakeover}
+      />
     </div>
   );
 }
