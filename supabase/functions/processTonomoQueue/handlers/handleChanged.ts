@@ -9,6 +9,7 @@ import {
   assignStaffToProjectFields,
   deduplicateProjectItems,
   resolveProductsFromTiers,
+  resolveProductsFromWorkDays,
   resolveMappingsMulti,
   loadMappingTable,
   findProjectByOrderId,
@@ -237,10 +238,17 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
   }
 
   const rawTiersChanged = p.order?.service_custom_tiers || p.service_custom_tiers || [];
-  if (rawTiersChanged.length > 0 && !overriddenFields.includes('products')) {
+  const workDaysArrChanged = p.order?.workDays || p.workDays || [];
+  if ((rawTiersChanged.length > 0 || workDaysArrChanged.length > 0) && !overriddenFields.includes('products')) {
     // Reuse allMappings loaded above instead of calling loadMappingTable again
     const { autoProducts: newProducts, autoPackages: newPackages, mappingGaps: newGaps } =
       await resolveProductsFromTiers(entities, rawTiersChanged, allMappings);
+
+    // Also map Tonomo workDays (weekend/day-specific fees) to surcharge products
+    const { autoProducts: feeProducts, mappingGaps: feeGaps } =
+      await resolveProductsFromWorkDays(entities, workDaysArrChanged, allMappings);
+    if (feeProducts.length > 0) newProducts.push(...feeProducts);
+    newGaps.push(...feeGaps);
 
     // Compare old vs new to detect removals
     const oldProductIds = new Set((project.products || []).map((p: any) => p.product_id));

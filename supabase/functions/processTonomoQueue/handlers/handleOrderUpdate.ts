@@ -3,6 +3,7 @@ import { ACTIVE_STAGES } from '../types.ts';
 import {
   deduplicateProjectItems,
   resolveProductsFromTiers,
+  resolveProductsFromWorkDays,
   loadMappingTable,
   findProjectByOrderId,
   safeJsonParse,
@@ -163,10 +164,18 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
   }
 
   const rawTiersBCC = p.order?.service_custom_tiers || p.service_custom_tiers || [];
-  if (rawTiersBCC.length > 0 && !overriddenFields.includes('products')) {
+  const workDaysArrBCC = p.order?.workDays || p.workDays || [];
+  if ((rawTiersBCC.length > 0 || workDaysArrBCC.length > 0) && !overriddenFields.includes('products')) {
     const allMappingsBCC = await loadMappingTable(entities);
     const { autoProducts: newProd, autoPackages: newPkg, mappingGaps: newGapsBCC } =
       await resolveProductsFromTiers(entities, rawTiersBCC, allMappingsBCC);
+
+    // Also map Tonomo workDays (weekend/day-specific fees) to surcharge products
+    const { autoProducts: feeProducts, mappingGaps: feeGaps } =
+      await resolveProductsFromWorkDays(entities, workDaysArrBCC, allMappingsBCC);
+    if (feeProducts.length > 0) newProd.push(...feeProducts);
+    newGapsBCC.push(...feeGaps);
+
     if (newProd.length > 0 || newPkg.length > 0) {
       const dedupedBCC = deduplicateProjectItems(newProd, newPkg,
         await entities.Product.list(null, 500).catch(() => []),

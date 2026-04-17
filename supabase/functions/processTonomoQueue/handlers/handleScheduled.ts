@@ -11,6 +11,7 @@ import {
   assignStaffToProjectFields,
   deduplicateProjectItems,
   resolveProductsFromTiers,
+  resolveProductsFromWorkDays,
   resolveMappingsMulti,
   loadMappingTable,
   findProjectByOrderId,
@@ -113,6 +114,14 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   const {
     autoProducts, autoPackages, mappingGaps: productMappingGaps, allConfirmed: allProductsMapped,
   } = await resolveProductsFromTiers(entities, rawTiers, allMappings);
+
+  // Map Tonomo workDays (weekend/day-specific fees) to surcharge products
+  const workDaysArr = p.order?.workDays || p.workDays || [];
+  const { autoProducts: feeProducts, mappingGaps: feeGaps } =
+    await resolveProductsFromWorkDays(entities, workDaysArr, allMappings);
+  if (feeProducts.length > 0) autoProducts.push(...feeProducts);
+  productMappingGaps.push(...feeGaps);
+
   const hasAutoProducts = autoProducts.length > 0 || autoPackages.length > 0;
   const productGapNames = productMappingGaps.map((g: any) => g.serviceName);
 

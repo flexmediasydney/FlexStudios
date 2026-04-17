@@ -483,7 +483,7 @@ export async function resolveProductsFromWorkDays(entities: any, workDays: any[]
     // Priority 1: confirmed mapping table entry
     const confirmed = allMappings.find(
       (m: any) => m.mapping_type === 'workday_fee' &&
-                  (m.tonomo_id === feeName || (m.tonomo_name || '').toLowerCase() === feeName.toLowerCase()) &&
+                  (m.tonomo_id === feeName || (m.tonomo_label || '').toLowerCase() === feeName.toLowerCase()) &&
                   m.is_confirmed === true &&
                   m.flexmedia_entity_id
     );
