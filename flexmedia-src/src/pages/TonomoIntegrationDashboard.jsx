@@ -770,7 +770,7 @@ function PendingReviewCard({ project }) {
             <p className="text-sm text-muted-foreground">{project.property_address}</p>
             <div className="mt-2 space-y-1 text-xs">
               <p>Photographer: {photographers[0]?.name || "Unassigned"}</p>
-              <p>Agent: {project.agent_id ? "Linked" : "Not linked"}</p>
+              <p>Agent: {project.agent_name || (project.agent_id ? "Linked (unnamed)" : <span className="text-red-600">Unmapped</span>)}</p>
               {project.shoot_date && <p>Shoot: {new Date(project.shoot_date).toLocaleDateString()}</p>}
               <p>Services: {services.join(", ") || "None"}</p>
               {project.tonomo_invoice_amount && <p>Invoice: ${project.tonomo_invoice_amount}</p>}
