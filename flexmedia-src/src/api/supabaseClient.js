@@ -82,6 +82,7 @@ function toTableName(entityName) {
     'tonomo_integration_settingses': 'tonomo_integration_settings',
     'tonomo_role_defaultses': 'tonomo_role_defaults',
     'tonomo_processing_queues': 'tonomo_processing_queue',
+    'pulse_timelines': 'pulse_timeline',
     'price_matrixes': 'price_matrices',
     'price_matrix_audit_logses': 'price_matrix_audit_logs',
     'price_matrix_snapshotses': 'price_matrix_snapshots',
