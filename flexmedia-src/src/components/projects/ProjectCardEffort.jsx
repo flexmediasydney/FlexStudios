@@ -52,6 +52,10 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
 
    const estimatedSeconds = useMemo(() => {
      return tasks.reduce((sum, task) => {
+       // Exclude deleted/archived (match ProjectDetails EffortLoggingTab filter)
+       if (task.is_deleted || task.is_archived) return sum;
+       // Exclude revision tasks — counted separately below
+       if (/^\[Revision #\d+\]/.test(task.title || "")) return sum;
        const role = task.auto_assign_role;
        if (!role || role === "none") return sum;
        const mins = typeof task.estimated_minutes === "number" ? task.estimated_minutes : 0;
@@ -59,10 +63,13 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
      }, 0);
    }, [tasks]);
 
-   // Revision effort tracking: actual from revision tasks, estimated from template
+   // Revision effort tracking: actual + estimated from revision tasks on the project
    const revisionActualSeconds = useMemo(() => {
      return revisions.reduce((sum, rev) => {
-       const revisionTasks = tasks.filter(t => t.title?.startsWith(`[Revision #${rev.revision_number}]`));
+       const revisionTasks = tasks.filter(t =>
+         !t.is_deleted && !t.is_archived &&
+         t.title?.startsWith(`[Revision #${rev.revision_number}]`)
+       );
        return sum + revisionTasks.reduce((taskSum, task) => {
          const revisionLogs = timeLogs.filter(l => l.task_id === task.id);
          return taskSum + revisionLogs.reduce((logSum, log) => logSum + computeLogSeconds(log), 0);
@@ -72,8 +79,11 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
 
    const revisionEstimatedSeconds = useMemo(() => {
      return revisions.reduce((sum, rev) => {
-       const template = rev.template_id ? tasks.filter(t => t.title?.startsWith(`[Revision #${rev.revision_number}]`)) : [];
-       const estimatedMins = template.reduce((tSum, task) => {
+       const revisionTasks = tasks.filter(t =>
+         !t.is_deleted && !t.is_archived &&
+         t.title?.startsWith(`[Revision #${rev.revision_number}]`)
+       );
+       const estimatedMins = revisionTasks.reduce((tSum, task) => {
          const mins = typeof task.estimated_minutes === "number" ? task.estimated_minutes : 0;
          return tSum + (task.auto_assign_role && task.auto_assign_role !== "none" ? mins : 0);
        }, 0);

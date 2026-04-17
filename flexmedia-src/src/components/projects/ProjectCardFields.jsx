@@ -142,7 +142,7 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
       return <ProjectStatusTimer lastStatusChange={project.last_status_change} />;
     }
     case "tasks": {
-       const allRegularTasks = tasks.filter(t => !/^\[Revision #\d+\]/.test(t.title || ""));
+       const allRegularTasks = tasks.filter(t => !t.is_deleted && !t.is_archived && !/^\[Revision #\d+\]/.test(t.title || ""));
        const activeTasks = allRegularTasks.filter(t => !t.is_completed);
        const completedTasks = allRegularTasks.filter(t => t.is_completed);
        const total = allRegularTasks.length;
@@ -241,7 +241,7 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
        );
      }
     case "requests": {
-       const allRevisionTasks = tasks.filter(t => /^\[Revision #\d+\]/.test(t.title || ""));
+       const allRevisionTasks = tasks.filter(t => !t.is_deleted && !t.is_archived && /^\[Revision #\d+\]/.test(t.title || ""));
        const activeTasks = allRevisionTasks.filter(t => !t.is_completed);
        const completedTasks = allRevisionTasks.filter(t => t.is_completed);
        const total = allRevisionTasks.length;

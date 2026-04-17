@@ -108,7 +108,7 @@ const urgencyBorderClass = {
 
 /* ─────────────────────────── Mini Progress Bar ─────────────────────────── */
 function TaskProgressBar({ tasks }) {
-  const regularTasks = tasks.filter(t => !t.parent_task_id && !t.is_deleted && !/^\[Revision #\d+\]/.test(t.title || ""));
+  const regularTasks = tasks.filter(t => !t.parent_task_id && !t.is_deleted && !t.is_archived && !/^\[Revision #\d+\]/.test(t.title || ""));
   if (regularTasks.length === 0) return null;
 
   const completed = regularTasks.filter(t => t.is_completed).length;
