@@ -42,12 +42,15 @@ export default function EmailListContainer({
     overscan: 10,
   });
 
-  // Reset scroll position when switching folders/views, or when search/filter changes reduce the list
+  // Reset scroll position when the user actively switches folders/views or changes search.
+  // CRITICAL: do NOT include filteredThreads.length here — loadMore() appending threads
+  // would reset scroll to top, hiding the sentinel and breaking the intersection observer
+  // (user would see only the first page of 50 threads forever).
   useEffect(() => {
     if (parentRef.current) {
       parentRef.current.scrollTop = 0;
     }
-  }, [filterView, searchQuery, filterUnread, filteredThreads.length]);
+  }, [filterView, searchQuery, filterUnread]);
 
   // Intersection observer: trigger loadMore when user scrolls near the bottom
   const loadMoreRef = useRef(null);
