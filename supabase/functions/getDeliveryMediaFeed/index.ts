@@ -204,41 +204,77 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
     return res;
   };
 
-  let res = await doRequest(token);
-  if (!res.ok) {
+  // Retry loop: up to 3 attempts to handle 429s and transient 5xx from Dropbox.
+  const MAX_ATTEMPTS = 3;
+  let lastErr = '';
+  let activeToken = token;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const res = await doRequest(activeToken);
+    if (res.ok) return res.json();
+
     const txt = await res.text().catch(() => '');
-    // Auto-refresh on 401 and retry once
+    lastErr = `${res.status}: ${txt.slice(0, 300)}`;
+
+    // Auto-refresh on 401 and retry once (counts as an attempt)
     if (res.status === 401 || txt.includes('expired_access_token') || txt.includes('invalid_access_token')) {
       try {
-        const newToken = await refreshAccessToken();
-        res = await doRequest(newToken);
-        if (!res.ok) {
-          const txt2 = await res.text().catch(() => '');
-          throw new Error(`Dropbox ${endpoint} ${res.status}: ${txt2.slice(0, 300)}`);
-        }
-        return res.json();
-      } catch (refreshErr) {
-        throw new Error(`expired_access_token: ${refreshErr.message}`);
+        activeToken = await refreshAccessToken();
+        continue; // retry with new token
+      } catch (refreshErr: unknown) {
+        const m = refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+        throw new Error(`expired_access_token: ${m}`);
       }
     }
+
+    // Rate limited — honour Retry-After (capped) then retry
+    if (res.status === 429 && attempt < MAX_ATTEMPTS - 1) {
+      const retryAfter = parseInt(res.headers?.get('Retry-After') || '2', 10);
+      const delayMs = Math.min(Math.max(retryAfter, 1), 5) * 1000;
+      console.warn(`Dropbox 429 on ${endpoint}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      continue;
+    }
+
+    // Transient 5xx — exponential backoff
+    if (res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS - 1) {
+      const delayMs = 500 * Math.pow(2, attempt); // 500ms, 1s, 2s
+      console.warn(`Dropbox ${res.status} on ${endpoint}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      continue;
+    }
+
+    // Non-retryable — throw immediately
     if (res.status === 429) {
-      const retryAfter = res.headers?.get('Retry-After') || '60';
-      throw new Error(`Dropbox rate limited on ${endpoint} — retry after ${retryAfter}s`);
+      throw new Error(`Dropbox rate limited on ${endpoint} — retry shortly`);
     }
     throw new Error(`Dropbox ${endpoint} ${res.status}: ${txt.slice(0, 300)}`);
   }
-  return res.json();
+
+  throw new Error(`Dropbox ${endpoint} exhausted retries: ${lastErr}`);
 }
 
-/** If response is 401, try to refresh token and return error response. */
-async function handleTokenExpiry(res: Response, req: Request): Promise<Response | null> {
+/**
+ * If the response is 401, attempt to refresh the Dropbox token and return the
+ * new access token so the caller can transparently retry.
+ * Returns:
+ *   - `{ newToken }` on successful refresh (caller should retry with this token)
+ *   - An error `Response` if refresh failed (502) — client should surface error
+ *   - `null` if the response was not a 401 (not a token issue, fall through)
+ *
+ * Note: 2026-04 fix — previously returned a 503 TOKEN_REFRESHED asking the
+ * browser to retry, but delivery-page clients don't auto-retry on 503 so end
+ * users saw broken thumbnails. Server-side retry eliminates that.
+ */
+async function handleTokenExpiry(
+  res: Response,
+  req: Request,
+): Promise<{ newToken: string } | Response | null> {
   if (res.status === 401) {
     await res.body?.cancel();
     try {
-      await refreshAccessToken();
-      // Token refreshed — but we can't easily retry the binary request here.
-      // Return an error that tells the frontend to retry.
-      return errResponse('TOKEN_REFRESHED', 'Token was refreshed — please retry', 503, req);
+      const newToken = await refreshAccessToken();
+      return { newToken };
     } catch {
       return errResponse('TOKEN_EXPIRED', 'Dropbox token expired and refresh failed', 502, req);
     }
@@ -665,13 +701,33 @@ Deno.serve(async (req) => {
       });
 
       let dbxRes: Response;
+      let activeToken = token;
       try {
         dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/files/get_thumbnail_v2`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
+          headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
         });
       } catch (_err: unknown) {
         return errResponse('DROPBOX_TIMEOUT', 'Thumbnail request timed out', 504, req);
+      }
+
+      // On 401, refresh token and retry the thumbnail fetch server-side so the
+      // client never sees a 503 TOKEN_REFRESHED bounce.
+      if (dbxRes.status === 401) {
+        const refreshed = await handleTokenExpiry(dbxRes, req);
+        if (refreshed && 'newToken' in refreshed) {
+          activeToken = refreshed.newToken;
+          try {
+            dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/files/get_thumbnail_v2`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+            });
+          } catch (_err: unknown) {
+            return errResponse('DROPBOX_TIMEOUT', 'Thumbnail request timed out', 504, req);
+          }
+        } else if (refreshed instanceof Response) {
+          return refreshed;
+        }
       }
 
       if (dbxRes.ok) {
@@ -724,22 +780,29 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Check if the thumbnail failure is a token issue before falling back
-      const tokenErr = await handleTokenExpiry(dbxRes, req);
-      if (tokenErr) return tokenErr;
-
       // Explicit fallback: thumbnail failed, proxy the full file instead.
       console.warn(`Thumbnail failed (${dbxRes.status}), falling back to proxy`);
       await dbxRes.body?.cancel();
 
       const proxyArg = JSON.stringify({ url: parentShareUrl, path: relPath });
-      const proxyRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+      let proxyRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': proxyArg },
+        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': proxyArg },
       }, DBX_CONTENT_TIMEOUT_MS);
+      // Retry server-side on 401
+      if (proxyRes.status === 401) {
+        const refreshed = await handleTokenExpiry(proxyRes, req);
+        if (refreshed && 'newToken' in refreshed) {
+          activeToken = refreshed.newToken;
+          proxyRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': proxyArg },
+          }, DBX_CONTENT_TIMEOUT_MS);
+        } else if (refreshed instanceof Response) {
+          return refreshed;
+        }
+      }
       if (!proxyRes.ok) {
-        const proxyTokenErr = await handleTokenExpiry(proxyRes, req);
-        if (proxyTokenErr) return proxyTokenErr;
         await proxyRes.body?.cancel();
         return errResponse('PROXY_FAILED', 'Could not retrieve file from Dropbox', 502, req);
       }
@@ -769,14 +832,27 @@ Deno.serve(async (req) => {
       const arg = JSON.stringify({ url: parentShareUrl, path: relPath });
 
       // Use longer timeout for video content which can be large
-      const dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+      let activeToken = token;
+      let dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
+        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
       }, DBX_CONTENT_TIMEOUT_MS);
 
+      // Server-side retry on 401 instead of bouncing 503 to client
+      if (dbxRes.status === 401) {
+        const refreshed = await handleTokenExpiry(dbxRes, req);
+        if (refreshed && 'newToken' in refreshed) {
+          activeToken = refreshed.newToken;
+          dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+          }, DBX_CONTENT_TIMEOUT_MS);
+        } else if (refreshed instanceof Response) {
+          return refreshed;
+        }
+      }
+
       if (!dbxRes.ok) {
-        const tokenErr = await handleTokenExpiry(dbxRes, req);
-        if (tokenErr) return tokenErr;
         await dbxRes.body?.cancel();
         return errResponse('STREAM_FAILED', 'Could not stream file from Dropbox', 502, req);
       }
@@ -810,13 +886,27 @@ Deno.serve(async (req) => {
       const relPath = stripPrefix(body.file_path, pathPrefix);
       const arg = JSON.stringify({ url: parentShareUrl, path: relPath });
 
-      const dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+      let activeToken = token;
+      let dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
+        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
       }, DBX_CONTENT_TIMEOUT_MS);
+
+      // Server-side retry on 401 instead of bouncing 503 to client
+      if (dbxRes.status === 401) {
+        const refreshed = await handleTokenExpiry(dbxRes, req);
+        if (refreshed && 'newToken' in refreshed) {
+          activeToken = refreshed.newToken;
+          dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+          }, DBX_CONTENT_TIMEOUT_MS);
+        } else if (refreshed instanceof Response) {
+          return refreshed;
+        }
+      }
+
       if (!dbxRes.ok) {
-        const tokenErr = await handleTokenExpiry(dbxRes, req);
-        if (tokenErr) return tokenErr;
         await dbxRes.body?.cancel();
         return errResponse('PROXY_FAILED', 'Could not retrieve file from Dropbox', 502, req);
       }
@@ -891,9 +981,50 @@ Deno.serve(async (req) => {
     }
 
     // 2. No cache — fetch from Dropbox and store
-    const listing = await fetchListingFromDropbox(
-      token, share_url, path, base_path, parentShareUrl, pathPrefix
-    );
+    //
+    // Graceful degradation: if Dropbox is transiently down (timeout / rate limit /
+    // network error) the delivery page should still render with an empty state
+    // rather than 5xx'ing the user. Return {folders:[], total_files:0, degraded:true}
+    // with a short cache so the page is usable and we retry soon. Non-transient
+    // errors (config missing, invalid token) still surface as errors.
+    let listing: Record<string, unknown>;
+    try {
+      listing = await fetchListingFromDropbox(
+        token, share_url, path, base_path, parentShareUrl, pathPrefix
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTransient =
+        msg.includes('timeout') ||
+        msg.includes('rate limited') ||
+        msg.includes('Dropbox /files/list_folder 5') || // 5xx from Dropbox
+        msg.includes('Dropbox /files/list_folder/continue 5') ||
+        msg.includes('fetch failed') ||
+        msg.includes('network');
+
+      if (isTransient) {
+        console.warn('getDeliveryMediaFeed: Dropbox transient failure, returning empty listing:', msg);
+        const degraded = {
+          folders: [],
+          total_files: 0,
+          fetched_at: new Date().toISOString(),
+          degraded: true,
+          degraded_reason: 'Dropbox temporarily unavailable',
+        };
+        return new Response(JSON.stringify(degraded), {
+          status: 200,
+          headers: {
+            ...getCorsHeaders(req),
+            'Content-Type': 'application/json',
+            // Short cache so we retry soon
+            'Cache-Control': 'public, max-age=30',
+            'X-Cache': 'DEGRADED',
+          },
+        });
+      }
+      // Non-transient — rethrow so outer catch emits the right error
+      throw err;
+    }
 
     // Store in cache (don't block the response)
     const cacheWritePromise = upsertCacheEntry({
