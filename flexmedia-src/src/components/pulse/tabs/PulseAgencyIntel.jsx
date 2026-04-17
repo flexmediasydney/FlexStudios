@@ -37,6 +37,8 @@ import {
   X,
   Activity,
   UserPlus,
+  Download,
+  Clock,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 
@@ -68,6 +70,42 @@ function fmtDate(d) {
 
 function normAgencyKey(s) {
   return (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function fmtAgo(d) {
+  if (!d) return "—";
+  const t = new Date(d).getTime();
+  if (isNaN(t)) return "—";
+  const diff = Date.now() - t;
+  if (diff < 0) return "now";
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d2 = Math.floor(h / 24);
+  if (d2 < 30) return `${d2}d ago`;
+  const mo = Math.floor(d2 / 30);
+  return `${mo}mo ago`;
+}
+
+function exportCsv(filename, header, rows) {
+  const escape = (v) => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [header.join(",")];
+  for (const r of rows) lines.push(header.map((h) => escape(r[h])).join(","));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function parseArray(val) {
@@ -991,7 +1029,7 @@ export function AgencySlideout({
 /* ═══ MAIN COMPONENT ════════════════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
 export default function PulseAgencyIntel({
   pulseAgents = [],
@@ -1010,6 +1048,7 @@ export default function PulseAgencyIntel({
   const [agencySort, setAgencySort] = useState({ col: "live_agent_count", dir: "desc" });
   const [agencyColFilter, setAgencyColFilter] = useState(""); // suburb text filter
   const [agencyPage, setAgencyPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [selectedAgency, setSelectedAgency] = useState(null);
 
   /* ── Build agent count map keyed by rea_agency_id or normalised name ──── */
@@ -1073,9 +1112,24 @@ export default function PulseAgencyIntel({
   }, [filtered, agencySort]);
 
   /* ── Pagination ──────────────────────────────────────────────────────── */
-  const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
   const safePage = Math.min(agencyPage, pageCount - 1);
-  const pageRows = sorted.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+  const pageRows = sorted.slice(safePage * pageSize, safePage * pageSize + pageSize);
+
+  /* ── CSV export of filtered rows ────────────────────────────────────── */
+  const handleExportCsv = useCallback(() => {
+    const header = [
+      "name", "suburb", "state", "phone", "email", "website",
+      "live_agent_count", "active_listings", "total_sold_12m",
+      "avg_sold_price", "avg_agent_rating", "is_in_crm",
+      "rea_agency_id", "last_synced_at",
+    ];
+    exportCsv(
+      `pulse_agencies_${new Date().toISOString().slice(0, 10)}.csv`,
+      header,
+      sorted
+    );
+  }, [sorted]);
 
   /* ── Sort toggle ──────────────────────────────────────────────────────── */
   function toggleSort(col) {
@@ -1165,10 +1219,23 @@ export default function PulseAgencyIntel({
           )}
         </div>
 
-        {/* Result count */}
-        <span className="text-xs text-muted-foreground ml-auto tabular-nums">
-          {filtered.length.toLocaleString()} agenc{filtered.length === 1 ? "y" : "ies"}
-        </span>
+        {/* CSV export + count */}
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs gap-1"
+            onClick={handleExportCsv}
+            disabled={sorted.length === 0}
+            title="Export filtered agencies as CSV"
+          >
+            <Download className="h-3 w-3" />
+            CSV
+          </Button>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {filtered.length.toLocaleString()} agenc{filtered.length === 1 ? "y" : "ies"}
+          </span>
+        </div>
       </div>
 
       {/* ── Table card ── */}
@@ -1217,6 +1284,10 @@ export default function PulseAgencyIntel({
                     Rating
                   </ColHeader>
                 </th>
+                {/* Last synced */}
+                <th className="px-2 py-2 text-right hidden xl:table-cell">
+                  <span className="text-muted-foreground font-medium">Synced</span>
+                </th>
                 {/* CRM */}
                 <th className="px-2 py-2 text-right pr-3">
                   <span className="text-muted-foreground font-medium">CRM</span>
@@ -1227,7 +1298,7 @@ export default function PulseAgencyIntel({
               {pageRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     className="text-center py-12 text-muted-foreground"
                   >
                     <Building2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground/20" />
@@ -1326,6 +1397,16 @@ export default function PulseAgencyIntel({
                         <StarRating value={ag.avg_agent_rating} />
                       </span>
                     </td>
+                    {/* Last synced */}
+                    <td
+                      className="px-2 py-2 text-right text-[10px] text-muted-foreground hidden xl:table-cell whitespace-nowrap"
+                      title={ag.last_synced_at ? new Date(ag.last_synced_at).toLocaleString() : "Never synced"}
+                    >
+                      <span className="inline-flex items-center gap-0.5">
+                        <Clock className="h-2.5 w-2.5" />
+                        {fmtAgo(ag.last_synced_at)}
+                      </span>
+                    </td>
                     {/* CRM badge */}
                     <td className="px-2 py-2 text-right pr-3">
                       <CrmBadge inCrm={!!ag.is_in_crm} />
@@ -1338,13 +1419,25 @@ export default function PulseAgencyIntel({
         </div>
 
         {/* ── Pagination ── */}
-        {pageCount > 1 && (
+        {sorted.length > 0 && (
           <div className="flex items-center justify-between gap-2 px-3 py-2 border-t bg-muted/20">
-            <span className="text-[10px] text-muted-foreground tabular-nums">
-              {safePage * PAGE_SIZE + 1}–
-              {Math.min((safePage + 1) * PAGE_SIZE, sorted.length)} of{" "}
-              {sorted.length.toLocaleString()}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {safePage * pageSize + 1}–
+                {Math.min((safePage + 1) * pageSize, sorted.length)} of{" "}
+                {sorted.length.toLocaleString()}
+              </span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setAgencyPage(0); }}
+                className="h-6 text-[10px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
+                title="Rows per page"
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>{n} / page</option>
+                ))}
+              </select>
+            </div>
             <div className="flex items-center gap-1">
               <Button
                 variant="outline"

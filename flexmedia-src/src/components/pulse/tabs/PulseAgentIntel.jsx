@@ -45,6 +45,8 @@ import {
   ChevronDown,
   X,
   Activity,
+  Download,
+  Clock,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 
@@ -108,6 +110,44 @@ function mapPosition(jobTitle) {
     return "Senior";
   if (jt.includes("associate")) return "Associate";
   return "Junior";
+}
+
+/* Relative time-ago for last_synced_at columns. */
+function fmtAgo(d) {
+  if (!d) return "—";
+  const t = new Date(d).getTime();
+  if (isNaN(t)) return "—";
+  const diff = Date.now() - t;
+  if (diff < 0) return "now";
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d2 = Math.floor(h / 24);
+  if (d2 < 30) return `${d2}d ago`;
+  const mo = Math.floor(d2 / 30);
+  return `${mo}mo ago`;
+}
+
+/* CSV export helper — quote fields, build blob, trigger download. */
+function exportCsv(filename, header, rows) {
+  const escape = (v) => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [header.join(",")];
+  for (const r of rows) lines.push(header.map((h) => escape(r[h])).join(","));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function PositionBadge({ position }) {
@@ -890,7 +930,21 @@ export function AgentSlideout({
 
 /* ── Main Component ──────────────────────────────────────────────────────── */
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+
+const INTEGRITY_FILTERS = [
+  { value: "all", label: "All quality" },
+  { value: "high", label: "High (≥80)" },
+  { value: "medium", label: "Medium (50–79)" },
+  { value: "low", label: "Low (<50)" },
+];
+
+const MAPPING_FILTERS = [
+  { value: "all", label: "All mapping" },
+  { value: "mapped", label: "Mapped" },
+  { value: "suggested", label: "Suggested" },
+  { value: "unmapped", label: "Unmapped" },
+];
 
 const SORT_COLS = {
   sales_as_lead: (a) => a.sales_as_lead ?? -1,
@@ -919,11 +973,29 @@ export default function PulseAgentIntel({
 }) {
   // ── UI state ──────────────────────────────────────────────────────────────
   const [agentFilter, setAgentFilter] = useState("all"); // all | not_in_crm | in_crm
+  const [integrityFilter, setIntegrityFilter] = useState("all"); // all | high | medium | low
+  const [mappingFilter, setMappingFilter] = useState("all"); // all | mapped | suggested | unmapped
+  const [pageSize, setPageSize] = useState(50);
   const [agentSort, setAgentSort] = useState({ col: "sales_as_lead", dir: "desc" });
   const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: "" });
   const [agentPage, setAgentPage] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [addToCrmCandidate, setAddToCrmCandidate] = useState(null);
+
+  // ── Build mapping-status lookup keyed by pulse_agent_id ────────────────────
+  const mappingByAgent = useMemo(() => {
+    const m = new Map();
+    for (const map of pulseMappings || []) {
+      // entity_type 'agent' is the row key; falls back to pulse_id field if used
+      const key = map.pulse_agent_id || map.pulse_entity_id || map.pulse_id;
+      if (!key) continue;
+      // Prefer "mapped" > "suggested" > anything else if multiple rows
+      const cur = m.get(key);
+      const conf = map.confidence || (map.crm_id ? "mapped" : null);
+      if (!cur || (conf === "mapped" && cur !== "mapped")) m.set(key, conf);
+    }
+    return m;
+  }, [pulseMappings]);
 
   // ── Auto-open Add-to-CRM dialog when triggered from CommandCenter ───────
   useEffect(() => {
@@ -964,6 +1036,27 @@ export default function PulseAgentIntel({
     // Status filter
     if (agentFilter === "not_in_crm") list = list.filter((a) => !a.is_in_crm);
     else if (agentFilter === "in_crm") list = list.filter((a) => a.is_in_crm);
+
+    // Integrity score filter
+    if (integrityFilter === "high") list = list.filter((a) => (a.data_integrity_score ?? 0) >= 80);
+    else if (integrityFilter === "medium")
+      list = list.filter((a) => {
+        const s = a.data_integrity_score ?? 0;
+        return s >= 50 && s < 80;
+      });
+    else if (integrityFilter === "low")
+      list = list.filter((a) => (a.data_integrity_score ?? 0) < 50);
+
+    // Mapping-status filter
+    if (mappingFilter !== "all") {
+      list = list.filter((a) => {
+        const conf = mappingByAgent.get(a.id);
+        if (mappingFilter === "mapped") return conf === "mapped" || a.is_in_crm;
+        if (mappingFilter === "suggested") return conf === "suggested";
+        if (mappingFilter === "unmapped") return !conf && !a.is_in_crm;
+        return true;
+      });
+    }
 
     // Column filters
     if (agencyQ) {
@@ -1007,16 +1100,31 @@ export default function PulseAgentIntel({
     });
 
     const totalCount = list.length;
-    const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
     const safePageIndex = Math.min(agentPage, totalPages - 1);
-    const paginated = list.slice(safePageIndex * PAGE_SIZE, (safePageIndex + 1) * PAGE_SIZE);
+    const paginated = list.slice(safePageIndex * pageSize, (safePageIndex + 1) * pageSize);
 
     return { filtered: list, paginated, totalPages, totalCount };
-  }, [pulseAgents, agentFilter, agentColFilters, search, agentSort, agentPage]);
+  }, [pulseAgents, agentFilter, integrityFilter, mappingFilter, mappingByAgent, agentColFilters, search, agentSort, agentPage, pageSize]);
 
   const safePage = Math.min(agentPage, totalPages - 1);
-  const showingStart = safePage * PAGE_SIZE + 1;
-  const showingEnd = Math.min(showingStart + PAGE_SIZE - 1, totalCount);
+  const showingStart = safePage * pageSize + 1;
+  const showingEnd = Math.min(showingStart + pageSize - 1, totalCount);
+
+  // CSV export of currently-filtered set
+  const handleExportCsv = useCallback(() => {
+    const header = [
+      "full_name", "agency_name", "agency_suburb", "email", "mobile",
+      "job_title", "data_integrity_score", "total_listings_active", "sales_as_lead",
+      "avg_sold_price", "avg_days_on_market", "rea_rating", "is_in_crm",
+      "rea_agent_id", "last_synced_at",
+    ];
+    exportCsv(
+      `pulse_agents_${new Date().toISOString().slice(0, 10)}.csv`,
+      header,
+      filtered
+    );
+  }, [filtered]);
 
   function handleColFilterChange(col, val) {
     setAgentColFilters((prev) => ({ ...prev, [col]: val }));
@@ -1070,10 +1178,47 @@ export default function PulseAgentIntel({
           </button>
         ))}
 
-        <div className="ml-auto text-xs text-muted-foreground tabular-nums">
-          {totalCount > 0
-            ? `Showing ${showingStart.toLocaleString()}–${showingEnd.toLocaleString()} of ${totalCount.toLocaleString()}`
-            : "No results"}
+        {/* Integrity quality filter */}
+        <select
+          value={integrityFilter}
+          onChange={(e) => { setIntegrityFilter(e.target.value); setAgentPage(0); }}
+          className="h-7 text-xs rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+          title="Filter by data-integrity score"
+        >
+          {INTEGRITY_FILTERS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+
+        {/* Mapping status filter */}
+        <select
+          value={mappingFilter}
+          onChange={(e) => { setMappingFilter(e.target.value); setAgentPage(0); }}
+          className="h-7 text-xs rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+          title="Filter by CRM-mapping status"
+        >
+          {MAPPING_FILTERS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs gap-1"
+            onClick={handleExportCsv}
+            disabled={filtered.length === 0}
+            title="Export filtered agents as CSV"
+          >
+            <Download className="h-3 w-3" />
+            CSV
+          </Button>
+          <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+            {totalCount > 0
+              ? `${showingStart.toLocaleString()}–${showingEnd.toLocaleString()} of ${totalCount.toLocaleString()}`
+              : "No results"}
+          </span>
         </div>
       </div>
 
@@ -1143,6 +1288,10 @@ export default function PulseAgentIntel({
                 >
                   Rating <SortIcon col="rea_rating" sort={agentSort} />
                 </th>
+                {/* Last synced */}
+                <th className="py-2.5 px-2 text-right font-medium text-muted-foreground hidden xl:table-cell whitespace-nowrap">
+                  Synced
+                </th>
                 {/* CRM */}
                 <th className="py-2.5 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">
                   CRM
@@ -1178,6 +1327,8 @@ export default function PulseAgentIntel({
                 <td className="py-1 px-2 hidden md:table-cell" />
                 {/* Rating — no filter */}
                 <td className="py-1 px-2 hidden sm:table-cell" />
+                {/* Last-synced — no filter */}
+                <td className="py-1 px-2 hidden xl:table-cell" />
                 {/* Suburb filter (lives in CRM column for space, but targets suburb) */}
                 <td className="py-1 px-3">
                   <input
@@ -1196,7 +1347,7 @@ export default function PulseAgentIntel({
               {paginated.length === 0 && (
                 <tr>
                   <td
-                    colSpan={11}
+                    colSpan={12}
                     className="py-12 text-center text-sm text-muted-foreground"
                   >
                     <Users className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
@@ -1313,6 +1464,17 @@ export default function PulseAgentIntel({
                       <StarRating rating={agent.rea_rating} count={agent.rea_review_count} />
                     </td>
 
+                    {/* Last synced */}
+                    <td
+                      className="py-2 px-2 text-right text-[10px] text-muted-foreground hidden xl:table-cell whitespace-nowrap"
+                      title={agent.last_synced_at ? new Date(agent.last_synced_at).toLocaleString() : "Never synced"}
+                    >
+                      <span className="inline-flex items-center gap-0.5">
+                        <Clock className="h-2.5 w-2.5" />
+                        {fmtAgo(agent.last_synced_at)}
+                      </span>
+                    </td>
+
                     {/* CRM status */}
                     <td className="py-2 px-3 text-right">
                       <CrmStatusBadge inCrm={agent.is_in_crm} />
@@ -1326,10 +1488,22 @@ export default function PulseAgentIntel({
 
         {/* ── Pagination ── */}
         {totalCount > 0 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-muted/20">
-            <span className="text-xs text-muted-foreground">
-              Page {safePage + 1} of {totalPages}
-            </span>
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-muted/20 gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                Page {safePage + 1} of {totalPages}
+              </span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setAgentPage(0); }}
+                className="h-6 text-[11px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
+                title="Rows per page"
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>{n} / page</option>
+                ))}
+              </select>
+            </div>
             <div className="flex items-center gap-1">
               <Button
                 variant="outline"

@@ -29,6 +29,7 @@ import {
   Image as ImageIcon,
   Phone,
   Clock,
+  Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -103,9 +104,45 @@ const DATE_SOURCE_LABEL = {
   first_seen: "First seen on our platform — actual listing date unknown",
 };
 
+function fmtAgo(d) {
+  if (!d) return "—";
+  const t = new Date(d).getTime();
+  if (isNaN(t)) return "—";
+  const diff = Date.now() - t;
+  if (diff < 0) return "now";
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d2 = Math.floor(h / 24);
+  if (d2 < 30) return `${d2}d ago`;
+  const mo = Math.floor(d2 / 30);
+  return `${mo}mo ago`;
+}
+
+function exportCsv(filename, header, rows) {
+  const escape = (v) => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [header.join(",")];
+  for (const r of rows) lines.push(header.map((h) => escape(r[h])).join(","));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
 const TYPE_FILTERS = [
   { value: "all", label: "All" },
@@ -579,6 +616,7 @@ export default function PulseListingsTab({
   const [listingSort, setListingSort] = useState({ col: "listed_date", dir: "desc" });
   const [listingColFilter, setListingColFilter] = useState("");
   const [listingPage, setListingPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [selectedListing, setSelectedListing] = useState(null);
 
   // ── Sorting helper ──────────────────────────────────────────────────────────
@@ -595,7 +633,7 @@ export default function PulseListingsTab({
   );
 
   // ── Filtered + sorted + paginated listings ──────────────────────────────────
-  const { rows, total } = useMemo(() => {
+  const { rows, filtered, total } = useMemo(() => {
     const lc = (s) => (s || "").toLowerCase();
     const globalQ = lc(search);
     const colQ = lc(listingColFilter);
@@ -651,11 +689,26 @@ export default function PulseListingsTab({
     });
 
     const total = filtered.length;
-    const rows = filtered.slice(listingPage * PAGE_SIZE, (listingPage + 1) * PAGE_SIZE);
-    return { rows, total };
-  }, [pulseListings, listingFilter, listingColFilter, listingSort, listingPage, search]);
+    const rows = filtered.slice(listingPage * pageSize, (listingPage + 1) * pageSize);
+    return { rows, filtered, total };
+  }, [pulseListings, listingFilter, listingColFilter, listingSort, listingPage, pageSize, search]);
 
-  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const totalPages = Math.ceil(total / pageSize);
+
+  // CSV export of filtered set
+  const handleExportCsv = useCallback(() => {
+    const header = [
+      "address", "suburb", "postcode", "listing_type", "asking_price", "sold_price",
+      "bedrooms", "bathrooms", "parking", "land_size", "days_on_market",
+      "agent_name", "agency_name", "listed_date", "sold_date",
+      "property_key", "source_url", "last_synced_at",
+    ];
+    exportCsv(
+      `pulse_listings_${new Date().toISOString().slice(0, 10)}.csv`,
+      header,
+      filtered
+    );
+  }, [filtered]);
 
   // ── Column header helper ────────────────────────────────────────────────────
   const Th = ({ col, children, className }) => (
@@ -714,6 +767,17 @@ export default function PulseListingsTab({
               </button>
             )}
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs gap-1"
+            onClick={handleExportCsv}
+            disabled={total === 0}
+            title="Export filtered listings as CSV"
+          >
+            <Download className="h-3 w-3" />
+            CSV
+          </Button>
           <span className="text-[11px] text-muted-foreground whitespace-nowrap">
             Showing {rows.length} of {total} listings
           </span>
@@ -746,6 +810,7 @@ export default function PulseListingsTab({
                   <Th col="agency_name">Agency</Th>
                   <Th col="listed_date">Listed</Th>
                   <Th col="sold_date" className="hidden sm:table-cell">Sold Date</Th>
+                  <Th className="hidden xl:table-cell">Synced</Th>
                   <Th col="price_text">Status</Th>
                 </tr>
               </thead>
@@ -863,6 +928,17 @@ export default function PulseListingsTab({
                           : "—"}
                       </td>
 
+                      {/* Last synced */}
+                      <td
+                        className="px-2 py-1.5 whitespace-nowrap text-[10px] text-muted-foreground hidden xl:table-cell"
+                        title={l.last_synced_at ? new Date(l.last_synced_at).toLocaleString() : "Never synced"}
+                      >
+                        <span className="inline-flex items-center gap-0.5">
+                          <Clock className="h-2.5 w-2.5" />
+                          {fmtAgo(l.last_synced_at)}
+                        </span>
+                      </td>
+
                       {/* Status */}
                       <td className="px-2 py-1.5 max-w-[120px]">
                         <p className="truncate text-muted-foreground">{status}</p>
@@ -875,8 +951,8 @@ export default function PulseListingsTab({
           </div>
 
           {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between px-3 py-2 border-t border-border/60 bg-muted/20">
+          {total > 0 && (
+            <div className="flex items-center justify-between px-3 py-2 border-t border-border/60 bg-muted/20 gap-2">
               <Button
                 variant="ghost"
                 size="sm"
@@ -887,9 +963,21 @@ export default function PulseListingsTab({
                 <ChevronLeft className="h-3.5 w-3.5 mr-1" />
                 Prev
               </Button>
-              <span className="text-[11px] text-muted-foreground">
-                Page {listingPage + 1} of {totalPages}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground">
+                  Page {listingPage + 1} of {totalPages}
+                </span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setListingPage(0); }}
+                  className="h-6 text-[11px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
+                  title="Rows per page"
+                >
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>{n} / page</option>
+                  ))}
+                </select>
+              </div>
               <Button
                 variant="ghost"
                 size="sm"
