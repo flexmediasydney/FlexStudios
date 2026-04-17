@@ -3,7 +3,7 @@
  * Manages REA scraper runs, cron schedule display, sync history,
  * suburb pool, and raw payload drill-through.
  */
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -23,6 +26,7 @@ import {
   ChevronDown, ChevronUp, Eye, MapPin, ToggleLeft, ToggleRight,
   ExternalLink, Repeat, Globe, Calendar, Coins, FileCode2,
   User, XCircle, Activity, Copy, Edit3, Save, AlertCircle,
+  ChevronLeft, ChevronRight, Filter, Download, History, X,
 } from "lucide-react";
 
 // ── Source UI metadata ────────────────────────────────────────────────────────
@@ -770,7 +774,7 @@ function DispatchedNoLogs() {
 // (never truncated), has a Copy button, and an Edit button that opens the
 // editor dialog.
 
-function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch }) {
+function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch, onViewHistory }) {
   const meta = getSourceMeta(sourceConfig.source_id);
   const Icon = meta.icon;
   const lastStatus = lastLog?.status;
@@ -1054,6 +1058,17 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, i
               title="View last payload"
             >
               <Eye className="h-3 w-3" />
+            </Button>
+          )}
+          {onViewHistory && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => onViewHistory(sourceConfig.source_id)}
+              title="View full sync history for this source"
+            >
+              <History className="h-3 w-3" />
             </Button>
           )}
           <Button
@@ -1494,58 +1509,418 @@ function CronScheduleTable({ runningSources, lastLogBySource, sourceConfigs }) {
   );
 }
 
-// --- Sync History Table ---
+// --- Sync History Table (paginated, filtered, server-fetched) ---
+//
+// Replaces the previous client-side .slice(0, 20) cap. The full pulse_sync_logs
+// table is the authoritative audit trail for every Apify dispatch — capping at
+// 20 hid hours of history. Now we fetch server-side with proper pagination,
+// filters (source / status / time-window), CSV export, and a 60s auto-refresh
+// toggle. Matches the design language of /EdgeFunctionAuditLog.
+//
+// Props:
+//   sourceConfigs   — used to populate the Source dropdown
+//   onDrill(log)    — open the raw-payload dialog
+//   filterSourceId  — controlled "deep-link" filter (set by SourceCard "View History")
+//   onChangeFilter  — clears/changes the controlled filter
 
-function SyncHistory({ syncLogs, onDrill }) {
-  const recent = useMemo(() => syncLogs.slice(0, 20), [syncLogs]);
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+
+const TIME_WINDOWS = [
+  { value: "1h",  label: "Last 1 hour",   ms: 60 * 60 * 1000 },
+  { value: "24h", label: "Last 24 hours", ms: 24 * 60 * 60 * 1000 },
+  { value: "7d",  label: "Last 7 days",   ms: 7 * 24 * 60 * 60 * 1000 },
+  { value: "30d", label: "Last 30 days",  ms: 30 * 24 * 60 * 60 * 1000 },
+  { value: "all", label: "All time",      ms: null },
+];
+
+// Stats summary derived from result_summary jsonb. Used for CSV column too.
+function recordsSummaryFlat(log) {
+  const s = log?.result_summary || {};
+  const a = s.agents_processed ?? "";
+  const l = s.listings_stored ?? "";
+  const r = s.records_saved ?? "";
+  return { agents: a, listings: l, records: r };
+}
+
+function downloadCsv(rows) {
+  const header = [
+    "started_at", "completed_at", "source_id", "source_label", "status",
+    "duration_sec", "agents_processed", "listings_stored", "records_saved",
+    "triggered_by", "triggered_by_name", "apify_run_id", "error_message",
+  ];
+  const escape = (v) => {
+    if (v == null) return "";
+    const s = String(v);
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const lines = [header.join(",")];
+  for (const log of rows) {
+    const dur = log.started_at && log.completed_at
+      ? Math.max(0, Math.round((new Date(log.completed_at) - new Date(log.started_at)) / 1000))
+      : "";
+    const sums = recordsSummaryFlat(log);
+    lines.push([
+      log.started_at || "",
+      log.completed_at || "",
+      log.source_id || "",
+      log.source_label || "",
+      log.status || "",
+      dur,
+      sums.agents,
+      sums.listings,
+      sums.records,
+      log.triggered_by || "",
+      log.triggered_by_name || "",
+      log.apify_run_id || "",
+      (log.error_message || "").slice(0, 500),
+    ].map(escape).join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `pulse_sync_logs_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilter }) {
+  // ── filter state ──
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [timeWindow, setTimeWindow] = useState("7d");
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(0);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastFetched, setLastFetched] = useState(null);
+
+  // Reset page on filter change
+  useEffect(() => { setPage(0); }, [filterSourceId, statusFilter, timeWindow, pageSize]);
+
+  // Build dropdown of distinct source_ids — combine known configs + any
+  // source_ids seen on the current page (so historical/legacy ids still appear).
+  const sourceOptions = useMemo(() => {
+    const map = new Map();
+    for (const c of sourceConfigs || []) {
+      if (c.source_id) map.set(c.source_id, c.label || c.source_id);
+    }
+    for (const r of rows) {
+      const sid = r.source_id;
+      if (sid && !map.has(sid)) map.set(sid, r.source_label || sid);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [sourceConfigs, rows]);
+
+  // ── server fetch ──
+  const fetchPage = useCallback(async () => {
+    setError(null);
+    try {
+      let q = api._supabase
+        .from("pulse_sync_logs")
+        .select(
+          "id, source_id, source_label, status, started_at, completed_at, " +
+          "result_summary, triggered_by, triggered_by_name, apify_run_id, error_message",
+          { count: "exact" }
+        )
+        .order("started_at", { ascending: false });
+
+      if (filterSourceId && filterSourceId !== "all") {
+        q = q.eq("source_id", filterSourceId);
+      }
+      if (statusFilter !== "all") {
+        q = q.eq("status", statusFilter);
+      }
+      const tw = TIME_WINDOWS.find(t => t.value === timeWindow);
+      if (tw && tw.ms != null) {
+        q = q.gte("started_at", new Date(Date.now() - tw.ms).toISOString());
+      }
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      q = q.range(from, to);
+
+      const { data, error, count } = await q;
+      if (error) throw error;
+      setRows(data || []);
+      setTotal(count || 0);
+      setLastFetched(new Date());
+    } catch (err) {
+      setError(err?.message || "Fetch failed");
+      setRows([]);
+      setTotal(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [filterSourceId, statusFilter, timeWindow, page, pageSize]);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchPage();
+  }, [fetchPage]);
+
+  // Auto-refresh every 60s when enabled
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => { fetchPage(); }, 60_000);
+    return () => clearInterval(id);
+  }, [autoRefresh, fetchPage]);
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const showingFrom = total === 0 ? 0 : page * pageSize + 1;
+  const showingTo = Math.min(total, (page + 1) * pageSize);
+  const hasPrev = page > 0;
+  const hasNext = (page + 1) < pageCount;
+
+  const filterCount =
+    (filterSourceId && filterSourceId !== "all" ? 1 : 0) +
+    (statusFilter !== "all" ? 1 : 0) +
+    (timeWindow !== "7d" ? 1 : 0);
 
   return (
-    <Card className="rounded-xl border shadow-sm">
-      <CardHeader className="pb-2 px-4 pt-4">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <Database className="h-4 w-4 text-muted-foreground" />
-          Sync History
-          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{recent.length}</Badge>
-        </CardTitle>
+    <Card id="sync-history" className="rounded-xl border shadow-sm scroll-mt-16">
+      <CardHeader className="pb-3 px-4 pt-4">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Database className="h-4 w-4 text-muted-foreground" />
+            Sync History
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+              {total.toLocaleString()} total
+            </Badge>
+            {filterCount > 0 && (
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
+                <Filter className="h-2.5 w-2.5" />
+                {filterCount} filter{filterCount === 1 ? "" : "s"}
+              </Badge>
+            )}
+          </CardTitle>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            {lastFetched && (
+              <span className="flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {fmtRelativeTs(lastFetched)}
+              </span>
+            )}
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <Switch
+                checked={autoRefresh}
+                onCheckedChange={setAutoRefresh}
+                aria-label="Auto-refresh every 60s"
+              />
+              <span>Auto-refresh</span>
+            </label>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[10px] gap-1"
+              onClick={() => { setLoading(true); fetchPage(); }}
+              disabled={loading}
+              title="Refresh now"
+            >
+              <Loader2 className={cn("h-3 w-3", loading && "animate-spin")} />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[10px] gap-1"
+              onClick={() => downloadCsv(rows)}
+              disabled={rows.length === 0}
+              title="Download visible rows as CSV"
+            >
+              <Download className="h-3 w-3" />
+              CSV
+            </Button>
+          </div>
+        </div>
+
+        {/* Filter row */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+          <div>
+            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+              Source
+            </label>
+            <Select
+              value={filterSourceId || "all"}
+              onValueChange={(v) => onChangeFilter?.(v === "all" ? null : v)}
+            >
+              <SelectTrigger className="h-8 text-xs mt-0.5">
+                <SelectValue placeholder="All sources" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sources</SelectItem>
+                {sourceOptions.map(([id, label]) => (
+                  <SelectItem key={id} value={id}>
+                    <span className="truncate">{label}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+              Status
+            </label>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="h-8 text-xs mt-0.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
+                <SelectItem value="failed">Failed</SelectItem>
+                <SelectItem value="running">Running</SelectItem>
+                <SelectItem value="timed_out">Timed out</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+              Time window
+            </label>
+            <Select value={timeWindow} onValueChange={setTimeWindow}>
+              <SelectTrigger className="h-8 text-xs mt-0.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TIME_WINDOWS.map(tw => (
+                  <SelectItem key={tw.value} value={tw.value}>{tw.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+              Page size
+            </label>
+            <Select value={String(pageSize)} onValueChange={(v) => setPageSize(parseInt(v, 10))}>
+              <SelectTrigger className="h-8 text-xs mt-0.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map(n => (
+                  <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {filterCount > 0 && (
+          <div className="mt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[10px] gap-1"
+              onClick={() => {
+                onChangeFilter?.(null);
+                setStatusFilter("all");
+                setTimeWindow("7d");
+              }}
+            >
+              <X className="h-3 w-3" />
+              Clear all filters
+            </Button>
+          </div>
+        )}
       </CardHeader>
-      <CardContent className="px-4 pb-4 overflow-x-auto">
-        {recent.length === 0 ? (
-          <p className="text-xs text-muted-foreground py-4 text-center">No sync logs yet.</p>
-        ) : (
-          <table className="w-full text-xs min-w-[560px]">
-            <thead>
-              <tr className="border-b">
-                <th className="text-left pb-2 font-medium text-muted-foreground">Source</th>
-                <th className="text-left pb-2 font-medium text-muted-foreground">Status</th>
-                <th className="text-left pb-2 font-medium text-muted-foreground">Started</th>
-                <th className="text-left pb-2 font-medium text-muted-foreground">Duration</th>
-                <th className="text-left pb-2 font-medium text-muted-foreground">Records</th>
-                <th className="pb-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {recent.map((log) => (
-                <tr key={log.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                  <td className="py-2 pr-3 font-medium max-w-[180px] truncate">{log.source_label || log.source_id || "—"}</td>
-                  <td className="py-2 pr-3"><StatusBadge status={log.status} /></td>
-                  <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">{fmtTs(log.started_at)}</td>
-                  <td className="py-2 pr-3 text-muted-foreground">{fmtDuration(log.started_at, log.completed_at)}</td>
-                  <td className="py-2 pr-3 text-muted-foreground">{recordsSummary(log)}</td>
-                  <td className="py-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0"
-                      onClick={() => onDrill(log)}
-                      title="View raw payload"
-                    >
-                      <Eye className="h-3 w-3" />
-                    </Button>
-                  </td>
+      <CardContent className="px-4 pb-4">
+        {error && (
+          <div className="rounded-md border border-red-300 bg-red-50/60 dark:bg-red-950/20 p-3 mb-3 text-xs flex items-start gap-2">
+            <XCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-red-700 dark:text-red-400">Failed to load sync history</p>
+              <p className="text-muted-foreground mt-0.5 font-mono text-[10px]">{error}</p>
+            </div>
+          </div>
+        )}
+        <div className="overflow-x-auto">
+          {rows.length === 0 && !loading ? (
+            <p className="text-xs text-muted-foreground py-8 text-center">
+              {filterCount > 0
+                ? "No sync logs match the current filters."
+                : "No sync logs yet."}
+            </p>
+          ) : (
+            <table className="w-full text-xs min-w-[640px]">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left pb-2 font-medium text-muted-foreground">Source</th>
+                  <th className="text-left pb-2 font-medium text-muted-foreground">Status</th>
+                  <th className="text-left pb-2 font-medium text-muted-foreground">Started</th>
+                  <th className="text-left pb-2 font-medium text-muted-foreground">Duration</th>
+                  <th className="text-left pb-2 font-medium text-muted-foreground">Records</th>
+                  <th className="text-left pb-2 font-medium text-muted-foreground">Triggered by</th>
+                  <th className="pb-2" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((log) => (
+                  <tr key={log.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                    <td className="py-2 pr-3 font-medium max-w-[200px] truncate" title={log.source_id || ""}>
+                      {log.source_label || log.source_id || "—"}
+                    </td>
+                    <td className="py-2 pr-3"><StatusBadge status={log.status} /></td>
+                    <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">{fmtTs(log.started_at)}</td>
+                    <td className="py-2 pr-3 text-muted-foreground">{fmtDuration(log.started_at, log.completed_at)}</td>
+                    <td className="py-2 pr-3 text-muted-foreground">{recordsSummary(log)}</td>
+                    <td className="py-2 pr-3 text-muted-foreground text-[10px] max-w-[140px] truncate" title={log.triggered_by_name || log.triggered_by || ""}>
+                      {log.triggered_by_name || log.triggered_by || "—"}
+                    </td>
+                    <td className="py-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0"
+                        onClick={() => onDrill(log)}
+                        title="View raw payload"
+                      >
+                        <Eye className="h-3 w-3" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Pagination footer */}
+        {total > 0 && (
+          <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/40">
+            <p className="text-[10px] text-muted-foreground">
+              Showing <span className="font-medium text-foreground tabular-nums">{showingFrom.toLocaleString()}</span>
+              –<span className="font-medium text-foreground tabular-nums">{showingTo.toLocaleString()}</span>{" "}
+              of <span className="font-medium text-foreground tabular-nums">{total.toLocaleString()}</span>{" "}
+              · Page <span className="tabular-nums">{page + 1}</span> of <span className="tabular-nums">{pageCount}</span>
+            </p>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 gap-1 text-[10px]"
+                disabled={!hasPrev || loading}
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="h-3 w-3" />
+                Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 gap-1 text-[10px]"
+                disabled={!hasNext || loading}
+                onClick={() => setPage(p => p + 1)}
+              >
+                Next
+                <ChevronRight className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -1845,6 +2220,18 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
   const [runningSources, setRunningSources] = useState(new Set());
   const [drillLog, setDrillLog] = useState(null);
   const [scheduleSource, setScheduleSource] = useState(null);
+  // Controlled "deep-link" filter for the SyncHistory table — set by SourceCard
+  // "View History" links so a card can scroll to and filter the history.
+  const [historyFilterSourceId, setHistoryFilterSourceId] = useState(null);
+
+  const openHistoryForSource = useCallback((sourceId) => {
+    setHistoryFilterSourceId(sourceId || null);
+    // Scroll to the sync history card
+    setTimeout(() => {
+      const el = document.getElementById("sync-history");
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }, []);
 
   const activeSuburbCount = useMemo(() => targetSuburbs.filter((s) => s.is_active).length, [targetSuburbs]);
 
@@ -1997,6 +2384,7 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
               onOpenSchedule={setScheduleSource}
               onEdit={setEditConfig}
               onDrillDispatch={handleDrillDispatch}
+              onViewHistory={openHistoryForSource}
             />
           ))}
           {visibleSources.length === 0 && (
@@ -2020,7 +2408,12 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
       </div>
 
       {/* ── Sync history ── */}
-      <SyncHistory syncLogs={syncLogs} onDrill={setDrillLog} />
+      <SyncHistory
+        sourceConfigs={visibleSources}
+        onDrill={setDrillLog}
+        filterSourceId={historyFilterSourceId}
+        onChangeFilter={setHistoryFilterSourceId}
+      />
 
       {/* ── Dialogs ── */}
       {drillLog && (
