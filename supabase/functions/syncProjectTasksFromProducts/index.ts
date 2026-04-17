@@ -450,9 +450,11 @@ Deno.serve(async (req) => {
       }
       const migratedIds = tierMigrationTasks.map((t: any) => t.template_id.replace(`:${tierFrom}:`, `:${pricingTier}:`));
       migratedIds.forEach((id: string) => activeTaskTemplateIds.add(id));
-      if (tierMigrationTasks.length > 0) {
-        invokeFunction('calculateProjectTaskDeadlines', { project_id, trigger_event: 'tier_migration' }).catch(() => {});
-      }
+      // NOTE: We deliberately do NOT invoke calculateProjectTaskDeadlines here.
+      // Running it before the dependency backfill below causes a race where
+      // dependencies_cleared tasks see `depends_on_task_ids: []` and get
+      // stamped with a "now()"-based due_date. The end-of-sync invocation
+      // (after deps are written) handles both tier migration and new creates.
     }
 
     for (let i = 0; i < orphanedTasks.length; i += batchSize) {
@@ -721,8 +723,11 @@ Deno.serve(async (req) => {
       }
     } catch { /* non-fatal */ }
 
-    // FIX #23: Recalculate task deadlines after all tasks are synced (for Tonomo products etc.)
-    if (createdCount > 0 || tasksToReactivate.length > 0) {
+    // FIX #23: Recalculate task deadlines after all tasks are synced (for Tonomo products etc.).
+    // IMPORTANT: this runs AFTER the dependency backfill — invoking calculateProjectTaskDeadlines
+    // any earlier races with the two-pass create → update-deps flow and stamps
+    // dependencies_cleared tasks with "now()"-based due_dates.
+    if (createdCount > 0 || tasksToReactivate.length > 0 || tierMigrationTasks.length > 0) {
       invokeFunction('calculateProjectTaskDeadlines', { project_id, trigger_event: 'tasks_synced' }).catch(() => {});
     }
 
