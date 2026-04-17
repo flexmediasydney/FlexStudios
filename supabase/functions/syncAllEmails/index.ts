@@ -1,8 +1,8 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 
 // Admin-only scheduled sync with comprehensive error handling and logging
 
-Deno.serve(async (req) => {
+serveWithAudit('syncAllEmails', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
@@ -10,14 +10,12 @@ Deno.serve(async (req) => {
 
     // Auth: allow service-role (internal/cron calls) or master_admin users
     const user = await getUserFromReq(req).catch(() => null);
-    if (!user) {
-      const authHeader = req.headers.get('authorization') || '';
-      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
-      if (!serviceKey || !authHeader.includes(serviceKey)) {
-        return errorResponse('Authentication required', 401);
+    const isServiceRole = user?.id === '__service_role__';
+    if (!isServiceRole) {
+      if (!user) return errorResponse('Authentication required', 401);
+      if (user.role !== 'master_admin') {
+        return errorResponse('Forbidden: Master admin access required', 403);
       }
-    } else if (user.role !== 'master_admin') {
-      return errorResponse('Forbidden: Master admin access required', 403);
     }
 
     // Retry helper

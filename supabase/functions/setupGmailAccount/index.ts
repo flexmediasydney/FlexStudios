@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * setupGmailAccount — registers an EmailAccount record for a user.
@@ -10,7 +10,7 @@ import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonRespons
  *
  * Expects: { emailAddress, displayName, teamId, accessToken, refreshToken }
  */
-Deno.serve(async (req) => {
+serveWithAudit('setupGmailAccount', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

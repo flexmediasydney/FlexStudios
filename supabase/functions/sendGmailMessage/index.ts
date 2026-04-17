@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -23,7 +23,7 @@ const retryFetch = async (url: string, options: any, retries = 3): Promise<Respo
   throw new Error('retryFetch: all retries exhausted');
 };
 
-Deno.serve(async (req) => {
+serveWithAudit('sendGmailMessage', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

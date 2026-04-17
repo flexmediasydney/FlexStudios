@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 import { MS_PER_DAY, MS_PER_MINUTE, GMAIL_DEFAULT_LOOKBACK_DAYS, GMAIL_HISTORY_FALLBACK_LOOKBACK_DAYS, GMAIL_LOOKBACK_MINUTES, MAX_MESSAGES_PER_SYNC } from '../_shared/constants.ts';
 import { AgentLookup } from '../_shared/emailLinking.ts';
 
@@ -708,7 +708,7 @@ async function upsertConversations(_admin: any, _accountId: string) {
   return;
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('syncGmailMessagesForAccount', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();

@@ -1,4 +1,4 @@
-import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 // --- Agent lookup cache (per sync cycle, scoped per request to avoid leaking between concurrent requests) ---
 let agentCache = new Map<string, any>();
@@ -690,7 +690,7 @@ async function upsertConversations(admin: any, accountId: string) {
   }
 }
 
-Deno.serve(async (req) => {
+serveWithAudit('syncGmailMessages', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
     const admin = getAdminClient();
