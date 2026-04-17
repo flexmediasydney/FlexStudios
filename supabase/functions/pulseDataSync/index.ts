@@ -46,40 +46,74 @@ interface ApifyRunResult {
   datasetId: string | null;
 }
 
+/**
+ * Fetch with an explicit abort-based timeout. Prevents the handler from
+ * hanging past the Supabase edge function 150s wall if Apify stalls.
+ * Throws AbortError on timeout — callers must catch.
+ */
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function runApifyActor(actorSlug: string, input: any, label: string, timeoutSecs = 180): Promise<ApifyRunResult> {
   if (!APIFY_TOKEN) throw new Error('APIFY_TOKEN not set in environment');
 
   const safeId = actorSlug.replace('/', '~');
   const url = `${APIFY_BASE}/acts/${safeId}/runs?timeout=${timeoutSecs}&waitForFinish=${timeoutSecs}`;
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${APIFY_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  });
+  // Fetch timeout = Apify timeout + 10s grace (so we see the ACTUAL Apify response
+  // rather than the edge runtime killing us at 150s). Each individual HTTP call
+  // caps at 120s to leave budget for other suburbs in a batch.
+  const fetchTimeoutMs = Math.min(timeoutSecs * 1000 + 10_000, 120_000);
+
+  let resp: Response;
+  try {
+    resp = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${APIFY_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }, fetchTimeoutMs);
+  } catch (err: any) {
+    console.error(`Apify ${label} run submit failed (aborted/network): ${err?.message || err}`);
+    return { items: [], runId: null, datasetId: null };
+  }
 
   if (!resp.ok) {
-    const body = await resp.text();
+    const body = await resp.text().catch(() => '');
     console.error(`Apify ${label} failed: ${resp.status} — ${body.substring(0, 200)}`);
     return { items: [], runId: null, datasetId: null };
   }
 
-  const runData = await resp.json();
+  const runData = await resp.json().catch(() => ({}));
   let runId = runData?.data?.id || null;
   let status = runData?.data?.status;
   let datasetId = runData?.data?.defaultDatasetId || null;
 
-  // Poll if still running
+  // Poll if still running — cap total poll time at timeoutSecs so we respect the caller's budget.
   if (status === 'RUNNING' || status === 'READY') {
-    for (let i = 0; i < 60; i++) {
+    const pollBudgetMs = Math.min(timeoutSecs * 1000, 120_000);
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < pollBudgetMs) {
       await new Promise(r => setTimeout(r, 5000));
-      const pollResp = await fetch(`${APIFY_BASE}/actor-runs/${runId}`, {
-        headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
-      });
-      const pollData = await pollResp.json();
-      status = pollData?.data?.status;
-      datasetId = pollData?.data?.defaultDatasetId || datasetId;
-      if (status !== 'RUNNING' && status !== 'READY') break;
+      try {
+        const pollResp = await fetchWithTimeout(`${APIFY_BASE}/actor-runs/${runId}`, {
+          headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
+        }, 15_000);
+        const pollData = await pollResp.json().catch(() => ({}));
+        status = pollData?.data?.status;
+        datasetId = pollData?.data?.defaultDatasetId || datasetId;
+        if (status !== 'RUNNING' && status !== 'READY') break;
+      } catch (pollErr: any) {
+        // One poll failing is fine — try again next iteration. If we run out
+        // of budget, the while loop exits and we fall through to the status check.
+        console.warn(`Apify ${label} poll error: ${pollErr?.message || pollErr}`);
+      }
     }
   }
 
@@ -89,9 +123,9 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
   }
 
   try {
-    const itemsResp = await fetch(`${APIFY_BASE}/datasets/${datasetId}/items?limit=5000`, {
+    const itemsResp = await fetchWithTimeout(`${APIFY_BASE}/datasets/${datasetId}/items?limit=5000`, {
       headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
-    });
+    }, 30_000);
     if (!itemsResp.ok) {
       console.error(`Apify ${label}: dataset fetch failed (${itemsResp.status})`);
       return { items: [], runId, datasetId };
