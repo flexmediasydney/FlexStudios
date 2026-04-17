@@ -44,12 +44,15 @@ const subscriptions   = new Map(); // entityName → unsubscribeFn
 
 const CACHE_TTL  = 5 * 60 * 1000; // 5 minutes
 const LIST_LIMIT = 1000;           // default: fetch up to 1000; limit applied client-side
-// Large Pulse intelligence tables need higher limits
+// Large tables need higher fetch limits so per-page client-side slices don't silently drop rows
 const ENTITY_LIST_LIMITS = {
   PulseListing: 5000,
   PulseAgent: 5000,
   PulseAgency: 2000,
   PulseTimeline: 2000,
+  // ProjectTask can grow fast: ~17 tasks per project × hundreds of projects + revisions
+  ProjectTask: 5000,
+  TaskTimeLog: 5000,
 };
 const CACHE_PRUNE_INTERVAL = 10 * 60 * 1000; // prune every 10 minutes
 const MAX_SINGLE_CACHE_SIZE = 2000; // BUG FIX: cap singleCache to prevent unbounded memory growth

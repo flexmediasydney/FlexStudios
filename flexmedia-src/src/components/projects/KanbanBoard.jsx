@@ -401,8 +401,11 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
   const navigate = useNavigate();
   const { enabledFields } = useCardFields();
   // Bug fix: use tasks/timeLogs from parent when available to avoid duplicate entity subscriptions
-  const { data: fallbackTasks = [] } = useEntityList(!parentTasks ? "ProjectTask" : null, "-due_date", 500);
-  const { data: fallbackTimeLogs = [] } = useEntityList(!parentTimeLogs ? "TaskTimeLog" : null);
+  // IMPORTANT: 5000-row cap matches Projects.jsx — prevents partial task coverage silently
+  // truncating card task counts/effort estimates (was 500; project with 17 tasks would only
+  // get 14 fetched → card showed wrong values vs ProjectDetails).
+  const { data: fallbackTasks = [] } = useEntityList(!parentTasks ? "ProjectTask" : null, "-due_date", 5000);
+  const { data: fallbackTimeLogs = [] } = useEntityList(!parentTimeLogs ? "TaskTimeLog" : null, null, 5000);
   const allTasks = parentTasks || fallbackTasks;
   const allTimeLogs = parentTimeLogs || fallbackTimeLogs;
   const { prefetch: prefetchProject } = usePrefetchProjectDetails();

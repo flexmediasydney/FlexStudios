@@ -128,8 +128,10 @@ export default function Projects() {
    const { data: clients = [], loading: clientsLoading, error: clientsError, refetch: refetchClients } = useEntityList("Client", null, 100);
    
    // Secondary batch: loaded but not blocking
-   const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 300);
-   const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog", null, 50);
+   // IMPORTANT: limits must cover all active tasks/logs across visible projects.
+   // Previously 300/50 silently truncated — cards showed incomplete counts/effort.
+   const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 5000);
+   const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog", null, 5000);
    const { data: agents = [] } = useEntityList("Agent", null, 50);
    const { data: agencies = [] } = useEntityList("Agency", null, 50);
    const { data: teams = [] } = useEntityList("InternalTeam", null, 30);
