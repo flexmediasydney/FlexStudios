@@ -3,7 +3,7 @@
  * Manages REA scraper runs, cron schedule display, sync history,
  * suburb pool, and raw payload drill-through.
  */
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +19,7 @@ import {
   AlertTriangle, Loader2, Plus, Trash2, Settings2,
   ChevronDown, ChevronUp, Eye, MapPin, ToggleLeft, ToggleRight,
   ExternalLink, Repeat, Globe, Calendar, Coins, FileCode2,
+  User, XCircle, Activity,
 } from "lucide-react";
 
 // ── Source definitions ────────────────────────────────────────────────────────
@@ -314,27 +315,556 @@ function BoundingBoxDiagram({ region = "Greater Sydney", maxItems = 500 }) {
   );
 }
 
+// ── pulse_sync_runs data hook ─────────────────────────────────────────────────
+
+/**
+ * Fetch aggregated sync runs for a specific source_id from the pulse_sync_runs
+ * view (see migration 069_pulse_sync_runs_view.sql). Each "run" is 1-N
+ * pulseDataSync dispatches bucketed into a 15-minute window.
+ *
+ * Auto-refreshes every 15s while any run has in_progress dispatches. Drops to
+ * 60s polling once everything terminal (completed/failed). This keeps the UI
+ * live during a cron fan-out without hammering the DB when nothing's happening.
+ */
+function usePulseSyncRuns(sourceId, limit = 10) {
+  const [runs, setRuns] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const hasActive = useMemo(() => runs.some((r) => (r.in_progress || 0) > 0), [runs]);
+
+  useEffect(() => {
+    if (!sourceId) return;
+    let cancelled = false;
+
+    const fetchRuns = async () => {
+      try {
+        const { data, error } = await api._supabase
+          .from("pulse_sync_runs")
+          .select("*")
+          .eq("source_id", sourceId)
+          .order("run_started_at", { ascending: false })
+          .limit(limit);
+        if (error) throw error;
+        if (!cancelled) setRuns(data || []);
+      } catch (err) {
+        // Silent — view may not yet be deployed. Card still renders from lastLog.
+        console.warn("pulse_sync_runs fetch failed:", err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    fetchRuns();
+    // Faster polling while in-progress; slower when idle.
+    const intervalMs = hasActive ? 15000 : 60000;
+    const id = setInterval(fetchRuns, intervalMs);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [sourceId, limit, hasActive]);
+
+  return { runs, loading };
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
+
+// --- Triggered-by badge ---
+
+function TriggeredByBadge({ names }) {
+  if (!names || names.length === 0) {
+    return (
+      <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1">
+        <User className="h-2.5 w-2.5" />
+        Unknown
+      </Badge>
+    );
+  }
+  const isCron = names.length === 1 && names[0] === "Cron";
+  return (
+    <Badge
+      className={cn(
+        "text-[10px] px-1.5 py-0 gap-1",
+        isCron
+          ? "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+          : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+      )}
+    >
+      {isCron ? <Clock className="h-2.5 w-2.5" /> : <User className="h-2.5 w-2.5" />}
+      {names.join(", ")}
+    </Badge>
+  );
+}
+
+// --- Progress bar (green/blue-pulsing/red segments) ---
+
+function RunProgressBar({ run }) {
+  const total = run.total_dispatches || 0;
+  if (total === 0) return null;
+  const succeeded = run.succeeded || 0;
+  const failed = run.failed || 0;
+  const inProgress = run.in_progress || 0;
+  const pct = (n) => (total > 0 ? (n / total) * 100 : 0);
+
+  return (
+    <div className="w-full h-2 rounded-full bg-muted overflow-hidden flex">
+      {succeeded > 0 && (
+        <div className="h-full bg-emerald-500" style={{ width: `${pct(succeeded)}%` }} />
+      )}
+      {inProgress > 0 && (
+        <div
+          className="h-full bg-blue-500 animate-pulse"
+          style={{ width: `${pct(inProgress)}%` }}
+        />
+      )}
+      {failed > 0 && <div className="h-full bg-red-500" style={{ width: `${pct(failed)}%` }} />}
+    </div>
+  );
+}
+
+// --- Format duration in compact form ---
+
+function fmtDurationSec(sec) {
+  if (sec == null || isNaN(sec)) return "—";
+  if (sec < 60) return `${Math.round(sec)}s`;
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
+}
+
+// --- Per-dispatch (per-suburb) table shown when a run is expanded ---
+
+function DispatchTable({ dispatches = [], onDrill }) {
+  if (!dispatches.length) {
+    return <p className="text-[10px] text-muted-foreground py-2 italic">No dispatches.</p>;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-[10px]">
+        <thead>
+          <tr className="border-b border-border/50 text-muted-foreground">
+            <th className="text-left pb-1 font-medium">Suburb</th>
+            <th className="text-left pb-1 font-medium">Status</th>
+            <th className="text-right pb-1 font-medium">Duration</th>
+            <th className="text-right pb-1 font-medium">Fetched</th>
+            <th className="text-right pb-1 font-medium">New</th>
+            <th className="pb-1" />
+          </tr>
+        </thead>
+        <tbody>
+          {dispatches.map((d) => {
+            const suburbs = Array.isArray(d.suburbs) && d.suburbs.length > 0 ? d.suburbs : null;
+            const suburbLabel = suburbs ? suburbs.join(", ") : "—";
+            let statusEl;
+            if (d.status === "completed") {
+              statusEl = (
+                <span className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="h-2.5 w-2.5" />
+                  done
+                </span>
+              );
+            } else if (d.status === "running") {
+              statusEl = (
+                <span className="inline-flex items-center gap-0.5 text-blue-600 dark:text-blue-400 animate-pulse">
+                  <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  running
+                </span>
+              );
+            } else if (d.status === "failed") {
+              statusEl = (
+                <span className="inline-flex items-center gap-0.5 text-red-600 dark:text-red-400">
+                  <XCircle className="h-2.5 w-2.5" />
+                  failed
+                </span>
+              );
+            } else {
+              statusEl = <span className="text-muted-foreground">{d.status || "—"}</span>;
+            }
+            return (
+              <tr
+                key={d.id}
+                className={cn(
+                  "border-b border-border/30 last:border-0",
+                  onDrill && "hover:bg-muted/30 cursor-pointer transition-colors"
+                )}
+                onClick={onDrill ? () => onDrill(d.id) : undefined}
+              >
+                <td className="py-1 pr-2 font-medium max-w-[140px] truncate" title={suburbLabel}>
+                  {suburbLabel}
+                </td>
+                <td className="py-1 pr-2">{statusEl}</td>
+                <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
+                  {fmtDurationSec(d.duration_sec)}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {d.status === "running" ? "—" : (d.records_fetched ?? 0)}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums">
+                  {d.status === "running" ? "—" : (d.records_new ?? 0)}
+                </td>
+                <td className="py-1">
+                  {d.error_message && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-red-600 dark:text-red-400 text-[9px]"
+                      title={d.error_message}
+                    >
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      {String(d.error_message).slice(0, 40)}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// --- Single run summary block (latest run or historical entry) ---
+
+function RunSummary({ run, isBoundingBox, expanded, onToggle, onDrillDispatch }) {
+  const total = run.total_dispatches || 0;
+  const succeeded = run.succeeded || 0;
+  const failed = run.failed || 0;
+  const inProgress = run.in_progress || 0;
+  const allFailed = total > 0 && failed === total;
+  const hasPartialFail = failed > 0 && failed < total;
+  const runDurationSec = Math.max(
+    0,
+    Math.floor(
+      (new Date(run.run_last_activity || run.run_started_at).getTime() -
+        new Date(run.run_started_at).getTime()) /
+        1000
+    )
+  );
+  const isLongRunning = inProgress > 0 && runDurationSec > 600;
+
+  // Tint based on state
+  let tintClass = "";
+  if (allFailed) tintClass = "border-red-400/60 bg-red-50/60 dark:bg-red-950/20";
+  else if (hasPartialFail) tintClass = "border-amber-400/60 bg-amber-50/60 dark:bg-amber-950/20";
+  else if (inProgress > 0) tintClass = "border-blue-400/60 bg-blue-50/60 dark:bg-blue-950/20";
+
+  // Bounding-box special case: no progress bar, just status
+  if (isBoundingBox) {
+    const d = run.dispatches?.[0] || {};
+    return (
+      <div className={cn("rounded-md border px-2.5 py-2 text-[10px] space-y-1", tintClass)}>
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-1 text-muted-foreground uppercase tracking-wide font-semibold">
+            <Clock className="h-3 w-3" />
+            Last run · {fmtRelativeTs(run.run_started_at)}
+          </span>
+          <TriggeredByBadge names={run.triggered_by_names} />
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {d.status === "completed" && (
+            <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-medium">
+              <CheckCircle2 className="h-3 w-3" />
+              completed
+            </span>
+          )}
+          {d.status === "running" && (
+            <span className="inline-flex items-center gap-1 text-blue-700 dark:text-blue-400 font-medium animate-pulse">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              running…
+            </span>
+          )}
+          {d.status === "failed" && (
+            <span className="inline-flex items-center gap-1 text-red-700 dark:text-red-400 font-medium">
+              <XCircle className="h-3 w-3" />
+              failed
+            </span>
+          )}
+          <span className="text-muted-foreground">·</span>
+          <span className="tabular-nums">
+            {run.total_records_fetched?.toLocaleString() || 0} fetched
+          </span>
+          <span className="text-muted-foreground">·</span>
+          <span className="tabular-nums">
+            {run.total_records_new?.toLocaleString() || 0} new
+          </span>
+          <span className="text-muted-foreground">·</span>
+          <span>{fmtDurationSec(d.duration_sec ?? runDurationSec)}</span>
+        </div>
+        {d.error_message && (
+          <div className="pt-1 mt-1 border-t border-red-500/30 text-red-700 dark:text-red-400 font-mono break-all">
+            {String(d.error_message).slice(0, 200)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Per-suburb run
+  return (
+    <div className={cn("rounded-md border px-2.5 py-2 text-[10px] space-y-1.5", tintClass)}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 text-muted-foreground uppercase tracking-wide font-semibold">
+          <Clock className="h-3 w-3" />
+          Last run · {fmtRelativeTs(run.run_started_at)}
+          {isLongRunning && (
+            <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400 ml-1 normal-case tracking-normal">
+              <Clock className="h-2.5 w-2.5" />
+              long-running
+            </span>
+          )}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <TriggeredByBadge names={run.triggered_by_names} />
+          {onToggle && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              aria-label={expanded ? "Collapse" : "Expand"}
+            >
+              {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <RunProgressBar run={run} />
+
+      {/* Status counters */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="font-medium">
+          {succeeded + failed}/{total} suburbs
+          {inProgress > 0 && (
+            <span className="text-blue-600 dark:text-blue-400"> · {inProgress} in progress</span>
+          )}
+        </span>
+        {allFailed && (
+          <span className="text-red-700 dark:text-red-400 font-semibold">
+            All {failed} dispatches failed
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-3 flex-wrap text-muted-foreground">
+        <span className="inline-flex items-center gap-1">
+          <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+          <span className="tabular-nums">{succeeded}</span> succeeded
+        </span>
+        {inProgress > 0 && (
+          <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
+            <Activity className="h-3 w-3 animate-pulse" />
+            <span className="tabular-nums">{inProgress}</span> running
+          </span>
+        )}
+        <span
+          className={cn(
+            "inline-flex items-center gap-1",
+            failed > 0 && "text-red-600 dark:text-red-400 font-medium"
+          )}
+        >
+          <XCircle className="h-3 w-3" />
+          <span className="tabular-nums">{failed}</span> failed
+        </span>
+      </div>
+
+      {/* Records + duration */}
+      <div className="flex items-center gap-3 flex-wrap text-muted-foreground">
+        <span>
+          Records:{" "}
+          <span className="font-medium text-foreground tabular-nums">
+            {run.total_records_fetched?.toLocaleString() || 0}
+          </span>{" "}
+          fetched ·{" "}
+          <span className="font-medium text-foreground tabular-nums">
+            {run.total_records_new?.toLocaleString() || 0}
+          </span>{" "}
+          new
+        </span>
+        <span>·</span>
+        <span>Duration: {fmtDurationSec(runDurationSec)}</span>
+      </div>
+
+      {/* Failed-suburbs list on partial fail */}
+      {hasPartialFail && !expanded && (
+        <div className="text-[10px] text-red-700 dark:text-red-400 border-t border-red-500/20 pt-1 mt-1">
+          Failed:{" "}
+          {run.dispatches
+            ?.filter((d) => d.status === "failed")
+            .flatMap((d) => d.suburbs || [])
+            .slice(0, 5)
+            .join(", ") || "(see detail)"}
+        </div>
+      )}
+
+      {/* Expanded per-suburb detail */}
+      {expanded && (
+        <div className="mt-2 pt-2 border-t border-border/50">
+          <DispatchTable dispatches={run.dispatches || []} onDrill={onDrillDispatch} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Multi-run history list (compact single-line summaries) ---
+
+function RunHistoryList({ runs, isBoundingBox, onDrillDispatch }) {
+  const [expandedRunId, setExpandedRunId] = useState(null);
+  if (!runs.length) return null;
+
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+        <Activity className="h-3 w-3" />
+        Run history · {runs.length}
+      </div>
+      <div className="rounded-md border bg-background/60 divide-y divide-border/50">
+        {runs.map((r) => {
+          const key = `${r.source_id}__${r.run_bucket}`;
+          const isOpen = expandedRunId === key;
+          const total = r.total_dispatches || 0;
+          const succeeded = r.succeeded || 0;
+          const failed = r.failed || 0;
+          const inProgress = r.in_progress || 0;
+          const triggeredByName = r.triggered_by_names?.[0] || "—";
+
+          return (
+            <div key={key}>
+              <button
+                type="button"
+                onClick={() => setExpandedRunId(isOpen ? null : key)}
+                className="w-full px-2 py-1.5 text-[10px] text-left hover:bg-muted/30 transition-colors flex items-center gap-2"
+              >
+                <span className="text-muted-foreground tabular-nums w-[84px] shrink-0">
+                  {fmtTs(r.run_started_at)}
+                </span>
+                {isBoundingBox ? (
+                  <span className="tabular-nums">
+                    {succeeded > 0 && (
+                      <span className="text-emerald-600 dark:text-emerald-400">✓</span>
+                    )}
+                    {failed > 0 && <span className="text-red-600 dark:text-red-400">✗</span>}
+                    {inProgress > 0 && (
+                      <span className="text-blue-600 dark:text-blue-400 animate-pulse">●</span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="tabular-nums font-medium">
+                    <span className="text-emerald-600 dark:text-emerald-400">{succeeded}</span>/
+                    <span>{total}</span>
+                    {failed > 0 && (
+                      <span className="text-red-600 dark:text-red-400"> · {failed}✗</span>
+                    )}
+                    {inProgress > 0 && (
+                      <span className="text-blue-600 dark:text-blue-400 animate-pulse">
+                        {" "}· {inProgress}●
+                      </span>
+                    )}
+                  </span>
+                )}
+                <span className="text-muted-foreground tabular-nums">
+                  {(r.total_records_fetched || 0).toLocaleString()} rec
+                  {r.total_records_new > 0 && (
+                    <span className="text-foreground"> ({r.total_records_new.toLocaleString()} new)</span>
+                  )}
+                </span>
+                <span className="ml-auto text-muted-foreground truncate max-w-[90px]" title={triggeredByName}>
+                  by {triggeredByName}
+                </span>
+                {isOpen ? (
+                  <ChevronUp className="h-3 w-3 shrink-0" />
+                ) : (
+                  <ChevronDown className="h-3 w-3 shrink-0" />
+                )}
+              </button>
+              {isOpen && (
+                <div className="px-2 py-2 bg-muted/20">
+                  <DispatchTable dispatches={r.dispatches || []} onDrill={onDrillDispatch} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// --- Empty-state: no runs yet ---
+
+function NoRunsYet() {
+  return (
+    <div className="rounded-md border border-dashed px-2.5 py-3 text-center text-[10px] text-muted-foreground">
+      No runs yet — click <span className="font-semibold">Run Now</span> to trigger.
+    </div>
+  );
+}
+
+// --- "Dispatched but no logs" placeholder ---
+
+function DispatchedNoLogs() {
+  return (
+    <div className="rounded-md border px-2.5 py-2 text-[10px] space-y-1 border-blue-400/60 bg-blue-50/60 dark:bg-blue-950/20">
+      <div className="flex items-center gap-1 font-medium text-blue-700 dark:text-blue-400">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Dispatched but no sync logs yet — syncs may be queuing
+      </div>
+    </div>
+  );
+}
 
 // --- Source Card (enhanced) ---
 
-function SourceCard({ source, lastLog, sourceConfig, activeSuburbCount, isRunning, onRun, onOpenPayload, onOpenSchedule }) {
+function SourceCard({ source, lastLog, sourceConfig, pulseTimeline, activeSuburbCount, isRunning, onRun, onOpenPayload, onOpenSchedule, onDrillDispatch }) {
   const Icon = source.icon;
   const lastStatus = lastLog?.status;
   const [showInput, setShowInput] = useState(false);
+  const [runExpanded, setRunExpanded] = useState(false);
+
+  // Pull aggregated runs from the view. First run is the "latest"; rest are history.
+  const { runs: syncRuns } = usePulseSyncRuns(source.source_id, 10);
+  const latestRun = syncRuns[0] || null;
+  const historyRuns = syncRuns.slice(1);
+  const isBoundingBox =
+    source.approach === "bounding_box" || source.source_id.startsWith("rea_listings_bb");
+
+  // Detect "cron_dispatched" event without a matching sync_log (queuing state)
+  const hasRecentDispatchWithoutLog = useMemo(() => {
+    if (latestRun || !Array.isArray(pulseTimeline)) return false;
+    const now = Date.now();
+    return pulseTimeline.some((ev) => {
+      if (ev.event_type !== "cron_dispatched") return false;
+      const newVal = ev.new_value;
+      if (newVal?.source_id && newVal.source_id !== source.source_id) return false;
+      // For bounding-box, match on title containing the source label
+      if (!newVal?.source_id && !(ev.title || "").includes(source.label.split(" ")[1] || "")) {
+        return false;
+      }
+      const ageMs = now - new Date(ev.created_at).getTime();
+      return ageMs < 10 * 60 * 1000; // within 10 minutes
+    });
+  }, [pulseTimeline, latestRun, source]);
 
   // Use last_run_at from source_configs if available, else fallback to last log timestamp
-  const lastRunAt = sourceConfig?.last_run_at || lastLog?.completed_at || lastLog?.started_at || null;
-  const summary = lastLog?.result_summary || {};
+  const lastRunAt =
+    latestRun?.run_started_at ||
+    sourceConfig?.last_run_at ||
+    lastLog?.completed_at ||
+    lastLog?.started_at ||
+    null;
 
   // Status traffic light
   let statusDot = "bg-gray-300";
-  if (lastStatus === "completed") statusDot = "bg-emerald-500";
+  if (latestRun) {
+    if (latestRun.in_progress > 0) statusDot = "bg-blue-500 animate-pulse";
+    else if (latestRun.failed === latestRun.total_dispatches) statusDot = "bg-red-500";
+    else if (latestRun.failed > 0) statusDot = "bg-amber-500";
+    else if (latestRun.succeeded > 0) statusDot = "bg-emerald-500";
+  } else if (lastStatus === "completed") statusDot = "bg-emerald-500";
   else if (lastStatus === "running") statusDot = "bg-blue-500 animate-pulse";
   else if (lastStatus === "failed") statusDot = "bg-red-500";
 
   // Red if >2 days old for daily sources, >9 days for weekly
-  if (lastRunAt) {
+  if (lastRunAt && statusDot !== "bg-blue-500 animate-pulse") {
     const ageMs = Date.now() - new Date(lastRunAt).getTime();
     const ageDays = ageMs / 86400000;
     const limit = source.schedule?.includes("Weekly") ? 9 : 2;
@@ -429,44 +959,41 @@ function SourceCard({ source, lastLog, sourceConfig, activeSuburbCount, isRunnin
           )}
         </div>
 
-        {/* Last run summary */}
-        <div className="rounded-md bg-background/60 border px-2.5 py-2 text-[10px] space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <Clock className="h-3 w-3" />
-              Last run
-            </span>
-            <span className="font-medium">{fmtRelativeTs(lastRunAt)}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-muted-foreground">
-              {lastStatus === "completed" ? <CheckCircle2 className="h-3 w-3 text-emerald-500" /> :
-               lastStatus === "failed" ? <AlertTriangle className="h-3 w-3 text-red-500" /> :
-               <Database className="h-3 w-3" />}
-              Records
-            </span>
-            <span className="font-medium">{lastLog ? recordsSummary(lastLog) : "—"}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <Calendar className="h-3 w-3" />
-              Next run
-            </span>
-            <span className="font-medium">{nextCronLabel(source.schedule)}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <Coins className="h-3 w-3" />
-              Est. cost
-            </span>
-            <span className="font-medium">{source.cost_note}</span>
-          </div>
-          {lastStatus === "failed" && summary.error && (
-            <div className="mt-1 pt-1 border-t border-red-500/30 text-red-600 dark:text-red-400 text-[10px] font-mono break-all">
-              {String(summary.error).substring(0, 120)}
-            </div>
-          )}
+        {/* Last run summary — uses pulse_sync_runs view (multi-dispatch aware) */}
+        {latestRun ? (
+          <RunSummary
+            run={latestRun}
+            isBoundingBox={isBoundingBox}
+            expanded={runExpanded}
+            onToggle={isBoundingBox ? null : () => setRunExpanded((v) => !v)}
+            onDrillDispatch={onDrillDispatch}
+          />
+        ) : hasRecentDispatchWithoutLog ? (
+          <DispatchedNoLogs />
+        ) : (
+          <NoRunsYet />
+        )}
+
+        {/* Next run + cost, small line */}
+        <div className="flex items-center justify-between text-[10px] text-muted-foreground px-1">
+          <span className="flex items-center gap-1">
+            <Calendar className="h-3 w-3" />
+            Next: <span className="font-medium text-foreground">{nextCronLabel(source.schedule)}</span>
+          </span>
+          <span className="flex items-center gap-1">
+            <Coins className="h-3 w-3" />
+            <span className="font-medium text-foreground">{source.cost_note}</span>
+          </span>
         </div>
+
+        {/* Multi-run history (collapsed list) */}
+        {historyRuns.length > 0 && (
+          <RunHistoryList
+            runs={historyRuns.slice(0, 5)}
+            isBoundingBox={isBoundingBox}
+            onDrillDispatch={onDrillDispatch}
+          />
+        )}
 
         {/* Actions */}
         <div className="flex items-center gap-1.5">
@@ -903,6 +1430,27 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
 
   const activeSuburbCount = useMemo(() => targetSuburbs.filter((s) => s.is_active).length, [targetSuburbs]);
 
+  // Open the drill dialog for a given sync_log id (looked up in the list first,
+  // else fetched directly). Used by the per-suburb DispatchTable row clicks —
+  // we only have IDs in the pulse_sync_runs view, not full payloads.
+  const handleDrillDispatch = useCallback(
+    async (syncLogId) => {
+      if (!syncLogId) return;
+      const existing = syncLogs.find((l) => l.id === syncLogId);
+      if (existing) {
+        setDrillLog(existing);
+        return;
+      }
+      try {
+        const log = await api.entities.PulseSyncLog.get(syncLogId);
+        if (log) setDrillLog(log);
+      } catch (err) {
+        toast.error(`Could not load payload: ${err.message}`);
+      }
+    },
+    [syncLogs]
+  );
+
   // Last log per source
   const lastLogBySource = useMemo(() => {
     const map = {};
@@ -1013,11 +1561,13 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
               source={source}
               lastLog={lastLogBySource[source.source_id]}
               sourceConfig={sourceConfigByIdMap[source.source_id]}
+              pulseTimeline={pulseTimeline}
               activeSuburbCount={activeSuburbCount}
               isRunning={runningSources.has(source.source_id)}
               onRun={runSource}
               onOpenPayload={setDrillLog}
               onOpenSchedule={setScheduleSource}
+              onDrillDispatch={handleDrillDispatch}
             />
           ))}
         </div>
