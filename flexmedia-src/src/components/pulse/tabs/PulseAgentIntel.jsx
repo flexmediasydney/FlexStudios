@@ -11,11 +11,13 @@
  */
 
 import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +49,7 @@ import {
   Activity,
   Download,
   Clock,
+  Loader2,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 
@@ -957,6 +960,38 @@ const SORT_COLS = {
   suburb: (a) => (a.agency_suburb || "").toLowerCase(),
 };
 
+// UI-sort-key → DB column. PostgREST only understands real column names;
+// our sort UI uses short human-ish keys that we translate here. Keys
+// missing from this map fall back to sales_as_lead desc (a sensible default).
+const SERVER_SORT_MAP = {
+  sales_as_lead: "sales_as_lead",
+  total_listings_active: "total_listings_active",
+  avg_sold_price: "avg_sold_price",
+  avg_days_on_market: "avg_days_on_market",
+  rea_rating: "rea_rating",
+  name: "full_name",
+  agency: "agency_name",
+  suburb: "agency_suburb",
+};
+
+// CSV export cap (same rationale as PulseListings).
+const CSV_EXPORT_CAP_AGENTS = 10000;
+
+// localStorage — page-size choice + auto-refresh toggle persist per-tab.
+const LS_PAGE_SIZE_KEY = "pulse_agents_page_size";
+const LS_AUTO_REFRESH_KEY = "pulse_agents_auto_refresh";
+const AUTO_REFRESH_INTERVAL_MS = 60_000;
+
+function readStoredPageSize() {
+  if (typeof window === "undefined") return 50;
+  const raw = Number(window.localStorage.getItem(LS_PAGE_SIZE_KEY));
+  return PAGE_SIZE_OPTIONS.includes(raw) ? raw : 50;
+}
+function readStoredAutoRefresh() {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(LS_AUTO_REFRESH_KEY) === "1";
+}
+
 export default function PulseAgentIntel({
   pulseAgents = [],
   pulseAgencies = [],
@@ -975,12 +1010,22 @@ export default function PulseAgentIntel({
   const [agentFilter, setAgentFilter] = useState("all"); // all | not_in_crm | in_crm
   const [integrityFilter, setIntegrityFilter] = useState("all"); // all | high | medium | low
   const [mappingFilter, setMappingFilter] = useState("all"); // all | mapped | suggested | unmapped
-  const [pageSize, setPageSize] = useState(50);
+  // Page size persists in localStorage so the user's choice survives reloads.
+  const [pageSize, setPageSize] = useState(readStoredPageSize);
   const [agentSort, setAgentSort] = useState({ col: "sales_as_lead", dir: "desc" });
   const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: "" });
   const [agentPage, setAgentPage] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [addToCrmCandidate, setAddToCrmCandidate] = useState(null);
+  // Auto-refresh — opt-in, 60s. Same rationale as PulseListings.
+  const [autoRefresh, setAutoRefresh] = useState(readStoredAutoRefresh);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_PAGE_SIZE_KEY, String(pageSize)); } catch { /* quota / SSR */ }
+  }, [pageSize]);
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_AUTO_REFRESH_KEY, autoRefresh ? "1" : "0"); } catch { /* quota / SSR */ }
+  }, [autoRefresh]);
 
   // ── Build mapping-status lookup keyed by pulse_agent_id ────────────────────
   const mappingByAgent = useMemo(() => {
@@ -1025,106 +1070,153 @@ export default function PulseAgentIntel({
     []
   );
 
-  // ── Filtered + sorted + paginated agents ─────────────────────────────────
-  const { filtered, paginated, totalPages, totalCount } = useMemo(() => {
-    const q = (search || "").toLowerCase().trim();
-    const agencyQ = agentColFilters.agency.toLowerCase().trim();
-    const suburbQ = agentColFilters.suburb.toLowerCase().trim();
+  // ── Reset page on filter change (server-pagination refactor: all filters
+  //    drive a new query, so the page index must reset or we'd page past).
+  useEffect(() => {
+    setAgentPage(0);
+  }, [agentFilter, integrityFilter, mappingFilter, agentColFilters.agency, agentColFilters.suburb, search, agentSort.col, agentSort.dir, pageSize]);
 
-    let list = pulseAgents;
+  // ── Server-side query builder ─────────────────────────────────────────────
+  // Returns a PostgREST query with every server-applicable filter applied.
+  // Mapping filter is the ONE filter that stays client-side — it depends on
+  // pulseMappings which is a separate table fetch; joining would force a view.
+  const buildQuery = useCallback((selectCols, withCount) => {
+    let q = api._supabase
+      .from("pulse_agents")
+      .select(selectCols, withCount ? { count: "exact" } : undefined);
 
-    // Status filter
-    if (agentFilter === "not_in_crm") list = list.filter((a) => !a.is_in_crm);
-    else if (agentFilter === "in_crm") list = list.filter((a) => a.is_in_crm);
+    // Status filter (in-CRM)
+    if (agentFilter === "not_in_crm") q = q.eq("is_in_crm", false);
+    else if (agentFilter === "in_crm") q = q.eq("is_in_crm", true);
 
     // Integrity score filter
-    if (integrityFilter === "high") list = list.filter((a) => (a.data_integrity_score ?? 0) >= 80);
-    else if (integrityFilter === "medium")
-      list = list.filter((a) => {
-        const s = a.data_integrity_score ?? 0;
-        return s >= 50 && s < 80;
-      });
-    else if (integrityFilter === "low")
-      list = list.filter((a) => (a.data_integrity_score ?? 0) < 50);
+    if (integrityFilter === "high") q = q.gte("data_integrity_score", 80);
+    else if (integrityFilter === "medium") q = q.gte("data_integrity_score", 50).lt("data_integrity_score", 80);
+    else if (integrityFilter === "low") q = q.lt("data_integrity_score", 50);
 
-    // Mapping-status filter
-    if (mappingFilter !== "all") {
-      list = list.filter((a) => {
+    // Column filters
+    const agencyQ = (agentColFilters.agency || "").trim();
+    if (agencyQ) {
+      q = q.ilike("agency_name", `%${agencyQ.replace(/[%_]/g, "\\$&")}%`);
+    }
+    const suburbQ = (agentColFilters.suburb || "").trim();
+    if (suburbQ) {
+      q = q.ilike("agency_suburb", `%${suburbQ.replace(/[%_]/g, "\\$&")}%`);
+    }
+
+    // Global search (OR across name/agency/email/mobile/suburb/job_title)
+    const globalQ = (search || "").trim();
+    if (globalQ) {
+      const s = globalQ.replace(/[%_]/g, "\\$&");
+      q = q.or(`full_name.ilike.%${s}%,agency_name.ilike.%${s}%,email.ilike.%${s}%,mobile.ilike.%${s}%,agency_suburb.ilike.%${s}%,job_title.ilike.%${s}%`);
+    }
+
+    // Sort — translate UI sort-key to DB column, fall back to sales_as_lead
+    const sortCol = SERVER_SORT_MAP[agentSort.col] || "sales_as_lead";
+    q = q.order(sortCol, { ascending: agentSort.dir === "asc", nullsFirst: false });
+
+    return q;
+  }, [agentFilter, integrityFilter, agentColFilters, search, agentSort]);
+
+  // Page fetch
+  const queryKey = useMemo(
+    () => ["pulse-agents-page", {
+      agentFilter, integrityFilter,
+      agency: agentColFilters.agency, suburb: agentColFilters.suburb,
+      search, sortCol: agentSort.col, sortDir: agentSort.dir,
+      page: agentPage, pageSize,
+    }],
+    [agentFilter, integrityFilter, agentColFilters, search, agentSort, agentPage, pageSize],
+  );
+
+  const { data: pageData, isLoading, isFetching } = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const from = agentPage * pageSize;
+      // We overfetch by a modest factor when the mapping filter is engaged
+      // so the client-side narrow has enough rows to populate a full page.
+      // For non-mapping filters this is a plain single page.
+      const overfetch = mappingFilter === "all" ? 0 : pageSize * 3;
+      const to = from + pageSize - 1 + overfetch;
+      const q = buildQuery("*", true).range(from, to);
+      const { data: rows, count, error } = await q;
+      if (error) throw error;
+      return { rows: rows || [], count: count || 0 };
+    },
+    keepPreviousData: true,
+    staleTime: 30_000,
+    refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
+
+  // Apply the ONE client-side filter (mapping status) to the fetched page.
+  const paginated = useMemo(() => {
+    const rows = pageData?.rows || [];
+    if (mappingFilter === "all") return rows.slice(0, pageSize);
+    const narrowed = rows.filter((a) => {
+      const conf = mappingByAgent.get(a.id);
+      if (mappingFilter === "mapped") return conf === "mapped" || a.is_in_crm;
+      if (mappingFilter === "suggested") return conf === "suggested";
+      if (mappingFilter === "unmapped") return !conf && !a.is_in_crm;
+      return true;
+    });
+    return narrowed.slice(0, pageSize);
+  }, [pageData, mappingFilter, mappingByAgent, pageSize]);
+
+  const totalCount = pageData?.count || 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const safePage = Math.min(agentPage, totalPages - 1);
+  const showingStart = totalCount === 0 ? 0 : safePage * pageSize + 1;
+  const showingEnd = Math.min(showingStart + paginated.length - 1, totalCount);
+
+  // `filtered` is exposed to the CSV button; we reshape this to a lazy-ish
+  // "server filtered count" so button disable logic still works.
+  const filteredLength = totalCount;
+
+  const [exporting, setExporting] = useState(false);
+  // CSV export of currently-filtered set — fetches ENTIRE filtered set from
+  // server (up to CSV_EXPORT_CAP_AGENTS), NOT just the current page.
+  const handleExportCsv = useCallback(async () => {
+    setExporting(true);
+    try {
+      const cap = Math.min(totalCount, CSV_EXPORT_CAP_AGENTS);
+      if (totalCount > CSV_EXPORT_CAP_AGENTS) {
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+          `Filter matches ${totalCount.toLocaleString()} agents. Only the first ${CSV_EXPORT_CAP_AGENTS.toLocaleString()} will export. Continue?`,
+        );
+        if (!ok) { setExporting(false); return; }
+      }
+      const all = [];
+      for (let off = 0; off < cap; off += 1000) {
+        const end = Math.min(off + 999, cap - 1);
+        const { data: chunk, error } = await buildQuery("*", false).range(off, end);
+        if (error) throw error;
+        all.push(...(chunk || []));
+        if (!chunk || chunk.length < 1000) break;
+      }
+      // Apply the mapping filter AFTER the fetch when active
+      const filteredAll = mappingFilter === "all" ? all : all.filter((a) => {
         const conf = mappingByAgent.get(a.id);
         if (mappingFilter === "mapped") return conf === "mapped" || a.is_in_crm;
         if (mappingFilter === "suggested") return conf === "suggested";
         if (mappingFilter === "unmapped") return !conf && !a.is_in_crm;
         return true;
       });
+      const header = [
+        "full_name", "agency_name", "agency_suburb", "email", "mobile",
+        "job_title", "data_integrity_score", "total_listings_active", "sales_as_lead",
+        "avg_sold_price", "avg_days_on_market", "rea_rating", "is_in_crm",
+        "rea_agent_id", "last_synced_at",
+      ];
+      exportCsv(`pulse_agents_${new Date().toISOString().slice(0, 10)}.csv`, header, filteredAll);
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      window.alert(`CSV export failed: ${err?.message || err}`);
+    } finally {
+      setExporting(false);
     }
-
-    // Column filters
-    if (agencyQ) {
-      list = list.filter((a) =>
-        (a.agency_name || "").toLowerCase().includes(agencyQ)
-      );
-    }
-    if (suburbQ) {
-      list = list.filter((a) =>
-        (a.agency_suburb || "").toLowerCase().includes(suburbQ)
-      );
-    }
-
-    // Global search
-    if (q) {
-      list = list.filter((a) => {
-        const haystack = [
-          a.full_name,
-          a.agency_name,
-          a.email,
-          a.mobile,
-          a.agency_suburb,
-          a.job_title,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(q);
-      });
-    }
-
-    // Sort
-    const accessor = SORT_COLS[agentSort.col] || SORT_COLS.sales_as_lead;
-    const dir = agentSort.dir === "asc" ? 1 : -1;
-    list = [...list].sort((a, b) => {
-      const va = accessor(a);
-      const vb = accessor(b);
-      if (va < vb) return -1 * dir;
-      if (va > vb) return 1 * dir;
-      return 0;
-    });
-
-    const totalCount = list.length;
-    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
-    const safePageIndex = Math.min(agentPage, totalPages - 1);
-    const paginated = list.slice(safePageIndex * pageSize, (safePageIndex + 1) * pageSize);
-
-    return { filtered: list, paginated, totalPages, totalCount };
-  }, [pulseAgents, agentFilter, integrityFilter, mappingFilter, mappingByAgent, agentColFilters, search, agentSort, agentPage, pageSize]);
-
-  const safePage = Math.min(agentPage, totalPages - 1);
-  const showingStart = safePage * pageSize + 1;
-  const showingEnd = Math.min(showingStart + pageSize - 1, totalCount);
-
-  // CSV export of currently-filtered set
-  const handleExportCsv = useCallback(() => {
-    const header = [
-      "full_name", "agency_name", "agency_suburb", "email", "mobile",
-      "job_title", "data_integrity_score", "total_listings_active", "sales_as_lead",
-      "avg_sold_price", "avg_days_on_market", "rea_rating", "is_in_crm",
-      "rea_agent_id", "last_synced_at",
-    ];
-    exportCsv(
-      `pulse_agents_${new Date().toISOString().slice(0, 10)}.csv`,
-      header,
-      filtered
-    );
-  }, [filtered]);
+  }, [buildQuery, totalCount, mappingFilter, mappingByAgent]);
 
   function handleColFilterChange(col, val) {
     setAgentColFilters((prev) => ({ ...prev, [col]: val }));
@@ -1208,16 +1300,32 @@ export default function PulseAgentIntel({
             size="sm"
             className="h-7 px-2 text-xs gap-1"
             onClick={handleExportCsv}
-            disabled={filtered.length === 0}
-            title="Export filtered agents as CSV"
+            disabled={filteredLength === 0 || exporting}
+            title="Export filtered agents as CSV (server-side, up to 10k rows)"
           >
-            <Download className="h-3 w-3" />
+            {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
             CSV
           </Button>
+          {/* Auto-refresh toggle — opt-in 60s. Agents data changes slowly. */}
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none"
+            title="Auto-refresh every 60s"
+          >
+            <Switch
+              checked={autoRefresh}
+              onCheckedChange={setAutoRefresh}
+              aria-label="Auto-refresh every 60s"
+            />
+            <span>Auto-refresh</span>
+          </label>
           <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-            {totalCount > 0
-              ? `${showingStart.toLocaleString()}–${showingEnd.toLocaleString()} of ${totalCount.toLocaleString()}`
-              : "No results"}
+            {isFetching ? (
+              <Loader2 className="inline h-3 w-3 animate-spin" />
+            ) : totalCount > 0 ? (
+              `${showingStart.toLocaleString()}–${showingEnd.toLocaleString()} of ${totalCount.toLocaleString()}`
+            ) : (
+              "No results"
+            )}
           </span>
         </div>
       </div>
@@ -1344,7 +1452,18 @@ export default function PulseAgentIntel({
 
             {/* ── tbody ── */}
             <tbody>
-              {paginated.length === 0 && (
+              {isLoading && paginated.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={12}
+                    className="py-12 text-center text-sm text-muted-foreground"
+                  >
+                    <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
+                    Loading agents…
+                  </td>
+                </tr>
+              )}
+              {!isLoading && paginated.length === 0 && (
                 <tr>
                   <td
                     colSpan={12}
