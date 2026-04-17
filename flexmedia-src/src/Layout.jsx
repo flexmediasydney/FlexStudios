@@ -305,6 +305,7 @@ function LayoutContent({ currentPageName, children }) {
           can("SalesCommand") && { name: "Sales Command", href: "SalesCommand", icon: Crosshair },
           can("IndustryPulse") && { name: "Industry Pulse", href: "IndustryPulse", icon: Rss },
           can("Prospecting") && { name: "Pipeline", href: "Prospecting", icon: Target },
+          can("PropertyProspects") && { name: "Property Prospects", href: "PropertyProspects", icon: Target },
           can("SalesMap") && { name: "Sales Map", href: "SalesMap", icon: MapPin },
           can("ClientMonitor") && { name: "Client Retention", href: "ClientMonitor", icon: UserCheck },
           can("TalentPulse") && { name: "Talent Pulse", href: "TalentPulse", icon: Briefcase },

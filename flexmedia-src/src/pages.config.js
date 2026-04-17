@@ -94,6 +94,8 @@ const Products = React.lazy(() => import('./pages/Products'));
 const ProjectDetails = React.lazy(() => import('./pages/ProjectDetails'));
 const Properties = React.lazy(() => import('./pages/Properties'));
 const PropertyDetails = React.lazy(() => import('./pages/PropertyDetails'));
+const PropertyProspects = React.lazy(() => import('./pages/PropertyProspects'));
+const PropertyMergeTool = React.lazy(() => import('./pages/PropertyMergeTool'));
 const Projects = React.lazy(() => import('./pages/Projects'));
 const ProspectDetails = React.lazy(() => import('./pages/ProspectDetails'));
 const Prospecting = React.lazy(() => import('./pages/Prospecting'));
@@ -151,6 +153,8 @@ export const PAGES = {
     "Projects": Projects,
     "Properties": Properties,
     "PropertyDetails": PropertyDetails,
+    "PropertyProspects": PropertyProspects,
+    "PropertyMergeTool": PropertyMergeTool,
     "ProspectDetails": ProspectDetails,
     "Prospecting": Prospecting,
     "Reports": Reports,
