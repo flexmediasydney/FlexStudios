@@ -216,14 +216,50 @@ export default function EmailInboxMain() {
     return filters;
   }, [filterView]);
 
-  // Paginated email loading: fetch 50 at a time instead of all 5000
-  const PAGE_SIZE = 50;
+  // Paginated email loading — THREADS per page, not messages.
+  // Previous bug: paginating messages yielded ~45 threads per 50 messages
+  // (because a thread has multiple messages and they got grouped client-side).
+  // Fix: server-side RPC `get_inbox_threads` returns N WHOLE threads with
+  // their messages pre-aggregated as JSONB. One RPC call = N complete threads,
+  // and pagination advances by thread count — not message count.
+  const THREAD_PAGE_SIZE = 50;
   const [messages, setMessages] = useState([]);
   const [messagesLoading, setMessagesLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
-  const messagesOffsetRef = useRef(0);
+  const [totalThreadCount, setTotalThreadCount] = useState(null); // Diagnostic: total threads available
+  const threadOffsetRef = useRef(0);
   const messageFilterKeyRef = useRef(null);
+
+  // Map our internal filterView + feature filters to RPC parameters.
+  // The RPC accepts: folder, account_ids, search, unread_only, limit, offset.
+  const rpcParamsForCurrentView = useCallback((limit, offset) => {
+    // account_ids: null = all user accounts; specific = filter to one
+    // Frontend-side account filtering by UI still runs via `filteredThreads`
+    // useMemo, so we pass NULL here (send all accounts' threads, let the
+    // client filter by `accountFilter`). We DO pass the full userAccountIds
+    // list so RLS security still holds via backend — but that's enforced
+    // in RLS policies already.
+    return {
+      p_folder: filterView || 'inbox',
+      p_account_ids: null,
+      p_search: null, // Client-side search still operates on fetched threads
+      p_unread_only: false, // Client-side filter still applies
+      p_limit: limit,
+      p_offset: offset,
+    };
+  }, [filterView]);
+
+  // Flatten an RPC response's threads into a messages array (so the existing
+  // `threads` useMemo can re-group by gmail_thread_id and all downstream code
+  // keeps working unchanged).
+  const flattenThreadsToMessages = (threads) => {
+    const out = [];
+    for (const t of threads || []) {
+      for (const m of t.messages || []) out.push(m);
+    }
+    return out;
+  };
 
   // Initial fetch + reset when filters change
   useEffect(() => {
@@ -232,31 +268,35 @@ export default function EmailInboxMain() {
 
     // Reset pagination state when filters change
     messageFilterKeyRef.current = filterKey;
-    messagesOffsetRef.current = 0;
+    threadOffsetRef.current = 0;
     setMessages([]);
     setMessagesLoading(true);
     setHasMoreMessages(true);
+    setTotalThreadCount(null);
 
     const fetchInitial = async () => {
       try {
-        const result = await api.entities.EmailMessage.filterPaginated(
-          messageFilters, '-received_at', PAGE_SIZE, 0
-        );
+        const result = await api.rpc('get_inbox_threads', rpcParamsForCurrentView(THREAD_PAGE_SIZE, 0));
         if (isMounted && messageFilterKeyRef.current === filterKey) {
-          setMessages(result.data);
-          setHasMoreMessages(result.hasMore);
-          messagesOffsetRef.current = result.data.length;
+          const fetchedThreads = result?.threads || [];
+          setMessages(flattenThreadsToMessages(fetchedThreads));
+          setHasMoreMessages(Boolean(result?.has_more));
+          setTotalThreadCount(result?.total_count ?? null);
+          threadOffsetRef.current = fetchedThreads.length;
           setMessagesLoading(false);
         }
       } catch (error) {
-        console.error('Failed to fetch emails:', error);
+        console.error('Failed to fetch inbox threads:', error);
         if (isMounted) setMessagesLoading(false);
       }
     };
 
     fetchInitial();
 
-    // Real-time subscription: new emails appear at top instantly
+    // Real-time subscription: new emails appear at top instantly.
+    // The DB trigger keeps email_conversations in sync, so the next
+    // pagination fetch will reflect changes; this subscription handles
+    // the between-fetches state for immediate feedback.
     const unsubscribe = api.entities.EmailMessage.subscribe((event) => {
       if (!isMounted || messageFilterKeyRef.current !== filterKey) return;
 
@@ -266,7 +306,6 @@ export default function EmailInboxMain() {
             if (prev.some(item => item.id === event.data?.id)) return prev;
             return [event.data, ...prev];
           });
-          messagesOffsetRef.current += 1;
         }
       } else if (event.type === 'update') {
         if (matchesMessageFilter(event.data, messageFilters)) {
@@ -277,16 +316,11 @@ export default function EmailInboxMain() {
             }
             return [event.data, ...prev];
           });
-          // Offset only increases if it was a new addition (not an in-place update)
-          // — small imprecision is fine, dedup in loadMore handles edge cases
         } else {
-          // Entity no longer matches filter — remove it
           setMessages((prev) => prev.filter(item => item.id !== event.id));
-          messagesOffsetRef.current = Math.max(0, messagesOffsetRef.current - 1);
         }
       } else if (event.type === 'delete') {
         setMessages((prev) => prev.filter(item => item.id !== event.id));
-        messagesOffsetRef.current = Math.max(0, messagesOffsetRef.current - 1);
       }
     });
 
@@ -300,37 +334,40 @@ export default function EmailInboxMain() {
     if (loadingMore || !hasMoreMessages) return;
     setLoadingMore(true);
     try {
-      const result = await api.entities.EmailMessage.filterPaginated(
-        messageFilters, '-received_at', PAGE_SIZE, messagesOffsetRef.current
+      const result = await api.rpc(
+        'get_inbox_threads',
+        rpcParamsForCurrentView(THREAD_PAGE_SIZE, threadOffsetRef.current)
       );
+      const newThreads = result?.threads || [];
+      const newMessages = flattenThreadsToMessages(newThreads);
       setMessages(prev => {
-        // Deduplicate: real-time subscription may have already added some
         const existingIds = new Set(prev.map(m => m.id));
-        const newItems = result.data.filter(m => !existingIds.has(m.id));
-        return [...prev, ...newItems];
+        const toAdd = newMessages.filter(m => !existingIds.has(m.id));
+        return [...prev, ...toAdd];
       });
-      setHasMoreMessages(result.hasMore);
-      messagesOffsetRef.current += result.data.length;
+      setHasMoreMessages(Boolean(result?.has_more));
+      if (result?.total_count != null) setTotalThreadCount(result.total_count);
+      threadOffsetRef.current += newThreads.length;
     } catch (error) {
-      console.error('Failed to load more emails:', error);
+      console.error('Failed to load more threads:', error);
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, hasMoreMessages, messageFilters]);
+  }, [loadingMore, hasMoreMessages, rpcParamsForCurrentView]);
 
   const refetchMessages = useCallback(async () => {
     try {
-      messagesOffsetRef.current = 0;
-      const result = await api.entities.EmailMessage.filterPaginated(
-        messageFilters, '-received_at', PAGE_SIZE, 0
-      );
-      setMessages(result.data);
-      setHasMoreMessages(result.hasMore);
-      messagesOffsetRef.current = result.data.length;
+      threadOffsetRef.current = 0;
+      const result = await api.rpc('get_inbox_threads', rpcParamsForCurrentView(THREAD_PAGE_SIZE, 0));
+      const fetchedThreads = result?.threads || [];
+      setMessages(flattenThreadsToMessages(fetchedThreads));
+      setHasMoreMessages(Boolean(result?.has_more));
+      if (result?.total_count != null) setTotalThreadCount(result.total_count);
+      threadOffsetRef.current = fetchedThreads.length;
     } catch (error) {
-      console.error('Failed to refetch emails:', error);
+      console.error('Failed to refetch threads:', error);
     }
-  }, [messageFilters]);
+  }, [rpcParamsForCurrentView]);
 
 
 
@@ -1571,6 +1608,7 @@ export default function EmailInboxMain() {
                 onLoadMore={loadMoreMessages}
                 hasMore={hasMoreMessages}
                 loadingMore={loadingMore}
+                totalAvailable={totalThreadCount}
                 onContextMenu={async (thread, action) => {
                   try {
                     if (action === 'archive') {

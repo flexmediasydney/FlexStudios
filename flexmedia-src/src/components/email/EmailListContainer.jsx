@@ -28,6 +28,7 @@ export default function EmailListContainer({
   onLoadMore,
   hasMore = false,
   loadingMore = false,
+  totalAvailable = null,
 }) {
   const allSelected =
     selectedMessages.size === filteredThreads.length && filteredThreads.length > 0;
@@ -180,10 +181,19 @@ export default function EmailListContainer({
         )}
       </div>
 
-      {/* Count footer */}
+      {/* Count footer — shows "Showing X of Y" so pagination regressions are instantly visible */}
       {filteredThreads.length > 0 && (
         <div className="flex-shrink-0 px-4 py-1 border-t bg-muted/10 text-[11px] text-muted-foreground/50 text-right">
-          {filteredThreads.length.toLocaleString()} conversation{filteredThreads.length !== 1 ? "s" : ""}
+          {totalAvailable != null && totalAvailable > filteredThreads.length ? (
+            <>
+              Showing {filteredThreads.length.toLocaleString()} of {totalAvailable.toLocaleString()} conversation{totalAvailable !== 1 ? "s" : ""}
+              {hasMore && <span className="ml-1 opacity-70">(scroll to load more)</span>}
+            </>
+          ) : (
+            <>
+              {filteredThreads.length.toLocaleString()} conversation{filteredThreads.length !== 1 ? "s" : ""}
+            </>
+          )}
         </div>
       )}
     </div>

@@ -706,6 +706,19 @@ const integrationsApi = {
   },
 };
 
+/**
+ * Call a Postgres RPC (database function) via PostgREST.
+ * Signature: api.rpc(functionName, params) → { data, error }
+ *
+ * Used for server-side aggregation that the entity CRUD interface can't express
+ * (e.g. `get_inbox_threads` which aggregates messages by thread).
+ */
+async function callRpc(client, functionName, params = {}) {
+  const { data, error } = await client.rpc(functionName, params);
+  if (error) throw new Error(error.message || `RPC ${functionName} failed`);
+  return data;
+}
+
 export const api = {
   entities: entitiesProxy,
 
@@ -718,6 +731,12 @@ export const api = {
   auth: authApi,
   users: usersApi,
   integrations: integrationsApi,
+
+  /**
+   * Call a Postgres RPC (database function).
+   * Example: const result = await api.rpc('get_inbox_threads', { p_folder: 'inbox', p_limit: 50 });
+   */
+  rpc: (name, params) => callRpc(supabase, name, params),
 
   // Expose raw Supabase clients for edge cases during migration
   _supabase: supabase,
