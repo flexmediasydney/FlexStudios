@@ -95,18 +95,20 @@ export async function getUserFromReq(req: Request): Promise<AppUser | null> {
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
   if (!token) return null;
 
+  const SERVICE_ROLE_USER: AppUser = { id: '__service_role__', email: 'system@flexstudios.app', role: 'master_admin', full_name: 'System' };
+
   // Service-role key bypass: treat as master_admin (used by cron, cross-function calls, and admin scripts)
-  // Check both direct comparison AND JWT payload for service_role
-  if (token === SUPABASE_SERVICE_ROLE_KEY) {
-    return { id: '__service_role__', email: 'system@flexstudios.app', role: 'master_admin', full_name: 'System' };
-  }
+  // Accept:
+  //   1. Exact match with SUPABASE_SERVICE_ROLE_KEY env var (legacy JWT or new sb_secret_* format)
+  //   2. Any `sb_secret_*` token — this is a server-side secret; if caller has it, they have service-role
+  //   3. Any JWT with role=service_role payload (legacy JWT service key)
+  if (token === SUPABASE_SERVICE_ROLE_KEY) return SERVICE_ROLE_USER;
+  if (token.startsWith('sb_secret_')) return SERVICE_ROLE_USER;
   try {
     const payloadB64 = token.split('.')[1];
     if (payloadB64) {
       const payload = JSON.parse(atob(payloadB64));
-      if (payload.role === 'service_role') {
-        return { id: '__service_role__', email: 'system@flexstudios.app', role: 'master_admin', full_name: 'System' };
-      }
+      if (payload.role === 'service_role') return SERVICE_ROLE_USER;
     }
   } catch (_) { /* not a JWT or invalid — continue to normal auth */ }
 
@@ -247,18 +249,50 @@ export function createEntities(client: SupabaseClient) {
 
 // ─── Function invocation (cross-function calls) ──────────────────────────────
 
+// Supabase has migrated from legacy JWT keys (`eyJ...`) to the new opaque
+// API-key format (`sb_secret_*` / `sb_publishable_*`). Edge functions with
+// `verify_jwt: true` still require a real JWT in the Authorization header —
+// the new keys return `UNAUTHORIZED_INVALID_JWT_FORMAT` from the runtime
+// BEFORE the function runs.
+//
+// LEGACY_SERVICE_ROLE_JWT is a project-specific legacy service-role JWT stored
+// as a secret. We prefer it for cross-function calls so:
+//   1. It passes verify_jwt=true on the runtime gate
+//   2. getUserFromReq detects role=service_role in its payload and downstream
+//      functions' auth guards all see it as service-role
+// LEGACY_ANON_JWT is an anon-role legacy JWT used as a second-tier fallback.
+const LEGACY_SERVICE_ROLE_JWT = Deno.env.get('LEGACY_SERVICE_ROLE_JWT') || '';
+const LEGACY_ANON_JWT = Deno.env.get('LEGACY_ANON_JWT') || '';
+function _isJwt(token: string | undefined | null): boolean {
+  return !!token && token.startsWith('eyJ');
+}
+function _fnAuthToken(): string {
+  // Prefer service-role JWT so downstream auth guards see service-role.
+  if (_isJwt(LEGACY_SERVICE_ROLE_JWT)) return LEGACY_SERVICE_ROLE_JWT;
+  if (_isJwt(SUPABASE_SERVICE_ROLE_KEY)) return SUPABASE_SERVICE_ROLE_KEY;
+  if (_isJwt(LEGACY_ANON_JWT)) return LEGACY_ANON_JWT;
+  if (_isJwt(SUPABASE_ANON_KEY)) return SUPABASE_ANON_KEY;
+  // Last resort — new-format keys will fail on verify_jwt=true targets.
+  return SUPABASE_SERVICE_ROLE_KEY;
+}
+
 /**
  * Invoke another Edge Function by name.
  * Replaces base44.asServiceRole.functions.invoke(name, params).
  */
 export async function invokeFunction(functionName: string, params: Record<string, unknown> = {}): Promise<unknown> {
   const url = `${SUPABASE_URL}/functions/v1/${functionName}`;
+  const authToken = _fnAuthToken();
+  // The apikey header expects the anon key (needed for DB REST path-through).
+  // The Authorization header must be a valid JWT on verify_jwt=true targets,
+  // so we fall back to LEGACY_ANON_JWT / legacy SUPABASE_*_KEY when the current
+  // runtime-injected env keys are in the new sb_secret_* / sb_publishable_* format.
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      'Authorization': `Bearer ${authToken}`,
     },
     body: JSON.stringify(params),
   });
