@@ -623,6 +623,9 @@ verify_jwt = false
 [functions.prunePriceMatrixSnapshots]
 verify_jwt = false
 
+[functions.pulseCostReport]
+verify_jwt = false
+
 [functions.pulseDataSync]
 verify_jwt = false
 
@@ -635,10 +638,22 @@ verify_jwt = false
 [functions.pulseFireWorker]
 verify_jwt = false
 
+[functions.pulseCircuitReset]
+verify_jwt = false
+
+[functions.pulseReconcileOrphans]
+verify_jwt = false
+
+[functions.pulseRelistDetector]
+verify_jwt = false
+
 [functions.pulseScheduledScrape]
 verify_jwt = false
 
 [functions.pulseSignalGenerator]
+verify_jwt = false
+
+[functions.pulseTimelineAnchor]
 verify_jwt = false
 
 [functions.recalculateProjectPricingServerSide]
