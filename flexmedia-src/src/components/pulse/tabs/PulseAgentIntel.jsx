@@ -14,6 +14,7 @@ import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { createPageUrl } from "@/utils";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -626,14 +627,15 @@ export function AgentSlideout({
                 <ReaBadge />
                 {/* Tier 3: when mapped, the In CRM badge links to the CRM page. */}
                 {agent.is_in_crm && crmMapping?.crm_entity_id ? (
-                  <a
-                    href={`/people/${crmMapping.crm_entity_id}`}
+                  <Link
+                    to={createPageUrl("PersonDetails") + `?id=${crmMapping.crm_entity_id}`}
+                    replace={false}
                     className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800 px-1.5 py-0 text-[9px] font-medium leading-4 hover:underline"
                     title="Open CRM record"
                   >
                     In CRM
                     <ExternalLink className="h-2.5 w-2.5" />
-                  </a>
+                  </Link>
                 ) : (
                   <CrmStatusBadge inCrm={agent.is_in_crm} />
                 )}

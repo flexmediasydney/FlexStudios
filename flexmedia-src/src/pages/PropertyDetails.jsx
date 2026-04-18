@@ -14,6 +14,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
+import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -664,7 +665,7 @@ export default function PropertyDetails() {
                   return (
                     <Link
                       key={a.reaId}
-                      to={`/people/${a.crmEntityId}`}
+                      to={createPageUrl("PersonDetails") + `?id=${a.crmEntityId}`}
                       className="flex items-center justify-between text-xs text-primary hover:underline"
                       title="Open CRM record"
                     >
@@ -721,7 +722,7 @@ export default function PropertyDetails() {
                   return (
                     <Link
                       key={a.reaId || a.name || i}
-                      to={`/organisations/${a.crmEntityId}`}
+                      to={createPageUrl("OrgDetails") + `?id=${a.crmEntityId}`}
                       className="flex items-center justify-between text-xs text-primary hover:underline"
                       title="Open CRM record"
                     >
