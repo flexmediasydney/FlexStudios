@@ -764,6 +764,7 @@ export default function IndustryPulse() {
           {currentEntity.type === "agent" && (
             <AgentSlideout
               agent={currentEntityRecord}
+              pulseAgents={pulseAgents}
               pulseAgencies={pulseAgencies}
               pulseListings={pulseListings}
               pulseTimeline={pulseTimeline}

@@ -109,7 +109,10 @@ function fuzzyNameMatch(a, b) {
 }
 
 function mapPosition(jobTitle) {
-  const jt = (jobTitle || "").toLowerCase();
+  const jt = (jobTitle || "").toLowerCase().trim();
+  // AG07: Empty job_title → null (skip badge entirely). Previously defaulted
+  // to "Junior", flooding the UI with grey pills on un-enriched rows.
+  if (!jt) return null;
   if (
     jt.includes("partner") ||
     jt.includes("director") ||
@@ -165,6 +168,8 @@ function exportCsv(filename, header, rows) {
 }
 
 function PositionBadge({ position }) {
+  // AG07: skip entirely when position is null (empty job_title).
+  if (!position) return null;
   const cls =
     position === "Partner"
       ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-300 dark:border-blue-800"
@@ -528,6 +533,7 @@ function AddToCrmDialog({ agent, crmAgents, crmAgencies, pulseMappings, onClose,
 export function AgentSlideout({
   agent,
   pulseAgencies = [],
+  pulseAgents = [],
   pulseListings,
   pulseTimeline,
   crmAgents,
@@ -879,6 +885,30 @@ export function AgentSlideout({
                 agent.avg_days_on_market ||
                 agent.rea_rating
             );
+
+            // AG03: peer rank within agency_suburb by sales_as_lead desc.
+            // Small-N floor: only compute when ≥5 agents exist in that suburb.
+            // We use pulseAgents (the parent tab's current page) as the
+            // candidate set — cheap, no extra fetch, consistent with the
+            // filter-table context the user is already in.
+            const peerRank = (() => {
+              const suburb = agent.agency_suburb;
+              if (!suburb) return null;
+              const peers = pulseAgents.filter(
+                (a) => a.agency_suburb === suburb,
+              );
+              if (peers.length < 5) return null;
+              const sorted = [...peers].sort(
+                (a, b) => (b.sales_as_lead ?? -1) - (a.sales_as_lead ?? -1),
+              );
+              const idx = sorted.findIndex((a) => a.id === agent.id);
+              if (idx < 0) return null;
+              const rank = idx + 1;
+              const total = sorted.length;
+              const pct = Math.max(1, Math.round((rank / total) * 100));
+              return { rank, total, pct, suburb };
+            })();
+
             if (!hasAnyPerf) {
               const activeCount = agent.total_listings_active ?? 0;
               return (
@@ -889,6 +919,11 @@ export function AgentSlideout({
                   <p className="text-xs text-muted-foreground italic">
                     Performance metrics pending enrichment — {activeCount} active listing{activeCount !== 1 ? "s" : ""} detected.
                   </p>
+                  {peerRank && (
+                    <p className="text-[10px] text-muted-foreground pt-1">
+                      #{peerRank.rank} of {peerRank.total} in {peerRank.suburb} (sales as lead)
+                    </p>
+                  )}
                 </section>
               );
             }
@@ -917,6 +952,17 @@ export function AgentSlideout({
                     <p className="text-[10px] text-muted-foreground mt-0.5">Avg DOM</p>
                   </div>
                 </div>
+                {/* AG03: peer rank — small sub-label under the tile grid. */}
+                {peerRank && (
+                  <p className="text-[10px] text-muted-foreground pt-0.5 flex items-center gap-1.5">
+                    <MapPin className="h-3 w-3" />
+                    <span>
+                      <span className="font-semibold text-foreground">Top {peerRank.pct}%</span>
+                      {" "}in {peerRank.suburb}
+                      <span className="opacity-70"> · #{peerRank.rank} of {peerRank.total}</span>
+                    </span>
+                  </p>
+                )}
               </section>
             );
           })()}
@@ -1259,6 +1305,19 @@ export default function PulseAgentIntel({
   useEffect(() => {
     try { window.localStorage.setItem(LS_AUTO_REFRESH_KEY, autoRefresh ? "1" : "0"); } catch { /* quota / SSR */ }
   }, [autoRefresh]);
+
+  // AG04: distinct agency + suburb lists for the column-filter comboboxes.
+  // Populated from the agents currently loaded in memory — the <datalist>
+  // approach keeps zero JS weight vs. a full shadcn combobox; the browser
+  // handles the dropdown + typeahead natively.
+  const distinctAgencies = useMemo(
+    () => [...new Set(pulseAgents.map((a) => a.agency_name).filter(Boolean))].sort(),
+    [pulseAgents],
+  );
+  const distinctSuburbs = useMemo(
+    () => [...new Set(pulseAgents.map((a) => a.agency_suburb).filter(Boolean))].sort(),
+    [pulseAgents],
+  );
 
   // ── Region filter derivations (Auditor-11 F1) ─────────────────────────────
   // Distinct regions for the dropdown + suburb list for the chosen region,
@@ -1609,6 +1668,106 @@ export default function PulseAgentIntel({
         </div>
       </div>
 
+      {/* ── AG05: Active-filter chips ── */}
+      {(() => {
+        const chips = [];
+        if (search && search.trim()) {
+          chips.push({ key: "search", label: "Search", value: search.trim(), onClear: null });
+        }
+        if (agentFilter !== "all") {
+          const map = { not_in_crm: "Not in CRM", in_crm: "In CRM" };
+          chips.push({
+            key: "status",
+            label: "Status",
+            value: map[agentFilter] || agentFilter,
+            onClear: () => setAgentFilter("all"),
+          });
+        }
+        if (agentColFilters.agency && agentColFilters.agency.trim()) {
+          chips.push({
+            key: "agency",
+            label: "Agency",
+            value: agentColFilters.agency.trim(),
+            onClear: () => handleColFilterChange("agency", ""),
+          });
+        }
+        if (agentColFilters.suburb && agentColFilters.suburb.trim()) {
+          chips.push({
+            key: "suburb",
+            label: "Suburb",
+            value: agentColFilters.suburb.trim(),
+            onClear: () => handleColFilterChange("suburb", ""),
+          });
+        }
+        if (integrityFilter !== "all") {
+          const lbl = INTEGRITY_FILTERS.find((f) => f.value === integrityFilter)?.label || integrityFilter;
+          chips.push({
+            key: "integrity",
+            label: "Integrity",
+            value: lbl,
+            onClear: () => setIntegrityFilter("all"),
+          });
+        }
+        if (mappingFilter !== "all") {
+          const lbl = MAPPING_FILTERS.find((f) => f.value === mappingFilter)?.label || mappingFilter;
+          chips.push({
+            key: "mapping",
+            label: "Mapping",
+            value: lbl,
+            onClear: () => setMappingFilter("all"),
+          });
+        }
+        if (regionFilter !== "all") {
+          chips.push({
+            key: "region",
+            label: "Region",
+            value: regionFilter,
+            onClear: () => setRegionFilter("all"),
+          });
+        }
+        if (chips.length === 0) return null;
+        const clearAll = () => {
+          setAgentFilter("all");
+          setIntegrityFilter("all");
+          setMappingFilter("all");
+          setRegionFilter("all");
+          setAgentColFilters({ agency: "", suburb: "" });
+          setAgentPage(0);
+        };
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {chips.map((c) => (
+              <span
+                key={c.key}
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 pl-2 pr-1 py-0.5 text-[10px] text-foreground"
+              >
+                <span className="text-muted-foreground">{c.label}:</span>
+                <span className="font-medium truncate max-w-[180px]">{c.value}</span>
+                {c.onClear && (
+                  <button
+                    type="button"
+                    onClick={c.onClear}
+                    className="rounded-full p-0.5 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label={`Clear ${c.label} filter`}
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </span>
+            ))}
+            {chips.some((c) => c.onClear) && (
+              <button
+                type="button"
+                onClick={clearAll}
+                className="text-[10px] text-primary hover:underline px-1"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ── Table card ── */}
       <Card className="rounded-xl border-0 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
@@ -1698,15 +1857,21 @@ export default function PulseAgentIntel({
                 <td colSpan={2} className="py-1 pl-3 pr-2">
                   {/* empty — agent col has no filter */}
                 </td>
-                {/* Agency filter */}
+                {/* Agency filter — AG04: native combobox via datalist (distinct values from memory). */}
                 <td className="py-1 px-2">
                   <input
                     type="text"
+                    list="pulse-agent-agencies"
                     placeholder="Filter agency…"
                     value={agentColFilters.agency}
                     onChange={(e) => handleColFilterChange("agency", e.target.value)}
                     className="w-full min-w-0 rounded border border-border bg-background px-2 py-0.5 text-[10px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
                   />
+                  <datalist id="pulse-agent-agencies">
+                    {distinctAgencies.map((n) => (
+                      <option key={n} value={n} />
+                    ))}
+                  </datalist>
                 </td>
                 {/* Email — no filter */}
                 <td className="py-1 px-2 hidden lg:table-cell" />
@@ -1726,15 +1891,21 @@ export default function PulseAgentIntel({
                 <td className="py-1 px-2 hidden xl:table-cell" />
                 {/* Added (first_seen_at) — no filter */}
                 <td className="py-1 px-2 hidden xl:table-cell" />
-                {/* Suburb filter (lives in CRM column for space, but targets suburb) */}
+                {/* Suburb filter — AG04: native combobox via datalist. */}
                 <td className="py-1 px-3">
                   <input
                     type="text"
+                    list="pulse-agent-suburbs"
                     placeholder="Suburb…"
                     value={agentColFilters.suburb}
                     onChange={(e) => handleColFilterChange("suburb", e.target.value)}
                     className="w-full min-w-0 rounded border border-border bg-background px-2 py-0.5 text-[10px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
                   />
+                  <datalist id="pulse-agent-suburbs">
+                    {distinctSuburbs.map((n) => (
+                      <option key={n} value={n} />
+                    ))}
+                  </datalist>
                 </td>
               </tr>
             </thead>
@@ -1784,9 +1955,24 @@ export default function PulseAgentIntel({
                     {/* Name + badges */}
                     <td className="py-2 px-2">
                       <div className="flex flex-col gap-0.5 min-w-0">
-                        <span className="font-medium text-foreground truncate max-w-[160px]">
-                          {agent.full_name || "—"}
-                        </span>
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="font-medium text-foreground truncate max-w-[160px]">
+                            {agent.full_name || "—"}
+                          </span>
+                          {/* AG08: gold Award icon when agent has any award text
+                              (only ~5.2% of agents — high-value outreach signal). */}
+                          {agent.awards && (
+                            <Award
+                              className="h-3 w-3 flex-shrink-0 fill-amber-400 text-amber-500"
+                              aria-label="Award recipient"
+                              title={
+                                String(agent.awards).length > 60
+                                  ? `${String(agent.awards).slice(0, 60)}…`
+                                  : String(agent.awards)
+                              }
+                            />
+                          )}
+                        </div>
                         <div className="flex items-center gap-1 flex-wrap">
                           <PositionBadge position={position} />
                           {agent.rea_agent_id && (
@@ -1982,6 +2168,8 @@ export default function PulseAgentIntel({
       {selectedAgent && (
         <AgentSlideout
           agent={selectedAgent}
+          pulseAgents={pulseAgents}
+          pulseAgencies={pulseAgencies}
           pulseListings={pulseListings}
           pulseTimeline={pulseTimeline}
           crmAgents={crmAgents}
