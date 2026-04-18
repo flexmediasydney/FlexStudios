@@ -96,8 +96,10 @@ function SummaryStats({ pulseListings }) {
     // "on market" states. Previously only for_sale was counted so
     // under_contract listings silently dropped out of market totals.
     const onMarket = pulseListings.filter((l) => isActiveListing(l));
+    // MK01: use UTC month boundary so AU users don't see the counter flicker
+    // during the window between local midnight and 00:00 UTC on the 1st.
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
     const totalListings = onMarket.length;
 
@@ -749,12 +751,74 @@ const TIME_RANGE_OPTIONS = [
   { value: "all", label: "All time" },
 ];
 
-const PROPERTY_TYPE_OPTIONS = [
+// MK06: property-type options are now computed dynamically from pulseListings
+// (see `usePropertyTypeOptions` below) rather than hard-coded. Prod data has
+// >15 distinct normalised types — house/apartment/townhouse alone dropped
+// ~40% of listings out of the filter.
+
+// Grouped fallback used when the distinct count ≥ 12. Values are matched
+// against normalised (lowercase-trimmed) property_type values — covers both
+// canonical REA values and common free-text drift.
+const PROPERTY_TYPE_GROUPS = {
+  residential: new Set([
+    "house", "apartment", "townhouse", "unit", "studio", "villa",
+    "duplex/semi-detached", "semi-detached", "terrace", "flat",
+    "apartment / unit / flat", "unitblock", "retirement living",
+  ]),
+  land: new Set(["land", "rural", "residential land"]),
+  commercial: new Set(["commercial", "commercial property", "business"]),
+};
+
+const GROUPED_OPTIONS = [
   { value: "all", label: "All Types" },
-  { value: "house", label: "House" },
-  { value: "apartment", label: "Apartment" },
-  { value: "townhouse", label: "Townhouse" },
+  { value: "group:residential", label: "Residential" },
+  { value: "group:land", label: "Land" },
+  { value: "group:commercial", label: "Commercial" },
 ];
+
+// Label-case a normalised property type key for display.
+// "residential land" → "Residential Land", "duplex/semi-detached" → "Duplex/Semi-Detached".
+function toLabelCase(key) {
+  return key
+    .split(/([\s/-])/)
+    .map((part) =>
+      /^[\s/-]$/.test(part)
+        ? part
+        : part.charAt(0).toUpperCase() + part.slice(1)
+    )
+    .join("");
+}
+
+function usePropertyTypeOptions(pulseListings) {
+  return useMemo(() => {
+    const counts = {};
+    for (const l of pulseListings) {
+      const raw = l.property_type;
+      if (!raw) continue;
+      const norm = String(raw).toLowerCase().trim();
+      if (!norm) continue;
+      counts[norm] = (counts[norm] || 0) + 1;
+    }
+
+    const distinctAboveThreshold = Object.entries(counts)
+      .filter(([, n]) => n >= 5)
+      .sort((a, b) => b[1] - a[1]);
+
+    // Fallback: too many distinct values → offer grouped dropdown instead.
+    if (distinctAboveThreshold.length >= 12) {
+      return { options: GROUPED_OPTIONS, grouped: true };
+    }
+
+    const options = [
+      { value: "all", label: "All Types" },
+      ...distinctAboveThreshold.map(([key, n]) => ({
+        value: key,
+        label: `${toLabelCase(key)} (${n.toLocaleString()})`,
+      })),
+    ];
+    return { options, grouped: false };
+  }, [pulseListings]);
+}
 
 export default function PulseMarketData({
   pulseAgents = [],
@@ -773,6 +837,10 @@ export default function PulseMarketData({
   const [timeRange, setTimeRange] = useState("30");
   const [propertyType, setPropertyType] = useState("all");
 
+  // MK06: dynamic options based on real prod data. Groups fallback kicks in
+  // automatically if distinct count ≥ 12 (caps dropdown width + clutter).
+  const { options: propertyTypeOptions } = usePropertyTypeOptions(pulseListings);
+
   // Filter listings by time range and property type
   const filteredListings = useMemo(() => {
     let list = pulseListings;
@@ -787,11 +855,22 @@ export default function PulseMarketData({
       });
     }
 
-    // Property type filter
+    // Property type filter — supports exact normalised match and
+    // `group:<name>` aggregate values (residential / land / commercial).
     if (propertyType !== "all") {
-      list = list.filter(
-        (l) => (l.property_type || "").toLowerCase() === propertyType
-      );
+      if (propertyType.startsWith("group:")) {
+        const groupKey = propertyType.slice(6);
+        const groupSet = PROPERTY_TYPE_GROUPS[groupKey];
+        if (groupSet) {
+          list = list.filter((l) =>
+            groupSet.has((l.property_type || "").toLowerCase().trim())
+          );
+        }
+      } else {
+        list = list.filter(
+          (l) => (l.property_type || "").toLowerCase().trim() === propertyType
+        );
+      }
     }
 
     return list;
@@ -821,12 +900,12 @@ export default function PulseMarketData({
 
         <span className="text-muted-foreground text-xs mx-1">|</span>
 
-        {/* Property type */}
-        <div className="flex items-center gap-1">
+        {/* Property type — dynamic options (MK06) */}
+        <div className="flex items-center gap-1 flex-wrap">
           <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mr-1">
             Property:
           </span>
-          {PROPERTY_TYPE_OPTIONS.map((opt) => (
+          {propertyTypeOptions.map((opt) => (
             <Button
               key={opt.value}
               variant={propertyType === opt.value ? "secondary" : "ghost"}

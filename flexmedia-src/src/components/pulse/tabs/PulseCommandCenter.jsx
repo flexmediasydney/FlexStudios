@@ -3,14 +3,14 @@
  * Cards: Weekly Trend, Top Agents Not In CRM, Recent Enrichment Activity,
  *        Hot Signals (7d), Conversion Funnel, Suburb Distribution, Recent Timeline.
  */
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Cell,
+  Tooltip, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
 import { TrendingUp, Users, UserPlus, MapPin, Activity, ExternalLink, Sparkles, AtSign, Phone, Zap, Flame, Home, FileImage } from "lucide-react";
 import {
@@ -48,30 +48,66 @@ function fmtShortDate(d) {
 
 // ── Card 1: Weekly Listings Trend ─────────────────────────────────────────────
 
+// CC04: window picker — user can switch between 4w / 12w / 26w / 52w views.
+const TREND_WINDOWS = [
+  { value: 4,  label: "4w"  },
+  { value: 12, label: "12w" },
+  { value: 26, label: "26w" },
+  { value: 52, label: "52w" },
+];
+
 function WeeklyTrendCard({ pulseListings }) {
+  const [weeks, setWeeks] = useState(12);
+
+  // For ≤12 weeks show per-week labels (W1..W12); for ≥26 switch to
+  // month labels so the axis doesn't collapse into a dense strip.
+  const useMonthLabels = weeks >= 26;
+
   const data = useMemo(() => {
-    const weeks = [];
-    for (let i = 11; i >= 0; i--) {
+    const rows = [];
+    for (let i = weeks - 1; i >= 0; i--) {
       const start = new Date(Date.now() - (i + 1) * 7 * 86400000);
       const end = new Date(Date.now() - i * 7 * 86400000);
       const count = pulseListings.filter(
         (l) => l.listed_date && new Date(l.listed_date) >= start && new Date(l.listed_date) < end
       ).length;
-      weeks.push({ week: `W${12 - i}`, count });
+      const label = useMonthLabels
+        // Month label at the START of each bucket — duplicated months render as
+        // a long band on the axis but recharts will de-dupe visually.
+        ? start.toLocaleDateString("en-AU", { month: "short" })
+        : `W${weeks - i}`;
+      rows.push({ week: label, count });
     }
-    return weeks;
-  }, [pulseListings]);
+    return rows;
+  }, [pulseListings, weeks, useMonthLabels]);
 
   const hasData = data.some((d) => d.count > 0);
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
       <CardHeader className="pb-2 pt-4 px-4">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-blue-500" />
-          Market Pulse — Weekly Listings Trend
-        </CardTitle>
-        <p className="text-[10px] text-muted-foreground">Last 12 weeks</p>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-blue-500" />
+              Market Pulse — Weekly Listings Trend
+            </CardTitle>
+            <p className="text-[10px] text-muted-foreground">Last {weeks} weeks</p>
+          </div>
+          <div className="flex items-center gap-0.5 shrink-0">
+            {TREND_WINDOWS.map((w) => (
+              <Button
+                key={w.value}
+                variant={weeks === w.value ? "secondary" : "ghost"}
+                size="sm"
+                className="h-6 px-1.5 text-[10px]"
+                onClick={() => setWeeks(w.value)}
+              >
+                {w.label}
+              </Button>
+            ))}
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="px-2 pb-4">
         {!hasData ? (
@@ -88,7 +124,14 @@ function WeeklyTrendCard({ pulseListings }) {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-              <XAxis dataKey="week" {...axisStyle} tickLine={false} axisLine={false} />
+              <XAxis
+                dataKey="week"
+                {...axisStyle}
+                tickLine={false}
+                axisLine={false}
+                interval="preserveStartEnd"
+                minTickGap={useMonthLabels ? 24 : 8}
+              />
               <YAxis {...axisStyle} tickLine={false} axisLine={false} allowDecimals={false} width={28} />
               <Tooltip
                 contentStyle={tooltipStyle.contentStyle}
@@ -448,6 +491,11 @@ function HotSignalsCard({ pulseSignals, pulseTimeline, onOpenEntity }) {
 const FUNNEL_COLORS = ["#94a3b8", "#3b82f6", "#10b981", "#8b5cf6"];
 
 function ConversionFunnelCard({ pulseAgents, crmAgents, projects, stats }) {
+  // CC05: log scale by default so all four bars are visibly proportional even
+  // when Territory (thousands) dwarfs Booked (single digits). User can switch
+  // back to Linear when they want absolute comparison.
+  const [scale, setScale] = useState("log");
+
   const data = useMemo(() => {
     // relationship_state casing has drifted in the CRM — "Active"/"active"/etc.
     // Use shared `isRelationshipState` for case-insensitive matching.
@@ -458,40 +506,106 @@ function ConversionFunnelCard({ pulseAgents, crmAgents, projects, stats }) {
     const bookedThisMonth = (projects || []).filter(
       (p) => p.created_at && new Date(p.created_at) > d30
     ).length;
-    return [
+    const rows = [
       { stage: "Territory", count: stats?.totalAgents ?? (pulseAgents || []).length },
       { stage: "In CRM", count: (crmAgents || []).length },
       { stage: "Active", count: activeClients },
       { stage: "Booked (30d)", count: bookedThisMonth },
     ];
+    // Compute stage-over-stage conversion % (relative to the PREVIOUS stage,
+    // not to Territory — "Active/In-CRM" is the more useful funnel metric).
+    return rows.map((r, i) => {
+      const prev = i > 0 ? rows[i - 1].count : null;
+      const pct = prev && prev > 0 ? (r.count / prev) * 100 : null;
+      const pctLabel = pct == null
+        ? `${r.count.toLocaleString()}`
+        : `${r.count.toLocaleString()} (${pct >= 10 ? pct.toFixed(0) : pct.toFixed(1)}%)`;
+      return { ...r, pct, pctLabel };
+    });
   }, [pulseAgents, crmAgents, projects, stats]);
 
   const maxVal = Math.max(...data.map((d) => d.count), 1);
+  // Log scale can't show 0; use a floor of 1 so empty stages still render a tick.
+  const minForLog = 1;
+  const isLog = scale === "log";
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
       <CardHeader className="pb-2 pt-4 px-4">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <Activity className="h-4 w-4 text-green-500" />
-          Conversion Funnel
-        </CardTitle>
-        <p className="text-[10px] text-muted-foreground">Territory → booked</p>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Activity className="h-4 w-4 text-green-500" />
+              Conversion Funnel
+            </CardTitle>
+            <p className="text-[10px] text-muted-foreground">Territory → booked · labels show stage-over-stage %</p>
+          </div>
+          <div className="flex items-center gap-0.5 shrink-0">
+            <Button
+              variant={scale === "linear" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-6 px-1.5 text-[10px]"
+              onClick={() => setScale("linear")}
+            >
+              Linear
+            </Button>
+            <Button
+              variant={scale === "log" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-6 px-1.5 text-[10px]"
+              onClick={() => setScale("log")}
+            >
+              Log
+            </Button>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="px-2 pb-4">
-        <ResponsiveContainer width="100%" height={160}>
-          <BarChart data={data} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={data} margin={{ top: 20, right: 8, left: -16, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
             <XAxis dataKey="stage" {...axisStyle} tickLine={false} axisLine={false} />
-            <YAxis {...axisStyle} tickLine={false} axisLine={false} allowDecimals={false} width={32} domain={[0, maxVal]} />
+            {isLog ? (
+              <YAxis
+                {...axisStyle}
+                tickLine={false}
+                axisLine={false}
+                allowDecimals={false}
+                width={32}
+                scale="log"
+                // recharts log scale needs explicit domain (it won't infer from data).
+                domain={[minForLog, Math.max(maxVal, minForLog)]}
+                allowDataOverflow
+              />
+            ) : (
+              <YAxis
+                {...axisStyle}
+                tickLine={false}
+                axisLine={false}
+                allowDecimals={false}
+                width={32}
+                domain={[0, maxVal]}
+              />
+            )}
             <Tooltip
               contentStyle={tooltipStyle.contentStyle}
               cursor={{ fill: "hsl(var(--muted)/0.25)" }}
-              formatter={(v, name) => [v, "Agents"]}
+              formatter={(v, _n, p) => {
+                const pct = p?.payload?.pct;
+                return pct == null
+                  ? [v.toLocaleString(), "Agents"]
+                  : [`${v.toLocaleString()} (${pct >= 10 ? pct.toFixed(0) : pct.toFixed(1)}%)`, "Agents"];
+              }}
             />
             <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={48}>
               {data.map((entry, i) => (
                 <Cell key={entry.stage} fill={FUNNEL_COLORS[i % FUNNEL_COLORS.length]} />
               ))}
+              <LabelList
+                dataKey="pctLabel"
+                position="top"
+                style={{ fill: "hsl(var(--muted-foreground))", fontSize: 9, fontWeight: 500 }}
+              />
             </Bar>
           </BarChart>
         </ResponsiveContainer>
