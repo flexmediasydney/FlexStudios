@@ -536,7 +536,8 @@ export default function PulseIntelligencePanel({
     return null;
   }, [USE_DOSSIER_RPC, dossier, entityType, mapping, legacyAgents, legacyAgencies, crmEntity, entityName]);
 
-  // Timeline events
+  // Timeline events (aggregated: agent events + their listings; agency events
+  // + all agents + all listings). Migration 135 widened the RPC accordingly.
   const entityTimelineEntries = useMemo(() => {
     if (USE_DOSSIER_RPC) return dossier?.timeline || [];
     if (!entityId) return [];
@@ -549,6 +550,37 @@ export default function PulseIntelligencePanel({
       return false;
     });
   }, [USE_DOSSIER_RPC, dossier, legacyTimeline, entityId, mapping, crmEntity]);
+
+  // Timeline source filter: 'all' | 'direct' | 'agent' | 'listing'
+  const [timelineSourceFilter, setTimelineSourceFilter] = useState("all");
+
+  // Counts per source bucket (derived from entries so it stays correct under
+  // both RPC and legacy paths).
+  const timelineSummary = useMemo(() => {
+    const rows = entityTimelineEntries || [];
+    const rpcSummary = dossier?.timeline_summary;
+    // Prefer the RPC's breakdown (authoritative) but compute client-side as a
+    // fallback for the legacy path.
+    const byEntityType = rpcSummary?.by_entity_type || rows.reduce((acc, r) => {
+      const k = r.entity_type || "unknown";
+      acc[k] = (acc[k] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      total: rows.length,
+      byEntityType,
+    };
+  }, [entityTimelineEntries, dossier]);
+
+  const filteredTimelineEntries = useMemo(() => {
+    const rows = entityTimelineEntries || [];
+    if (timelineSourceFilter === "all") return rows;
+    if (timelineSourceFilter === "direct") {
+      // "Direct" = events on the entity itself (matches its own entity_type).
+      return rows.filter(r => r.entity_type === entityType);
+    }
+    return rows.filter(r => r.entity_type === timelineSourceFilter);
+  }, [entityTimelineEntries, timelineSourceFilter, entityType]);
 
   /* ── IP04: dedicated targeted listings fetch ──────────────────────────────
      The legacy path filters `legacyListings` in-memory — that list is capped
@@ -1724,10 +1756,75 @@ export default function PulseIntelligencePanel({
       <Card>
         <CardContent className="p-4">
           <SectionHeader icon={Clock}>Intelligence Timeline</SectionHeader>
+
+          {/* Filter chips: 'all' vs the entity-type buckets surfaced by the
+              aggregated RPC (migration 135). Lets the user pivot between
+              events on the entity itself, its agents, and its listings
+              without losing context. */}
+          {timelineSummary.total > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mb-3">
+              {(() => {
+                const tabs = [
+                  { key: "all", label: "All", count: timelineSummary.total },
+                  {
+                    key: "direct",
+                    label: entityType === "agency" ? "This agency" : "This agent",
+                    count: (timelineSummary.byEntityType[entityType] || 0),
+                  },
+                ];
+                if (entityType === "agency") {
+                  tabs.push({
+                    key: "agent",
+                    label: "Agents",
+                    count: timelineSummary.byEntityType.agent || 0,
+                  });
+                }
+                tabs.push({
+                  key: "listing",
+                  label: "Listings",
+                  count: timelineSummary.byEntityType.listing || 0,
+                });
+
+                return tabs.map(tab => {
+                  const isActive = timelineSourceFilter === tab.key;
+                  const isDisabled = tab.count === 0 && tab.key !== "all";
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={() => setTimelineSourceFilter(tab.key)}
+                      className={cn(
+                        "text-[11px] px-2.5 py-1 rounded-full border transition-colors",
+                        isActive
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-muted/30 border-border/60 hover:bg-muted/60 text-foreground",
+                        isDisabled && "opacity-40 cursor-not-allowed hover:bg-muted/30"
+                      )}
+                      title={isDisabled ? "No events in this bucket" : `Show ${tab.label.toLowerCase()} events`}
+                    >
+                      {tab.label}
+                      <span className={cn(
+                        "ml-1.5 text-[10px] opacity-80",
+                        isActive ? "text-primary-foreground" : "text-muted-foreground"
+                      )}>
+                        {tab.count}
+                      </span>
+                    </button>
+                  );
+                });
+              })()}
+            </div>
+          )}
+
           <PulseTimeline
-            entries={entityTimelineEntries}
+            entries={filteredTimelineEntries}
             maxHeight="max-h-[500px]"
-            emptyMessage={`No timeline events for this ${entityType} yet. Events will appear after data syncs detect changes.`}
+            emptyMessage={
+              timelineSourceFilter === "all"
+                ? `No timeline events for this ${entityType} yet. Events will appear after data syncs detect changes.`
+                : `No events in this bucket. Try the "All" tab.`
+            }
           />
         </CardContent>
       </Card>
