@@ -102,7 +102,7 @@ export default function PropertyDetails() {
       const [pRes, lRes, prRes] = await Promise.all([
         api._supabase.from("property_full_v").select("*").eq("property_key", propertyKey).maybeSingle(),
         api._supabase.from("pulse_listings")
-          .select("id, source_listing_id, address, suburb, postcode, listing_type, asking_price, sold_price, listed_date, sold_date, auction_date, price_text, agent_name, agent_rea_id, agency_name, agency_rea_id, source_url, image_url, hero_image, images, last_synced_at, first_seen_at, days_on_market, bedrooms, bathrooms, parking, land_size, property_type, detail_enriched_at, date_available, land_size_sqm, floorplan_urls, video_url, video_thumb_url, media_items, listing_withdrawn_at")
+          .select("id, source_listing_id, address, suburb, postcode, listing_type, asking_price, sold_price, listed_date, sold_date, auction_date, auction_time_known, price_text, agent_name, agent_rea_id, agency_name, agency_rea_id, source_url, image_url, hero_image, images, last_synced_at, first_seen_at, days_on_market, bedrooms, bathrooms, parking, land_size, property_type, detail_enriched_at, date_available, land_size_sqm, floorplan_urls, video_url, video_thumb_url, media_items, listing_withdrawn_at")
           .eq("property_key", propertyKey)
           .order("listed_date", { ascending: false, nullsFirst: false }),
         api._supabase.from("projects")
@@ -124,6 +124,12 @@ export default function PropertyDetails() {
       const agencyReaIds = Array.from(new Set((lRes.data || [])
         .map((l) => l.agency_rea_id).filter(Boolean)));
       if (agentReaIds.length > 0 || agencyReaIds.length > 0) {
+        // LS02: scope pulse_crm_mappings to the rea_ids we actually care about.
+        // The previous unscoped `.in("entity_type", ["agent","agency"])` pulled
+        // every single agent/agency mapping on every property page load
+        // (potentially thousands of rows). Filter to this property's agents +
+        // agencies only.
+        const relevantReaIds = [...agentReaIds, ...agencyReaIds];
         const [paRes, pagRes, mapRes] = await Promise.all([
           agentReaIds.length > 0
             ? api._supabase.from("pulse_agents")
@@ -137,7 +143,8 @@ export default function PropertyDetails() {
             : Promise.resolve({ data: [] }),
           api._supabase.from("pulse_crm_mappings")
             .select("id, entity_type, pulse_entity_id, crm_entity_id, rea_id")
-            .in("entity_type", ["agent", "agency"]),
+            .in("entity_type", ["agent", "agency"])
+            .in("rea_id", relevantReaIds),
         ]);
         if (paRes.error) throw paRes.error;
         if (pagRes.error) throw pagRes.error;
