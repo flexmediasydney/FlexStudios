@@ -20,7 +20,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { CheckCircle2, XCircle, Link2, Users, Building2, ExternalLink, Search, X } from "lucide-react";
+import { CheckCircle2, XCircle, Link2, Users, Building2, ExternalLink, Search, X, Sparkles, Loader2 } from "lucide-react";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -120,9 +120,19 @@ const TYPE_OPTIONS = [
 
 // ── Row ───────────────────────────────────────────────────────────────────────
 
-function MappingRow({ mapping, pulseName, crmName, onConfirm, onReject, confirming, rejecting }) {
+function MappingRow({ mapping, pulseName, crmName, onConfirm, onReject, confirming, rejecting, selected, onToggleSelect }) {
   return (
     <tr className="border-b last:border-0 hover:bg-muted/30 transition-colors align-top">
+      {/* QoL #63: row selection checkbox */}
+      <td className="py-2.5 pl-4 pr-2 w-[32px]">
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onChange={() => onToggleSelect(mapping.id)}
+          className="h-3.5 w-3.5"
+          aria-label={`Select mapping ${mapping.id}`}
+        />
+      </td>
       {/* Entity type */}
       <td className="py-2.5 pr-3">
         <div className="flex items-center gap-1.5">
@@ -249,6 +259,12 @@ export default function PulseMappings({
   const [confirming, setConfirming] = useState(null);
   const [rejecting, setRejecting] = useState(null);
   const [rejectCandidate, setRejectCandidate] = useState(null);
+  // QoL #63: bulk-selection + bulk-busy state.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // QoL #64: auto-confirm exact-match dialog state.
+  const [autoConfirmOpen, setAutoConfirmOpen] = useState(false);
+  const [autoConfirmBusy, setAutoConfirmBusy] = useState(false);
 
   // Resolved rows
   const rows = useMemo(() => {
@@ -307,6 +323,16 @@ export default function PulseMappings({
     return { all: pulseMappings.length, confirmed, suggested };
   }, [pulseMappings]);
 
+  // QoL #64: mappings that qualify for one-click auto-confirm.
+  // Criteria: match_type === "rea_id+name" (both REA ID AND name matched) AND
+  // confidence === "suggested" (awaiting human approval). Strongest match
+  // strategy in pulseDataSync — the only reason these aren't already confirmed
+  // is that nobody has clicked the green check yet.
+  const exactMatchSuggested = useMemo(
+    () => pulseMappings.filter((m) => m.match_type === "rea_id+name" && m.confidence === "suggested"),
+    [pulseMappings],
+  );
+
   const handleConfirm = useCallback(async (mapping) => {
     setConfirming(mapping.id);
     try {
@@ -319,6 +345,96 @@ export default function PulseMappings({
       setConfirming(null);
     }
   }, []);
+
+  // QoL #63: per-row selection toggle.
+  const toggleSelect = useCallback((id) => {
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }, []);
+
+  // Select-all applies to the CURRENTLY FILTERED rows — matches on-screen
+  // selection intent rather than every mapping in the table.
+  const toggleSelectAllFiltered = useCallback(() => {
+    setSelectedIds((prev) => {
+      const ids = filtered.map((r) => r.mapping.id);
+      const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
+      const n = new Set(prev);
+      if (allSelected) { for (const id of ids) n.delete(id); }
+      else { for (const id of ids) n.add(id); }
+      return n;
+    });
+  }, [filtered]);
+
+  // QoL #63: bulk confirm — only rows that aren't already confirmed.
+  const bulkConfirm = useCallback(async () => {
+    const ids = filtered
+      .filter((r) => selectedIds.has(r.mapping.id) && r.mapping.confidence !== "confirmed")
+      .map((r) => r.mapping.id);
+    if (!ids.length) { toast.info("No unconfirmed mappings selected"); return; }
+    setBulkBusy(true);
+    try {
+      const { error, count } = await api._supabase
+        .from("pulse_crm_mappings")
+        .update({ confidence: "confirmed" }, { count: "exact" })
+        .in("id", ids);
+      if (error) throw error;
+      await refetchEntityList("PulseCrmMapping");
+      setSelectedIds(new Set());
+      toast.success(`Confirmed ${count ?? ids.length} mapping${ids.length === 1 ? "" : "s"}`);
+    } catch (err) {
+      toast.error(`Bulk confirm failed: ${err.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [filtered, selectedIds]);
+
+  // QoL #63: bulk reject (hard-delete) for every selected row.
+  const bulkReject = useCallback(async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const { error, count } = await api._supabase
+        .from("pulse_crm_mappings")
+        .delete({ count: "exact" })
+        .in("id", ids);
+      if (error) throw error;
+      await refetchEntityList("PulseCrmMapping");
+      setSelectedIds(new Set());
+      toast.success(`Deleted ${count ?? ids.length} mapping${ids.length === 1 ? "" : "s"}`);
+    } catch (err) {
+      toast.error(`Bulk delete failed: ${err.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [selectedIds]);
+
+  // QoL #64: auto-confirm every rea_id+name match still in "suggested" state.
+  const runAutoConfirm = useCallback(async () => {
+    const ids = exactMatchSuggested.map((m) => m.id);
+    if (!ids.length) { setAutoConfirmOpen(false); return; }
+    setAutoConfirmBusy(true);
+    try {
+      const { error, count } = await api._supabase
+        .from("pulse_crm_mappings")
+        .update({ confidence: "confirmed" }, { count: "exact" })
+        .in("id", ids);
+      if (error) throw error;
+      await refetchEntityList("PulseCrmMapping");
+      toast.success(`Auto-confirmed ${count ?? ids.length} exact-match mapping${ids.length === 1 ? "" : "s"}`);
+      setAutoConfirmOpen(false);
+    } catch (err) {
+      toast.error(`Auto-confirm failed: ${err.message}`);
+    } finally {
+      setAutoConfirmBusy(false);
+    }
+  }, [exactMatchSuggested]);
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((r) => selectedIds.has(r.mapping.id));
+  const selectedOnScreen = filtered.filter((r) => selectedIds.has(r.mapping.id)).length;
 
   // Opens confirmation dialog
   const handleRejectRequest = useCallback((mapping) => {
@@ -349,6 +465,19 @@ export default function PulseMappings({
           <Link2 className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-semibold">CRM Mappings</h2>
           <Badge variant="outline" className="text-[10px] px-1.5 py-0">{filtered.length}</Badge>
+          {/* QoL #64: auto-confirm every exact-match (rea_id+name) suggestion */}
+          {exactMatchSuggested.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2.5 text-xs gap-1 border-emerald-400/60 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/30"
+              onClick={() => setAutoConfirmOpen(true)}
+              title="Auto-confirm mappings where both REA ID and full name matched exactly"
+            >
+              <Sparkles className="h-3 w-3" />
+              Auto-confirm {exactMatchSuggested.length} exact match{exactMatchSuggested.length === 1 ? "" : "es"}
+            </Button>
+          )}
         </div>
 
         {/* Search filter */}
@@ -410,6 +539,45 @@ export default function PulseMappings({
         </div>
       </div>
 
+      {/* QoL #63: sticky bulk-action bar — shows only while ≥1 on-screen row is ticked */}
+      {selectedOnScreen > 0 && (
+        <div className="sticky top-2 z-10 flex items-center justify-between gap-2 rounded-lg border bg-background/95 backdrop-blur px-3 py-2 shadow-sm">
+          <span className="text-xs">
+            <strong>{selectedOnScreen}</strong> mapping{selectedOnScreen === 1 ? "" : "s"} selected
+          </span>
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2.5 text-xs gap-1 border-emerald-400/60 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400"
+              onClick={bulkConfirm}
+              disabled={bulkBusy}
+            >
+              {bulkBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+              Confirm {selectedOnScreen}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2.5 text-xs gap-1 border-red-400/60 text-red-700 hover:bg-red-50 dark:text-red-400"
+              onClick={bulkReject}
+              disabled={bulkBusy}
+            >
+              <XCircle className="h-3 w-3" />
+              Reject {selectedOnScreen}
+            </Button>
+            <Button
+              size="sm" variant="ghost" className="h-7 px-2 text-xs"
+              onClick={() => setSelectedIds(new Set())}
+              disabled={bulkBusy}
+            >
+              <X className="h-3 w-3" />
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* ── Table ── */}
       <Card className="rounded-xl border shadow-sm">
         <CardContent className="p-0 overflow-x-auto">
@@ -418,9 +586,18 @@ export default function PulseMappings({
               No mappings found.
             </div>
           ) : (
-            <table className="w-full text-xs min-w-[700px]">
+            <table className="w-full text-xs min-w-[740px]">
               <thead>
                 <tr className="border-b bg-muted/30">
+                  <th className="text-left pl-4 pr-2 py-2.5 w-[32px]">
+                    <input
+                      type="checkbox"
+                      checked={allFilteredSelected}
+                      onChange={toggleSelectAllFiltered}
+                      className="h-3.5 w-3.5"
+                      aria-label="Select all filtered mappings"
+                    />
+                  </th>
                   <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Type</th>
                   <th className="text-left px-3 py-2.5 font-medium text-muted-foreground">Pulse Entity</th>
                   <th className="text-left px-3 py-2.5 font-medium text-muted-foreground">CRM Entity</th>
@@ -441,6 +618,8 @@ export default function PulseMappings({
                     onReject={handleRejectRequest}
                     confirming={confirming}
                     rejecting={rejecting}
+                    selected={selectedIds.has(mapping.id)}
+                    onToggleSelect={toggleSelect}
                   />
                 ))}
               </tbody>
@@ -460,6 +639,57 @@ export default function PulseMappings({
             </p>
           </CardContent>
         </Card>
+      )}
+
+      {/* QoL #64: Auto-confirm exact-match dialog */}
+      {autoConfirmOpen && (
+        <Dialog open onOpenChange={(o) => { if (!o) setAutoConfirmOpen(false); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-sm flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-emerald-600" />
+                Auto-confirm exact-match mappings
+              </DialogTitle>
+            </DialogHeader>
+            <div className="text-xs text-muted-foreground space-y-2 py-2">
+              <p>
+                This will set <strong>confidence = confirmed</strong> on{" "}
+                <strong className="text-emerald-700 dark:text-emerald-400">
+                  {exactMatchSuggested.length} mapping{exactMatchSuggested.length === 1 ? "" : "s"}
+                </strong>{" "}
+                that currently match both:
+              </p>
+              <ul className="list-disc pl-5 space-y-0.5">
+                <li><code className="font-mono text-[10px]">match_type = "rea_id+name"</code> (REA ID AND full name match exactly)</li>
+                <li><code className="font-mono text-[10px]">confidence = "suggested"</code> (awaiting human confirmation)</li>
+              </ul>
+              <p className="italic">
+                Rows with fuzzy or single-signal matches are not affected. You
+                can still Reject any row manually afterwards.
+              </p>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setAutoConfirmOpen(false)}
+                disabled={autoConfirmBusy}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={runAutoConfirm}
+                disabled={autoConfirmBusy}
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                {autoConfirmBusy
+                  ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Confirming…</>
+                  : `Confirm all ${exactMatchSuggested.length}`}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* ── Reject confirmation dialog ── */}

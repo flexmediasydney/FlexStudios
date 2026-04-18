@@ -51,7 +51,7 @@ import { toast } from "sonner";
 import {
   MapPin, Plus, Search, RefreshCw, ChevronLeft, ChevronRight,
   Edit3, Trash2, Upload, ShieldCheck, AlertTriangle, CheckCircle2,
-  ArrowUp, ArrowDown, X, FileSpreadsheet, Loader2,
+  ArrowUp, ArrowDown, X, FileSpreadsheet, Loader2, Clock, XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -66,6 +66,56 @@ const PRIORITY_RANGE = [1, 10];
 // suburb names must NEVER contain commas. This rule is hard-enforced both
 // client-side (form validation) and server-side (constraint 086).
 const NAME_FORBIDDEN_CHARS = /[,]/;
+
+// ── Last-scraped helper (QoL #65) ─────────────────────────────────────────────
+// Returns a short relative label + staleness tier for a given ISO timestamp.
+// Tiers drive the amber/red indicators in the table.
+function fmtRelativeAgo(iso) {
+  if (!iso) return { label: "Never", tier: "never" };
+  try {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 0 || isNaN(ms)) return { label: "—", tier: "unknown" };
+    const mins = Math.round(ms / 60_000);
+    if (mins < 1)  return { label: "just now", tier: "fresh" };
+    if (mins < 60) return { label: `${mins}m ago`, tier: "fresh" };
+    const hrs = Math.round(mins / 60);
+    const days = ms / 86_400_000;
+    const label = hrs < 24 ? `${hrs}h ago` : `${Math.round(days)}d ago`;
+    if (days > 30) return { label, tier: "very-stale" }; // red
+    if (days > 7)  return { label, tier: "stale" };      // amber
+    return { label, tier: "fresh" };
+  } catch { return { label: "—", tier: "unknown" }; }
+}
+
+// QoL #65: fetch max(completed_at) per suburb from pulse_sync_logs.
+// We pull the 60-day window (plenty to cover weekly crons) and reduce
+// client-side to a Map<lower(name), ISO> — cheaper than a groupBy RPC for
+// a typical ~1k-row pool and keeps all mutation paths client-side.
+function useLastScrapedBySuburb() {
+  return useQuery({
+    queryKey: ["pulse-suburbs-last-scraped"],
+    queryFn: async () => {
+      const sinceIso = new Date(Date.now() - 60 * 86_400_000).toISOString();
+      const { data, error } = await api._supabase
+        .from("pulse_sync_logs")
+        .select("suburb, completed_at")
+        .not("suburb", "is", null)
+        .not("completed_at", "is", null)
+        .gte("completed_at", sinceIso)
+        .order("completed_at", { ascending: false })
+        .limit(5000);
+      if (error) throw error;
+      const byName = new Map();
+      for (const r of data || []) {
+        const key = (r.suburb || "").toLowerCase();
+        if (!byName.has(key)) byName.set(key, r.completed_at);
+      }
+      return byName;
+    },
+    staleTime: 60_000,
+    refetchIntervalInBackground: false,
+  });
+}
 
 // ── Validators ───────────────────────────────────────────────────────────────
 
@@ -236,6 +286,12 @@ export default function PulseSuburbs() {
 
   // ── Data ──
   const { data: health } = useSuburbPoolHealth();
+  // QoL #65: last-scraped timestamp per suburb (60-day window, 1min staleTime).
+  const { data: lastScrapedMap } = useLastScrapedBySuburb();
+  // QoL #66: bulk-selection state (Activate/Deactivate N + Set priority).
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkPriority, setBulkPriority] = useState(5);
 
   const queryKey = useMemo(
     () => ["pulse-target-suburbs", { activeFilter, minPriority, pageSize, page, sortKey, sortDir, search }],
@@ -321,6 +377,70 @@ export default function PulseSuburbs() {
       toast.error(`Delete failed: ${err.message}`);
     }
   }, [refreshAll]);
+
+  // ── QoL #66: bulk operations ─────────────────────────────────────────
+  const toggleSelect = useCallback((id) => {
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }, []);
+  const toggleSelectAllOnPage = useCallback(() => {
+    setSelectedIds((prev) => {
+      const ids = (data?.rows || []).map((r) => r.id);
+      const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
+      const n = new Set(prev);
+      if (allSelected) { for (const id of ids) n.delete(id); }
+      else { for (const id of ids) n.add(id); }
+      return n;
+    });
+  }, [data]);
+
+  const bulkSetActive = useCallback(async (is_active) => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const { error, count } = await api._supabase
+        .from("pulse_target_suburbs")
+        .update({ is_active }, { count: "exact" })
+        .in("id", ids);
+      if (error) throw error;
+      toast.success(`${is_active ? "Activated" : "Deactivated"} ${count ?? ids.length} suburb${ids.length === 1 ? "" : "s"}`);
+      setSelectedIds(new Set());
+      refreshAll();
+    } catch (err) {
+      toast.error(`Bulk update failed: ${err.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [selectedIds, refreshAll]);
+
+  const bulkSetPriority = useCallback(async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    const p = Number(bulkPriority);
+    if (!Number.isInteger(p) || p < 1 || p > 10) {
+      toast.error("Priority must be an integer 1-10");
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      const { error, count } = await api._supabase
+        .from("pulse_target_suburbs")
+        .update({ priority: p }, { count: "exact" })
+        .in("id", ids);
+      if (error) throw error;
+      toast.success(`Set priority=${p} on ${count ?? ids.length} suburb${ids.length === 1 ? "" : "s"}`);
+      setSelectedIds(new Set());
+      refreshAll();
+    } catch (err) {
+      toast.error(`Bulk priority failed: ${err.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [selectedIds, bulkPriority, refreshAll]);
 
   return (
     <div className="space-y-3">
@@ -442,6 +562,66 @@ export default function PulseSuburbs() {
         </CardContent>
       </Card>
 
+      {/* QoL #66: sticky bulk-action bar — Activate N / Deactivate N / Set priority */}
+      {selectedIds.size > 0 && (
+        <div className="sticky top-2 z-10 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-background/95 backdrop-blur px-3 py-2 shadow-sm">
+          <span className="text-xs">
+            <strong>{selectedIds.size}</strong> suburb{selectedIds.size === 1 ? "" : "s"} selected
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2.5 text-xs gap-1 border-emerald-400/60 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400"
+              onClick={() => bulkSetActive(true)}
+              disabled={bulkBusy}
+              title="Mark selected suburbs is_active=true"
+            >
+              {bulkBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+              Activate {selectedIds.size}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2.5 text-xs gap-1 border-amber-400/60 text-amber-700 hover:bg-amber-50 dark:text-amber-400"
+              onClick={() => bulkSetActive(false)}
+              disabled={bulkBusy}
+              title="Mark selected suburbs is_active=false (soft-delete)"
+            >
+              <XCircle className="h-3 w-3" />
+              Deactivate {selectedIds.size}
+            </Button>
+            <div className="flex items-center gap-1 pl-1 border-l ml-1">
+              <span className="text-[11px] text-muted-foreground">Priority</span>
+              <Input
+                type="number"
+                min={1}
+                max={10}
+                value={bulkPriority}
+                onChange={(e) => setBulkPriority(e.target.value)}
+                className="h-7 w-14 text-xs"
+                disabled={bulkBusy}
+              />
+              <Button
+                size="sm" variant="outline" className="h-7 px-2 text-xs"
+                onClick={bulkSetPriority}
+                disabled={bulkBusy}
+              >
+                Set P → {bulkPriority}
+              </Button>
+            </div>
+            <Button
+              size="sm" variant="ghost" className="h-7 px-2 text-xs"
+              onClick={() => setSelectedIds(new Set())}
+              disabled={bulkBusy}
+            >
+              <X className="h-3 w-3" />
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <Card className="rounded-xl border shadow-sm">
         <CardContent className="p-0">
@@ -459,12 +639,23 @@ export default function PulseSuburbs() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-[32px]">
+                      <input
+                        type="checkbox"
+                        checked={rows.length > 0 && rows.every((r) => selectedIds.has(r.id))}
+                        onChange={toggleSelectAllOnPage}
+                        className="h-3.5 w-3.5"
+                        aria-label="Select all suburbs on this page"
+                      />
+                    </TableHead>
                     <SortableHead label="Name" k="name" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
                     <TableHead className="w-[60px]">State</TableHead>
                     <TableHead className="w-[80px]">Postcode</TableHead>
                     <TableHead>Region</TableHead>
                     <SortableHead label="Priority" k="priority" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-[90px]" />
                     <TableHead className="w-[80px]">Active</TableHead>
+                    {/* QoL #65: Last-scraped column with relative label + staleness tier */}
+                    <TableHead className="w-[110px]">Last scraped</TableHead>
                     <SortableHead label="Created" k="created_at" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-[120px]" />
                     <TableHead className="w-[100px]">Actions</TableHead>
                   </TableRow>
@@ -474,6 +665,9 @@ export default function PulseSuburbs() {
                     <SuburbRow
                       key={s.id}
                       suburb={s}
+                      lastScrapedIso={lastScrapedMap?.get((s.name || "").toLowerCase()) || null}
+                      selected={selectedIds.has(s.id)}
+                      onToggleSelect={toggleSelect}
                       onEdit={setEditing}
                       onDeactivateRequest={setConfirmDelete}
                       onInlineUpdate={inlineUpdate}
@@ -556,7 +750,7 @@ function SortableHead({ label, k, sortKey, sortDir, onSort, className }) {
 
 // ── Single row with inline editors ───────────────────────────────────────────
 
-function SuburbRow({ suburb, onEdit, onDeactivateRequest, onInlineUpdate }) {
+function SuburbRow({ suburb, lastScrapedIso, selected, onToggleSelect, onEdit, onDeactivateRequest, onInlineUpdate }) {
   const [priorityEdit, setPriorityEdit] = useState(false);
   const [pTmp, setPTmp] = useState(suburb.priority ?? 5);
 
@@ -572,9 +766,28 @@ function SuburbRow({ suburb, onEdit, onDeactivateRequest, onInlineUpdate }) {
   }, [pTmp, suburb.priority, suburb.id, onInlineUpdate]);
 
   const missingPostcode = !suburb.postcode;
+  // QoL #65: relative last-scraped + staleness tier → amber (>7d) / red (>30d).
+  const lastScraped = fmtRelativeAgo(lastScrapedIso);
+  const staleTone = {
+    "fresh":      "text-muted-foreground",
+    "stale":      "text-amber-700 dark:text-amber-400 font-medium",
+    "very-stale": "text-red-700 dark:text-red-400 font-semibold",
+    "never":      "text-muted-foreground/60 italic",
+    "unknown":    "text-muted-foreground",
+  }[lastScraped.tier] || "text-muted-foreground";
 
   return (
     <TableRow className={cn(!suburb.is_active && "opacity-50")}>
+      {/* QoL #66: selection checkbox */}
+      <TableCell className="w-[32px]">
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onChange={() => onToggleSelect(suburb.id)}
+          className="h-3.5 w-3.5"
+          aria-label={`Select ${suburb.name}`}
+        />
+      </TableCell>
       <TableCell className="font-medium">
         <div className="flex items-center gap-1.5">
           <span>{suburb.name}</span>
@@ -618,6 +831,14 @@ function SuburbRow({ suburb, onEdit, onDeactivateRequest, onInlineUpdate }) {
           onCheckedChange={(checked) => onInlineUpdate(suburb.id, { is_active: checked })}
           aria-label={suburb.is_active ? "Deactivate" : "Activate"}
         />
+      </TableCell>
+      {/* QoL #65: Last scraped cell with relative label + tier tone */}
+      <TableCell className={cn("text-[11px] tabular-nums whitespace-nowrap", staleTone)}
+                 title={lastScrapedIso ? `Last completed_at: ${lastScrapedIso}` : "No pulse_sync_logs entry for this suburb in the last 60 days"}>
+        <span className="inline-flex items-center gap-1">
+          <Clock className="h-3 w-3" />
+          {lastScraped.label}
+        </span>
       </TableCell>
       <TableCell className="text-[11px] text-muted-foreground tabular-nums">
         {suburb.created_at ? new Date(suburb.created_at).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
