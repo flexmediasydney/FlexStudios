@@ -647,15 +647,35 @@ serveWithAudit('pulseDataSync', async (req) => {
         rea_review_count: reviews.total_reviews || null,
         reviews_count: reviews.total_reviews || 0,
         reviews_avg: reviews.avg_rating || null,
+        // ── Migration 098: capture richer review data ────────────────
+        // Aggregated review tags ([{tag, count}, ...]) — high-signal for
+        // competitive intelligence. E.g. "Professional: 254, Great negotiator: 68"
+        reviews_compliments: Array.isArray(reviews.compliments) && reviews.compliments.length > 0
+          ? JSON.stringify(reviews.compliments.slice(0, 30))
+          : null,
+        // Most recent review (role + rating + content) for sentiment tracking
+        reviews_latest: reviews.latest_review && typeof reviews.latest_review === 'object'
+          ? JSON.stringify(reviews.latest_review)
+          : null,
         awards: rea.awards || null,
         speciality_suburbs: rea.specialities || null,
+        // ── Migration 098: nickname/first-name ──────────────────────
+        friendly_name: rea.friendly_name || null,
         social_facebook: rea.social?.facebook || null,
         social_instagram: rea.social?.instagram || null,
         social_linkedin: rea.social?.linkedin || null,
         community_involvement: rea.community_involvement || null,
         biography: rea.description || rea.about || rea.biography || null,
         recent_listing_ids: JSON.stringify((rea.recent_listings || []).slice(0, 10).map((l: any) => l.listing_id)),
+        // profile_sales_breakdown = agent-lifetime stats by property type
         sales_breakdown: rea.profile_sales_breakdown ? JSON.stringify(rea.profile_sales_breakdown) : null,
+        // ── Migration 098: search_sales_breakdown = suburb-scoped version ──
+        // Different semantic from sales_breakdown — this is the agent's
+        // performance IN THE CURRENT SEARCH SUBURB. Useful for suburb-specific
+        // intelligence ("Sonia in Liverpool: 58 primary-lister sales").
+        search_sales_breakdown: rea.search_sales_breakdown && rea.search_sales_breakdown.count > 0
+          ? JSON.stringify(rea.search_sales_breakdown)
+          : null,
         rea_agent_id: rea.salesperson_id ? String(rea.salesperson_id) : null,
         rea_profile_url: rea.profile_url || null,
         profile_image: rea.image || rea.photo_url || rea.profile_image || null, // May come from websift, also cross-enriched from listing data
@@ -903,11 +923,21 @@ serveWithAudit('pulseDataSync', async (req) => {
           suburbs_active: typeof a.suburbs_active === 'string' ? JSON.parse(a.suburbs_active) : (a.suburbs_active || []),
           recent_listing_ids: typeof a.recent_listing_ids === 'string' ? JSON.parse(a.recent_listing_ids) : (a.recent_listing_ids || []),
           sales_breakdown: typeof a.sales_breakdown === 'string' ? JSON.parse(a.sales_breakdown) : (a.sales_breakdown || null),
+          // Migration 098 — parse the new jsonb columns back to objects for upsert
+          reviews_compliments: typeof a.reviews_compliments === 'string' ? JSON.parse(a.reviews_compliments) : (a.reviews_compliments || null),
+          reviews_latest: typeof a.reviews_latest === 'string' ? JSON.parse(a.reviews_latest) : (a.reviews_latest || null),
+          search_sales_breakdown: typeof a.search_sales_breakdown === 'string' ? JSON.parse(a.search_sales_breakdown) : (a.search_sales_breakdown || null),
         };
         // Don't overwrite cross-enriched fields with null
         if (!record.email) delete record.email;
         if (!record.profile_image) delete record.profile_image;
         if (!record.total_listings_active) delete record.total_listings_active;
+        // Don't clobber reviews_compliments with null either — if the new scrape
+        // didn't return compliments but a previous one did, preserve the old.
+        if (!record.reviews_compliments) delete record.reviews_compliments;
+        if (!record.reviews_latest) delete record.reviews_latest;
+        if (!record.search_sales_breakdown) delete record.search_sales_breakdown;
+        if (!record.friendly_name) delete record.friendly_name;
         return record;
       });
 
