@@ -38,7 +38,8 @@ import {
   Home, MapPin, ArrowLeft, Share2, Star, Images, Video, Camera, Calendar,
   Clock, TrendingUp, TrendingDown, DollarSign, Building2, Tag, AlertTriangle,
   Bed, Bath, Car, ExternalLink, Phone, Mail, Users, History,
-  ChevronDown, ChevronRight, Play, FileText, CheckCircle2,
+  ChevronDown, ChevronRight, ChevronsUpDown, ChevronUp, Play, FileText, CheckCircle2,
+  XCircle, Eye, List, BarChart3,
 } from "lucide-react";
 import {
   formatAuctionDateTime,
@@ -47,6 +48,12 @@ import {
   LISTING_TYPE_LABEL,
   listingTypeBadgeClasses,
 } from "@/components/pulse/utils/listingHelpers";
+import { ListingSlideout } from "@/components/pulse/tabs/PulseListings";
+import {
+  ComposedChart, Line, Scatter, XAxis, YAxis, Tooltip as RTooltip,
+  Legend, ReferenceArea, ResponsiveContainer, CartesianGrid,
+} from "recharts";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 // ── Colour / format helpers ──────────────────────────────────────────────
 
@@ -124,9 +131,24 @@ export default function PropertyDetails() {
   }, [location.search]);
 
   // Tabs: default = timeline. Arrow keys navigate between tabs (A11y).
-  const TAB_ORDER = ["timeline", "media", "projects", "agents"];
+  const TAB_ORDER = ["timeline", "media", "listings", "projects", "agents", "market"];
   const [tab, setTab] = useState("timeline");
   const tabsRef = useRef(null);
+
+  // Flash-highlight state: Price-Timeline-Chart dots fire this; TimelineTab
+  // listens for it and momentarily highlights the matching card.
+  const [flashedEventId, setFlashedEventId] = useState(null);
+  const handleChartDotClick = useCallback((eventId) => {
+    if (!eventId) return;
+    setTab("timeline");
+    setFlashedEventId(eventId);
+    // Scroll tab rail into view
+    requestAnimationFrame(() => {
+      tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    // Clear flash after 2s so it can re-trigger
+    window.setTimeout(() => setFlashedEventId(null), 2000);
+  }, []);
   useEffect(() => {
     const onKey = (e) => {
       // Only intercept when focus isn't inside an input/textarea/button
@@ -355,6 +377,15 @@ export default function PropertyDetails() {
               />
             </ErrorBoundary>
 
+            {/* ── PRICE TIMELINE CHART (Phase 2) ── */}
+            <ErrorBoundary compact fallbackLabel="Price timeline">
+              <PriceTimelineChart
+                listings={listings}
+                projects={projects}
+                onDotClick={handleChartDotClick}
+              />
+            </ErrorBoundary>
+
             {/* ── TABS ── */}
             <div ref={tabsRef}>
               <Tabs value={tab} onValueChange={setTab}>
@@ -371,6 +402,15 @@ export default function PropertyDetails() {
                   <TabsTrigger value="media" className="flex-1 text-xs sm:text-sm">
                     <Images className="h-3.5 w-3.5 mr-1.5" />
                     Media
+                  </TabsTrigger>
+                  <TabsTrigger value="listings" className="flex-1 text-xs sm:text-sm">
+                    <List className="h-3.5 w-3.5 mr-1.5" />
+                    Listings
+                    {listings.length > 0 && (
+                      <Badge variant="secondary" className="ml-1.5 h-4 px-1 text-[9px] tabular-nums">
+                        {listings.length}
+                      </Badge>
+                    )}
                   </TabsTrigger>
                   <TabsTrigger value="projects" className="flex-1 text-xs sm:text-sm">
                     <Camera className="h-3.5 w-3.5 mr-1.5" />
@@ -390,17 +430,37 @@ export default function PropertyDetails() {
                       </Badge>
                     )}
                   </TabsTrigger>
+                  <TabsTrigger value="market" className="flex-1 text-xs sm:text-sm">
+                    <BarChart3 className="h-3.5 w-3.5 mr-1.5" />
+                    Market
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="timeline" className="mt-3">
                   <ErrorBoundary compact fallbackLabel="Timeline">
-                    <TimelineTab events={timelineEvents} listings={listings} projects={projects} />
+                    <TimelineTab
+                      events={timelineEvents}
+                      listings={listings}
+                      projects={projects}
+                      flashedEventId={flashedEventId}
+                    />
                   </ErrorBoundary>
                 </TabsContent>
 
                 <TabsContent value="media" className="mt-3">
                   <ErrorBoundary compact fallbackLabel="Media">
                     <MediaTab listings={listings} />
+                  </ErrorBoundary>
+                </TabsContent>
+
+                <TabsContent value="listings" className="mt-3">
+                  <ErrorBoundary compact fallbackLabel="Listings">
+                    <ListingsTab
+                      initialListings={listings}
+                      agents={agents}
+                      agencies={agencies}
+                      propertyKey={propertyKey}
+                    />
                   </ErrorBoundary>
                 </TabsContent>
 
@@ -412,7 +472,22 @@ export default function PropertyDetails() {
 
                 <TabsContent value="agents" className="mt-3">
                   <ErrorBoundary compact fallbackLabel="Agents">
-                    <AgentsTab agents={agents} agencies={agencies} />
+                    <AgentsTab
+                      agents={agents}
+                      agencies={agencies}
+                      listings={listings}
+                      projects={projects}
+                    />
+                  </ErrorBoundary>
+                </TabsContent>
+
+                <TabsContent value="market" className="mt-3">
+                  <ErrorBoundary compact fallbackLabel="Market">
+                    <MarketTab
+                      comparables={comparables}
+                      neighbours={dossier?.neighbour_clients || []}
+                      suburb={property?.suburb || null}
+                    />
                   </ErrorBoundary>
                 </TabsContent>
               </Tabs>
@@ -895,6 +970,393 @@ function SignalBanner({ signal }) {
   );
 }
 
+// ── Price Timeline Chart (Phase 2) ──────────────────────────────────────
+//
+// Composed chart that overlays:
+//   • a line tracking `asking_price` across all listings (nulls bridged)
+//   • dots for new-listing / sold / withdrawn events
+//   • square markers for FlexMedia shoot dates
+//   • ReferenceArea bands covering FlexMedia shoot windows
+//
+// Click a dot → scrolls Timeline tab into view and flash-highlights the
+// matching event card (parent wires this via `onDotClick(eventId)`).
+//
+// Safety: dates parsed defensively with `resolveListedDate`. Charts with
+// 0 plottable points return null so the parent skips rendering.
+
+function resolveListedDate(listing) {
+  const candidates = [
+    listing.listed_date,
+    listing.first_seen_at,
+    listing.created_at,
+  ];
+  for (const c of candidates) {
+    if (!c) continue;
+    const t = new Date(c).getTime();
+    if (isFinite(t)) return t;
+  }
+  return null;
+}
+
+function resolveDate(raw) {
+  if (!raw) return null;
+  const t = new Date(raw).getTime();
+  return isFinite(t) ? t : null;
+}
+
+function formatPriceShort(n) {
+  const v = Number(n);
+  if (!isFinite(v) || v <= 0) return "—";
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 1_000) return `$${Math.round(v / 1_000)}K`;
+  return `$${Math.round(v)}`;
+}
+
+function PriceTimelineTooltip({ active, payload, compact }) {
+  if (!active || !payload || payload.length === 0) return null;
+  // Prefer the scatter (event) payload over the line when both match
+  const scatterP = payload.find((p) => p.payload?._meta);
+  const linePoint = payload.find((p) => p.dataKey === "asking");
+  const meta = scatterP?.payload?._meta || linePoint?.payload?._meta || null;
+  const dateMs = scatterP?.payload?.x ?? linePoint?.payload?.x;
+  const price = scatterP?.payload?.y ?? linePoint?.payload?.asking;
+  const kind = meta?.kind;
+  const KIND_LABEL = {
+    listed: "New listing",
+    sold: "Sold",
+    withdrawn: "Withdrawn",
+    shoot: "FlexStudios shoot",
+  };
+  const kindColor = {
+    listed: "text-blue-600",
+    sold: "text-emerald-600",
+    withdrawn: "text-amber-600",
+    shoot: "text-violet-600",
+  }[kind] || "text-muted-foreground";
+
+  return (
+    <div className="bg-popover border border-border rounded-md shadow-md p-2 max-w-[220px]">
+      <div className="flex items-start gap-2">
+        {!compact && meta?.heroImage && (
+          <img
+            src={meta.heroImage}
+            alt=""
+            className="h-10 w-14 object-cover rounded shrink-0"
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+          />
+        )}
+        <div className="flex-1 min-w-0">
+          {kind && (
+            <p className={cn("text-[10px] uppercase tracking-widest font-bold", kindColor)}>
+              {KIND_LABEL[kind] || kind}
+            </p>
+          )}
+          <p className="text-xs font-bold tabular-nums">
+            {formatPriceShort(price)}
+          </p>
+          {dateMs && (
+            <p className="text-[10px] text-muted-foreground">{fmtDate(dateMs)}</p>
+          )}
+          {!compact && meta?.agent && (
+            <p className="text-[10px] text-muted-foreground truncate">{meta.agent}</p>
+          )}
+          {!compact && meta?.agency && (
+            <p className="text-[10px] text-muted-foreground truncate">{meta.agency}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PriceTimelineChart({ listings, projects, onDotClick }) {
+  const isMobile = useIsMobile();
+  const chartHeight = isMobile ? 140 : 220;
+
+  // ── Build line data: one point per listing with a resolvable date ──
+  const lineData = useMemo(() => {
+    const points = [];
+    for (const l of (listings || [])) {
+      const ms = resolveListedDate(l);
+      if (ms == null) continue;
+      const price = Number(l.asking_price);
+      points.push({
+        x: ms,
+        asking: isFinite(price) && price > 0 ? price : null,
+        _meta: {
+          kind: "listed",
+          heroImage: l.hero_image,
+          agent: l.agent_name,
+          agency: l.agency_name,
+          listing_id: l.id,
+        },
+      });
+    }
+    return points.sort((a, b) => a.x - b.x);
+  }, [listings]);
+
+  // ── Build scatter datasets: listed / sold / withdrawn / shoot ──
+  const { listedPoints, soldPoints, withdrawnPoints, shootPoints } = useMemo(() => {
+    const listed = [];
+    const sold = [];
+    const withdrawn = [];
+    const shoots = [];
+    for (const l of (listings || [])) {
+      const listedMs = resolveListedDate(l);
+      const listedPrice = Number(l.asking_price);
+      if (listedMs != null && isFinite(listedPrice) && listedPrice > 0) {
+        listed.push({
+          x: listedMs, y: listedPrice,
+          _meta: {
+            kind: "listed", heroImage: l.hero_image,
+            agent: l.agent_name, agency: l.agency_name,
+            eventId: `listed-${l.id}`,
+          },
+        });
+      }
+      const soldMs = resolveDate(l.sold_date);
+      const soldPrice = Number(l.sold_price);
+      if (soldMs != null && isFinite(soldPrice) && soldPrice > 0) {
+        sold.push({
+          x: soldMs, y: soldPrice,
+          _meta: {
+            kind: "sold", heroImage: l.hero_image,
+            agent: l.agent_name, agency: l.agency_name,
+            eventId: `sold-${l.id}`,
+          },
+        });
+      }
+      const wdMs = resolveDate(l.listing_withdrawn_at);
+      if (wdMs != null) {
+        // Y-value: fall back to asking price; if missing, interpolate later
+        const wdPrice = isFinite(listedPrice) && listedPrice > 0 ? listedPrice : null;
+        if (wdPrice != null) {
+          withdrawn.push({
+            x: wdMs, y: wdPrice,
+            _meta: {
+              kind: "withdrawn", heroImage: l.hero_image,
+              agent: l.agent_name, agency: l.agency_name,
+              eventId: `withdrawn-${l.id}`,
+            },
+          });
+        }
+      }
+    }
+    for (const p of (projects || [])) {
+      const shootMs = resolveDate(p.shoot_date || p.booking_date || p.created_at);
+      if (shootMs == null) continue;
+      // Interpolate Y from line data (nearest asking price)
+      let y = null;
+      if (lineData.length > 0) {
+        const nearest = lineData
+          .filter((pt) => pt.asking != null)
+          .reduce((best, pt) => {
+            const d = Math.abs(pt.x - shootMs);
+            if (!best || d < best.d) return { d, y: pt.asking };
+            return best;
+          }, null);
+        y = nearest?.y ?? null;
+      }
+      shoots.push({
+        x: shootMs, y: y ?? 0,
+        _meta: {
+          kind: "shoot",
+          agent: p.agent_name || p.project_owner_name,
+          agency: p.agency_name,
+          eventId: `shoot-${p.id}`,
+        },
+      });
+    }
+    return {
+      listedPoints: listed,
+      soldPoints: sold,
+      withdrawnPoints: withdrawn,
+      shootPoints: shoots,
+    };
+  }, [listings, projects, lineData]);
+
+  // ── FlexMedia shade bands (±2 days around each shoot) ──
+  const shootBands = useMemo(() => {
+    const DAY = 86400000;
+    return shootPoints.map((s) => ({
+      x1: s.x - 2 * DAY,
+      x2: s.x + 2 * DAY,
+    }));
+  }, [shootPoints]);
+
+  // Total plottable points — dictates render path
+  const totalPoints = lineData.length
+    + soldPoints.length
+    + withdrawnPoints.length
+    + shootPoints.length;
+
+  // 0 points → hide entirely
+  if (totalPoints === 0) return null;
+
+  // Determine domain
+  const allTimes = [
+    ...lineData.map((p) => p.x),
+    ...soldPoints.map((p) => p.x),
+    ...withdrawnPoints.map((p) => p.x),
+    ...shootPoints.map((p) => p.x),
+  ];
+  const xMin = Math.min(...allTimes);
+  const xMax = Math.max(...allTimes);
+  const xPadding = Math.max((xMax - xMin) * 0.05, 86400000 * 7); // ≥ 1 week
+  const xDomain = xMin === xMax
+    ? [xMin - 30 * 86400000, xMax + 30 * 86400000]
+    : [xMin - xPadding, xMax + xPadding];
+
+  // 1 point → sparkline empty-ish state with helper copy
+  if (totalPoints < 2) {
+    return (
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <TrendingUp className="h-4 w-4" />
+            Price Timeline
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div style={{ height: chartHeight }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart
+                data={lineData.length > 0 ? lineData : listedPoints}
+                margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
+              >
+                <XAxis
+                  dataKey="x" type="number" scale="time" domain={xDomain}
+                  tickFormatter={(v) => fmtMonthYear(v)}
+                  tick={{ fontSize: 10 }} stroke="currentColor" strokeOpacity={0.3}
+                />
+                <YAxis
+                  tickFormatter={(v) => "$" + (v / 1_000_000).toFixed(1) + "M"}
+                  tick={{ fontSize: 10 }} stroke="currentColor" strokeOpacity={0.3}
+                  width={48}
+                />
+                <Scatter
+                  data={lineData.length > 0 ? lineData.filter((p) => p.asking != null) : listedPoints}
+                  dataKey={lineData.length > 0 ? "asking" : "y"}
+                  fill="#3b82f6"
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-[10px] text-muted-foreground text-center mt-1">
+            Only 1 listing — more data will populate as new listings appear.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const handleScatterClick = (pt) => {
+    const eid = pt?.payload?._meta?.eventId || pt?._meta?.eventId;
+    if (eid) onDotClick?.(eid);
+  };
+
+  return (
+    <Card className="rounded-xl">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <TrendingUp className="h-4 w-4" />
+            Price Timeline
+          </CardTitle>
+          <span className="text-[10px] text-muted-foreground">
+            {lineData.length} listing{lineData.length !== 1 ? "s" : ""}
+            {shootPoints.length > 0 && ` · ${shootPoints.length} shoot${shootPoints.length !== 1 ? "s" : ""}`}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div style={{ height: chartHeight }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart
+              margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} />
+              <XAxis
+                dataKey="x" type="number" scale="time" domain={xDomain}
+                tickFormatter={(v) => fmtMonthYear(v)}
+                tick={{ fontSize: 10 }} stroke="currentColor" strokeOpacity={0.3}
+                allowDuplicatedCategory={false}
+              />
+              <YAxis
+                type="number" dataKey="y"
+                tickFormatter={(v) => "$" + (v / 1_000_000).toFixed(1) + "M"}
+                tick={{ fontSize: 10 }} stroke="currentColor" strokeOpacity={0.3}
+                width={48}
+                domain={["auto", "auto"]}
+              />
+              {shootBands.map((b, i) => (
+                <ReferenceArea
+                  key={`band-${i}`}
+                  x1={b.x1} x2={b.x2}
+                  fill="#8b5cf6" fillOpacity={0.08}
+                  stroke="#8b5cf6" strokeOpacity={0.15}
+                  ifOverflow="extendDomain"
+                />
+              ))}
+              <RTooltip
+                content={<PriceTimelineTooltip compact={isMobile} />}
+                cursor={{ strokeDasharray: "3 3", strokeOpacity: 0.3 }}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: 10, paddingTop: 4 }}
+                iconSize={8}
+              />
+              <Line
+                name="Asking price"
+                data={lineData}
+                dataKey="asking"
+                type="monotone"
+                stroke="#64748b"
+                strokeWidth={1.5}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
+              <Scatter
+                name="New listing"
+                data={listedPoints}
+                fill="#3b82f6"
+                shape="circle"
+                onClick={handleScatterClick}
+                isAnimationActive={false}
+              />
+              <Scatter
+                name="Sold"
+                data={soldPoints}
+                fill="#10b981"
+                shape="circle"
+                onClick={handleScatterClick}
+                isAnimationActive={false}
+              />
+              <Scatter
+                name="Withdrawn"
+                data={withdrawnPoints}
+                fill="#f59e0b"
+                shape="circle"
+                onClick={handleScatterClick}
+                isAnimationActive={false}
+              />
+              <Scatter
+                name="FlexMedia shoot"
+                data={shootPoints}
+                fill="#8b5cf6"
+                shape="square"
+                onClick={handleScatterClick}
+                isAnimationActive={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Intelligence strip — 7 tiles ─────────────────────────────────────────
 
 function IntelligenceStrip({ property, listings, projects, onTileClick }) {
@@ -1017,17 +1479,19 @@ function IntelligenceStrip({ property, listings, projects, onTileClick }) {
 
 // ── Timeline tab ─────────────────────────────────────────────────────────
 
-function TimelineTab({ events, listings, projects }) {
+function TimelineTab({ events, listings, projects, flashedEventId }) {
   const [filter, setFilter] = useState("all"); // all | shoots | rea | sales
 
   // Normalize events — rpc returns pulse_timeline rows, but fall back to
   // synthesizing from listings + projects when the RPC shape is empty.
+  // Each item gets a stable `_id` so PriceTimelineChart can flash-link to it.
   const allItems = useMemo(() => {
     if (Array.isArray(events) && events.length > 0) {
-      return events.map((e) => ({
+      return events.map((e, i) => ({
         ...e,
         _kind: classifyEventKind(e),
         _date: e.event_date || e.occurred_at || e.created_at,
+        _id: e.id || `evt-${i}`,
       })).filter((e) => e._date);
     }
     // Fallback — synthesize from listings & projects
@@ -1035,6 +1499,7 @@ function TimelineTab({ events, listings, projects }) {
     for (const l of listings) {
       if (l.listed_date) {
         synth.push({
+          _id: `listed-${l.id}`,
           _kind: "rea", _date: l.listed_date,
           title: `${LISTING_TYPE_LABEL[l.listing_type] || l.listing_type} — ${displayPrice(l).label}`,
           subtitle: `${l.agent_name || "—"} · ${l.agency_name || "—"}`,
@@ -1043,8 +1508,18 @@ function TimelineTab({ events, listings, projects }) {
       }
       if (l.sold_date && l.sold_price) {
         synth.push({
+          _id: `sold-${l.id}`,
           _kind: "sale", _date: l.sold_date,
           title: `Sold ${displayPrice({ ...l, listing_type: "sold" }).label}`,
+          subtitle: `${l.agent_name || "—"} · ${l.agency_name || "—"}`,
+          listing_id: l.id, source_url: l.source_url,
+        });
+      }
+      if (l.listing_withdrawn_at) {
+        synth.push({
+          _id: `withdrawn-${l.id}`,
+          _kind: "rea", _date: l.listing_withdrawn_at,
+          title: "Listing withdrawn",
           subtitle: `${l.agent_name || "—"} · ${l.agency_name || "—"}`,
           listing_id: l.id, source_url: l.source_url,
         });
@@ -1054,6 +1529,7 @@ function TimelineTab({ events, listings, projects }) {
       const d = p.shoot_date || p.created_at || p.booking_date;
       if (d) {
         synth.push({
+          _id: `shoot-${p.id}`,
           _kind: "shoot", _date: d,
           title: `FlexStudios shoot — ${p.tonomo_package || p.package_name || "Project"}`,
           subtitle: `${p.agent_name || p.project_owner_name || ""}`,
@@ -1136,7 +1612,11 @@ function TimelineTab({ events, listings, projects }) {
             </div>
             <div className="space-y-2 ml-2 border-l-2 border-border/40 pl-4">
               {items.map((e, i) => (
-                <TimelineCard key={e.id || `${month}-${i}`} event={e} />
+                <TimelineCard
+                  key={e._id || e.id || `${month}-${i}`}
+                  event={e}
+                  flashed={flashedEventId && flashedEventId === e._id}
+                />
               ))}
             </div>
           </div>
@@ -1154,12 +1634,19 @@ function classifyEventKind(e) {
   return "rea";
 }
 
-function TimelineCard({ event }) {
+function TimelineCard({ event, flashed }) {
   const kind = event._kind;
+  // Flash ring appears briefly when the Price Timeline Chart targets this card.
+  const flashCls = flashed
+    ? "ring-2 ring-primary ring-offset-2 ring-offset-background transition-shadow"
+    : "transition-shadow";
 
   if (kind === "shoot") {
     const content = (
-      <div className="bg-violet-50/40 dark:bg-violet-950/20 border border-violet-200/60 dark:border-violet-800/40 rounded p-2">
+      <div className={cn(
+        "bg-violet-50/40 dark:bg-violet-950/20 border border-violet-200/60 dark:border-violet-800/40 rounded p-2",
+        flashCls,
+      )}>
         <div className="flex items-start gap-2">
           <Camera className="h-3.5 w-3.5 text-violet-600 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
@@ -1184,7 +1671,10 @@ function TimelineCard({ event }) {
 
   if (kind === "sale") {
     return (
-      <div className="bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 rounded p-2">
+      <div className={cn(
+        "bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 rounded p-2",
+        flashCls,
+      )}>
         <div className="flex items-start gap-2">
           <DollarSign className="h-3.5 w-3.5 text-emerald-600 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
@@ -1212,7 +1702,7 @@ function TimelineCard({ event }) {
 
   // Default REA event
   return (
-    <div className="bg-muted/40 border border-border/60 rounded p-2">
+    <div className={cn("bg-muted/40 border border-border/60 rounded p-2", flashCls)}>
       <div className="flex items-start gap-2">
         <Building2 className="h-3.5 w-3.5 text-blue-600 mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">
@@ -1751,6 +2241,237 @@ function OurHistoryCard({ projects }) {
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+// ── Market tab ───────────────────────────────────────────────────────────
+//
+// Phase 2. Three stacked sections:
+//   1. Comparable sales   — dossier.comparables (≤5 sold in same suburb,
+//                            ±1 bed, last 12mo — already ranked by the RPC).
+//   2. Nearby FlexMedia clients — dossier.neighbour_clients (≤5 CRM agents
+//                            active in the same suburb).
+//   3. Suburb median snapshot — live query of sold prices in the last 90
+//                            days for this suburb; renders a median tile.
+//
+// Mobile layout: comparables go 1-up, neighbours stack, median tile is
+// full-width. All three sections stack vertically on every breakpoint.
+function MarketTab({ comparables, neighbours, suburb }) {
+  const suburbLabel = suburb || "this suburb";
+
+  // Live suburb median (last 90 days) — independent of the dossier so it's
+  // always fresh even if the RPC is cached.
+  const { data: medianRows, isLoading: medianLoading } = useQuery({
+    queryKey: ["suburb-sold-median-90d", suburb],
+    enabled: !!suburb,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - 90 * 86400000).toISOString();
+      const { data, error } = await api._supabase
+        .from("pulse_listings")
+        .select("sold_price, sold_date")
+        .eq("suburb", suburb)
+        .eq("listing_type", "sold")
+        .gte("sold_date", cutoff)
+        .not("sold_price", "is", null);
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const medianStat = useMemo(() => {
+    const prices = (medianRows || [])
+      .map((r) => Number(r.sold_price))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .sort((a, b) => a - b);
+    if (prices.length === 0) return null;
+    const mid = Math.floor(prices.length / 2);
+    const median = prices.length % 2
+      ? prices[mid]
+      : (prices[mid - 1] + prices[mid]) / 2;
+    return { median, n: prices.length };
+  }, [medianRows]);
+
+  return (
+    <div className="space-y-3">
+      {/* ── Section 1: Comparable sales ─────────────────────────────── */}
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <DollarSign className="h-4 w-4 text-emerald-600" />
+            Comparable sales
+            {comparables.length > 0 && (
+              <Badge variant="outline" className="text-[10px]">{comparables.length}</Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {comparables.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              No comparable sales found in {suburbLabel} for similar properties in the last 12 months.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {comparables.slice(0, 5).map((c, i) => {
+                const priceLabel = c.sold_price
+                  ? `$${(Number(c.sold_price) / 1_000_000).toFixed(2)}M`
+                  : "—";
+                const href = c.property_key
+                  ? createPageUrl("PropertyDetails") + `?key=${c.property_key}`
+                  : null;
+                const card = (
+                  <div className="rounded-xl border border-border overflow-hidden bg-card hover:shadow-md hover:border-emerald-300 transition-all h-full flex flex-col">
+                    <div className="aspect-[16/10] bg-muted overflow-hidden">
+                      {c.hero_image ? (
+                        <img
+                          src={c.hero_image}
+                          alt={c.address || "Comparable"}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+                          <Home className="h-8 w-8 opacity-40" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-3 flex-1 flex flex-col">
+                      <p className="text-xl font-bold tabular-nums text-emerald-700 leading-none">
+                        {priceLabel}
+                      </p>
+                      <p className="text-xs font-medium mt-1.5 line-clamp-2">
+                        {c.address || "—"}
+                      </p>
+                      {c.suburb && (
+                        <p className="text-[11px] text-muted-foreground">{c.suburb}</p>
+                      )}
+                      {(c.bedrooms != null || c.bathrooms != null || c.car_spaces != null) && (
+                        <div className="flex items-center gap-2 mt-2 text-[11px] text-muted-foreground tabular-nums">
+                          {c.bedrooms != null && (
+                            <span className="flex items-center gap-0.5">
+                              <Bed className="h-3 w-3" />{c.bedrooms}
+                            </span>
+                          )}
+                          {c.bathrooms != null && (
+                            <span className="flex items-center gap-0.5">
+                              <Bath className="h-3 w-3" />{c.bathrooms}
+                            </span>
+                          )}
+                          {c.car_spaces != null && (
+                            <span className="flex items-center gap-0.5">
+                              <Car className="h-3 w-3" />{c.car_spaces}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between mt-2 text-[10px] text-muted-foreground">
+                        {c.sold_date && <span>Sold {fmtRelative(c.sold_date)}</span>}
+                        {c.days_on_market != null && c.days_on_market > 0 && (
+                          <span className="tabular-nums">{c.days_on_market}d on market</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+                return href ? (
+                  <Link
+                    key={c.property_key || i}
+                    to={href}
+                    className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-xl"
+                  >
+                    {card}
+                  </Link>
+                ) : (
+                  <div key={i}>{card}</div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Section 2: Nearby FlexMedia clients ─────────────────────── */}
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Users className="h-4 w-4 text-blue-600" />
+            Nearby FlexMedia clients
+            {neighbours.length > 0 && (
+              <Badge variant="outline" className="text-[10px]">{neighbours.length}</Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {neighbours.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              No FlexMedia clients active in {suburbLabel}.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {neighbours.slice(0, 5).map((n, i) => {
+                const row = (
+                  <div className="flex items-center gap-3 rounded-lg border border-border p-2.5 bg-card hover:bg-muted/40 transition-colors">
+                    <Avatar className="h-10 w-10 shrink-0">
+                      {n.profile_image && <AvatarImage src={n.profile_image} alt={n.full_name} />}
+                      <AvatarFallback className="text-xs">{initials(n.full_name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{n.full_name || "—"}</p>
+                      {n.agency_name && (
+                        <p className="text-[11px] text-muted-foreground truncate">{n.agency_name}</p>
+                      )}
+                    </div>
+                    {n.crm_agent_id && (
+                      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                    )}
+                  </div>
+                );
+                return n.crm_agent_id ? (
+                  <Link
+                    key={n.crm_agent_id || n.pulse_agent_id || i}
+                    to={createPageUrl("PersonDetails") + `?id=${n.crm_agent_id}`}
+                    className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg"
+                  >
+                    {row}
+                  </Link>
+                ) : (
+                  <div key={n.pulse_agent_id || i}>{row}</div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Section 3: Suburb median snapshot ───────────────────────── */}
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-[10px] uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+            <BarChart3 className="h-3.5 w-3.5 text-indigo-600" />
+            Suburb median (last 90d)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {medianLoading ? (
+            <Skeleton className="h-10 w-48" />
+          ) : medianStat ? (
+            <div className="flex items-end gap-3">
+              <p className="text-3xl font-bold tabular-nums text-indigo-700 leading-none">
+                ${(medianStat.median / 1_000_000).toFixed(2)}M
+              </p>
+              <p className="text-xs text-muted-foreground tabular-nums pb-1">
+                n={medianStat.n}
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No sales recorded in {suburbLabel} in the last 90 days.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
