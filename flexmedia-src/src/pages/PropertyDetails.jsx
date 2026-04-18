@@ -1909,6 +1909,320 @@ function MediaTab({ listings }) {
   );
 }
 
+// ── Listings tab ─────────────────────────────────────────────────────────
+
+/**
+ * Full listing history for the property. The dossier RPC caps `listings` at 50
+ * rows (sorted newest first). When the user hits the 50-row ceiling we fall
+ * back to a direct PostgREST range query on `pulse_listings` to fetch the next
+ * 50 rows — no migration needed.
+ *
+ * Columns: Date | Type | Price | Agent | Agency | DoM | Withdrawn | Sold | Actions
+ * Sorting: client-side on listed_date, asking_price (numeric), days_on_market.
+ * Slideout: reuses the canonical <ListingSlideout> from PulseListings.
+ */
+function ListingsTab({ initialListings, agents, agencies, propertyKey }) {
+  const [rows, setRows] = useState(initialListings || []);
+  const [sortCol, setSortCol] = useState("listed_date");
+  const [sortDir, setSortDir] = useState("desc");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreErr, setLoadMoreErr] = useState(null);
+  const [exhausted, setExhausted] = useState(false);
+  const [selectedListing, setSelectedListing] = useState(null);
+
+  // Keep rows in sync when parent dossier refreshes (e.g., cache invalidation).
+  useEffect(() => {
+    setRows(initialListings || []);
+    setExhausted(false);
+  }, [initialListings]);
+
+  const sortedRows = useMemo(() => {
+    const out = [...rows];
+    const domOf = (l) => {
+      if (l.days_on_market != null && Number(l.days_on_market) > 0) {
+        return Number(l.days_on_market);
+      }
+      if (l.sold_date && l.listed_date) {
+        const ms = new Date(l.sold_date).getTime() - new Date(l.listed_date).getTime();
+        if (isFinite(ms) && ms >= 0) return Math.round(ms / 86400000);
+      }
+      return null;
+    };
+    const getKey = (l) => {
+      if (sortCol === "listed_date") {
+        const d = l.listed_date || l.first_seen_at || l.created_at;
+        return d ? new Date(d).getTime() : 0;
+      }
+      if (sortCol === "price") {
+        return Number(l.sold_price || l.asking_price) || 0;
+      }
+      if (sortCol === "dom") {
+        return domOf(l) || 0;
+      }
+      return 0;
+    };
+    out.sort((a, b) => {
+      const av = getKey(a);
+      const bv = getKey(b);
+      if (av === bv) return 0;
+      return sortDir === "asc" ? av - bv : bv - av;
+    });
+    return out;
+  }, [rows, sortCol, sortDir]);
+
+  const onHeaderClick = useCallback((col) => {
+    setSortCol((prev) => {
+      if (prev === col) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return prev;
+      }
+      setSortDir("desc");
+      return col;
+    });
+  }, []);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || exhausted) return;
+    setLoadingMore(true);
+    setLoadMoreErr(null);
+    try {
+      const offset = rows.length;
+      const { data, error } = await api._supabase
+        .from("pulse_listings")
+        .select("*")
+        .eq("property_key", propertyKey)
+        .order("listed_date", { ascending: false, nullsFirst: false })
+        .range(offset, offset + 49);
+      if (error) throw error;
+      const next = Array.isArray(data) ? data : [];
+      if (next.length === 0) {
+        setExhausted(true);
+      } else {
+        const seen = new Set(rows.map((r) => r.id));
+        const appended = next.filter((r) => !seen.has(r.id));
+        setRows((prev) => [...prev, ...appended]);
+        if (next.length < 50) setExhausted(true);
+      }
+    } catch (err) {
+      setLoadMoreErr(err?.message || "Failed to load more listings");
+      toast.error("Failed to load more listings");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, exhausted, rows, propertyKey]);
+
+  if (!sortedRows || sortedRows.length === 0) {
+    return (
+      <Card className="rounded-xl">
+        <CardContent className="py-10 text-center">
+          <List className="h-10 w-10 mx-auto mb-2 opacity-30 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No listing history yet for this property.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const canLoadMore = !exhausted && rows.length >= 50;
+
+  return (
+    <>
+      <Card className="rounded-xl overflow-hidden">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <List className="h-4 w-4 text-blue-600" />
+            Listing history
+            <Badge variant="outline" className="text-[10px]">{rows.length}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-muted/40 border-y border-border">
+                <tr className="text-left">
+                  <SortHeader col="listed_date" label="Listed" sortCol={sortCol} sortDir={sortDir} onClick={onHeaderClick} />
+                  <th className="px-3 py-2 font-semibold">Type</th>
+                  <SortHeader col="price" label="Price" sortCol={sortCol} sortDir={sortDir} onClick={onHeaderClick} align="right" />
+                  <th className="px-3 py-2 font-semibold hidden sm:table-cell">Agent</th>
+                  <th className="px-3 py-2 font-semibold hidden md:table-cell">Agency</th>
+                  <SortHeader col="dom" label="DoM" sortCol={sortCol} sortDir={sortDir} onClick={onHeaderClick} align="right" className="hidden md:table-cell" />
+                  <th className="px-3 py-2 font-semibold hidden lg:table-cell text-center">Withdrawn</th>
+                  <th className="px-3 py-2 font-semibold hidden lg:table-cell">Sold</th>
+                  <th className="px-3 py-2 font-semibold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedRows.map((l, idx) => (
+                  <ListingRow
+                    key={l.id || `${l.listed_date}-${idx}`}
+                    listing={l}
+                    agents={agents}
+                    agencies={agencies}
+                    onOpen={() => setSelectedListing(l)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(canLoadMore || loadMoreErr) && (
+            <div className="border-t border-border p-3 text-center">
+              {loadMoreErr && (
+                <p className="text-[11px] text-red-600 mb-2">{loadMoreErr}</p>
+              )}
+              {canLoadMore && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="h-8 text-xs"
+                >
+                  {loadingMore ? "Loading…" : "Load more"}
+                </Button>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {selectedListing && (
+        <ListingSlideout
+          listing={selectedListing}
+          pulseAgents={agents || []}
+          pulseAgencies={agencies || []}
+          onClose={() => setSelectedListing(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function SortHeader({ col, label, sortCol, sortDir, onClick, align, className }) {
+  const active = sortCol === col;
+  const Icon = !active ? ChevronsUpDown : sortDir === "asc" ? ChevronUp : ChevronDown;
+  return (
+    <th
+      className={cn(
+        "px-3 py-2 font-semibold cursor-pointer select-none hover:bg-muted/60",
+        align === "right" && "text-right",
+        className,
+      )}
+      onClick={() => onClick(col)}
+      title={`Sort by ${label}`}
+    >
+      <span className={cn("inline-flex items-center gap-1", align === "right" && "flex-row-reverse")}>
+        {label}
+        <Icon className={cn("h-3 w-3", active ? "opacity-100" : "opacity-40")} />
+      </span>
+    </th>
+  );
+}
+
+function ListingRow({ listing, agents, agencies, onOpen }) {
+  const typeCls = listingTypeBadgeClasses(listing.listing_type);
+  const typeLabel = listing.listing_withdrawn_at
+    ? "Withdrawn"
+    : (LISTING_TYPE_LABEL[listing.listing_type] || listing.listing_type || "—");
+
+  const price = displayPrice(listing).label;
+
+  const linkedAgent = listing.agent_rea_id
+    ? (agents || []).find((a) => String(a.rea_agent_id) === String(listing.agent_rea_id))
+    : null;
+  const linkedAgency = listing.agency_rea_id
+    ? (agencies || []).find((a) => String(a.rea_agency_id) === String(listing.agency_rea_id))
+    : null;
+
+  const agentLabel = linkedAgent?.full_name || listing.agent_name || "—";
+  const agencyLabel = linkedAgency?.name || listing.agency_name || "—";
+
+  const agentHref = linkedAgent?.crm_agent_id
+    ? (createPageUrl("PersonDetails") + `?id=${linkedAgent.crm_agent_id}`)
+    : linkedAgent?.pulse_agent_id
+    ? `/IndustryPulse?tab=agents&pulse_id=${linkedAgent.pulse_agent_id}`
+    : null;
+
+  const agencyHref = linkedAgency?.crm_agency_id
+    ? (createPageUrl("OrgDetails") + `?id=${linkedAgency.crm_agency_id}`)
+    : linkedAgency?.pulse_agency_id
+    ? `/IndustryPulse?tab=agencies&pulse_id=${linkedAgency.pulse_agency_id}`
+    : null;
+
+  let dom = null;
+  if (listing.days_on_market != null && Number(listing.days_on_market) > 0) {
+    dom = Number(listing.days_on_market);
+  } else if (listing.sold_date && listing.listed_date) {
+    const ms = new Date(listing.sold_date).getTime() - new Date(listing.listed_date).getTime();
+    if (isFinite(ms) && ms >= 0) dom = Math.round(ms / 86400000);
+  }
+
+  return (
+    <tr className="border-t border-border/60 hover:bg-muted/30">
+      <td className="px-3 py-2 whitespace-nowrap">{fmtDate(listing.listed_date)}</td>
+      <td className="px-3 py-2">
+        <Badge
+          variant="outline"
+          className={cn("text-[10px]", typeCls.bg, typeCls.text, typeCls.border)}
+        >
+          {typeLabel}
+        </Badge>
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums font-medium">{price}</td>
+      <td className="px-3 py-2 hidden sm:table-cell truncate max-w-[180px]">
+        {agentHref ? (
+          <Link to={agentHref} className="hover:underline" title="Open agent">
+            {agentLabel}
+          </Link>
+        ) : agentLabel}
+      </td>
+      <td className="px-3 py-2 hidden md:table-cell truncate max-w-[200px]">
+        {agencyHref ? (
+          <Link to={agencyHref} className="hover:underline" title="Open agency">
+            {agencyLabel}
+          </Link>
+        ) : agencyLabel}
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums hidden md:table-cell">
+        {dom != null ? `${dom}d` : "—"}
+      </td>
+      <td className="px-3 py-2 hidden lg:table-cell text-center">
+        {listing.listing_withdrawn_at ? (
+          <span title={`Withdrawn ${fmtDate(listing.listing_withdrawn_at)}`}>
+            <XCircle className="h-3.5 w-3.5 text-red-500 inline" />
+          </span>
+        ) : "—"}
+      </td>
+      <td className="px-3 py-2 hidden lg:table-cell whitespace-nowrap">
+        {listing.sold_date ? fmtDate(listing.sold_date) : "—"}
+      </td>
+      <td className="px-3 py-2 text-right whitespace-nowrap">
+        <div className="inline-flex items-center gap-1">
+          {listing.source_url && (
+            <a
+              href={listing.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted hover:bg-muted/80 text-[11px]"
+              title="Open on REA"
+            >
+              <ExternalLink className="h-3 w-3" />
+              REA
+            </a>
+          )}
+          <button
+            type="button"
+            onClick={onOpen}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted hover:bg-muted/80 text-[11px]"
+            title="Open slideout"
+          >
+            <Eye className="h-3 w-3" />
+            Open
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // ── Projects tab ─────────────────────────────────────────────────────────
 
 function ProjectsTab({ projects, property }) {
