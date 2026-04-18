@@ -2918,10 +2918,46 @@ function recordsSummaryFlat(log) {
   return { agents: a, listings: l, records: r };
 }
 
+// ── Sync History records cell helpers ────────────────────────────────────
+// Render fetched / new / updated counters in the Sync History table with the
+// same empty-state semantics as the per-source card's DispatchTable row:
+//   · running  → "—" (counters are written on completion)
+//   · null     → "—" (older rows pre-migration 095, or failed-early runs
+//                that never tallied counters)
+//   · number   → locale-formatted integer
+function syncRecordsCellText(log, field) {
+  if (log?.status === "running") return "—";
+  const v = log?.[field];
+  if (v == null) return "—";
+  return Number(v).toLocaleString();
+}
+
+function syncRecordsCellTitle(log, kind) {
+  const fetched = log?.records_fetched;
+  const newRows = log?.records_new;
+  const updated = log?.records_updated;
+  if (log?.status === "running") {
+    return "Record counters are populated when the run completes.";
+  }
+  if (fetched == null && newRows == null && updated == null) {
+    return "No per-run counters recorded for this sync (legacy row or failed before tally).";
+  }
+  const labels = {
+    fetched: "Rows returned by the scrape / API call",
+    new:     "Rows inserted on this run (not previously seen)",
+    updated: "Existing rows whose payload changed on this run",
+  };
+  return labels[kind] || "";
+}
+
 function downloadCsv(rows) {
   const header = [
     "started_at", "completed_at", "source_id", "source_label", "status",
-    "duration_sec", "agents_processed", "listings_stored", "records_saved",
+    "duration_sec",
+    // Slim-row counters (migration 095) — surfaced in the table as dedicated
+    // Fetched/New/Updated columns, so include them in the CSV too.
+    "records_fetched", "records_new", "records_updated",
+    "agents_processed", "listings_stored", "records_saved",
     "triggered_by", "triggered_by_name", "apify_run_id", "error_message",
   ];
   const escape = (v) => {
@@ -2943,6 +2979,9 @@ function downloadCsv(rows) {
       log.source_label || "",
       log.status || "",
       dur,
+      log.records_fetched ?? "",
+      log.records_new ?? "",
+      log.records_updated ?? "",
       sums.agents,
       sums.listings,
       sums.records,
@@ -3005,6 +3044,10 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
         .select(
           "id, source_id, source_label, status, started_at, completed_at, " +
           "result_summary, triggered_by, triggered_by_name, apify_run_id, error_message, " +
+          // Slim-row record counters (migration 095) — rendered in dedicated
+          // Fetched / New / Updated columns below, matching the per-source
+          // card's DispatchTable row layout.
+          "records_fetched, records_new, records_updated, " +
           // Batch attribution (migration 088) — rendered as "3/10" chip below.
           "batch_id, batch_number, total_batches",
           { count: "exact" }
@@ -3227,14 +3270,20 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                 : "No sync logs yet."}
             </p>
           ) : (
-            <table className="w-full text-xs min-w-[720px]">
+            <table className="w-full text-xs min-w-[820px]">
               <thead>
                 <tr className="border-b">
                   <th className="text-left pb-2 font-medium text-muted-foreground">Source</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Status</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Started</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Duration</th>
-                  <th className="text-left pb-2 font-medium text-muted-foreground">Records</th>
+                  {/* Parity with per-source card DispatchTable: split the
+                      monolithic "Records" column into Fetched / New / Updated
+                      so users can scan counters at a glance instead of parsing
+                      "120 fetched, 8 new, 3 updated" strings. */}
+                  <th className="text-right pb-2 font-medium text-muted-foreground" title="Rows returned by the scrape / API call">Fetched</th>
+                  <th className="text-right pb-2 font-medium text-muted-foreground" title="Rows inserted on this run (not previously seen)">New</th>
+                  <th className="text-right pb-2 font-medium text-muted-foreground" title="Existing rows whose payload changed on this run">Updated</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground" title="Chunked dispatch batch (N of M). Blank for ad-hoc/manual syncs.">Batch</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Triggered by</th>
                   <th className="pb-2" />
@@ -3249,7 +3298,37 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                     <td className="py-2 pr-3"><StatusBadge status={log.status} /></td>
                     <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">{fmtTs(log.started_at)}</td>
                     <td className="py-2 pr-3 text-muted-foreground">{fmtDuration(log.started_at, log.completed_at)}</td>
-                    <td className="py-2 pr-3 text-muted-foreground">{recordsSummary(log)}</td>
+                    {/* Parity with per-source card row — show fetched / new /
+                        updated as separate tabular-num cells. Mirror the
+                        DispatchTable's "—" behaviour for running rows, and
+                        show "—" (instead of 0) for historical rows whose
+                        counters were never populated (pre-migration 095) or
+                        for failed runs where the scrape never completed. */}
+                    <td className={cn(
+                      "py-2 pr-3 text-right tabular-nums",
+                      log.records_fetched == null && "text-muted-foreground/40",
+                    )}
+                      title={syncRecordsCellTitle(log, "fetched")}
+                    >
+                      {syncRecordsCellText(log, "records_fetched")}
+                    </td>
+                    <td className={cn(
+                      "py-2 pr-3 text-right tabular-nums",
+                      log.records_new == null && "text-muted-foreground/40",
+                      (log.records_new ?? 0) > 0 && "text-emerald-700 dark:text-emerald-400 font-medium",
+                    )}
+                      title={syncRecordsCellTitle(log, "new")}
+                    >
+                      {syncRecordsCellText(log, "records_new")}
+                    </td>
+                    <td className={cn(
+                      "py-2 pr-3 text-right tabular-nums",
+                      log.records_updated == null && "text-muted-foreground/40",
+                    )}
+                      title={syncRecordsCellTitle(log, "updated")}
+                    >
+                      {syncRecordsCellText(log, "records_updated")}
+                    </td>
                     <td className="py-2 pr-3">
                       {log.batch_number != null && log.total_batches != null ? (
                         <Badge
