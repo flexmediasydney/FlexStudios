@@ -189,13 +189,23 @@ function sortRoster(list, sortKey) {
 const normName = (s) =>
   (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
-const parseJSON = (val) => {
+const parseJSON = (val, field = "<unknown>") => {
   if (!val) return null;
-  try { return typeof val === "string" ? JSON.parse(val) : val; } catch { return null; }
+  try {
+    return typeof val === "string" ? JSON.parse(val) : val;
+  } catch (e) {
+    // AG16: surface malformed data in dev so we notice bad payloads instead of
+    // silently coalescing to null. Guarded to avoid prod console noise.
+    if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn("[PulseIntelligencePanel] parseJSON failed for", field, "err=", e);
+    }
+    return null;
+  }
 };
 
-const parseArray = (val) => {
-  const parsed = parseJSON(val);
+const parseArray = (val, field = "<unknown>") => {
+  const parsed = parseJSON(val, field);
   return Array.isArray(parsed) ? parsed : [];
 };
 
@@ -540,8 +550,47 @@ export default function PulseIntelligencePanel({
     });
   }, [USE_DOSSIER_RPC, dossier, legacyTimeline, entityId, mapping, crmEntity]);
 
-  // Listings for this entity
+  /* ── IP04: dedicated targeted listings fetch ──────────────────────────────
+     The legacy path filters `legacyListings` in-memory — that list is capped
+     at 5000 rows, so agents/agencies with tail activity beyond the cap were
+     silently dropped. Under the RPC path the dossier RPC already returns
+     listings; we still issue a standalone per-entity query so a top-agent
+     dossier can pull up to 100 rows reliably even if the RPC slice is
+     conservative. Fires once the entity's REA ID is known (from pulseData
+     or crmEntity fallback). */
+  const entityReaIdForListings = pulseData?.rea_agent_id
+    || pulseData?.rea_agency_id
+    || (entityType === "agent" ? crmEntity?.rea_agent_id : crmEntity?.rea_agency_id)
+    || null;
+
+  const {
+    data: targetedListings,
+    isError: targetedListingsError,
+  } = useQuery({
+    queryKey: ["entity-listings", entityType, entityReaIdForListings],
+    queryFn: async () => {
+      const col = entityType === "agent" ? "agent_rea_id" : "agency_rea_id";
+      const { data, error } = await supabase
+        .from("pulse_listings")
+        .select("*")
+        .eq(col, entityReaIdForListings)
+        .order("listed_date", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!entityReaIdForListings,
+    staleTime: 30_000,
+  });
+
+  // Listings for this entity — prefer the dedicated targeted fetch so agents
+  // with listings beyond the 5k legacy cap (or beyond the dossier RPC's
+  // returned slice) still render completely. Falls back to RPC/legacy data
+  // whenever the query errors or hasn't resolved yet.
   const entityListings = useMemo(() => {
+    if (targetedListings && targetedListings.length > 0 && !targetedListingsError) {
+      return targetedListings;
+    }
     if (USE_DOSSIER_RPC) return dossier?.listings || [];
     if (!pulseData) return [];
     if (entityType === "agent") {
@@ -557,7 +606,7 @@ export default function PulseIntelligencePanel({
     const name = normName(pulseData.name);
     if (name) return legacyListings.filter(l => normName(l.agency_name) === name);
     return [];
-  }, [USE_DOSSIER_RPC, dossier, entityType, pulseData, legacyListings]);
+  }, [targetedListings, targetedListingsError, USE_DOSSIER_RPC, dossier, entityType, pulseData, legacyListings]);
 
   const activeListings = entityListings.filter(l => l.listing_type === "for_sale" || l.listing_type === "for_rent");
   const forSaleListings = entityListings.filter(l => l.listing_type === "for_sale");
@@ -598,12 +647,49 @@ export default function PulseIntelligencePanel({
 
   // Sales breakdown / suburbs — derived from pulse_record, path-independent
   const salesBreakdown = useMemo(
-    () => parseJSON(pulseData?.sales_breakdown),
+    () => parseJSON(pulseData?.sales_breakdown, "sales_breakdown"),
     [pulseData]
   );
   const suburbsList = useMemo(
-    () => parseArray(pulseData?.suburbs_active),
+    () => parseArray(pulseData?.suburbs_active, "suburbs_active"),
     [pulseData]
+  );
+
+  // AG15: memoize primary/alternate contact lookups so they don't re-run
+  // on every re-render. Keyed on the raw entity field + its alternate_* column
+  // so swapping to a different pulse_record invalidates the cache.
+  const agentMobInfo = useMemo(
+    () => (entityType === "agent" ? primaryContact(pulseData, "mobile") : { value: null }),
+    [entityType, pulseData?.mobile, pulseData?.mobile_source, pulseData?.mobile_confidence, pulseData?.alternate_mobiles]
+  );
+  const agentBizInfo = useMemo(
+    () => (entityType === "agent" ? primaryContact(pulseData, "business_phone") : { value: null }),
+    [entityType, pulseData?.business_phone, pulseData?.business_phone_source, pulseData?.business_phone_confidence, pulseData?.alternate_phones]
+  );
+  const agentEmailInfo = useMemo(
+    () => (entityType === "agent" ? primaryContact(pulseData, "email") : { value: null }),
+    [entityType, pulseData?.email, pulseData?.email_source, pulseData?.email_confidence, pulseData?.alternate_emails]
+  );
+  const agentAltMobiles = useMemo(
+    () => (entityType === "agent" ? alternateContacts(pulseData, "mobile") : []),
+    [entityType, pulseData?.mobile, pulseData?.alternate_mobiles]
+  );
+  const agentAltBizPhones = useMemo(
+    () => (entityType === "agent" ? alternateContacts(pulseData, "business_phone") : []),
+    [entityType, pulseData?.business_phone, pulseData?.alternate_phones]
+  );
+  const agentAltEmails = useMemo(
+    () => (entityType === "agent" ? alternateContacts(pulseData, "email") : []),
+    [entityType, pulseData?.email, pulseData?.alternate_emails]
+  );
+
+  const agencyPhoneInfo = useMemo(
+    () => (entityType === "agency" ? primaryContact(pulseData, "phone") : { value: null }),
+    [entityType, pulseData?.phone, pulseData?.phone_source, pulseData?.phone_confidence, pulseData?.alternate_phones]
+  );
+  const agencyEmailInfo = useMemo(
+    () => (entityType === "agency" ? primaryContact(pulseData, "email") : { value: null }),
+    [entityType, pulseData?.email, pulseData?.email_source, pulseData?.email_confidence, pulseData?.alternate_emails]
   );
 
   // Cross-reference: pulse listings matching CRM project addresses
@@ -873,14 +959,14 @@ export default function PulseIntelligencePanel({
 
                 {/* Contact row — primary value + provenance badges. Legacy
                     `all_emails` extras still render below for backwards compat,
-                    but the newer `alternate_emails` disclosure is preferred. */}
+                    but the newer `alternate_emails` disclosure is preferred.
+                    AG15: contact lookups are memoized at the component level. */}
                 {(() => {
-                  const mobInfo   = primaryContact(a, "mobile");
-                  const bizInfo   = primaryContact(a, "business_phone");
-                  const emailInfo = primaryContact(a, "email");
-                  const altMobiles = alternateContacts(a, "mobile");
-                  const altBizPhones = alternateContacts(a, "business_phone");
-                  const altEmails = alternateContacts(a, "email");
+                  const mobInfo   = agentMobInfo;
+                  const bizInfo   = agentBizInfo;
+                  const emailInfo = agentEmailInfo;
+                  const altBizPhones = agentAltBizPhones;
+                  const altEmails = agentAltEmails;
                   return (
                     <div className="mt-1.5 space-y-1">
                       <div className="flex items-center gap-3 flex-wrap">
@@ -909,7 +995,7 @@ export default function PulseIntelligencePanel({
                             with pre-migration rows. Alternates via
                             alternate_emails take priority (rendered below). */}
                         {altEmails.length === 0 && (() => {
-                          const allEmails = parseArray(a.all_emails);
+                          const allEmails = parseArray(a.all_emails, "all_emails");
                           const extras = allEmails.filter(e => e && e !== a.email);
                           return extras.map((em) => (
                             <div key={em} className="flex items-center gap-1 text-xs">
@@ -1112,48 +1198,52 @@ export default function PulseIntelligencePanel({
           </Card>
         )}
 
-        {/* ── 10. CRM Cross-Reference ──────────────────────────────────── */}
-        <Card>
-          <CardContent className="p-4">
-            <SectionHeader icon={Briefcase} count={entityProjects.length}>CRM Cross-Reference</SectionHeader>
-            {mapping ? (
-              <Badge variant="outline" className="text-[9px] text-green-600 border-green-200 mb-2">
-                <CheckCircle2 className="h-3 w-3 mr-1" /> Mapped to CRM
-              </Badge>
-            ) : (
-              <p className="text-xs text-muted-foreground/60 mb-2">Not in CRM</p>
-            )}
-            {entityProjects.length > 0 ? (
-              <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {entityProjects.slice(0, 15).map(p => {
-                  const isCrossLinked = crossLinked.some(l => normAddr(l.address) === normAddr(p.property_address));
-                  return (
-                    <div key={p.id} className="flex items-center justify-between text-xs p-1.5 rounded bg-muted/20">
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium truncate">{p.title || p.property_address}</p>
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Badge variant="outline" className={cn("text-[7px] py-0",
-                            p.status === "delivered" ? "text-green-600 border-green-200" :
-                            p.status === "scheduled" ? "text-blue-600 border-blue-200" :
-                            "text-muted-foreground"
-                          )}>{p.status}</Badge>
-                          {p.shoot_date && <span>{fmtDate(p.shoot_date)}</span>}
+        {/* ── 10. CRM Cross-Reference ────────────────────────────────────
+            IP12: unmount the whole card when there's no mapping AND no
+            cross-linked projects — nothing to show, no reason for chrome. */}
+        {(mapping || entityProjects.length > 0) && (
+          <Card>
+            <CardContent className="p-4">
+              <SectionHeader icon={Briefcase} count={entityProjects.length}>CRM Cross-Reference</SectionHeader>
+              {mapping ? (
+                <Badge variant="outline" className="text-[9px] text-green-600 border-green-200 mb-2">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> Mapped to CRM
+                </Badge>
+              ) : (
+                <p className="text-xs text-muted-foreground/60 mb-2">Not in CRM</p>
+              )}
+              {entityProjects.length > 0 ? (
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {entityProjects.slice(0, 15).map(p => {
+                    const isCrossLinked = crossLinked.some(l => normAddr(l.address) === normAddr(p.property_address));
+                    return (
+                      <div key={p.id} className="flex items-center justify-between text-xs p-1.5 rounded bg-muted/20">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium truncate">{p.title || p.property_address}</p>
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <Badge variant="outline" className={cn("text-[7px] py-0",
+                              p.status === "delivered" ? "text-green-600 border-green-200" :
+                              p.status === "scheduled" ? "text-blue-600 border-blue-200" :
+                              "text-muted-foreground"
+                            )}>{p.status}</Badge>
+                            {p.shoot_date && <span>{fmtDate(p.shoot_date)}</span>}
+                          </div>
                         </div>
+                        {isCrossLinked && (
+                          <Badge className="text-[7px] bg-indigo-100 text-indigo-700 border-0 shrink-0 ml-2">
+                            Pulse Match
+                          </Badge>
+                        )}
                       </div>
-                      {isCrossLinked && (
-                        <Badge className="text-[7px] bg-indigo-100 text-indigo-700 border-0 shrink-0 ml-2">
-                          Pulse Match
-                        </Badge>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : mapping ? (
-              <p className="text-xs text-muted-foreground/60">No projects found for this agent</p>
-            ) : null}
-          </CardContent>
-        </Card>
+                    );
+                  })}
+                </div>
+              ) : mapping ? (
+                <p className="text-xs text-muted-foreground/60">No projects found for this agent</p>
+              ) : null}
+            </CardContent>
+          </Card>
+        )}
 
         {/* ── 11. Enrichment Metadata (collapsible) ────────────────────── */}
         <Card>
@@ -1263,10 +1353,11 @@ export default function PulseIntelligencePanel({
                       </div>
                     )}
                     {/* Contact row — with primary + alternates for email/phone.
-                        email is NEW on pulse_agencies (migration 108+). */}
+                        email is NEW on pulse_agencies (migration 108+).
+                        AG15: contact lookups memoized at the component level. */}
                     {(() => {
-                      const phoneInfo = primaryContact(a, "phone");
-                      const emailInfo = primaryContact(a, "email");
+                      const phoneInfo = agencyPhoneInfo;
+                      const emailInfo = agencyEmailInfo;
                       return (
                         <div className="mt-1.5 space-y-1">
                           <div className="flex items-center gap-3 flex-wrap">
@@ -1317,43 +1408,49 @@ export default function PulseIntelligencePanel({
           );
         })()}
 
-        {/* ── 2b. Branding (migration 108+: HQ address + brand colors) ─── */}
-        {(a.address_street || a.brand_color_primary || a.brand_color_text) && (
+        {/* ── 2b. Head Office (migration 108+: HQ address) ─────────────────
+            AG22: split out from the old "Branding" card so the section header
+            doesn't say "Branding" when only an address is present (address
+            coverage ~60%, brand colors ~7%). */}
+        {a.address_street && (
           <Card>
             <CardContent className="p-4">
-              <SectionHeader icon={Palette}>Branding</SectionHeader>
-              <div className="space-y-2">
-                {a.address_street && (
-                  <div className="flex items-start gap-2 text-xs">
-                    <MapPin className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-[9px] uppercase text-muted-foreground font-semibold">HQ Address</p>
-                      <p className="font-medium">{a.address_street}</p>
-                    </div>
+              <SectionHeader icon={MapPin}>Head Office</SectionHeader>
+              <div className="flex items-start gap-2 text-xs">
+                <MapPin className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-medium">{a.address_street}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── 2c. Brand Identity (migration 108+: brand colors) ───────────
+            AG22: only rendered when at least one brand color is populated. */}
+        {(a.brand_color_primary || a.brand_color_text) && (
+          <Card>
+            <CardContent className="p-4">
+              <SectionHeader icon={Palette}>Brand Identity</SectionHeader>
+              <div className="flex items-center gap-3">
+                {a.brand_color_primary && (
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="h-5 w-5 rounded border shadow-sm"
+                      style={{ backgroundColor: a.brand_color_primary }}
+                      title={`Primary: ${a.brand_color_primary}`}
+                    />
+                    <span className="text-[10px] font-mono text-muted-foreground">{a.brand_color_primary}</span>
                   </div>
                 )}
-                {(a.brand_color_primary || a.brand_color_text) && (
-                  <div className="flex items-center gap-3 pt-1">
-                    {a.brand_color_primary && (
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="h-5 w-5 rounded border shadow-sm"
-                          style={{ backgroundColor: a.brand_color_primary }}
-                          title={`Primary: ${a.brand_color_primary}`}
-                        />
-                        <span className="text-[10px] font-mono text-muted-foreground">{a.brand_color_primary}</span>
-                      </div>
-                    )}
-                    {a.brand_color_text && (
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="h-5 w-5 rounded border shadow-sm"
-                          style={{ backgroundColor: a.brand_color_text }}
-                          title={`Text: ${a.brand_color_text}`}
-                        />
-                        <span className="text-[10px] font-mono text-muted-foreground">{a.brand_color_text}</span>
-                      </div>
-                    )}
+                {a.brand_color_text && (
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="h-5 w-5 rounded border shadow-sm"
+                      style={{ backgroundColor: a.brand_color_text }}
+                      title={`Text: ${a.brand_color_text}`}
+                    />
+                    <span className="text-[10px] font-mono text-muted-foreground">{a.brand_color_text}</span>
                   </div>
                 )}
               </div>
