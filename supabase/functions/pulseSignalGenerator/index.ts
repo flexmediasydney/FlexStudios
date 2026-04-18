@@ -28,8 +28,10 @@ import {
   errorResponse,
   serveWithAudit,
 } from '../_shared/supabase.ts';
+import { startRun, endRun, recordError } from '../_shared/observability.ts';
 
 const GENERATOR = 'pulseSignalGenerator';
+const SOURCE_ID = 'pulse_signal_generator';
 const DEFAULT_LOOKBACK_HOURS = 24;
 const AGENCY_GROWTH_THRESHOLD = 2;  // agents gained in lookback to trigger a growth signal
 
@@ -334,6 +336,20 @@ serveWithAudit('pulseSignalGenerator', async (req: Request) => {
   const since = new Date(Date.now() - lookbackHours * 3600 * 1000).toISOString();
   const admin = getAdminClient();
 
+  // ── Open observability run ─────────────────────────────────────────────
+  // Uses the shared module so every pulseSignalGenerator invocation shows up
+  // in the Run History UI the same way pulseDataSync / pulseDetailEnrich do.
+  // The legacy pulse_timeline 'data_sync' row below is kept for backward
+  // compatibility with the Signals tab's existing event-type filter.
+  const ctx = await startRun({
+    admin,
+    sourceId: SOURCE_ID,
+    syncType: 'pulse_signal_generate',
+    triggeredBy: 'manual',
+    triggeredByName: `pulseSignalGenerator:${runId.slice(0, 8)}`,
+    inputConfig: { lookback_hours: lookbackHours, since, run_id: runId },
+  });
+
   const results: Record<string, { candidates: number; inserted: number; error?: string }> = {
     agent_movement:  { candidates: 0, inserted: 0 },
     agency_growth:   { candidates: 0, inserted: 0 },
@@ -374,14 +390,17 @@ serveWithAudit('pulseSignalGenerator', async (req: Request) => {
       if (error) throw new Error(error.message);
       results[name].inserted = data?.length || 0;
     } catch (err: any) {
-      console.error(`[pulseSignalGenerator] class=${name} failed:`, err?.message);
+      recordError(ctx, err, 'error');
       results[name].error = err?.message || String(err);
     }
   }
 
   const totalInserted = Object.values(results).reduce((a, r) => a + r.inserted, 0);
+  const totalCandidates = Object.values(results).reduce((a, r) => a + r.candidates, 0);
+  const anyError = Object.values(results).some(r => r.error);
 
   // Emit a timeline "data_sync" row so the run shows up in PulseTimeline UI.
+  // Kept for backward compatibility — the Signals tab filters on this event.
   try {
     await admin.from('pulse_timeline').insert({
       entity_type: 'system',
@@ -391,15 +410,36 @@ serveWithAudit('pulseSignalGenerator', async (req: Request) => {
       description: Object.entries(results)
         .map(([k, v]) => `${k}=${v.inserted}/${v.candidates}${v.error ? ` (err: ${v.error})` : ''}`)
         .join(', '),
-      new_value: results,
+      new_value: { ...results, sync_log_id: ctx.syncLogId },
       source: GENERATOR,
       idempotency_key: `${GENERATOR}:run:${runId}`,
     });
   } catch { /* non-fatal */ }
 
+  // ── Close observability run ────────────────────────────────────────────
+  await endRun(ctx, {
+    status: anyError ? 'failed' : 'completed',
+    recordsFetched: totalCandidates,
+    recordsUpdated: totalInserted,
+    recordsDetail: Object.fromEntries(
+      Object.entries(results).map(([k, v]) => [k, { candidates: v.candidates, inserted: v.inserted }]),
+    ),
+    sourceLabel: `${SOURCE_ID} · ${totalInserted} new · ${lookbackHours}h`,
+    suburb: 'signals',
+    customSummary: {
+      lookback_hours: lookbackHours,
+      since,
+      results,
+      total_candidates: totalCandidates,
+      total_inserted: totalInserted,
+      run_id: runId,
+    },
+  });
+
   return jsonResponse({
     ok: true,
     run_id: runId,
+    sync_log_id: ctx.syncLogId,
     lookback_hours: lookbackHours,
     duration_ms: Date.now() - startedAt,
     results,
