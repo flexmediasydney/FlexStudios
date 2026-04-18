@@ -21,7 +21,7 @@ import PulseTimeline from "@/components/pulse/PulseTimeline";
 import { Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   TrendingUp, Users, Home, Clock, AlertTriangle, CheckCircle2, DollarSign,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
-  BarChart3, User, Loader2, BookOpen, Database, History
+  BarChart3, User, Loader2, BookOpen, Database, History, Sparkles, Palette
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
@@ -29,6 +29,8 @@ import {
   displayPrice as sharedDisplayPrice,
   LISTING_TYPE_LABEL,
   listingTypeBadgeClasses,
+  primaryContact,
+  alternateContacts,
 } from "@/components/pulse/utils/listingHelpers";
 
 /* ── Helpers ─────────────────────────────────────────────────────────────────── */
@@ -98,6 +100,114 @@ const REABadge = () => (
     REA
   </span>
 );
+
+/* ── Contact-provenance mini-badges + alternate disclosure ───────────────────── */
+
+/**
+ * Small row of badges that annotate a primary contact value: "verified" when
+ * 2+ sources agree, "detail" when the source starts with `detail_page_`,
+ * and "stale" when last_seen_at > 90d ago.
+ *
+ * Shown inline next to an email/phone/mobile value.
+ */
+function ContactProvBadges({ info }) {
+  if (!info || !info.value) return null;
+  const isDetail = typeof info.source === "string" && info.source.startsWith("detail_page_");
+  return (
+    <span className="inline-flex items-center gap-0.5 ml-1 align-middle">
+      {info.verified && (
+        <span
+          title={`Verified across ${info.sourcesCount} sources`}
+          className="inline-flex items-center gap-0.5 text-[8px] font-semibold uppercase px-1 py-0 rounded text-emerald-700 bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-800/40"
+        >
+          <CheckCircle2 className="h-2 w-2" /> verified
+        </span>
+      )}
+      {isDetail && (
+        <span
+          title="Sourced from listing detail page"
+          className="inline-flex items-center gap-0.5 text-[8px] font-semibold uppercase px-1 py-0 rounded text-indigo-700 bg-indigo-50 border border-indigo-200 dark:bg-indigo-950/20 dark:text-indigo-400 dark:border-indigo-800/40"
+        >
+          <Sparkles className="h-2 w-2" /> detail
+        </span>
+      )}
+      {info.stale && (
+        <span
+          title="Last seen > 90 days ago"
+          className="inline-flex items-center text-[8px] font-semibold uppercase px-1 py-0 rounded text-amber-700 bg-amber-50 border border-amber-200 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-800/40"
+        >
+          stale
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Collapsible "Also seen" disclosure listing alternate values for a given
+ * contact field with their sources, confidence, and first/last seen dates.
+ *
+ * Renders nothing when there are no alternates.
+ */
+function AlternateContactsDisclosure({ entity, field, labelPlural, icon: Icon = Mail }) {
+  const [open, setOpen] = useState(false);
+  const items = useMemo(() => alternateContacts(entity, field), [entity, field]);
+  if (!items || items.length === 0) return null;
+
+  const fmtShort = (d) => {
+    if (!d) return "—";
+    try {
+      return new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "2-digit" });
+    } catch { return "—"; }
+  };
+
+  const isEmail = field === "email";
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((p) => !p)}
+        className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
+        Also seen: {items.length} other {labelPlural}
+      </button>
+      {open && (
+        <div className="mt-1 space-y-1 pl-3 border-l border-border/60">
+          {items.map((alt, i) => (
+            <div key={`${alt.value}-${i}`} className="text-[10px] leading-snug">
+              <div className="flex items-center gap-1">
+                <Icon className="h-2.5 w-2.5 text-muted-foreground/50" />
+                {isEmail ? (
+                  <a href={`mailto:${alt.value}`} className="text-primary/80 hover:underline truncate">
+                    {alt.value}
+                  </a>
+                ) : (
+                  <a href={`tel:${alt.value}`} className="text-primary/80 hover:underline truncate">
+                    {alt.value}
+                  </a>
+                )}
+                {alt.confidence != null && (
+                  <span className="text-[8px] text-muted-foreground/60 tabular-nums">
+                    {alt.confidence}%
+                  </span>
+                )}
+              </div>
+              <div className="text-[9px] text-muted-foreground/70 pl-3.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                {alt.sources.length > 0 && (
+                  <span>src: {alt.sources.join(", ")}</span>
+                )}
+                {alt.first_seen_at && <span>first {fmtShort(alt.first_seen_at)}</span>}
+                {alt.last_seen_at && <span>last {fmtShort(alt.last_seen_at)}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ── Section header ──────────────────────────────────────────────────────────── */
 
@@ -501,38 +611,64 @@ export default function PulseIntelligencePanel({
                   </div>
                 )}
 
-                {/* Contact row */}
-                <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                  {a.mobile && (
-                    <div className="flex items-center gap-1 text-xs">
-                      <Phone className="h-3 w-3 text-muted-foreground" />
-                      <a href={`tel:${a.mobile}`} className="text-primary hover:underline">{a.mobile}</a>
-                    </div>
-                  )}
-                  {a.business_phone && !a.mobile && (
-                    <div className="flex items-center gap-1 text-xs">
-                      <Phone className="h-3 w-3 text-muted-foreground" />
-                      <a href={`tel:${a.business_phone}`} className="text-primary hover:underline">{a.business_phone}</a>
-                    </div>
-                  )}
-                  {a.email && (
-                    <div className="flex items-center gap-1 text-xs">
-                      <Mail className="h-3 w-3 text-muted-foreground" />
-                      <a href={`mailto:${a.email}`} className="text-primary hover:underline">{a.email}</a>
-                    </div>
-                  )}
-                  {/* Show additional emails from all_emails JSON array */}
-                  {(() => {
-                    const allEmails = parseArray(a.all_emails);
-                    const extras = allEmails.filter(e => e && e !== a.email);
-                    return extras.length > 0 && extras.map(em => (
-                      <div key={em} className="flex items-center gap-1 text-xs">
-                        <Mail className="h-3 w-3 text-muted-foreground/50" />
-                        <a href={`mailto:${em}`} className="text-primary/70 hover:underline">{em}</a>
+                {/* Contact row — primary value + provenance badges. Legacy
+                    `all_emails` extras still render below for backwards compat,
+                    but the newer `alternate_emails` disclosure is preferred. */}
+                {(() => {
+                  const mobInfo   = primaryContact(a, "mobile");
+                  const bizInfo   = primaryContact(a, "business_phone");
+                  const emailInfo = primaryContact(a, "email");
+                  const altMobiles = alternateContacts(a, "mobile");
+                  const altBizPhones = alternateContacts(a, "business_phone");
+                  const altEmails = alternateContacts(a, "email");
+                  return (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {mobInfo.value && (
+                          <div className="flex items-center gap-1 text-xs">
+                            <Phone className="h-3 w-3 text-muted-foreground" />
+                            <a href={`tel:${mobInfo.value}`} className="text-primary hover:underline">{mobInfo.value}</a>
+                            <ContactProvBadges info={mobInfo} />
+                          </div>
+                        )}
+                        {bizInfo.value && !mobInfo.value && (
+                          <div className="flex items-center gap-1 text-xs">
+                            <Phone className="h-3 w-3 text-muted-foreground" />
+                            <a href={`tel:${bizInfo.value}`} className="text-primary hover:underline">{bizInfo.value}</a>
+                            <ContactProvBadges info={bizInfo} />
+                          </div>
+                        )}
+                        {emailInfo.value && (
+                          <div className="flex items-center gap-1 text-xs">
+                            <Mail className="h-3 w-3 text-muted-foreground" />
+                            <a href={`mailto:${emailInfo.value}`} className="text-primary hover:underline">{emailInfo.value}</a>
+                            <ContactProvBadges info={emailInfo} />
+                          </div>
+                        )}
+                        {/* Legacy all_emails renderer — kept for backwards compat
+                            with pre-migration rows. Alternates via
+                            alternate_emails take priority (rendered below). */}
+                        {altEmails.length === 0 && (() => {
+                          const allEmails = parseArray(a.all_emails);
+                          const extras = allEmails.filter(e => e && e !== a.email);
+                          return extras.map((em) => (
+                            <div key={em} className="flex items-center gap-1 text-xs">
+                              <Mail className="h-3 w-3 text-muted-foreground/50" />
+                              <a href={`mailto:${em}`} className="text-primary/70 hover:underline">{em}</a>
+                            </div>
+                          ));
+                        })()}
                       </div>
-                    ));
-                  })()}
-                </div>
+                      {/* Collapsed-by-default disclosures for alternate emails /
+                          phones. Only render when the arrays have entries. */}
+                      <AlternateContactsDisclosure entity={a} field="email" labelPlural="emails" icon={Mail} />
+                      <AlternateContactsDisclosure entity={a} field="mobile" labelPlural="mobiles" icon={Phone} />
+                      {altBizPhones.length > 0 && (
+                        <AlternateContactsDisclosure entity={a} field="business_phone" labelPlural="business phones" icon={Phone} />
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* REA profile link */}
                 {a.rea_profile_url && (
@@ -851,30 +987,44 @@ export default function PulseIntelligencePanel({
                     {a.postcode ? ` ${a.postcode}` : ""}
                   </div>
                 )}
-                <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                  {a.phone && (
-                    <div className="flex items-center gap-1 text-xs">
-                      <Phone className="h-3 w-3 text-muted-foreground" />
-                      <a href={`tel:${a.phone}`} className="text-primary hover:underline">{a.phone}</a>
+                {/* Contact row — with primary + alternates for email/phone.
+                    email is NEW on pulse_agencies (migration 108+). */}
+                {(() => {
+                  const phoneInfo = primaryContact(a, "phone");
+                  const emailInfo = primaryContact(a, "email");
+                  return (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {phoneInfo.value && (
+                          <div className="flex items-center gap-1 text-xs">
+                            <Phone className="h-3 w-3 text-muted-foreground" />
+                            <a href={`tel:${phoneInfo.value}`} className="text-primary hover:underline">{phoneInfo.value}</a>
+                            <ContactProvBadges info={phoneInfo} />
+                          </div>
+                        )}
+                        {emailInfo.value && (
+                          <div className="flex items-center gap-1 text-xs">
+                            <Mail className="h-3 w-3 text-muted-foreground" />
+                            <a href={`mailto:${emailInfo.value}`} className="text-primary hover:underline">{emailInfo.value}</a>
+                            <ContactProvBadges info={emailInfo} />
+                          </div>
+                        )}
+                        {a.website && (
+                          <div className="flex items-center gap-1 text-xs">
+                            <Globe className="h-3 w-3 text-muted-foreground" />
+                            <a
+                              href={a.website.startsWith("http") ? a.website : `https://${a.website}`}
+                              target="_blank" rel="noopener noreferrer"
+                              className="text-primary hover:underline truncate max-w-[200px]"
+                            >{a.website}</a>
+                          </div>
+                        )}
+                      </div>
+                      <AlternateContactsDisclosure entity={a} field="email" labelPlural="emails" icon={Mail} />
+                      <AlternateContactsDisclosure entity={a} field="phone" labelPlural="phones" icon={Phone} />
                     </div>
-                  )}
-                  {a.email && (
-                    <div className="flex items-center gap-1 text-xs">
-                      <Mail className="h-3 w-3 text-muted-foreground" />
-                      <a href={`mailto:${a.email}`} className="text-primary hover:underline">{a.email}</a>
-                    </div>
-                  )}
-                  {a.website && (
-                    <div className="flex items-center gap-1 text-xs">
-                      <Globe className="h-3 w-3 text-muted-foreground" />
-                      <a
-                        href={a.website.startsWith("http") ? a.website : `https://${a.website}`}
-                        target="_blank" rel="noopener noreferrer"
-                        className="text-primary hover:underline truncate max-w-[200px]"
-                      >{a.website}</a>
-                    </div>
-                  )}
-                </div>
+                  );
+                })()}
                 {a.rea_profile_url && (
                   <a
                     href={a.rea_profile_url}
@@ -889,6 +1039,50 @@ export default function PulseIntelligencePanel({
             </div>
           </CardContent>
         </Card>
+
+        {/* ── 2b. Branding (migration 108+: HQ address + brand colors) ─── */}
+        {(a.address_street || a.brand_color_primary || a.brand_color_text) && (
+          <Card>
+            <CardContent className="p-4">
+              <SectionHeader icon={Palette}>Branding</SectionHeader>
+              <div className="space-y-2">
+                {a.address_street && (
+                  <div className="flex items-start gap-2 text-xs">
+                    <MapPin className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-[9px] uppercase text-muted-foreground font-semibold">HQ Address</p>
+                      <p className="font-medium">{a.address_street}</p>
+                    </div>
+                  </div>
+                )}
+                {(a.brand_color_primary || a.brand_color_text) && (
+                  <div className="flex items-center gap-3 pt-1">
+                    {a.brand_color_primary && (
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="h-5 w-5 rounded border shadow-sm"
+                          style={{ backgroundColor: a.brand_color_primary }}
+                          title={`Primary: ${a.brand_color_primary}`}
+                        />
+                        <span className="text-[10px] font-mono text-muted-foreground">{a.brand_color_primary}</span>
+                      </div>
+                    )}
+                    {a.brand_color_text && (
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="h-5 w-5 rounded border shadow-sm"
+                          style={{ backgroundColor: a.brand_color_text }}
+                          title={`Text: ${a.brand_color_text}`}
+                        />
+                        <span className="text-[10px] font-mono text-muted-foreground">{a.brand_color_text}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* ── 3. Key Metrics (4-col grid) ──────────────────────────────── */}
         <Card>

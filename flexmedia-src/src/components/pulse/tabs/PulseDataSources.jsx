@@ -27,6 +27,7 @@ import {
   ExternalLink, Repeat, Globe, Calendar, Coins, FileCode2,
   User, XCircle, Activity, Copy, Edit3, Save, AlertCircle,
   ChevronLeft, ChevronRight, Filter, Download, History, X,
+  Sparkles,
 } from "lucide-react";
 
 // ── Source UI metadata ────────────────────────────────────────────────────────
@@ -59,6 +60,12 @@ const SOURCE_UI_META = {
     color: "text-orange-600",
     accentClass: "from-orange-500/10 to-orange-600/5 border-orange-200/60 dark:border-orange-800/40",
     costNote: "~$0.05/run",
+  },
+  rea_detail_enrich: {
+    icon: Sparkles,
+    color: "text-indigo-600",
+    accentClass: "from-indigo-500/10 to-indigo-600/5 border-indigo-200/60 dark:border-indigo-800/40",
+    costNote: "~$0.001/listing",
   },
 };
 

@@ -59,6 +59,7 @@ import {
   isActiveListing,
   stalenessInfo,
   reaIdEquals,
+  alternateContacts,
 } from "@/components/pulse/utils/listingHelpers";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
@@ -1163,11 +1164,22 @@ export default function PulseAgentIntel({
       q = q.ilike("agency_suburb", `%${suburbQ.replace(/[%_]/g, "\\$&")}%`);
     }
 
-    // Global search (OR across name/agency/email/mobile/suburb/job_title)
+    // Global search (OR across name/agency/email/mobile/suburb/job_title
+    // plus JSONB containment for alternate emails/mobiles so hits surface
+    // agents whose PRIMARY value doesn't match but an alternate does).
     const globalQ = (search || "").trim();
     if (globalQ) {
       const s = globalQ.replace(/[%_]/g, "\\$&");
-      q = q.or(`full_name.ilike.%${s}%,agency_name.ilike.%${s}%,email.ilike.%${s}%,mobile.ilike.%${s}%,agency_suburb.ilike.%${s}%,job_title.ilike.%${s}%`);
+      // PostgREST .or() requires JSON-embedded values to be properly escaped;
+      // wrap the containment operand in `cs.[{...}]` and JSON-stringify the
+      // value so double-quotes are included. When the search contains commas
+      // or parens PostgREST can get confused; our search is a free-text
+      // phrase so this works for typical email/phone substrings.
+      const jsonNeedle = JSON.stringify({ value: globalQ });
+      q = q.or(
+        `full_name.ilike.%${s}%,agency_name.ilike.%${s}%,email.ilike.%${s}%,mobile.ilike.%${s}%,agency_suburb.ilike.%${s}%,job_title.ilike.%${s}%,` +
+        `alternate_emails.cs.[${jsonNeedle}],alternate_mobiles.cs.[${jsonNeedle}]`
+      );
     }
 
     // Sort — translate UI sort-key to DB column, fall back to sales_as_lead
@@ -1583,31 +1595,57 @@ export default function PulseAgentIntel({
                       </div>
                     </td>
 
-                    {/* Email */}
+                    {/* Email — with +N badge when alternate_emails has extras */}
                     <td className="py-2 px-2 hidden lg:table-cell">
                       {agent.email ? (
-                        <a
-                          href={`mailto:${agent.email}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-primary hover:underline truncate max-w-[180px] block"
-                        >
-                          {agent.email}
-                        </a>
+                        <div className="flex items-center gap-1">
+                          <a
+                            href={`mailto:${agent.email}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-primary hover:underline truncate max-w-[160px] block"
+                          >
+                            {agent.email}
+                          </a>
+                          {(() => {
+                            const alts = alternateContacts(agent, "email");
+                            return alts.length > 0 ? (
+                              <span
+                                className="inline-flex items-center text-[9px] font-semibold px-1 py-0 rounded bg-muted text-muted-foreground shrink-0"
+                                title={`${alts.length} other email${alts.length !== 1 ? "s" : ""} seen`}
+                              >
+                                +{alts.length}
+                              </span>
+                            ) : null;
+                          })()}
+                        </div>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
                     </td>
 
-                    {/* Mobile */}
+                    {/* Mobile — with +N badge when alternate_mobiles has extras */}
                     <td className="py-2 px-2 hidden md:table-cell">
                       {agent.mobile ? (
-                        <a
-                          href={`tel:${agent.mobile}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-foreground hover:text-primary transition-colors whitespace-nowrap"
-                        >
-                          {agent.mobile}
-                        </a>
+                        <div className="flex items-center gap-1">
+                          <a
+                            href={`tel:${agent.mobile}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-foreground hover:text-primary transition-colors whitespace-nowrap"
+                          >
+                            {agent.mobile}
+                          </a>
+                          {(() => {
+                            const alts = alternateContacts(agent, "mobile");
+                            return alts.length > 0 ? (
+                              <span
+                                className="inline-flex items-center text-[9px] font-semibold px-1 py-0 rounded bg-muted text-muted-foreground shrink-0"
+                                title={`${alts.length} other mobile${alts.length !== 1 ? "s" : ""} seen`}
+                              >
+                                +{alts.length}
+                              </span>
+                            ) : null;
+                          })()}
+                        </div>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}

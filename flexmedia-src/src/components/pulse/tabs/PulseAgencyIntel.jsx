@@ -49,6 +49,7 @@ import {
   LISTING_TYPE_LABEL,
   listingTypeBadgeClasses,
   reaIdEquals,
+  alternateContacts,
 } from "@/components/pulse/utils/listingHelpers";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
@@ -1091,6 +1092,8 @@ const AGENCY_SERVER_SORT_MAP = {
   avg_agent_rating: "avg_agent_rating",
   name: "name",
   suburb: "suburb",
+  phone: "phone",
+  email: "email",
 };
 
 const CSV_EXPORT_CAP_AGENCIES = 10000;
@@ -1173,7 +1176,13 @@ export default function PulseAgencyIntel({
     const globalQ = (search || "").trim();
     if (globalQ) {
       const s = globalQ.replace(/[%_]/g, "\\$&");
-      q = q.or(`name.ilike.%${s}%,suburb.ilike.%${s}%,phone.ilike.%${s}%,email.ilike.%${s}%`);
+      // JSONB containment extensions so hits surface agencies whose PRIMARY
+      // value doesn't match but an alternate does (migration 108+).
+      const jsonNeedle = JSON.stringify({ value: globalQ });
+      q = q.or(
+        `name.ilike.%${s}%,suburb.ilike.%${s}%,phone.ilike.%${s}%,email.ilike.%${s}%,` +
+        `alternate_emails.cs.[${jsonNeedle}],alternate_phones.cs.[${jsonNeedle}]`
+      );
     }
 
     const sortCol = AGENCY_SERVER_SORT_MAP[agencySort.col] || "agent_count";
@@ -1415,6 +1424,10 @@ export default function PulseAgencyIntel({
                 <th className="px-2 py-2 text-left hidden md:table-cell">
                   <ColHeader col="phone">Phone</ColHeader>
                 </th>
+                {/* Email (NEW migration 108+) */}
+                <th className="px-2 py-2 text-left hidden lg:table-cell">
+                  <ColHeader col="email">Email</ColHeader>
+                </th>
                 {/* Agents */}
                 <th className="px-2 py-2 text-right">
                   <ColHeader col="live_agent_count" className="ml-auto">
@@ -1459,7 +1472,7 @@ export default function PulseAgencyIntel({
               {isLoading && pageRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={11}
                     className="text-center py-12 text-muted-foreground"
                   >
                     <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
@@ -1469,7 +1482,7 @@ export default function PulseAgencyIntel({
               ) : pageRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={11}
                     className="text-center py-12 text-muted-foreground"
                   >
                     <Building2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground/20" />
@@ -1504,9 +1517,18 @@ export default function PulseAgencyIntel({
                         )}
                       </div>
                     </td>
-                    {/* Name + suburb */}
+                    {/* Name + suburb + optional brand color dot (migration 108+) */}
                     <td className="px-2 py-2 max-w-[180px]">
-                      <p className="font-medium truncate">{ag.name || "—"}</p>
+                      <div className="flex items-center gap-1.5">
+                        {ag.brand_color_primary && (
+                          <span
+                            className="h-2.5 w-2.5 rounded-full border border-border shrink-0"
+                            style={{ backgroundColor: ag.brand_color_primary }}
+                            title={`Brand: ${ag.brand_color_primary}`}
+                          />
+                        )}
+                        <p className="font-medium truncate">{ag.name || "—"}</p>
+                      </div>
                       {ag.suburb && (
                         <p className="text-[10px] text-muted-foreground truncate mt-0.5">
                           <MapPin className="h-2.5 w-2.5 inline mr-0.5 -mt-px" />
@@ -1525,6 +1547,33 @@ export default function PulseAgencyIntel({
                         >
                           {ag.phone}
                         </a>
+                      ) : (
+                        <span className="text-muted-foreground/30">—</span>
+                      )}
+                    </td>
+                    {/* Email (NEW migration 108+) + alternate-count badge */}
+                    <td className="px-2 py-2 hidden lg:table-cell">
+                      {ag.email ? (
+                        <div className="flex items-center gap-1">
+                          <a
+                            href={`mailto:${ag.email}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-primary hover:underline truncate max-w-[160px] block"
+                          >
+                            {ag.email}
+                          </a>
+                          {(() => {
+                            const alts = alternateContacts(ag, "email");
+                            return alts.length > 0 ? (
+                              <span
+                                className="inline-flex items-center text-[9px] font-semibold px-1 py-0 rounded bg-muted text-muted-foreground shrink-0"
+                                title={`${alts.length} other email${alts.length !== 1 ? "s" : ""} seen`}
+                              >
+                                +{alts.length}
+                              </span>
+                            ) : null;
+                          })()}
+                        </div>
                       ) : (
                         <span className="text-muted-foreground/30">—</span>
                       )}

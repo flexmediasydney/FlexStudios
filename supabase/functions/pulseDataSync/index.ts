@@ -615,11 +615,32 @@ serveWithAudit('pulseDataSync', async (req) => {
       const reaName = rea.name || '';
       const reaMobile = normalizeMobile(rea.mobile || '');
 
-      // Integrity scoring: REA-only, recalibrated
-      let integrityScore = 50; // Base: REA profile exists
-      if (reaMobile) integrityScore += 10;
-      if (rea.agency?.name) integrityScore += 5;
-      // Email and photo get added during cross-enrichment (Step 6) and bump score then
+      // Integrity scoring: REA-only, via shared helper (migration 106).
+      // At this point (initial processing) we haven't cross-enriched yet,
+      // so email/photo are typically absent. They arrive later in Step 6
+      // and pulseDetailEnrich, both of which recompute via the same helper.
+      // We fall back to a static calc if the RPC hasn't deployed yet.
+      let integrityScore: number;
+      try {
+        const { data: scored } = await admin.rpc('pulse_compute_integrity_score', {
+          p_has_rea_profile:    !!rea.profile_url,
+          p_has_email:          !!rea.email,
+          p_email_is_clean:     !!(rea.email && !isMiddlemanEmail(rea.email)),
+          p_email_is_detail:    false,
+          p_email_multi_source: false,
+          p_has_mobile:         !!reaMobile,
+          p_mobile_is_detail:   false,
+          p_has_photo:          !!(rea.image || rea.photo_url || rea.profile_image),
+          p_has_agency:         !!rea.agency?.name,
+          p_has_rea_agent_id:   !!rea.salesperson_id,
+        });
+        integrityScore = typeof scored === 'number' ? scored : 50;
+      } catch {
+        // RPC may not exist yet (pre-106 deployment). Fallback to legacy formula.
+        integrityScore = 50;
+        if (reaMobile) integrityScore += 10;
+        if (rea.agency?.name) integrityScore += 5;
+      }
 
       const searchStats = rea.search_stats || {};
       const profileStats = rea.profile_stats || {};
@@ -895,7 +916,7 @@ serveWithAudit('pulseDataSync', async (req) => {
     // ── Step 5b: Snapshot existing agents BEFORE upsert (for movement detection in Step 9) ──
     // Must load before Step 6 upsert — otherwise existing.agency_rea_id already equals the new value
     const { data: preUpsertPulseAgents = [] } = await admin.from('pulse_agents')
-      .select('id, rea_agent_id, agency_name, agency_rea_id, full_name')
+      .select('id, rea_agent_id, agency_name, agency_rea_id, full_name, alternate_mobiles, alternate_emails')
       .not('rea_agent_id', 'is', null);
     const existingByReaIdSnapshot = new Map(preUpsertPulseAgents.map((a: any) => [a.rea_agent_id, a]));
     console.log(`Pre-upsert snapshot: ${preUpsertPulseAgents.length} existing agents with REA IDs`);
@@ -1497,18 +1518,31 @@ serveWithAudit('pulseDataSync', async (req) => {
           if (enrichData.jobTitle && !pa.job_title) updates.job_title = enrichData.jobTitle;
           if (enrichData.listingCount > 0) updates.total_listings_active = enrichData.listingCount;
 
-          // Recalculate integrity score from scratch (avoids competing Math.max paths)
+          // Recalculate integrity score via shared DB helper (migration 106).
+          // This keeps the formula consistent across pulseDataSync (initial +
+          // cross-enrich) and pulseDetailEnrich (detail path). Source-aware:
+          // detail_page_lister / detail_page_agency get +5/+3 over list-sourced.
           if (Object.keys(updates).length > 0) {
-            const finalEmail = updates.email || pa.email;
-            const finalEmailIsClean = finalEmail && !isMiddlemanEmail(finalEmail);
-            let newScore = 50; // base: exists in REA
-            if (pa.mobile || updates.mobile) newScore += 10;
-            // Only award points for a clean primary email
-            if (finalEmailIsClean) newScore += 15;
-            if (updates.profile_image || pa.profile_image) newScore += 10;
-            if (finalEmailIsClean && (updates.profile_image || pa.profile_image)) newScore += 5;
-            if (pa.rea_agent_id) newScore += 10;
-            updates.data_integrity_score = newScore;
+            const finalEmail = (updates.email || pa.email) as string | null;
+            const finalEmailIsClean = !!(finalEmail && !isMiddlemanEmail(finalEmail));
+            const finalMobile = (updates.mobile || pa.mobile) as string | null;
+            const finalPhoto = (updates.profile_image || pa.profile_image) as string | null;
+            // For cross-enrich path, source is 'cross_enrich' (70 confidence) —
+            // not 'detail' (95). So `p_email_is_detail` is false here; real
+            // detail enrichment bumps these flags via pulseDetailEnrich.
+            const { data: scored } = await admin.rpc('pulse_compute_integrity_score', {
+              p_has_rea_profile:    !!pa.rea_profile_url,
+              p_has_email:          !!finalEmail,
+              p_email_is_clean:     finalEmailIsClean,
+              p_email_is_detail:    false,
+              p_email_multi_source: false,
+              p_has_mobile:         !!finalMobile,
+              p_mobile_is_detail:   false,
+              p_has_photo:          !!finalPhoto,
+              p_has_agency:         !!pa.agency_name,
+              p_has_rea_agent_id:   !!pa.rea_agent_id,
+            });
+            updates.data_integrity_score = typeof scored === 'number' ? scored : 50;
 
             await admin.from('pulse_agents').update(updates).eq('id', pa.id);
             enriched++;
@@ -1651,11 +1685,31 @@ serveWithAudit('pulseDataSync', async (req) => {
         if (matchedCrm) { matchType = 'rea_id'; hasNameOverlap = true; }
       }
 
-      // Priority 2: Phone match
+      // Priority 2: Phone match — now INCLUDES alternate_mobiles (migration 103+104).
+      // Every mobile value ever observed for an agent lives in alternate_mobiles
+      // as {value, sources, confidence}. We match if ANY of those (incl. primary)
+      // matches the CRM contact's phone. This keeps mapping accuracy stable
+      // as detail-enrich discovers new mobiles (old primary demoted to alts).
       if (!matchedCrm) {
-        const agentMobile = normalizeMobile(agent.mobile);
-        if (agentMobile) {
-          matchedCrm = crmAgentsList.find((c: any) => normalizeMobile(c.phone) === agentMobile);
+        // Collect every mobile value for this agent from the primary + alternates
+        const agentMobilePool = new Set<string>();
+        if (agent.mobile) {
+          const n = normalizeMobile(agent.mobile);
+          if (n) agentMobilePool.add(n);
+        }
+        // Pull alternate_mobiles from the existing row (if any — new agents have none)
+        const existingAgentSnap = existingByReaIdSnapshot.get(reaId);
+        if (existingAgentSnap?.alternate_mobiles && Array.isArray(existingAgentSnap.alternate_mobiles)) {
+          for (const alt of existingAgentSnap.alternate_mobiles) {
+            const n = normalizeMobile(alt?.value || '');
+            if (n) agentMobilePool.add(n);
+          }
+        }
+        if (agentMobilePool.size > 0) {
+          matchedCrm = crmAgentsList.find((c: any) => {
+            const cPhone = normalizeMobile(c.phone);
+            return cPhone && agentMobilePool.has(cPhone);
+          });
           if (matchedCrm) {
             matchType = 'phone';
             hasNameOverlap = fuzzyNameMatch(matchedCrm.name || '', agent.full_name || '');

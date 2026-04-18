@@ -171,3 +171,246 @@ export function isRelationshipState(crmEntity, target) {
   if (!crmEntity?.relationship_state || !target) return false;
   return crmEntity.relationship_state.toLowerCase().trim() === target.toLowerCase().trim();
 }
+
+// ── Detail-enrichment helpers (migration 108+) ───────────────────────────
+
+const _DAYS_AU = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const _MONTHS_AU = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Format an auction timestamptz for display.
+ *
+ *   "2026-05-02T14:30:00+00:00" → "Sat 2 May 2026, 2:30pm"
+ *
+ * When the time portion is exactly 00:00 UTC we assume this is a pre-enrich
+ * legacy value (auction_date used to be a `date`, time was synthesised) and
+ * drop the time from the display — just "Sat 2 May 2026".
+ *
+ * Returns "" for null/invalid input.
+ */
+export function formatAuctionDateTime(auctionTs) {
+  if (!auctionTs) return "";
+  const d = new Date(auctionTs);
+  if (isNaN(d.getTime())) return "";
+
+  const dayName = _DAYS_AU[d.getDay()];
+  const dayNum = d.getDate();
+  const monthName = _MONTHS_AU[d.getMonth()];
+  const year = d.getFullYear();
+  const datePart = `${dayName} ${dayNum} ${monthName} ${year}`;
+
+  // Detect legacy "midnight UTC" marker. The original column was `date` so
+  // timestamptz rows with exactly 00:00:00Z most likely have no real time.
+  const isLegacyMidnight =
+    d.getUTCHours() === 0 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0;
+  if (isLegacyMidnight) return datePart;
+
+  // Render local time as h:mm am/pm.
+  let hour = d.getHours();
+  const mins = d.getMinutes();
+  const ampm = hour >= 12 ? "pm" : "am";
+  hour = hour % 12 || 12;
+  const minsStr = mins === 0 ? "" : `:${String(mins).padStart(2, "0")}`;
+  return `${datePart}, ${hour}${minsStr}${ampm}`;
+}
+
+/** Internal: parse a JSONB-ish value that may already be an array/object. */
+function _parseMaybeJson(val) {
+  if (val == null) return null;
+  if (typeof val === "string") {
+    try { return JSON.parse(val); } catch { return null; }
+  }
+  return val;
+}
+
+/**
+ * Derive the primary contact summary for a field on an agent / agency.
+ *
+ * @param entity — pulse_agent or pulse_agency row
+ * @param field  — "email" | "mobile" | "phone" | "business_phone" — the
+ *                 canonical column name. The helper looks up
+ *                 `${field}_source`, `${field}_confidence`, and the matching
+ *                 `alternate_*s` column by pluralising the name.
+ *
+ * Returns:
+ *   { value, source, confidence, sourcesCount, verified, stale }
+ *
+ *   - `verified` — true when 2+ sources have seen this exact value
+ *   - `stale`    — true when every source's last_seen_at is > 90d ago
+ *
+ * Returns `{ value: null }` when the entity has no value for the field.
+ */
+export function primaryContact(entity, field) {
+  if (!entity || !field) return { value: null };
+  const value = entity[field] || null;
+  if (!value) return { value: null };
+
+  // alternate_*s column name: email→alternate_emails, mobile→alternate_mobiles,
+  // phone→alternate_phones, business_phone→alternate_phones (shared pool on agents).
+  let altKey;
+  if (field === "email") altKey = "alternate_emails";
+  else if (field === "mobile") altKey = "alternate_mobiles";
+  else altKey = "alternate_phones";
+
+  const altArr = _parseMaybeJson(entity[altKey]);
+  const alternates = Array.isArray(altArr) ? altArr : [];
+
+  // Find the record matching this primary value (case-insensitive on emails).
+  const norm = (s) => (field === "email" ? String(s || "").toLowerCase() : String(s || ""));
+  const match = alternates.find((a) => a && norm(a.value) === norm(value));
+
+  const sources = Array.isArray(match?.sources) ? match.sources : [];
+  const confidence = match?.confidence ?? entity[`${field}_confidence`] ?? null;
+  const source = entity[`${field}_source`] || (sources[0] || null);
+
+  // Stale: last_seen_at > 90 days ago
+  let stale = false;
+  if (match?.last_seen_at) {
+    const lastSeen = new Date(match.last_seen_at).getTime();
+    if (!isNaN(lastSeen)) {
+      stale = Date.now() - lastSeen > 90 * 86400000;
+    }
+  }
+
+  return {
+    value,
+    source,
+    confidence,
+    sourcesCount: sources.length,
+    verified: sources.length >= 2,
+    stale,
+  };
+}
+
+/**
+ * Return the alternate-contact entries for a field, EXCLUDING the current
+ * primary value. Sorted by last_seen_at DESC.
+ *
+ * Shape: [{value, sources[], confidence, first_seen_at, last_seen_at}]
+ */
+export function alternateContacts(entity, field) {
+  if (!entity || !field) return [];
+  const primaryVal = entity[field];
+  let altKey;
+  if (field === "email") altKey = "alternate_emails";
+  else if (field === "mobile") altKey = "alternate_mobiles";
+  else altKey = "alternate_phones";
+
+  const altArr = _parseMaybeJson(entity[altKey]);
+  if (!Array.isArray(altArr)) return [];
+
+  const norm = (s) => (field === "email" ? String(s || "").toLowerCase() : String(s || ""));
+  const primaryNorm = norm(primaryVal);
+
+  const filtered = altArr.filter((a) => a && a.value && norm(a.value) !== primaryNorm);
+  // Sort by last_seen_at DESC (newest first)
+  return filtered
+    .slice()
+    .sort((a, b) => {
+      const ta = a.last_seen_at ? new Date(a.last_seen_at).getTime() : 0;
+      const tb = b.last_seen_at ? new Date(b.last_seen_at).getTime() : 0;
+      return tb - ta;
+    })
+    .map((a) => ({
+      value: a.value,
+      sources: Array.isArray(a.sources) ? a.sources : [],
+      confidence: a.confidence ?? null,
+      first_seen_at: a.first_seen_at || null,
+      last_seen_at: a.last_seen_at || null,
+    }));
+}
+
+/**
+ * Parse a listing's media into { photos, floorplans, video }.
+ *
+ * Preference order:
+ *   1. `listing.media_items` — the structured column (detail-enriched rows)
+ *   2. Legacy fallbacks: `floorplan_urls[]` + `video_url` (+ `video_thumb_url`)
+ *      + `images[]` for photos.
+ *
+ * Returns:
+ *   {
+ *     photos:     [{url, thumb?, order_index?}],
+ *     floorplans: [{url, thumb?, order_index?}],
+ *     video:      {url, thumb?} | null,
+ *   }
+ */
+export function parseMediaItems(listing) {
+  if (!listing) return { photos: [], floorplans: [], video: null };
+
+  const items = _parseMaybeJson(listing.media_items);
+  if (Array.isArray(items) && items.length > 0) {
+    const photos = [];
+    const floorplans = [];
+    let video = null;
+    for (const it of items) {
+      if (!it || !it.url) continue;
+      const rec = { url: it.url, thumb: it.thumb || null, order_index: it.order_index ?? null };
+      if (it.type === "photo") photos.push(rec);
+      else if (it.type === "floorplan") floorplans.push(rec);
+      else if (it.type === "video" && !video) video = rec;
+    }
+    const byOrder = (a, b) => (a.order_index ?? 0) - (b.order_index ?? 0);
+    return {
+      photos: photos.sort(byOrder),
+      floorplans: floorplans.sort(byOrder),
+      video,
+    };
+  }
+
+  // Fallbacks
+  const fpRaw = _parseMaybeJson(listing.floorplan_urls);
+  const floorplans = Array.isArray(fpRaw)
+    ? fpRaw.filter(Boolean).map((url, i) => ({ url, thumb: null, order_index: i }))
+    : [];
+
+  const imgRaw = _parseMaybeJson(listing.images);
+  const photos = Array.isArray(imgRaw)
+    ? imgRaw
+        .map((img, i) => {
+          const url = typeof img === "string" ? img : img?.url || img?.src;
+          if (!url) return null;
+          return { url, thumb: typeof img === "object" ? img?.thumb || null : null, order_index: i };
+        })
+        .filter(Boolean)
+    : [];
+
+  const video = listing.video_url
+    ? { url: listing.video_url, thumb: listing.video_thumb_url || null }
+    : null;
+
+  return { photos, floorplans, video };
+}
+
+/**
+ * Returns provenance for the three time-relevant fields on a listing, so
+ * the UI can tag values as "detail-enriched" vs "first_seen proxy".
+ *
+ * Returned shape: {
+ *   listed_date:  {value, source: 'first_seen' | 'detail_enriched'},
+ *   sold_date:    {value, source},
+ *   auction_date: {value, source},
+ * }
+ *
+ * Heuristic: if `detail_enriched_at` on the listing is set AND the field has
+ * a value, we mark it as detail_enriched. Otherwise (or when the listing
+ * hasn't been detail-enriched) the source is 'first_seen'.
+ */
+export function listingDatesProvenance(listing) {
+  if (!listing) {
+    return {
+      listed_date: { value: null, source: null },
+      sold_date: { value: null, source: null },
+      auction_date: { value: null, source: null },
+    };
+  }
+  const enriched = !!listing.detail_enriched_at;
+  const srcFor = (v) => (v ? (enriched ? "detail_enriched" : "first_seen") : null);
+  return {
+    listed_date: { value: listing.listed_date || null, source: srcFor(listing.listed_date) },
+    sold_date: { value: listing.sold_date || null, source: srcFor(listing.sold_date) },
+    auction_date: { value: listing.auction_date || null, source: srcFor(listing.auction_date) },
+  };
+}

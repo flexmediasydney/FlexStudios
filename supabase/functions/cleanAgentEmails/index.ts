@@ -88,7 +88,10 @@ serveWithAudit('cleanAgentEmails', async (req) => {
 
       let q = admin
         .from('pulse_agents')
-        .select('id, full_name, email, all_emails, rejected_emails, email_cleaned_at, agency_name')
+        // Migration 103: also load email_source + confidence to respect
+        // detail-sourced primaries (never clobber a high-confidence detail
+        // email with a cleanup-derived scrape pick).
+        .select('id, full_name, email, all_emails, rejected_emails, email_cleaned_at, agency_name, email_source, email_confidence')
         .order('id', { ascending: true })
         .range(offset, offset + pageSize - 1);
       if (onlyUncleaned) q = q.is('email_cleaned_at', null);
@@ -154,16 +157,33 @@ serveWithAudit('cleanAgentEmails', async (req) => {
           || beforeIsMiddleman
           || beforeEmail.includes(',');
 
-        if (primary && primaryLc !== beforeEmailLc && existingNeedsFix) {
+        // ── Source-aware promotion (migration 103+104) ────────────────────
+        // If the current primary was set by detail_page_* at high confidence
+        // (>= 85), the cleanup hygiene pass must not demote it. Hygiene is
+        // confidence=65 so a simple "source_confidence < existing confidence"
+        // check guards against clobbering.
+        const existingSource = row.email_source as string | null;
+        const existingConfidence = (row.email_confidence as number | null) ?? 0;
+        const detailSourced = existingSource === 'detail_page_lister' || existingSource === 'detail_page_agency';
+        const HYGIENE_CONFIDENCE = 65;
+        const primaryProtected = detailSourced && existingConfidence > HYGIENE_CONFIDENCE;
+
+        if (primary && primaryLc !== beforeEmailLc && existingNeedsFix && !primaryProtected) {
           updates.email = primary;
+          // Hygiene stamps itself as the new source — but ONLY when we actually
+          // rewrote the primary. Detail-sourced promotions came via pulse_merge_contact.
+          updates.email_source = 'hygiene';
+          updates.email_confidence = HYGIENE_CONFIDENCE;
           if (beforeEmail && !beforeIsMiddleman) {
             updates.previous_email = beforeEmail;
           }
           stats.primary_replaced++;
-        } else if (!primary && beforeEmail && beforeIsMiddleman) {
+        } else if (!primary && beforeEmail && beforeIsMiddleman && !primaryProtected) {
           // All known emails are middleman and nothing clean to replace with
           // — null the primary but keep the audit trail in rejected_emails.
           updates.email = null;
+          updates.email_source = null;
+          updates.email_confidence = null;
           stats.primary_replaced++;
         } else {
           stats.primary_unchanged++;

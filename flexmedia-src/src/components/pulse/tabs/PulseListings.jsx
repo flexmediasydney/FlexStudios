@@ -55,12 +55,16 @@ import {
   Download,
   Loader2,
   History,
+  FileImage,
+  Video,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import {
   displayPrice as sharedDisplayPrice,
   stalenessInfo,
+  formatAuctionDateTime,
+  parseMediaItems,
 } from "@/components/pulse/utils/listingHelpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -362,9 +366,14 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
                 )}
               </div>
             )}
-            {listing.land_size > 0 && (
+            {(listing.land_size_sqm > 0 || listing.land_size > 0) && (
               <div className="text-muted-foreground text-xs">
-                Land: {Number(listing.land_size).toLocaleString()} m²
+                Land: {Number(listing.land_size_sqm || listing.land_size).toLocaleString()} m²
+              </div>
+            )}
+            {listing.date_available && listing.listing_type === "for_rent" && (
+              <div className="text-muted-foreground text-xs">
+                Available: {fmtDate(listing.date_available)}
               </div>
             )}
           </div>
@@ -543,7 +552,7 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
             {listing.auction_date && (
               <div>
                 <p className="text-muted-foreground">Auction</p>
-                <p className="font-medium">{fmtDate(listing.auction_date)}</p>
+                <p className="font-medium">{formatAuctionDateTime(listing.auction_date) || fmtDate(listing.auction_date)}</p>
               </div>
             )}
             {listing.next_inspection && (
@@ -573,6 +582,84 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
                     />
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* Floorplans — detail-enriched (migration 108+) */}
+          {(() => {
+            const media = parseMediaItems(listing);
+            if (media.floorplans.length === 0 && !media.video) return null;
+            return (
+              <>
+                {media.floorplans.length > 0 && (
+                  <div className="border-t border-border/60 pt-3">
+                    <p className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide flex items-center gap-1">
+                      <FileImage className="h-3 w-3" /> Floorplans
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {media.floorplans.map((fp, i) => (
+                        <a
+                          key={i}
+                          href={fp.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block"
+                        >
+                          <img
+                            src={fp.thumb || fp.url}
+                            alt={`Floorplan ${i + 1}`}
+                            className="h-20 w-28 object-contain rounded border border-border bg-white hover:shadow-md transition-shadow"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {media.video && (
+                  <div className="border-t border-border/60 pt-3">
+                    <p className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide flex items-center gap-1">
+                      <Video className="h-3 w-3" /> Video
+                    </p>
+                    {(() => {
+                      // Extract YouTube video ID if it's a YouTube URL.
+                      const yt = media.video.url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/))([A-Za-z0-9_-]{11})/);
+                      if (yt) {
+                        return (
+                          <iframe
+                            src={`https://www.youtube.com/embed/${yt[1]}`}
+                            title="Listing video"
+                            className="w-full aspect-video rounded border border-border"
+                            frameBorder="0"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        );
+                      }
+                      return (
+                        <a
+                          href={media.video.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+                        >
+                          <Video className="h-3.5 w-3.5" />
+                          Watch video
+                        </a>
+                      );
+                    })()}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {/* Withdrawn banner (migration 108+) */}
+          {listing.listing_withdrawn_at && (
+            <div className="border-t border-border/60 pt-3">
+              <div className="inline-flex items-center gap-1.5 text-xs font-medium text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/40 rounded px-2 py-1">
+                <X className="h-3 w-3" />
+                Withdrawn {fmtDate(listing.listing_withdrawn_at)}
               </div>
             </div>
           )}
@@ -1017,9 +1104,37 @@ export default function PulseListingsTab({
                         <Thumb src={thumb} />
                       </td>
 
-                      {/* Address */}
+                      {/* Address — with floorplan/video/withdrawn indicators (migration 108+) */}
                       <td className="px-2 py-1.5 max-w-[180px]">
-                        <p className="truncate font-medium">{addr || "—"}</p>
+                        <div className="flex items-center gap-1">
+                          <p className="truncate font-medium flex-1 min-w-0">{addr || "—"}</p>
+                          {(() => {
+                            const fpArr = Array.isArray(l.floorplan_urls) ? l.floorplan_urls : [];
+                            const hasFloorplan = fpArr.length > 0;
+                            const hasVideo = !!l.video_url;
+                            return (
+                              <>
+                                {hasFloorplan && (
+                                  <FileImage
+                                    className="h-3 w-3 text-blue-500 shrink-0"
+                                    title={`${fpArr.length} floorplan${fpArr.length !== 1 ? "s" : ""}`}
+                                  />
+                                )}
+                                {hasVideo && (
+                                  <Video
+                                    className="h-3 w-3 text-blue-500 shrink-0"
+                                    title="Video available"
+                                  />
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                        {l.listing_withdrawn_at && (
+                          <span className="inline-flex items-center gap-0.5 text-[8px] font-semibold uppercase px-1 py-0 mt-0.5 rounded bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/20 dark:text-red-400 dark:border-red-900/40">
+                            Withdrawn
+                          </span>
+                        )}
                       </td>
 
                       {/* Price */}

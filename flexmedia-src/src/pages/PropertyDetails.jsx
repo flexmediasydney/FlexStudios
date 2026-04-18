@@ -24,6 +24,10 @@ import {
   Bed, Bath, Car, Plus, Eye, Images,
 } from "lucide-react";
 import AttachmentLightbox from "@/components/common/AttachmentLightbox";
+import {
+  formatAuctionDateTime,
+  parseMediaItems,
+} from "@/components/pulse/utils/listingHelpers";
 
 function fmtPrice(v) {
   if (!v || v <= 0) return "—";
@@ -98,7 +102,7 @@ export default function PropertyDetails() {
       const [pRes, lRes, prRes] = await Promise.all([
         api._supabase.from("property_full_v").select("*").eq("property_key", propertyKey).maybeSingle(),
         api._supabase.from("pulse_listings")
-          .select("id, source_listing_id, address, suburb, postcode, listing_type, asking_price, sold_price, listed_date, sold_date, agent_name, agent_rea_id, agency_name, agency_rea_id, source_url, image_url, hero_image, images, last_synced_at, first_seen_at, days_on_market, bedrooms, bathrooms, parking, land_size, property_type")
+          .select("id, source_listing_id, address, suburb, postcode, listing_type, asking_price, sold_price, listed_date, sold_date, auction_date, price_text, agent_name, agent_rea_id, agency_name, agency_rea_id, source_url, image_url, hero_image, images, last_synced_at, first_seen_at, days_on_market, bedrooms, bathrooms, parking, land_size, property_type, detail_enriched_at, date_available, land_size_sqm, floorplan_urls, video_url, video_thumb_url, media_items, listing_withdrawn_at")
           .eq("property_key", propertyKey)
           .order("listed_date", { ascending: false, nullsFirst: false }),
         api._supabase.from("projects")
@@ -188,19 +192,18 @@ export default function PropertyDetails() {
     return Array.from(groups.entries()).sort((a, b) => b[0] - a[0]);
   }, [timeline]);
 
-  // Aggregate all images across all listings → lightbox gallery
-  // Format: { file_name, file_url } to match AttachmentLightbox shape
+  // Aggregate all PHOTOS across all listings → lightbox gallery.
+  // Uses parseMediaItems() so detail-enriched listings (migration 108+) only
+  // contribute their photo-type items here; floorplans + video are rendered
+  // separately below.
   const allImages = useMemo(() => {
     const out = [];
     for (const l of listings) {
-      let imgs = [];
-      try {
-        if (Array.isArray(l.images)) imgs = l.images;
-        else if (typeof l.images === "string") imgs = JSON.parse(l.images);
-      } catch { imgs = []; }
-      // Prefer the full images array, fallback to hero/image_url
-      const src = imgs.length > 0 ? imgs : (l.hero_image || l.image_url ? [l.hero_image || l.image_url] : []);
-      src.forEach((url, i) => {
+      const media = parseMediaItems(l);
+      const photos = media.photos.length > 0
+        ? media.photos.map((p) => p.url)
+        : (l.hero_image || l.image_url ? [l.hero_image || l.image_url] : []);
+      photos.forEach((url, i) => {
         if (!url) return;
         out.push({
           file_name: `${l.agency_name || "Listing"} — ${fmtDate(l.listed_date || l.first_seen_at)} (${i + 1})`,
@@ -213,6 +216,26 @@ export default function PropertyDetails() {
       });
     }
     return out;
+  }, [listings]);
+
+  // Floorplans + video aggregated across listings (detail-enriched only).
+  const allFloorplans = useMemo(() => {
+    const out = [];
+    for (const l of listings) {
+      const media = parseMediaItems(l);
+      for (const fp of media.floorplans) {
+        out.push({ ...fp, listingId: l.id, agencyName: l.agency_name });
+      }
+    }
+    return out;
+  }, [listings]);
+
+  const latestVideo = useMemo(() => {
+    for (const l of listings) {
+      const media = parseMediaItems(l);
+      if (media.video) return { ...media.video, listing: l };
+    }
+    return null;
   }, [listings]);
 
   // Unique agents/agencies — decorated with resolved link targets (CRM if
@@ -436,6 +459,101 @@ export default function PropertyDetails() {
           onClose={() => setLightboxIndex(null)}
         />
       )}
+
+      {/* Floorplans + Video (detail-enriched, migration 108+) */}
+      {(allFloorplans.length > 0 || latestVideo) && (
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Images className="h-4 w-4 text-indigo-600" />
+              Detail Media
+              {allFloorplans.length > 0 && (
+                <Badge variant="outline" className="text-[10px]">
+                  {allFloorplans.length} floorplan{allFloorplans.length !== 1 ? "s" : ""}
+                </Badge>
+              )}
+              {latestVideo && <Badge variant="outline" className="text-[10px]">Video</Badge>}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {allFloorplans.length > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1.5">
+                  Floorplans
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {allFloorplans.map((fp, i) => (
+                    <a
+                      key={i}
+                      href={fp.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block"
+                      title={fp.agencyName || "Floorplan"}
+                    >
+                      <img
+                        src={fp.thumb || fp.url}
+                        alt={`Floorplan ${i + 1}`}
+                        className="h-24 w-32 object-contain rounded border border-border bg-white hover:shadow-md transition-shadow"
+                      />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+            {latestVideo && (() => {
+              const yt = latestVideo.url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/))([A-Za-z0-9_-]{11})/);
+              return (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1.5">
+                    Video
+                  </p>
+                  {yt ? (
+                    <iframe
+                      src={`https://www.youtube.com/embed/${yt[1]}`}
+                      title="Listing video"
+                      className="w-full max-w-lg aspect-video rounded border border-border"
+                      frameBorder="0"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                    />
+                  ) : (
+                    <a
+                      href={latestVideo.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+                    >
+                      Watch video
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Auction info (detail-enriched, migration 108+) — only when the
+          current listing state is for_sale and price_text mentions auction. */}
+      {(() => {
+        const currentListing = listings[0];
+        if (!currentListing?.auction_date) return null;
+        const priceText = (currentListing.price_text || "").toLowerCase();
+        if (!priceText.includes("auction")) return null;
+        return (
+          <Card className="rounded-xl border-amber-200/60 bg-amber-50/30 dark:bg-amber-950/10">
+            <CardContent className="p-3 flex items-center gap-2">
+              <Tag className="h-4 w-4 text-amber-600 shrink-0" />
+              <div className="text-xs">
+                <p className="font-semibold text-amber-800 dark:text-amber-300">Auction</p>
+                <p className="text-foreground">{formatAuctionDateTime(currentListing.auction_date)}</p>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Stats strip */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">

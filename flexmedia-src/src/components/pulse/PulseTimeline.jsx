@@ -17,7 +17,8 @@ import { cn } from "@/lib/utils";
 import {
   ArrowRight, Star, Home, User, Zap, RefreshCw, Link2, UserPlus,
   TrendingUp, Clock,
-  DollarSign, Play, CheckCircle2, Timer, ListPlus, Info
+  DollarSign, Play, CheckCircle2, Timer, ListPlus, Info,
+  Sparkles, AtSign, Phone, Gavel, FileImage, Video, XCircle,
 } from "lucide-react";
 
 /* ── System event types that get filtered out in compact mode ────────────── */
@@ -26,6 +27,8 @@ const SYSTEM_EVENT_TYPES = new Set([
   "scheduled_scrape_started",
   "scheduled_scrape_completed",
   "data_sync",
+  // detail_enriched is a sync-side event — too noisy for the compact dossier.
+  "detail_enriched",
 ]);
 
 /* ── Event type configuration ────────────────────────────────────────────── */
@@ -51,6 +54,18 @@ const EVENT_CONFIG = {
   scheduled_scrape_started: { icon: Play,          color: "bg-gray-400",    label: "Scrape Started",     category_color: "text-gray-500" },
   scheduled_scrape_completed: { icon: CheckCircle2, color: "bg-gray-400",   label: "Scrape Completed",   category_color: "text-gray-500" },
   data_sync:                { icon: RefreshCw,     color: "bg-gray-400",    label: "Data Sync",          category_color: "text-gray-500" },
+
+  // Detail-enrichment events (migration 108+)
+  detail_enriched:          { icon: Sparkles,      color: "bg-indigo-500",  label: "Detail Enriched",    category_color: "text-indigo-600 dark:text-indigo-400" },
+  agent_email_discovered:   { icon: AtSign,        color: "bg-emerald-500", label: "Email Found",        category_color: "text-emerald-600 dark:text-emerald-400" },
+  agent_mobile_discovered:  { icon: Phone,         color: "bg-emerald-500", label: "Mobile Found",       category_color: "text-emerald-600 dark:text-emerald-400" },
+  agent_email_changed:      { icon: RefreshCw,     color: "bg-amber-500",   label: "Email Changed",      category_color: "text-amber-600 dark:text-amber-400" },
+  agent_mobile_changed:     { icon: RefreshCw,     color: "bg-amber-500",   label: "Mobile Changed",     category_color: "text-amber-600 dark:text-amber-400" },
+  listing_auction_scheduled:{ icon: Gavel,         color: "bg-amber-500",   label: "Auction Scheduled",  category_color: "text-amber-600 dark:text-amber-400" },
+  listing_floorplan_added:  { icon: FileImage,     color: "bg-blue-500",    label: "Floorplan Added",    category_color: "text-blue-600 dark:text-blue-400" },
+  listing_video_added:      { icon: Video,         color: "bg-blue-500",    label: "Video Added",        category_color: "text-blue-600 dark:text-blue-400" },
+  listing_withdrawn:        { icon: XCircle,       color: "bg-red-500",     label: "Withdrawn",          category_color: "text-red-600 dark:text-red-400" },
+  sold_date_captured:       { icon: CheckCircle2,  color: "bg-emerald-500", label: "Sold Date Captured", category_color: "text-emerald-600 dark:text-emerald-400" },
 };
 
 /* ── Fallback config for unknown event types ─────────────────────────────── */
