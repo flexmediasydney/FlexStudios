@@ -7,6 +7,7 @@ import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -261,6 +262,40 @@ export default function IndustryPulse() {
     }
   }, []);
 
+  // ── Server-side accurate counts ───────────────────────────────────────────
+  // The client-side useMemo below reduces pulseListings.length, which is
+  // capped at 5000 rows by useEntityList. Once real listing count exceeds
+  // that cap, totals silently under-count. Fetch dedicated count queries
+  // in parallel so headline stats are accurate even past the cap.
+  const [accurateCounts, setAccurateCounts] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [forSale, forRent, sold, underContract, total] = await Promise.all([
+          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "for_sale"),
+          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "for_rent"),
+          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "sold"),
+          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "under_contract"),
+          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }),
+        ]);
+        if (cancelled) return;
+        setAccurateCounts({
+          activeListings: forSale.count ?? 0,
+          rentals: forRent.count ?? 0,
+          sold: sold.count ?? 0,
+          underContract: underContract.count ?? 0,
+          totalListings: total.count ?? 0,
+        });
+      } catch {
+        // Leave accurateCounts null so fallback to client-side reduce kicks in.
+      }
+    })();
+    return () => { cancelled = true; };
+    // Refresh counts whenever the client-side listings array length changes —
+    // a proxy for "data was refreshed".
+  }, [pulseListings.length]);
+
   // ── Computed stats ───────────────────────────────────────────────────────────
   const stats = useMemo(() => {
     const now = new Date();
@@ -273,7 +308,7 @@ export default function IndustryPulse() {
       (p) => p.created_at && new Date(p.created_at) > d30
     ).length;
 
-    return {
+    const clientSide = {
       totalAgents: pulseAgents.length,
       notInCrm: pulseAgents.filter((a) => !a.is_in_crm).length,
       totalAgencies: pulseAgencies.length,
@@ -301,7 +336,19 @@ export default function IndustryPulse() {
         recentListings > 0 ? Math.round((recentProjects / recentListings) * 100) : 0,
       suggestedMappings: pulseMappings.filter(m => m.confidence === "suggested").length,
     };
-  }, [pulseAgents, pulseAgencies, pulseListings, pulseEvents, pulseSignals, projects, pulseMappings]);
+
+    // Override listing counts with server-side accurate totals once loaded.
+    // Silently no-op when `accurateCounts` is null (first render / query error).
+    if (accurateCounts) {
+      clientSide.totalListings = accurateCounts.totalListings;
+      clientSide.activeListings = accurateCounts.activeListings;
+      clientSide.rentals = accurateCounts.rentals;
+      clientSide.sold = accurateCounts.sold;
+      clientSide.underContract = accurateCounts.underContract;
+    }
+
+    return clientSide;
+  }, [pulseAgents, pulseAgencies, pulseListings, pulseEvents, pulseSignals, projects, pulseMappings, accurateCounts]);
 
   // Deep-link handler — Command Center → Timeline tab
   const handleViewFullTimeline = useCallback(() => {

@@ -13,6 +13,10 @@ import {
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
 import { TrendingUp, Users, ArrowRight, UserPlus, MapPin, Activity, ExternalLink } from "lucide-react";
+import {
+  isActiveListing,
+  isRelationshipState,
+} from "@/components/pulse/utils/listingHelpers";
 
 // ── Tooltip styling ───────────────────────────────────────────────────────────
 
@@ -221,8 +225,10 @@ const FUNNEL_COLORS = ["#94a3b8", "#3b82f6", "#10b981", "#8b5cf6"];
 
 function ConversionFunnelCard({ pulseAgents, crmAgents, projects, stats }) {
   const data = useMemo(() => {
+    // relationship_state casing has drifted in the CRM — "Active"/"active"/etc.
+    // Use shared `isRelationshipState` for case-insensitive matching.
     const activeClients = (crmAgents || []).filter(
-      (a) => a.relationship_state === "Active"
+      (a) => isRelationshipState(a, "Active")
     ).length;
     const d30 = new Date(Date.now() - 30 * 86400000);
     const bookedThisMonth = (projects || []).filter(
@@ -275,8 +281,10 @@ function ConversionFunnelCard({ pulseAgents, crmAgents, projects, stats }) {
 function SuburbDistributionCard({ pulseListings }) {
   const data = useMemo(() => {
     const counts = {};
+    // Use `isActiveListing` — covers for_sale + for_rent + under_contract
+    // (previously only for_sale, so under_contract listings silently dropped).
     (pulseListings || [])
-      .filter((l) => l.listing_type === "for_sale" && l.suburb)
+      .filter((l) => isActiveListing(l) && l.suburb)
       .forEach((l) => {
         counts[l.suburb] = (counts[l.suburb] || 0) + 1;
       });

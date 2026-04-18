@@ -22,6 +22,11 @@ import { Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
   BarChart3, User, Loader2, BookOpen, Database
 } from "lucide-react";
+import {
+  displayPrice as sharedDisplayPrice,
+  LISTING_TYPE_LABEL,
+  listingTypeBadgeClasses,
+} from "@/components/pulse/utils/listingHelpers";
 
 /* ── Helpers ─────────────────────────────────────────────────────────────────── */
 
@@ -114,52 +119,70 @@ const StatBox = ({ value, label }) => (
 
 /* ── Listing row (shared for sale/rent/sold) ─────────────────────────────────── */
 
-const ListingRow = ({ l, showSoldInfo }) => (
-  <a
-    href={l.source_url || "#"}
-    target="_blank"
-    rel="noopener noreferrer"
-    className="flex items-center gap-2 text-xs p-1.5 rounded hover:bg-muted/30 transition-colors"
-  >
-    {l.image_url && (
-      <img src={l.image_url} alt="" className="h-10 w-14 object-cover rounded shrink-0" />
-    )}
-    <div className="flex-1 min-w-0">
-      <p className="font-medium truncate">{l.address || l.suburb || "\u2014"}</p>
-      <div className="flex items-center gap-2 text-muted-foreground flex-wrap">
-        {l.suburb && <span>{l.suburb}</span>}
-        {showSoldInfo ? (
-          <>
-            {l.sold_price > 0 && <span className="font-medium text-foreground">{fmtPrice(l.sold_price)}</span>}
-            {l.sold_date && <span className="text-[9px]">Sold {fmtDate(l.sold_date)}</span>}
-          </>
-        ) : (
-          <>
-            {l.previous_asking_price && (
-              <span className="text-muted-foreground line-through text-[10px] mr-1">
-                {fmtPrice(l.previous_asking_price)}
-              </span>
-            )}
-            {l.asking_price > 0 && <span className="font-medium text-foreground">{fmtPrice(l.asking_price)}</span>}
-            {l.listing_type === "for_rent" && l.asking_price > 0 && <span>/wk</span>}
-            {l.bedrooms && <span>{l.bedrooms}bed</span>}
-            {l.bathrooms && <span>{l.bathrooms}bath</span>}
-            {l.first_seen_at && <span className="text-[9px]">Listed {fmtDate(l.first_seen_at)}</span>}
-          </>
-        )}
+const ListingRow = ({ l, showSoldInfo }) => {
+  // Canonical price label (handles sold/rent/under_contract + /wk via suffix).
+  const priceLabel = sharedDisplayPrice(l).label;
+  const hasPrice = priceLabel && priceLabel !== "—" && priceLabel !== "\u2014";
+
+  return (
+    <a
+      href={l.source_url || "#"}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex items-center gap-2 text-xs p-1.5 rounded hover:bg-muted/30 transition-colors"
+    >
+      {l.image_url && (
+        <img src={l.image_url} alt="" className="h-10 w-14 object-cover rounded shrink-0" />
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="font-medium truncate">{l.address || l.suburb || "\u2014"}</p>
+        <div className="flex items-center gap-2 text-muted-foreground flex-wrap">
+          {l.suburb && <span>{l.suburb}</span>}
+          {showSoldInfo ? (
+            <>
+              {hasPrice && <span className="font-medium text-foreground">{priceLabel}</span>}
+              {l.sold_date && <span className="text-[9px]">Sold {fmtDate(l.sold_date)}</span>}
+            </>
+          ) : (
+            <>
+              {l.previous_asking_price && (
+                <span className="text-muted-foreground line-through text-[10px] mr-1">
+                  {fmtPrice(l.previous_asking_price)}
+                </span>
+              )}
+              {hasPrice && <span className="font-medium text-foreground">{priceLabel}</span>}
+              {l.bedrooms && <span>{l.bedrooms}bed</span>}
+              {l.bathrooms && <span>{l.bathrooms}bath</span>}
+              {l.first_seen_at && <span className="text-[9px]">Listed {fmtDate(l.first_seen_at)}</span>}
+            </>
+          )}
+        </div>
       </div>
-    </div>
-    {l.listing_type === "for_rent" && (
-      <Badge variant="outline" className="text-[7px] py-0 text-purple-600 border-purple-200 shrink-0">Rent</Badge>
-    )}
-    {l.listing_type === "sold" && (
-      <Badge className="text-[7px] bg-emerald-100 text-emerald-700 border-0 shrink-0">Sold</Badge>
-    )}
-    {l.listing_type === "for_sale" && (
-      <ExternalLink className="h-3 w-3 text-primary shrink-0" />
-    )}
-  </a>
-);
+      {l.listing_type === "for_rent" && (
+        <Badge variant="outline" className="text-[7px] py-0 text-purple-600 border-purple-200 shrink-0">Rent</Badge>
+      )}
+      {l.listing_type === "sold" && (
+        <Badge className="text-[7px] bg-emerald-100 text-emerald-700 border-0 shrink-0">Sold</Badge>
+      )}
+      {l.listing_type === "under_contract" && (() => {
+        // under_contract was missing from the badge set entirely — the listing
+        // would render with NO badge. Use shared amber classes for consistency.
+        const c = listingTypeBadgeClasses("under_contract");
+        return (
+          <Badge
+            variant="outline"
+            className={cn("text-[7px] py-0 shrink-0", c.text, c.border)}
+          >
+            {LISTING_TYPE_LABEL.under_contract}
+          </Badge>
+        );
+      })()}
+      {l.listing_type === "for_sale" && (
+        <ExternalLink className="h-3 w-3 text-primary shrink-0" />
+      )}
+    </a>
+  );
+};
 
 /* ═════════════════════════════════════════════════════════════════════════════ */
 /* ═══ MAIN COMPONENT ═══════════════════════════════════════════════════════ */

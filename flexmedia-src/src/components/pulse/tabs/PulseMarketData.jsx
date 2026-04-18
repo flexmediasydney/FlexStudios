@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { Home, DollarSign, Clock, TrendingUp, MapPin, Users, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isActiveListing } from "@/components/pulse/utils/listingHelpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -87,13 +88,16 @@ function StatCard({ label, value, icon: Icon, color }) {
 
 function SummaryStats({ pulseListings }) {
   const stats = useMemo(() => {
-    const forSale = pulseListings.filter((l) => l.listing_type === "for_sale");
+    // `isActiveListing` covers for_sale + for_rent + under_contract — all
+    // "on market" states. Previously only for_sale was counted so
+    // under_contract listings silently dropped out of market totals.
+    const onMarket = pulseListings.filter((l) => isActiveListing(l));
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const totalListings = forSale.length;
+    const totalListings = onMarket.length;
 
-    const withPrice = forSale.filter((l) => l.asking_price > 0);
+    const withPrice = onMarket.filter((l) => l.asking_price > 0);
     const avgPrice =
       withPrice.length > 0
         ? Math.round(withPrice.reduce((s, l) => s + l.asking_price, 0) / withPrice.length)
@@ -237,12 +241,14 @@ function TopListingAgentsTable({ pulseListings, crmAgents }) {
 
 function PriceDistributionChart({ pulseListings }) {
   const data = useMemo(() => {
-    const forSale = pulseListings.filter(
-      (l) => l.listing_type === "for_sale" && l.asking_price > 0
+    // On-market listings (for_sale + for_rent + under_contract) with a price.
+    // Previously for_sale-only — under_contract silently fell out.
+    const onMarket = pulseListings.filter(
+      (l) => isActiveListing(l) && l.asking_price > 0
     );
     return PRICE_BRACKETS.map((bracket) => ({
       label: bracket.label,
-      count: forSale.filter(
+      count: onMarket.filter(
         (l) => l.asking_price >= bracket.min && l.asking_price < bracket.max
       ).length,
     }));

@@ -42,6 +42,12 @@ import {
   Loader2,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
+import {
+  displayPrice as sharedDisplayPrice,
+  LISTING_TYPE_LABEL,
+  listingTypeBadgeClasses,
+  reaIdEquals,
+} from "@/components/pulse/utils/listingHelpers";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -206,6 +212,67 @@ const StatBox = ({ label, value, sub }) => (
 const ListingRow = ({ l, onOpen }) => {
   const isSold = l.listing_type === "sold";
   const isRent = l.listing_type === "for_rent";
+  const isUnderContract = l.listing_type === "under_contract";
+
+  // Shared canonical price label — handles sold / for_rent / under_contract
+  // ordering + the /wk suffix consistently. Previous inline branches diverged.
+  const priceLabel = sharedDisplayPrice(l).label;
+
+  // Body row content — shared between onOpen and link variants.
+  const bodyMeta = (
+    <div className="flex items-center gap-2 text-muted-foreground flex-wrap">
+      {l.suburb && <span>{l.suburb}</span>}
+      {isSold ? (
+        <>
+          {priceLabel && priceLabel !== "—" && (
+            <span className="font-medium text-foreground">{priceLabel}</span>
+          )}
+          {l.sold_date && (
+            <span className="text-[9px]">Sold {fmtDate(l.sold_date)}</span>
+          )}
+        </>
+      ) : (
+        <>
+          {priceLabel && priceLabel !== "—" && (
+            <span className="font-medium text-foreground">{priceLabel}</span>
+          )}
+          {l.bedrooms > 0 && <span>{l.bedrooms}bd</span>}
+          {l.bathrooms > 0 && <span>{l.bathrooms}ba</span>}
+        </>
+      )}
+    </div>
+  );
+
+  // Status badges — render one branch per state. under_contract uses amber
+  // classes from the shared listingTypeBadgeClasses helper.
+  const statusBadges = (
+    <>
+      {isSold && (
+        <Badge className="text-[7px] py-0 px-1 bg-emerald-100 text-emerald-700 border-0">
+          Sold
+        </Badge>
+      )}
+      {isRent && (
+        <Badge
+          variant="outline"
+          className="text-[7px] py-0 px-1 text-purple-600 border-purple-200"
+        >
+          Rent
+        </Badge>
+      )}
+      {isUnderContract && (() => {
+        const c = listingTypeBadgeClasses("under_contract");
+        return (
+          <Badge
+            variant="outline"
+            className={cn("text-[7px] py-0 px-1", c.text, c.border)}
+          >
+            {LISTING_TYPE_LABEL.under_contract}
+          </Badge>
+        );
+      })()}
+    </>
+  );
 
   if (onOpen) {
     return (
@@ -226,46 +293,11 @@ const ListingRow = ({ l, onOpen }) => {
         )}
         <div className="flex-1 min-w-0">
           <p className="font-medium truncate">{l.address || l.suburb || "—"}</p>
-          <div className="flex items-center gap-2 text-muted-foreground flex-wrap">
-            {l.suburb && <span>{l.suburb}</span>}
-            {isSold ? (
-              <>
-                {l.sold_price > 0 && (
-                  <span className="font-medium text-foreground">{fmtPrice(l.sold_price)}</span>
-                )}
-                {l.sold_date && (
-                  <span className="text-[9px]">Sold {fmtDate(l.sold_date)}</span>
-                )}
-              </>
-            ) : (
-              <>
-                {l.asking_price > 0 && (
-                  <span className="font-medium text-foreground">
-                    {fmtPrice(l.asking_price)}
-                    {isRent && "/wk"}
-                  </span>
-                )}
-                {l.bedrooms > 0 && <span>{l.bedrooms}bd</span>}
-                {l.bathrooms > 0 && <span>{l.bathrooms}ba</span>}
-              </>
-            )}
-          </div>
+          {bodyMeta}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {isSold && (
-            <Badge className="text-[7px] py-0 px-1 bg-emerald-100 text-emerald-700 border-0">
-              Sold
-            </Badge>
-          )}
-          {isRent && (
-            <Badge
-              variant="outline"
-              className="text-[7px] py-0 px-1 text-purple-600 border-purple-200"
-            >
-              Rent
-            </Badge>
-          )}
-          {!isSold && !isRent && (
+          {statusBadges}
+          {!isSold && !isRent && !isUnderContract && (
             <ChevronRight className="h-3 w-3 text-primary" />
           )}
         </div>
@@ -293,46 +325,11 @@ const ListingRow = ({ l, onOpen }) => {
       )}
       <div className="flex-1 min-w-0">
         <p className="font-medium truncate">{l.address || l.suburb || "—"}</p>
-        <div className="flex items-center gap-2 text-muted-foreground flex-wrap">
-          {l.suburb && <span>{l.suburb}</span>}
-          {isSold ? (
-            <>
-              {l.sold_price > 0 && (
-                <span className="font-medium text-foreground">{fmtPrice(l.sold_price)}</span>
-              )}
-              {l.sold_date && (
-                <span className="text-[9px]">Sold {fmtDate(l.sold_date)}</span>
-              )}
-            </>
-          ) : (
-            <>
-              {l.asking_price > 0 && (
-                <span className="font-medium text-foreground">
-                  {fmtPrice(l.asking_price)}
-                  {isRent && "/wk"}
-                </span>
-              )}
-              {l.bedrooms > 0 && <span>{l.bedrooms}bd</span>}
-              {l.bathrooms > 0 && <span>{l.bathrooms}ba</span>}
-            </>
-          )}
-        </div>
+        {bodyMeta}
       </div>
       <div className="flex items-center gap-1 shrink-0">
-        {isSold && (
-          <Badge className="text-[7px] py-0 px-1 bg-emerald-100 text-emerald-700 border-0">
-            Sold
-          </Badge>
-        )}
-        {isRent && (
-          <Badge
-            variant="outline"
-            className="text-[7px] py-0 px-1 text-purple-600 border-purple-200"
-          >
-            Rent
-          </Badge>
-        )}
-        {!isSold && !isRent && (
+        {statusBadges}
+        {!isSold && !isRent && !isUnderContract && (
           <ExternalLink className="h-3 w-3 text-primary" />
         )}
       </div>
@@ -946,7 +943,9 @@ export function AgencySlideout({
             </h4>
             <PulseTimeline
               entries={(pulseTimeline || []).filter(e =>
-                e.rea_id === agency?.rea_agency_id ||
+                // reaIdEquals coerces both sides to string — rea_id drifts
+                // between text + int shapes and strict === silently missed matches.
+                reaIdEquals(e.rea_id, agency?.rea_agency_id) ||
                 e.pulse_entity_id === agency?.id
               )}
               maxHeight="max-h-[300px]"

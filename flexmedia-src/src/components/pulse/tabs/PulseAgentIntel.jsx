@@ -52,6 +52,12 @@ import {
   Loader2,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
+import {
+  displayPrice as sharedDisplayPrice,
+  isActiveListing,
+  stalenessInfo,
+  reaIdEquals,
+} from "@/components/pulse/utils/listingHelpers";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -272,7 +278,9 @@ function MiniListingTable({ listings, emptyMsg, onOpenListing }) {
               <td className="py-1.5 pr-3 max-w-[220px] truncate text-foreground">
                 {l.address || l.suburb || "—"}
               </td>
-              <td className="py-1.5 pr-3 text-right tabular-nums">{fmtPrice(l.asking_price || l.sold_price)}</td>
+              {/* Use shared displayPrice — previously `asking_price || sold_price`
+                  which showed the asking-price fallback on sold listings. */}
+              <td className="py-1.5 pr-3 text-right tabular-nums">{sharedDisplayPrice(l).label}</td>
               <td className="py-1.5 text-right tabular-nums text-muted-foreground">
                 {l.days_on_market > 0 ? `${l.days_on_market}d` : "—"}
               </td>
@@ -537,9 +545,10 @@ export function AgentSlideout({
         (Array.isArray(l.agent_rea_ids) && l.agent_rea_ids.includes(id))
     );
     return {
-      active: all.filter(
-        (l) => l.listing_type === "for_sale" || l.listing_type === "for_rent"
-      ),
+      // Use shared `isActiveListing` so under_contract listings are counted as
+      // active workload (they previously fell off because the filter hard-coded
+      // for_sale + for_rent).
+      active: all.filter((l) => isActiveListing(l)),
       sold: all.filter((l) => l.listing_type === "sold"),
     };
   }, [agent.rea_agent_id, pulseListings]);
@@ -891,7 +900,9 @@ export function AgentSlideout({
             </h4>
             <PulseTimeline
               entries={(pulseTimeline || []).filter(e =>
-                e.rea_id === agent?.rea_agent_id ||
+                // reaIdEquals coerces both sides to string — rea_id drifts
+                // between text + int shapes and strict === silently missed matches.
+                reaIdEquals(e.rea_id, agent?.rea_agent_id) ||
                 e.pulse_entity_id === agent?.id
               )}
               maxHeight="max-h-[300px]"
@@ -1583,7 +1594,7 @@ export default function PulseAgentIntel({
                       <StarRating rating={agent.rea_rating} count={agent.rea_review_count} />
                     </td>
 
-                    {/* Last synced */}
+                    {/* Last synced — with stale badge when last_synced_at is >7d old */}
                     <td
                       className="py-2 px-2 text-right text-[10px] text-muted-foreground hidden xl:table-cell whitespace-nowrap"
                       title={agent.last_synced_at ? new Date(agent.last_synced_at).toLocaleString() : "Never synced"}
@@ -1592,6 +1603,14 @@ export default function PulseAgentIntel({
                         <Clock className="h-2.5 w-2.5" />
                         {fmtAgo(agent.last_synced_at)}
                       </span>
+                      {(() => {
+                        const s = stalenessInfo(agent.last_synced_at);
+                        return s.isStale ? (
+                          <Badge variant="outline" className="text-[8px] px-1 ml-1 text-amber-700 border-amber-400/60">
+                            {s.label}
+                          </Badge>
+                        ) : null;
+                      })()}
                     </td>
 
                     {/* CRM status */}

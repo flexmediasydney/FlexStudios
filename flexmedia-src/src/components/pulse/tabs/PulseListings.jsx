@@ -55,6 +55,10 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  displayPrice as sharedDisplayPrice,
+  stalenessInfo,
+} from "@/components/pulse/utils/listingHelpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -226,10 +230,9 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
 
   if (!listing) return null;
 
-  const displayPrice =
-    listing.listing_type === "sold"
-      ? fmtPrice(listing.sold_price || listing.asking_price)
-      : fmtPrice(listing.asking_price);
+  // Canonical price label via shared helper — handles sold/rent/under_contract
+  // ordering + /wk suffix in one place. See listingHelpers.js.
+  const displayPriceLabel = sharedDisplayPrice(listing).label;
 
   const heroSrc = !heroErr && (listing.hero_image || listing.image_url);
 
@@ -308,7 +311,7 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
 
           {/* Price + badges */}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-2xl font-bold tabular-nums">{displayPrice}</span>
+            <span className="text-2xl font-bold tabular-nums">{displayPriceLabel}</span>
             {listing.listing_type && (
               <span
                 className={cn(
@@ -947,10 +950,9 @@ export default function PulseListingsTab({
               </thead>
               <tbody className="divide-y divide-border/40">
                 {rows.map((l) => {
-                  const price =
-                    l.listing_type === "sold"
-                      ? fmtPrice(l.sold_price || l.asking_price)
-                      : fmtPrice(l.asking_price);
+                  // Canonical price label via shared helper — handles sold/rent/
+                  // under_contract ordering consistently across all renderers.
+                  const price = sharedDisplayPrice(l).label;
                   const thumb = l.image_url || l.hero_image;
                   const addr = [l.address, l.suburb, l.postcode]
                     .filter(Boolean)
@@ -1059,7 +1061,7 @@ export default function PulseListingsTab({
                           : "—"}
                       </td>
 
-                      {/* Last synced */}
+                      {/* Last synced — with stale badge when last_synced_at is >7d old */}
                       <td
                         className="px-2 py-1.5 whitespace-nowrap text-[10px] text-muted-foreground hidden xl:table-cell"
                         title={l.last_synced_at ? new Date(l.last_synced_at).toLocaleString() : "Never synced"}
@@ -1068,6 +1070,14 @@ export default function PulseListingsTab({
                           <Clock className="h-2.5 w-2.5" />
                           {fmtAgo(l.last_synced_at)}
                         </span>
+                        {(() => {
+                          const s = stalenessInfo(l.last_synced_at);
+                          return s.isStale ? (
+                            <Badge variant="outline" className="text-[8px] px-1 ml-1 text-amber-700 border-amber-400/60">
+                              {s.label}
+                            </Badge>
+                          ) : null;
+                        })()}
                       </td>
 
                       {/* Status */}
