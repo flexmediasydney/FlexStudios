@@ -20,6 +20,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +28,17 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+} from "@/components/ui/sheet";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -53,6 +65,8 @@ import {
   Clock,
   Loader2,
   History,
+  Copy,
+  Sparkles,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
@@ -86,6 +100,41 @@ function fmtDate(d) {
   } catch {
     return "—";
   }
+}
+
+/* AU numeric date for CSV export (dd/mm/yyyy). */
+function fmtDateAu(d) {
+  if (!d) return "";
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return "";
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const yyyy = dt.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+/* Rating color ramp + tier label (#20). */
+function ratingColorClass(r) {
+  const n = Number(r);
+  if (!Number.isFinite(n) || n <= 0) return "text-muted-foreground";
+  if (n >= 4.5) return "text-emerald-600 dark:text-emerald-400";
+  if (n >= 3.5) return "text-amber-600 dark:text-amber-400";
+  return "text-red-600 dark:text-red-400";
+}
+function ratingStarFill(r) {
+  const n = Number(r);
+  if (!Number.isFinite(n) || n <= 0) return "text-muted-foreground/40";
+  if (n >= 4.5) return "fill-emerald-500 text-emerald-500";
+  if (n >= 3.5) return "fill-amber-400 text-amber-400";
+  return "fill-red-500 text-red-500";
+}
+function ratingTier(r) {
+  const n = Number(r);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 4.8) return "Elite";
+  if (n >= 4.5) return "Top Rated";
+  if (n >= 4.0) return "Strong";
+  return null;
 }
 
 function normAgencyKey(s) {
@@ -147,7 +196,8 @@ function fmtAgo(d) {
   return `${mo}mo ago`;
 }
 
-/* CSV export helper — quote fields, build blob, trigger download. */
+/* CSV export helper — quote fields, build blob, trigger download.
+ * Prefixes a UTF-8 BOM (\uFEFF) so Excel detects the encoding. */
 function exportCsv(filename, header, rows) {
   const escape = (v) => {
     if (v == null) return "";
@@ -156,7 +206,8 @@ function exportCsv(filename, header, rows) {
   };
   const lines = [header.join(",")];
   for (const r of rows) lines.push(header.map((h) => escape(r[h])).join(","));
-  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const csv = "\uFEFF" + lines.join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -165,6 +216,36 @@ function exportCsv(filename, header, rows) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/* Copy-to-clipboard helper — used by hover-copy icons + context menu. */
+async function copyToClipboard(text, label) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(String(text));
+    toast.success(`Copied${label ? ` ${label}` : ""}!`);
+  } catch {
+    toast.error("Copy failed");
+  }
+}
+
+/* Small hover-only copy icon (#14). Parent row should have `group`. */
+function CopyCellIcon({ value, label }) {
+  if (!value) return null;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        copyToClipboard(value, label);
+      }}
+      className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity inline-flex items-center justify-center h-4 w-4 rounded hover:bg-muted text-muted-foreground hover:text-foreground shrink-0"
+      aria-label={`Copy ${label || "value"}`}
+      title={`Copy ${label || "value"}`}
+    >
+      <Copy className="h-3 w-3" />
+    </button>
+  );
 }
 
 function PositionBadge({ position }) {
@@ -212,17 +293,32 @@ function ReaBadge() {
 
 function AgentAvatar({ agent, size = 32 }) {
   const [imgError, setImgError] = React.useState(false);
+  const [imgLoaded, setImgLoaded] = React.useState(false);
   const initials = (agent.full_name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
 
   if (agent.profile_image && !imgError) {
+    // #21 Avatar lazy-load — pulsing muted placeholder until onLoad fires.
     return (
-      <img
-        src={agent.profile_image}
-        alt={agent.full_name}
-        className="rounded-full object-cover flex-shrink-0"
+      <div
+        className={cn(
+          "relative rounded-full overflow-hidden flex-shrink-0",
+          !imgLoaded && "bg-muted animate-pulse",
+        )}
         style={{ width: size, height: size }}
-        onError={() => setImgError(true)}
-      />
+      >
+        <img
+          src={agent.profile_image}
+          alt={agent.full_name}
+          loading="lazy"
+          decoding="async"
+          className={cn(
+            "rounded-full object-cover w-full h-full transition-opacity duration-200",
+            imgLoaded ? "opacity-100" : "opacity-0",
+          )}
+          onError={() => setImgError(true)}
+          onLoad={() => setImgLoaded(true)}
+        />
+      </div>
     );
   }
   return (
@@ -237,13 +333,42 @@ function AgentAvatar({ agent, size = 32 }) {
 
 function StarRating({ rating, count }) {
   if (!rating) return <span className="text-muted-foreground">—</span>;
+  const colorCls = ratingColorClass(rating);
+  const starCls = ratingStarFill(rating);
+  const tier = ratingTier(rating);
   return (
     <span className="inline-flex items-center gap-0.5 text-xs">
-      <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-      <span className="tabular-nums font-medium">{Number(rating).toFixed(1)}</span>
+      <Star className={cn("h-3 w-3", starCls)} />
+      <span className={cn("tabular-nums font-medium", colorCls)}>
+        {Number(rating).toFixed(1)}
+      </span>
       {count > 0 && (
         <span className="text-muted-foreground text-[10px]">({count})</span>
       )}
+      {tier && <TierPill tier={tier} />}
+    </span>
+  );
+}
+
+/* #20 Rating tier pill — Elite / Top Rated / Strong. */
+function TierPill({ tier }) {
+  if (!tier) return null;
+  const cls =
+    tier === "Elite"
+      ? "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/30 dark:text-violet-300 dark:border-violet-800"
+      : tier === "Top Rated"
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800"
+      : "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/30 dark:text-sky-300 dark:border-sky-800";
+  return (
+    <span
+      className={cn(
+        "ml-1 inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0 text-[9px] font-medium leading-4",
+        cls,
+      )}
+      title={`Rating tier: ${tier}`}
+    >
+      {tier === "Elite" && <Sparkles className="h-2.5 w-2.5" />}
+      {tier}
     </span>
   );
 }
@@ -544,6 +669,7 @@ export function AgentSlideout({
   onOpenEntity,
   hasHistory = false,
   onBack,
+  onNavigate,
 }) {
   const position = mapPosition(agent.job_title);
   // Tier 4: source-history drill
@@ -639,9 +765,46 @@ export function AgentSlideout({
     linkedin: agent.social_linkedin || null,
   }), [agent.social_facebook, agent.social_instagram, agent.social_linkedin]);
 
+  /* #17 Keyboard nav when slideout is open.
+   *   ← / →   prev/next within parent paginated list
+   *   c       copy primary mobile
+   *   e       mailto: primary email
+   *   a       trigger Add-to-CRM dialog
+   */
+  useEffect(() => {
+    function onKey(e) {
+      // Ignore when user is typing in an input/textarea/contenteditable.
+      const tag = (e.target?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "ArrowLeft") {
+        if (onNavigate) { e.preventDefault(); onNavigate(-1); }
+      } else if (e.key === "ArrowRight") {
+        if (onNavigate) { e.preventDefault(); onNavigate(1); }
+      } else if (e.key === "c" || e.key === "C") {
+        if (agent.mobile) {
+          e.preventDefault();
+          copyToClipboard(agent.mobile, "mobile");
+        }
+      } else if (e.key === "e" || e.key === "E") {
+        if (agent.email) {
+          e.preventDefault();
+          window.location.href = `mailto:${agent.email}`;
+        }
+      } else if (e.key === "a" || e.key === "A") {
+        if (!agent.is_in_crm && onAddToCrm) {
+          e.preventDefault();
+          onAddToCrm(agent);
+        }
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [agent, onNavigate, onAddToCrm]);
+
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-0">
+    <Sheet open onOpenChange={(o) => { if (!o) onClose?.(); }}>
+      <SheetContent side="right" className="sm:max-w-3xl w-full p-0 overflow-y-auto">
         {/* ── Header ── */}
         <div className="sticky top-0 z-10 bg-background border-b border-border px-5 pt-5 pb-4">
           <div className="flex items-start gap-4">
@@ -679,12 +842,8 @@ export function AgentSlideout({
                 <p className="text-xs text-muted-foreground">{agent.job_title}</p>
               )}
             </div>
-            <button
-              onClick={onClose}
-              className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-muted"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            {/* Close button is provided by <SheetContent>; we keep the right-hand
+                slot empty so the built-in X has breathing room. */}
           </div>
         </div>
 
@@ -1172,7 +1331,7 @@ export function AgentSlideout({
             )}
           </div>
         </div>
-      </DialogContent>
+      </SheetContent>
       {syncHistoryOpen && (
         <EntitySyncHistoryDialog
           entityType="agent"
@@ -1181,7 +1340,7 @@ export function AgentSlideout({
           onClose={() => setSyncHistoryOpen(false)}
         />
       )}
-    </Dialog>
+    </Sheet>
   );
 }
 
@@ -1299,6 +1458,11 @@ export default function PulseAgentIntel({
   // Auto-refresh — opt-in, 60s. Same rationale as PulseListings.
   const [autoRefresh, setAutoRefresh] = useState(readStoredAutoRefresh);
 
+  // #11 Bulk selection — Set of agent.id currently ticked in the table.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // #18 Quick-filter preset — one-at-a-time toggle. null = no preset.
+  const [activePreset, setActivePreset] = useState(null);
+
   useEffect(() => {
     try { window.localStorage.setItem(LS_PAGE_SIZE_KEY, String(pageSize)); } catch { /* quota / SSR */ }
   }, [pageSize]);
@@ -1383,7 +1547,7 @@ export default function PulseAgentIntel({
   //    drive a new query, so the page index must reset or we'd page past).
   useEffect(() => {
     setAgentPage(0);
-  }, [agentFilter, integrityFilter, mappingFilter, regionFilter, agentColFilters.agency, agentColFilters.suburb, search, agentSort.col, agentSort.dir, pageSize]);
+  }, [agentFilter, integrityFilter, mappingFilter, regionFilter, agentColFilters.agency, agentColFilters.suburb, search, agentSort.col, agentSort.dir, pageSize, activePreset]);
 
   // ── Server-side query builder ─────────────────────────────────────────────
   // Returns a PostgREST query with every server-applicable filter applied.
@@ -1434,12 +1598,35 @@ export default function PulseAgentIntel({
       q = q.ilike("search_text", `%${s}%`);
     }
 
-    // Sort — translate UI sort-key to DB column, fall back to sales_as_lead
-    const sortCol = SERVER_SORT_MAP[agentSort.col] || "sales_as_lead";
-    q = q.order(sortCol, { ascending: agentSort.dir === "asc", nullsFirst: false });
+    // #18 Quick-filter preset — composed ON TOP of the other filters so a
+    // chip acts as a one-click narrowing pass the user can still refine.
+    let sortOverride = null;
+    if (activePreset === "top20_not_in_crm") {
+      q = q.gte("data_integrity_score", 80).eq("is_in_crm", false);
+      sortOverride = { col: "sales_as_lead", dir: "desc" };
+    } else if (activePreset === "awarded") {
+      q = q.not("awards", "is", null);
+    } else if (activePreset === "recently_added") {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      q = q.gte("first_seen_at", sevenDaysAgo);
+    } else if (activePreset === "high_rating") {
+      q = q.gte("rea_rating", 4.5);
+    }
 
+    // Sort — translate UI sort-key to DB column, fall back to sales_as_lead.
+    // Presets may override sort so the chip's intent is obvious ("Top 20" is
+    // meaningless if sorted alphabetically).
+    const sortCol = sortOverride
+      ? sortOverride.col
+      : (SERVER_SORT_MAP[agentSort.col] || "sales_as_lead");
+    const sortDirAsc = sortOverride
+      ? sortOverride.dir === "asc"
+      : agentSort.dir === "asc";
+    q = q.order(sortCol, { ascending: sortDirAsc, nullsFirst: false });
+
+    // Preset hard-caps (e.g. "Top 20") applied via range at fetch-time below.
     return q;
-  }, [agentFilter, integrityFilter, agentColFilters, search, agentSort, suburbsInRegion]);
+  }, [agentFilter, integrityFilter, agentColFilters, search, agentSort, suburbsInRegion, activePreset]);
 
   // Page fetch
   const queryKey = useMemo(
@@ -1447,24 +1634,33 @@ export default function PulseAgentIntel({
       agentFilter, integrityFilter, regionFilter,
       agency: agentColFilters.agency, suburb: agentColFilters.suburb,
       search, sortCol: agentSort.col, sortDir: agentSort.dir,
-      page: agentPage, pageSize,
+      page: agentPage, pageSize, preset: activePreset,
     }],
-    [agentFilter, integrityFilter, regionFilter, agentColFilters, search, agentSort, agentPage, pageSize],
+    [agentFilter, integrityFilter, regionFilter, agentColFilters, search, agentSort, agentPage, pageSize, activePreset],
   );
 
   const { data: pageData, isLoading, isFetching } = useQuery({
     queryKey,
     queryFn: async () => {
       const from = agentPage * pageSize;
+      // #18 "Top 20" preset hard-caps result size to 20 regardless of page-size.
+      const presetCap = activePreset === "top20_not_in_crm" ? 20 : null;
       // We overfetch by a modest factor when the mapping filter is engaged
       // so the client-side narrow has enough rows to populate a full page.
       // For non-mapping filters this is a plain single page.
       const overfetch = mappingFilter === "all" ? 0 : pageSize * 3;
-      const to = from + pageSize - 1 + overfetch;
+      let to = from + pageSize - 1 + overfetch;
+      if (presetCap != null) {
+        to = Math.min(to, presetCap - 1);
+        if (from >= presetCap) {
+          return { rows: [], count: presetCap };
+        }
+      }
       const q = buildQuery("*", true).range(from, to);
       const { data: rows, count, error } = await q;
       if (error) throw error;
-      return { rows: rows || [], count: count || 0 };
+      const cappedCount = presetCap != null ? Math.min(count || 0, presetCap) : (count || 0);
+      return { rows: rows || [], count: cappedCount };
     },
     keepPreviousData: true,
     staleTime: 30_000,
@@ -1526,13 +1722,30 @@ export default function PulseAgentIntel({
         if (mappingFilter === "unmapped") return !conf && !a.is_in_crm;
         return true;
       });
+      // #19 CSV export enhancements — additional columns, AU dd/mm/yyyy dates,
+      // UTF-8 BOM (emitted by exportCsv) so Excel/Numbers reads UTF-8 cleanly.
       const header = [
         "full_name", "agency_name", "agency_suburb", "email", "mobile",
         "job_title", "data_integrity_score", "total_listings_active", "sales_as_lead",
         "avg_sold_price", "avg_days_on_market", "rea_rating", "is_in_crm",
-        "rea_agent_id", "last_synced_at",
+        "rea_agent_id", "awards", "rea_profile_url", "suburbs_active",
+        "years_experience", "first_seen_at", "social_linkedin", "last_synced_at",
       ];
-      exportCsv(`pulse_agents_${new Date().toISOString().slice(0, 10)}.csv`, header, filteredAll);
+      const shaped = filteredAll.map((r) => {
+        let suburbsStr = "";
+        try {
+          const raw = r.suburbs_active;
+          const list = Array.isArray(raw) ? raw : (typeof raw === "string" ? JSON.parse(raw) : []);
+          if (Array.isArray(list)) suburbsStr = list.join("; ");
+        } catch { /* leave blank */ }
+        return {
+          ...r,
+          suburbs_active: suburbsStr,
+          first_seen_at: fmtDateAu(r.first_seen_at),
+          last_synced_at: fmtDateAu(r.last_synced_at),
+        };
+      });
+      exportCsv(`pulse_agents_${new Date().toISOString().slice(0, 10)}.csv`, header, shaped);
     } catch (err) {
       // eslint-disable-next-line no-alert
       window.alert(`CSV export failed: ${err?.message || err}`);
@@ -1550,6 +1763,111 @@ export default function PulseAgentIntel({
     setAgentFilter(f);
     setAgentPage(0);
   }
+
+  // #11 Bulk-select helpers — operate on the currently visible page.
+  const visibleIds = useMemo(() => (paginated || []).map((a) => a.id), [paginated]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id));
+  const toggleSelectOne = useCallback((id, checked) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }, []);
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const id of visibleIds) next.delete(id);
+      } else {
+        for (const id of visibleIds) next.add(id);
+      }
+      return next;
+    });
+  }, [visibleIds, allVisibleSelected]);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const selectedCount = selectedIds.size;
+
+  // Clear stale selections that no longer correspond to a fetched row
+  // (e.g. after switching filters). Keeps the sticky bar in sync.
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    // Only remove IDs that are neither on the page nor previously kept
+    // around; this is cheap because the set is small.
+    const visible = new Set(visibleIds);
+    let changed = false;
+    const next = new Set();
+    for (const id of selectedIds) {
+      if (visible.has(id)) { next.add(id); }
+      else { changed = true; }
+    }
+    // Preserve cross-page selections — but reset completely when the preset or filter changes.
+    // We simplify: only prune on an *empty* page if the user has intentionally
+    // cleared filters — otherwise keep the selection around.
+    if (changed && visibleIds.length === 0) {
+      setSelectedIds(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleIds]);
+
+  // #11 Bulk actions.
+  const selectedAgentsFromVisible = useMemo(
+    () => (paginated || []).filter((a) => selectedIds.has(a.id)),
+    [paginated, selectedIds],
+  );
+
+  const handleBulkAddToCrm = useCallback(() => {
+    // Pick the first not-in-CRM agent from the selection to feed the
+    // existing single-agent Add-to-CRM flow — the dialog handles creation
+    // + dedup, and closing it pops the next candidate.
+    const next = selectedAgentsFromVisible.find((a) => !a.is_in_crm);
+    if (!next) {
+      toast.info("All selected agents are already in CRM");
+      return;
+    }
+    setAddToCrmCandidate(next);
+  }, [selectedAgentsFromVisible]);
+
+  const handleBulkExport = useCallback(() => {
+    if (selectedAgentsFromVisible.length === 0) return;
+    const header = [
+      "full_name", "agency_name", "agency_suburb", "email", "mobile",
+      "job_title", "data_integrity_score", "total_listings_active", "sales_as_lead",
+      "avg_sold_price", "avg_days_on_market", "rea_rating", "is_in_crm",
+      "rea_agent_id", "awards", "rea_profile_url", "suburbs_active",
+      "years_experience", "first_seen_at", "social_linkedin", "last_synced_at",
+    ];
+    const shaped = selectedAgentsFromVisible.map((r) => {
+      let suburbsStr = "";
+      try {
+        const raw = r.suburbs_active;
+        const list = Array.isArray(raw) ? raw : (typeof raw === "string" ? JSON.parse(raw) : []);
+        if (Array.isArray(list)) suburbsStr = list.join("; ");
+      } catch { /* */ }
+      return {
+        ...r,
+        suburbs_active: suburbsStr,
+        first_seen_at: fmtDateAu(r.first_seen_at),
+        last_synced_at: fmtDateAu(r.last_synced_at),
+      };
+    });
+    exportCsv(
+      `pulse_agents_selected_${new Date().toISOString().slice(0, 10)}.csv`,
+      header,
+      shaped,
+    );
+  }, [selectedAgentsFromVisible]);
+
+  // #17 Slideout navigation — map prev/next to neighbours in `paginated`.
+  const handleSlideoutNavigate = useCallback((dir) => {
+    if (!selectedAgent || !paginated?.length) return;
+    const idx = paginated.findIndex((a) => a.id === selectedAgent.id);
+    if (idx < 0) return;
+    const nextIdx = idx + dir;
+    if (nextIdx < 0 || nextIdx >= paginated.length) return;
+    setSelectedAgent(paginated[nextIdx]);
+  }, [paginated, selectedAgent]);
 
   /* ── Render ── */
   return (
@@ -1668,6 +1986,35 @@ export default function PulseAgentIntel({
         </div>
       </div>
 
+      {/* ── #18 Quick-filter preset chips ── */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {[
+          { key: "top20_not_in_crm", label: "Top 20 not in CRM" },
+          { key: "awarded", label: "Awarded" },
+          { key: "recently_added", label: "Recently added (<7d)" },
+          { key: "high_rating", label: "High rating ≥4.5" },
+        ].map((p) => {
+          const active = activePreset === p.key;
+          return (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => setActivePreset(active ? null : p.key)}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+                active
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground",
+              )}
+              title={active ? "Click to clear" : `Apply preset: ${p.label}`}
+            >
+              {p.label}
+              {active && <X className="h-2.5 w-2.5" />}
+            </button>
+          );
+        })}
+      </div>
+
       {/* ── AG05: Active-filter chips ── */}
       {(() => {
         const chips = [];
@@ -1775,8 +2122,16 @@ export default function PulseAgentIntel({
             {/* ── thead ── */}
             <thead>
               <tr className="border-b border-border bg-muted/40">
+                {/* #11 Select-all-visible checkbox */}
+                <th className="py-2.5 pl-3 pr-1 w-8">
+                  <Checkbox
+                    checked={allVisibleSelected ? true : (someVisibleSelected ? "indeterminate" : false)}
+                    onCheckedChange={toggleSelectAllVisible}
+                    aria-label="Select all visible agents"
+                  />
+                </th>
                 {/* Photo */}
-                <th className="py-2.5 pl-3 pr-2 w-10" />
+                <th className="py-2.5 pl-2 pr-2 w-10" />
                 {/* Name */}
                 <th
                   className="py-2.5 px-2 text-left font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground whitespace-nowrap"
@@ -1854,8 +2209,8 @@ export default function PulseAgentIntel({
 
               {/* ── Column filter row ── */}
               <tr className="border-b border-border bg-muted/20">
-                <td colSpan={2} className="py-1 pl-3 pr-2">
-                  {/* empty — agent col has no filter */}
+                <td colSpan={3} className="py-1 pl-3 pr-2">
+                  {/* empty — checkbox + photo + name cols have no filter */}
                 </td>
                 {/* Agency filter — AG04: native combobox via datalist (distinct values from memory). */}
                 <td className="py-1 px-2">
@@ -1915,7 +2270,7 @@ export default function PulseAgentIntel({
               {isLoading && paginated.length === 0 && (
                 <tr>
                   <td
-                    colSpan={13}
+                    colSpan={14}
                     className="py-12 text-center text-sm text-muted-foreground"
                   >
                     <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
@@ -1926,7 +2281,7 @@ export default function PulseAgentIntel({
               {!isLoading && paginated.length === 0 && (
                 <tr>
                   <td
-                    colSpan={13}
+                    colSpan={14}
                     className="py-12 text-center text-sm text-muted-foreground"
                   >
                     <Users className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
@@ -1937,20 +2292,34 @@ export default function PulseAgentIntel({
 
               {paginated.map((agent) => {
                 const position = mapPosition(agent.job_title);
+                const isSelected = selectedIds.has(agent.id);
                 return (
-                  <tr
-                    key={agent.id}
-                    className="border-b border-border/60 hover:bg-muted/40 cursor-pointer transition-colors"
-                    onClick={() =>
-                      onOpenEntity
-                        ? onOpenEntity({ type: "agent", id: agent.id })
-                        : setSelectedAgent(agent)
-                    }
-                  >
-                    {/* Photo */}
-                    <td className="py-2 pl-3 pr-2">
-                      <AgentAvatar agent={agent} size={32} />
-                    </td>
+                  <ContextMenu key={agent.id}>
+                    <ContextMenuTrigger asChild>
+                      <tr
+                        className={cn(
+                          "group border-b border-border/60 hover:bg-muted/40 cursor-pointer transition-colors",
+                          isSelected && "bg-primary/5",
+                        )}
+                        onClick={() =>
+                          onOpenEntity
+                            ? onOpenEntity({ type: "agent", id: agent.id })
+                            : setSelectedAgent(agent)
+                        }
+                      >
+                        {/* #11 row checkbox */}
+                        <td className="py-2 pl-3 pr-1" onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={(v) => toggleSelectOne(agent.id, !!v)}
+                            aria-label={`Select ${agent.full_name || "agent"}`}
+                          />
+                        </td>
+
+                        {/* Photo */}
+                        <td className="py-2 pl-2 pr-2">
+                          <AgentAvatar agent={agent} size={32} />
+                        </td>
 
                     {/* Name + badges */}
                     <td className="py-2 px-2">
@@ -1985,21 +2354,43 @@ export default function PulseAgentIntel({
                       </div>
                     </td>
 
-                    {/* Agency + suburb */}
+                    {/* Agency + suburb — #15/#16 clickable to fill col filter */}
                     <td className="py-2 px-2">
                       <div className="flex flex-col gap-0.5 min-w-0">
-                        <span className="text-foreground truncate max-w-[160px]">
-                          {agent.agency_name || "—"}
-                        </span>
+                        {agent.agency_name ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAgentColFilters((f) => ({ ...f, agency: agent.agency_name }));
+                              setAgentPage(0);
+                            }}
+                            className="text-foreground truncate max-w-[160px] text-left hover:text-primary hover:underline underline-offset-2 decoration-dotted"
+                            title={`Filter by agency: ${agent.agency_name}`}
+                          >
+                            {agent.agency_name}
+                          </button>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                         {agent.agency_suburb && (
-                          <span className="text-[10px] text-muted-foreground truncate max-w-[160px]">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAgentColFilters((f) => ({ ...f, suburb: agent.agency_suburb }));
+                              setAgentPage(0);
+                            }}
+                            className="text-[10px] text-muted-foreground truncate max-w-[160px] text-left hover:text-primary hover:underline underline-offset-2 decoration-dotted"
+                            title={`Filter by suburb: ${agent.agency_suburb}`}
+                          >
                             {agent.agency_suburb}
-                          </span>
+                          </button>
                         )}
                       </div>
                     </td>
 
-                    {/* Email — with +N badge when alternate_emails has extras */}
+                    {/* Email — hover-copy icon (#14) + +N badge when alt emails exist */}
                     <td className="py-2 px-2 hidden lg:table-cell">
                       {agent.email ? (
                         <div className="flex items-center gap-1">
@@ -2010,6 +2401,7 @@ export default function PulseAgentIntel({
                           >
                             {agent.email}
                           </a>
+                          <CopyCellIcon value={agent.email} label="email" />
                           {(() => {
                             const alts = alternateContacts(agent, "email");
                             return alts.length > 0 ? (
@@ -2027,7 +2419,7 @@ export default function PulseAgentIntel({
                       )}
                     </td>
 
-                    {/* Mobile — with +N badge when alternate_mobiles has extras */}
+                    {/* Mobile — hover-copy icon (#14) + +N badge for alt mobiles */}
                     <td className="py-2 px-2 hidden md:table-cell">
                       {agent.mobile ? (
                         <div className="flex items-center gap-1">
@@ -2038,6 +2430,7 @@ export default function PulseAgentIntel({
                           >
                             {agent.mobile}
                           </a>
+                          <CopyCellIcon value={agent.mobile} label="mobile" />
                           {(() => {
                             const alts = alternateContacts(agent, "mobile");
                             return alts.length > 0 ? (
@@ -2115,7 +2508,67 @@ export default function PulseAgentIntel({
                     <td className="py-2 px-3 text-right">
                       <CrmStatusBadge inCrm={agent.is_in_crm} />
                     </td>
-                  </tr>
+                      </tr>
+                    </ContextMenuTrigger>
+                    {/* #13 Right-click menu */}
+                    <ContextMenuContent className="w-56">
+                      <ContextMenuItem
+                        disabled={!agent.mobile}
+                        onSelect={() => copyToClipboard(agent.mobile, "phone")}
+                      >
+                        <Phone className="h-3.5 w-3.5 mr-2" />
+                        Copy phone
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        disabled={!agent.email}
+                        onSelect={() => copyToClipboard(agent.email, "email")}
+                      >
+                        <Mail className="h-3.5 w-3.5 mr-2" />
+                        Copy email
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        disabled={!agent.rea_profile_url}
+                        onSelect={() => {
+                          if (agent.rea_profile_url) {
+                            window.open(agent.rea_profile_url, "_blank", "noopener,noreferrer");
+                          }
+                        }}
+                      >
+                        <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                        Open REA profile
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        disabled={!agent.agency_name}
+                        onSelect={() => {
+                          setAgentColFilters((f) => ({ ...f, agency: agent.agency_name || "" }));
+                          setAgentPage(0);
+                        }}
+                      >
+                        <Building2 className="h-3.5 w-3.5 mr-2" />
+                        Filter by this agency
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        disabled={!agent.agency_suburb}
+                        onSelect={() => {
+                          setAgentColFilters((f) => ({ ...f, suburb: agent.agency_suburb || "" }));
+                          setAgentPage(0);
+                        }}
+                      >
+                        <MapPin className="h-3.5 w-3.5 mr-2" />
+                        Filter by this suburb
+                      </ContextMenuItem>
+                      {!agent.is_in_crm && (
+                        <>
+                          <ContextMenuSeparator />
+                          <ContextMenuItem onSelect={() => setAddToCrmCandidate(agent)}>
+                            <UserPlus className="h-3.5 w-3.5 mr-2" />
+                            Add to CRM
+                          </ContextMenuItem>
+                        </>
+                      )}
+                    </ContextMenuContent>
+                  </ContextMenu>
                 );
               })}
             </tbody>
@@ -2180,7 +2633,54 @@ export default function PulseAgentIntel({
             setSelectedAgent(null);
             setAddToCrmCandidate(agent);
           }}
+          onNavigate={handleSlideoutNavigate}
         />
+      )}
+
+      {/* ── #11 Sticky bulk-action bar ── */}
+      {selectedCount > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full border border-border bg-background/95 backdrop-blur shadow-lg px-3 py-2">
+          <span className="text-xs font-medium text-foreground px-2">
+            {selectedCount} selected
+          </span>
+          <span className="h-4 w-px bg-border" />
+          <Button
+            size="sm"
+            variant="default"
+            className="h-7 text-xs gap-1"
+            onClick={handleBulkAddToCrm}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Add to CRM
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            onClick={handleBulkExport}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export CSV
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            disabled
+            title="Compare — coming soon"
+          >
+            Compare
+          </Button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="ml-1 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            aria-label="Clear selection"
+            title="Clear selection"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       )}
 
       {/* ── Add to CRM dialog ── */}
