@@ -22,6 +22,7 @@ import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse
  *     - any circuit_breaker has been open for >60min
  *     - queue.stuck_over_20min > 0
  *     - silent_empty rate > 50% on any source in last 24h
+ *       (B48: CRON-triggered runs only — manual/test empties don't count)
  *   degraded   if ANY:
  *     - last_success_minutes_ago > 2x expected cadence on any source
  *     - DLQ > 0 (pulse_fire_queue.status='failed' in last 24h)
@@ -183,16 +184,20 @@ serveWithAudit('pulseHealthCheck', async (req) => {
       'breakerRows',
     ),
 
-    // Sync logs in last 24h — fetch just enough columns to compute stats
+    // Sync logs in last 24h — fetch just enough columns to compute stats.
+    // B48: include triggered_by so we can restrict the silent-empty tally to
+    // cron-triggered runs. Manual/test invocations (force_test, regression_*,
+    // backfill sweeps during debug sessions) routinely return 0 candidates —
+    // counting them inflates the rate and fires spurious 'unhealthy' alerts.
     // We limit to 2000 rows (last 24h typically has <500 even at peak).
     safeResolve(
       admin.from('pulse_sync_logs')
-        .select('source_id, status, records_fetched, started_at, completed_at, error_message')
+        .select('source_id, status, records_fetched, started_at, completed_at, error_message, triggered_by')
         .gte('started_at', new Date(Date.now() - 24 * 3600 * 1000).toISOString())
         .order('started_at', { ascending: false })
         .limit(2000)
         .then((r) => r.data || []),
-      [] as Array<{ source_id: string | null; status: string; records_fetched: number | null; started_at: string; completed_at: string | null; error_message: string | null }>,
+      [] as Array<{ source_id: string | null; status: string; records_fetched: number | null; started_at: string; completed_at: string | null; error_message: string | null; triggered_by: string | null }>,
       'syncLogs24h',
     ),
 
@@ -287,8 +292,16 @@ serveWithAudit('pulseHealthCheck', async (req) => {
       latestBySource[sid].latestAt = startedDate;
     }
     if (row.status === 'completed') {
-      silentEmptyBySource[sid].completed += 1;
-      if ((row.records_fetched ?? 0) === 0) silentEmptyBySource[sid].empty += 1;
+      // B48: restrict silent-empty tally to cron-triggered runs. Manual backfill
+      // sweeps and ad-hoc regression/test invocations frequently report 0 rows
+      // (they exhaust the queue mid-session) and would otherwise dominate the
+      // ratio for this source, firing a false 'unhealthy' on a perfectly fine
+      // cron. Cron runs are the signal; everything else is debug noise.
+      const isCron = row.triggered_by === 'cron';
+      if (isCron) {
+        silentEmptyBySource[sid].completed += 1;
+        if ((row.records_fetched ?? 0) === 0) silentEmptyBySource[sid].empty += 1;
+      }
       const completedDate = row.completed_at ? new Date(row.completed_at) : startedDate;
       if (completedDate && (!latestBySource[sid].completedAt || completedDate > latestBySource[sid].completedAt!)) {
         latestBySource[sid].completedAt = completedDate;
@@ -337,6 +350,10 @@ serveWithAudit('pulseHealthCheck', async (req) => {
       anyCadenceStale = true;
     }
 
+    // B48: `se` now counts cron-triggered completed runs only (see sync-log
+    // aggregation above). Threshold unchanged: require >=4 cron runs AND >50%
+    // empty before flagging, so low-cadence sources (e.g. daily) don't trip
+    // after a single empty cycle.
     const se = silentEmptyBySource[src.source_id];
     if (se && se.completed >= 4 && se.empty / se.completed > 0.5) {
       anySilentEmptyOver50 = true;
@@ -371,9 +388,16 @@ serveWithAudit('pulseHealthCheck', async (req) => {
   }
 
   // ── Sync-log 24h aggregates ─────────────────────────────────────────────
+  // B48: `last_24h_silent_empty` counts only cron-triggered runs so it matches
+  // the status rule above. Manual/test empties are tracked separately.
   const totalLogs = syncLogs24h.length;
   const failedLogs = syncLogs24h.filter((r) => r.status === 'failed').length;
-  const silentEmptyLogs = syncLogs24h.filter((r) => r.status === 'completed' && (r.records_fetched ?? 0) === 0).length;
+  const silentEmptyLogs = syncLogs24h.filter((r) =>
+    r.status === 'completed' && (r.records_fetched ?? 0) === 0 && r.triggered_by === 'cron'
+  ).length;
+  const silentEmptyManualLogs = syncLogs24h.filter((r) =>
+    r.status === 'completed' && (r.records_fetched ?? 0) === 0 && r.triggered_by !== 'cron'
+  ).length;
 
   // ── Top-level status rule ───────────────────────────────────────────────
   let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
@@ -396,7 +420,8 @@ serveWithAudit('pulseHealthCheck', async (req) => {
     sync_logs: {
       last_24h_total: totalLogs,
       last_24h_failed: failedLogs,
-      last_24h_silent_empty: silentEmptyLogs,
+      last_24h_silent_empty: silentEmptyLogs, // cron-triggered only (B48)
+      last_24h_silent_empty_manual: silentEmptyManualLogs, // informational
       stuck_running_over_20min: stuckSyncLogs,
       // Only admins see the error sample — often contains SQL / stack fragments
       ...(isAdmin
