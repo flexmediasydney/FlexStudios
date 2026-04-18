@@ -208,6 +208,7 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
   datasetId?: string;
   stats?: any;
   items: any[];
+  input?: any;
   error?: string;
 }> {
   if (!APIFY_TOKEN) return { ok: false, status: 'NO_TOKEN', items: [], error: 'APIFY_TOKEN not set' };
@@ -236,7 +237,7 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
 
   if (!resp.ok) {
     const txt = await resp.text().catch(() => '');
-    return { ok: false, status: `HTTP_${resp.status}`, items: [], error: `Apify ${label} submit ${resp.status}: ${txt.substring(0, 300)}` };
+    return { ok: false, status: `HTTP_${resp.status}`, items: [], input, error: `Apify ${label} submit ${resp.status}: ${txt.substring(0, 300)}` };
   }
 
   const runData = await resp.json();
@@ -246,14 +247,14 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
   const stats = runData?.data?.stats;
 
   if (status !== 'SUCCEEDED') {
-    return { ok: false, status, runId, datasetId, stats, items: [], error: `Apify status=${status}` };
+    return { ok: false, status, runId, datasetId, stats, items: [], input, error: `Apify status=${status}` };
   }
 
   const itemsResp = await fetch(`${APIFY_BASE}/datasets/${datasetId}/items?clean=1&limit=${urls.length + 10}`, {
     headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
   });
   const items = itemsResp.ok ? await itemsResp.json() : [];
-  return { ok: true, status, runId, datasetId, stats, items: Array.isArray(items) ? items : [] };
+  return { ok: true, status, runId, datasetId, stats, items: Array.isArray(items) ? items : [], input };
 }
 
 // ── Circuit breaker helpers ─────────────────────────────────────────────
@@ -525,6 +526,29 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       already_enriched_within_14d: forceIdsAlreadyEnrichedWithin14d,
     };
 
+    // B47: accumulate heavy payloads for side-table write at end of run so
+    // drill-through debugging has the raw memo23 response + our request input
+    // (mirrors pulseDataSync's raw_payload/input_config pattern from mig 095).
+    // Cap first batch items fully, truncate subsequent to avoid oversizing
+    // sync_log_payloads rows when a run processes many batches.
+    const RAW_PAYLOAD_MAX_ITEMS_FIRST = 10;
+    const RAW_PAYLOAD_MAX_ITEMS_LATER = 2;
+    const batchPayloads: Array<{
+      batch_index: number;
+      label: string;
+      ok: boolean;
+      status: string;
+      run_id?: string;
+      dataset_id?: string;
+      input?: any;
+      items_count: number;
+      items_truncated: boolean;
+      items_sample: any[];
+      error?: string;
+    }> = [];
+    const allBatchInputs: any[] = [];
+    const targetedListingIds: string[] = [];
+
     for (let bIdx = 0; bIdx < candidates.length; bIdx += BATCH_SIZE) {
       if (stats.batches_attempted >= MAX_BATCHES_PER_INVOCATION) {
         stats.batches_skipped_wall++;
@@ -538,14 +562,33 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       const batch = candidates.slice(bIdx, bIdx + BATCH_SIZE);
       const urls = batch.map(c => c.source_url);
       stats.batches_attempted++;
+      const batchIndex = Math.floor(bIdx / BATCH_SIZE);
 
-      const batchLabel = `batch_${bIdx / BATCH_SIZE}`;
+      // B47: capture targeted listing ids for input_config
+      batch.forEach(c => { if (c.source_listing_id) targetedListingIds.push(String(c.source_listing_id)); });
+
+      const batchLabel = `batch_${batchIndex}`;
       const result = await runMemo23Batch(urls, batchLabel);
       if (result.runId) stats.apify_run_ids.push(result.runId);
+      if (result.input) allBatchInputs.push(result.input);
       // B28: Apify bills the run-start event whether or not the items were useful.
       stats.apify_billed_cost_usd += 0.007; // run start
       if (!result.ok) {
         stats.errors.push(`${batchLabel}: ${result.error || result.status}`);
+        // B47: still record the failed batch for debugging
+        batchPayloads.push({
+          batch_index: batchIndex,
+          label: batchLabel,
+          ok: false,
+          status: result.status,
+          run_id: result.runId,
+          dataset_id: result.datasetId,
+          input: result.input,
+          items_count: 0,
+          items_truncated: false,
+          items_sample: [],
+          error: result.error,
+        });
         continue;
       }
       stats.batches_succeeded++;
@@ -554,6 +597,22 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       // returned, and these items produced value since result.ok is true.
       stats.apify_billed_cost_usd += 0.001 * result.items.length;
       stats.value_producing_cost_usd += 0.007 + 0.001 * result.items.length;
+
+      // B47: capture batch items (truncated) for raw_payload
+      const cap = batchIndex === 0 ? RAW_PAYLOAD_MAX_ITEMS_FIRST : RAW_PAYLOAD_MAX_ITEMS_LATER;
+      const truncated = result.items.length > cap;
+      batchPayloads.push({
+        batch_index: batchIndex,
+        label: batchLabel,
+        ok: true,
+        status: result.status,
+        run_id: result.runId,
+        dataset_id: result.datasetId,
+        input: result.input,
+        items_count: result.items.length,
+        items_truncated: truncated,
+        items_sample: truncated ? result.items.slice(0, cap) : result.items,
+      });
 
       // Index items by source_listing_id for O(1) match against candidates
       const itemsById = new Map<string, any>();
@@ -1029,9 +1088,35 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
     }).eq('id', syncLogId);
 
     // Heavy/arbitrary stats → side-table
+    // B47: also write raw_payload (memo23 items, truncated) + input_config
+    // (what we sent to memo23 + listing ids targeted) so the run-detail drill-
+    // through UI can show them. Mirrors pulseDataSync's side-table writes.
     try {
       await admin.from('pulse_sync_log_payloads').upsert({
         sync_log_id: syncLogId,
+        raw_payload: {
+          source: SOURCE_ID,
+          actor_slug: ACTOR_SLUG,
+          batch_count: batchPayloads.length,
+          items_returned_total: stats.items_returned,
+          // Truncation applied in-loop: first batch keeps up to 10 items,
+          // later batches keep up to 2. Counts in each entry tell you how many
+          // were actually returned before the sample was cut.
+          batches: batchPayloads,
+        },
+        input_config: {
+          trigger,
+          priority_mode: priorityMode,
+          max_listings: maxListings,
+          force_ids: forceIds,
+          dry_run: dryRun,
+          actor_slug: ACTOR_SLUG,
+          apify_wait_secs: APIFY_WAIT_SECS,
+          batch_size: BATCH_SIZE,
+          max_batches_per_invocation: MAX_BATCHES_PER_INVOCATION,
+          targeted_listing_ids: targetedListingIds,
+          batch_inputs: allBatchInputs,  // each = {startUrls, maxItems, flattenOutput}
+        },
         result_summary: {
           message: summaryMessage,
           apify_run_ids: stats.apify_run_ids,
