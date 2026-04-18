@@ -47,15 +47,16 @@ const SOURCE_ID = 'rea_detail_enrich';
 // Apify wait / batch knobs
 // memo23 runs ~5s per URL against REA through its residential proxy. We want
 // every batch to complete within the waitForFinish window (no polling), so
-// BATCH_SIZE × 5s < APIFY_WAIT_SECS. 15 URLs × 5s = 75s << 85s window.
+// BATCH_SIZE × 5s < APIFY_WAIT_SECS. 12 URLs × 5s = 60s << 85s window.
 // Edge function wall-clock cap is 150s; we can fit 1 batch comfortably.
 // Cron calls this repeatedly for larger backfills.
-// Timing: memo23 at 5s/URL × 15 URLs = 75s typical. Wall-clock 150s edge limit
-// leaves room for exactly 1 batch with a safe 85s wait. For throughput the
-// cron now fires every 15 min (migration 113), so 30 listings/hour = 720/day
-// is sustainable without stacking batches.
+// B35: Dropped BATCH_SIZE from 15 → 12 to buy ~15s of wall-clock margin.
+// With 140s WALL_BUDGET_MS, Apify wait ≤85s, and ~20s of DB work (candidate
+// select, per-listing updates, timeline/history inserts), 12 URLs leaves
+// comfortable headroom. For throughput the cron fires every 15 min, so
+// 24 listings/hour = 576/day stays well within budget.
 const APIFY_WAIT_SECS = 85;
-const BATCH_SIZE = 15;
+const BATCH_SIZE = 12;
 const MAX_BATCHES_PER_INVOCATION = 1;
 
 // Confidence source labels (must match pulse_source_confidence() in 104)
@@ -305,7 +306,10 @@ async function breakerRecordFailure(admin: any) {
 
 // ── Timeline emission (idempotent via idempotency_key) ──────────────────
 
-async function emitTimeline(admin: any, events: any[]): Promise<{ inserted: number; errors: string[] }> {
+async function emitTimeline(admin: any, events: any[]): Promise<{ inserted: number; errors: Array<{ msg: string; count: number }> }> {
+  // B31: group errors by first 80 chars so a schema-mismatch avalanche
+  // (e.g. "column ... does not exist" × 40 rows) collapses into a single
+  // visible entry with a count, instead of losing all but the first 3.
   if (events.length === 0) return { inserted: 0, errors: [] };
   // Best-effort insert; duplicate idempotency_keys are caught by unique constraint.
   // We try bulk first, then fall back to per-row inserts so one bad row doesn't
@@ -314,14 +318,21 @@ async function emitTimeline(admin: any, events: any[]): Promise<{ inserted: numb
   if (!error) return { inserted: count || events.length, errors: [] };
   // Dedup-only errors — expected, not a real problem
   if (String(error.message || '').includes('duplicate')) return { inserted: 0, errors: [] };
-  // Otherwise try per-row for partial success
-  const errors: string[] = [String(error.message || '').substring(0, 200)];
+  // Otherwise try per-row for partial success, and group error strings by prefix.
+  const errorGroups = new Map<string, number>();
+  const bump = (raw: string) => {
+    const key = String(raw || '').substring(0, 80);
+    errorGroups.set(key, (errorGroups.get(key) || 0) + 1);
+  };
+  // The bulk attempt's error applies to the whole first pass — count once.
+  bump(error.message || '');
   let inserted = 0;
   for (const e of events) {
     const { error: e2 } = await admin.from('pulse_timeline').insert(e);
     if (!e2) inserted++;
-    else if (!String(e2.message || '').includes('duplicate')) errors.push(String(e2.message).substring(0, 150));
+    else if (!String(e2.message || '').includes('duplicate')) bump(e2.message || '');
   }
+  const errors = Array.from(errorGroups.entries()).map(([msg, count]) => ({ msg, count }));
   return { inserted, errors };
 }
 
@@ -389,12 +400,25 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
     // B03: include detail_enrich_count so we can increment it correctly.
     const SELECT_COLS = 'id, source_listing_id, source_url, listing_type, sold_date, price_text, last_synced_at, detail_enriched_at, detail_enrich_count';
     let candidates: any[] = [];
+    // B18: track how many forceIds listings were already enriched within 14d.
+    // Surfaced in stats + console.warn so ad-hoc debug runs don't silently
+    // re-spend Apify budget on fresh data.
+    let forceIdsAlreadyEnrichedWithin14d = 0;
     if (forceIds.length > 0) {
       const { data } = await admin
         .from('pulse_listings')
         .select(SELECT_COLS)
         .in('id', forceIds);
       candidates = data || [];
+      const cutoff14d = Date.now() - 14 * 86400 * 1000;
+      forceIdsAlreadyEnrichedWithin14d = candidates.filter(c => {
+        if (!c.detail_enriched_at) return false;
+        const t = new Date(c.detail_enriched_at).getTime();
+        return !isNaN(t) && t >= cutoff14d;
+      }).length;
+      if (forceIdsAlreadyEnrichedWithin14d > 0) {
+        console.warn(`[pulseDetailEnrich] force_ids: ${forceIdsAlreadyEnrichedWithin14d}/${candidates.length} listings were already enriched within the last 14 days — re-enrich will overwrite recent data and incur extra Apify cost.`);
+      }
     } else {
       // Main path: pick stalest / priority targets
       let query = admin
@@ -429,20 +453,35 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
     candidates = candidates.filter(c => c.source_url && c.source_url.includes('realestate.com.au'));
 
     if (candidates.length === 0) {
+      // B46: schema-compliant final update. 'status' vocab on pulse_sync_logs
+      // is completed/failed/running/timed_out (NOT ok/partial/error). Heavy
+      // stats (message, cost, run ids) go to pulse_sync_log_payloads per
+      // migration 095.
       await admin.from('pulse_sync_logs').update({
-        status: 'ok', completed_at: new Date().toISOString(),
-        records_fetched: 0, records_processed: 0,
-        message: 'No candidates needing enrichment',
+        status: 'completed', completed_at: new Date().toISOString(),
+        records_fetched: 0, records_updated: 0,
       }).eq('id', syncLogId);
+      await admin.from('pulse_sync_log_payloads').upsert({
+        sync_log_id: syncLogId,
+        result_summary: { message: 'No candidates needing enrichment', candidates: 0 },
+      }, { onConflict: 'sync_log_id' });
       return jsonResponse({ ok: true, syncLogId, candidates: 0, message: 'No candidates needing enrichment' });
     }
 
     if (dryRun) {
+      // B46: schema-compliant (see above)
       await admin.from('pulse_sync_logs').update({
-        status: 'ok', completed_at: new Date().toISOString(),
+        status: 'completed', completed_at: new Date().toISOString(),
         records_fetched: candidates.length,
-        message: `DRY RUN: would enrich ${candidates.length} listings`,
       }).eq('id', syncLogId);
+      await admin.from('pulse_sync_log_payloads').upsert({
+        sync_log_id: syncLogId,
+        result_summary: {
+          message: `DRY RUN: would enrich ${candidates.length} listings`,
+          dry_run: true,
+          candidates: candidates.length,
+        },
+      }, { onConflict: 'sync_log_id' });
       return jsonResponse({ ok: true, dryRun: true, candidates: candidates.length, sample_ids: candidates.slice(0, 10).map(c => c.source_listing_id) });
     }
 
@@ -462,7 +501,15 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       errors: [] as string[],
       batches_skipped_wall: 0,
       apify_run_ids: [] as string[],
-      cost_estimate_usd: 0,
+      // B28: split into "what Apify bills us" vs "what produced useful data".
+      // apify_billed_cost_usd is always incremented when a batch is launched
+      // (run start $0.007) and per item returned ($0.001). It matches the
+      // Apify invoice line. value_producing_cost_usd only counts batches
+      // where result.ok — the cost of successful enrichment work.
+      apify_billed_cost_usd: 0,
+      value_producing_cost_usd: 0,
+      // B18: expose forceIds-re-enrich count in response stats.
+      already_enriched_within_14d: forceIdsAlreadyEnrichedWithin14d,
     };
 
     for (let bIdx = 0; bIdx < candidates.length; bIdx += BATCH_SIZE) {
@@ -482,14 +529,18 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       const batchLabel = `batch_${bIdx / BATCH_SIZE}`;
       const result = await runMemo23Batch(urls, batchLabel);
       if (result.runId) stats.apify_run_ids.push(result.runId);
-      stats.cost_estimate_usd += 0.007; // run start
+      // B28: Apify bills the run-start event whether or not the items were useful.
+      stats.apify_billed_cost_usd += 0.007; // run start
       if (!result.ok) {
         stats.errors.push(`${batchLabel}: ${result.error || result.status}`);
         continue;
       }
       stats.batches_succeeded++;
       stats.items_returned += result.items.length;
-      stats.cost_estimate_usd += 0.001 * result.items.length;
+      // B28: per-item cost counts toward both meters — Apify bills per item
+      // returned, and these items produced value since result.ok is true.
+      stats.apify_billed_cost_usd += 0.001 * result.items.length;
+      stats.value_producing_cost_usd += 0.007 + 0.001 * result.items.length;
 
       // Index items by source_listing_id for O(1) match against candidates
       const itemsById = new Map<string, any>();
@@ -511,9 +562,10 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
               listing_withdrawn_at: now.toISOString(),
               listing_withdrawn_reason: 'absent_from_rea',
               detail_enriched_at: now.toISOString(),
-              detail_enrich_count: (cand.detail_enrich_count || 0) + 1,  // B02: preserve count
               last_sync_log_id: syncLogId,
             }).eq('id', cand.id);
+            // B02-race-fix: atomic increment
+            await admin.rpc('pulse_inc_listing_detail_count', { p_listing_id: cand.id });
             stats.items_withdrawn++;
             timelineEvents.push({
               entity_type: 'listing',
@@ -545,7 +597,6 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
 
         const listingUpdates: Record<string, any> = {
           detail_enriched_at: now.toISOString(),
-          detail_enrich_count: (cand.detail_enrich_count || 0) + 1,
           last_sync_log_id: syncLogId,
           // B17: clear withdrawn flags if listing reappears
           listing_withdrawn_at: null,
@@ -562,6 +613,8 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
 
         // DO NOT overwrite address/suburb/postcode/source_url (property_key is generated from address).
         await admin.from('pulse_listings').update(listingUpdates).eq('id', cand.id);
+        // B02-race-fix: atomic increment
+        await admin.rpc('pulse_inc_listing_detail_count', { p_listing_id: cand.id });
         stats.items_processed++;
 
         // Base detail_enriched event (one per listing per day)
@@ -862,7 +915,21 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             // B45: bcText also honours `!agencyRow.brand_color_text` (parity with bcPrimary).
             const aUpdates: Record<string, any> = {};
             if (agency.website && !agencyRow.website) aUpdates.website = agency.website;
-            const addrStreet = agency.address?.streetAddress || null;
+            // B44: memo23 usually ships agency.address as an object
+            // ({streetAddress, suburb, state, postcode}), but occasionally as
+            // a flat string. Defensive parse: object → streetAddress; string
+            // with digit + comma → portion before first comma; else null.
+            let addrStreet: string | null = null;
+            const rawAddr = agency.address;
+            if (rawAddr && typeof rawAddr === 'object') {
+              addrStreet = rawAddr.streetAddress || null;
+            } else if (typeof rawAddr === 'string') {
+              const s = rawAddr.trim();
+              if (/\d/.test(s) && s.includes(',')) {
+                const head = s.split(',')[0].trim();
+                addrStreet = head || null;
+              }
+            }
             if (addrStreet && !agencyRow.address_street) aUpdates.address_street = addrStreet;
             const bcPrimary = agency.brandingColors?.primary || null;
             const bcText = agency.brandingColors?.text || null;
@@ -879,8 +946,9 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       // Bulk inserts
       if (timelineEvents.length > 0) {
         const tlResult = await emitTimeline(admin, timelineEvents);
+        // B31: emit grouped "<msg> (×<count>)" instead of first 3 raw strings.
         if (tlResult.errors.length > 0) {
-          tlResult.errors.slice(0, 3).forEach(e => stats.errors.push(`timeline: ${e}`));
+          tlResult.errors.forEach(e => stats.errors.push(`timeline: ${e.msg} (×${e.count})`));
         }
       }
       if (historyRows.length > 0) {
@@ -897,15 +965,63 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
     }
 
     // ── Final sync_log update ────────────────────────────────────────────
+    // B46: schema-compliant writes. `pulse_sync_logs` only accepts a narrow
+    // header (records_fetched, records_updated, records_detail jsonb,
+    // apify_run_id scalar text, error_message, status ∈
+    // completed|failed|running|timed_out). Heavy/arbitrary stats go to the
+    // side-table `pulse_sync_log_payloads.result_summary` per migration 095.
+    // Previously the code wrote non-existent columns (records_processed,
+    // message, apify_run_ids, cost_estimate_usd) — PostgREST silently
+    // dropped the UPDATE and rows stayed status='running' forever.
+    const summaryMessage = `Enriched ${stats.items_processed} / ${stats.candidates} candidates in ${stats.batches_succeeded} batches. ${stats.items_withdrawn} withdrawn. Apify billed: $${stats.apify_billed_cost_usd.toFixed(3)} (value-producing: $${stats.value_producing_cost_usd.toFixed(3)})`;
+    const finalStatus = stats.errors.length > 0 ? 'failed' : 'completed';
+    const joinedRunId = stats.apify_run_ids.filter(Boolean).join(',') || null;
+
     await admin.from('pulse_sync_logs').update({
-      status: stats.errors.length > 0 ? 'partial' : 'ok',
+      status: finalStatus,
       completed_at: new Date().toISOString(),
       records_fetched: stats.items_returned,
-      records_processed: stats.items_processed,
-      apify_run_ids: stats.apify_run_ids,
-      message: `Enriched ${stats.items_processed} / ${stats.candidates} candidates in ${stats.batches_succeeded} batches. ${stats.items_withdrawn} withdrawn. Cost: $${stats.cost_estimate_usd.toFixed(3)}`,
-      cost_estimate_usd: stats.cost_estimate_usd,
+      records_updated: stats.items_processed,
+      records_detail: {
+        withdrawn: stats.items_withdrawn,
+        agent_primary_promoted: stats.agent_primary_promoted,
+        agent_alt_added: stats.agent_alt_added,
+        agency_primary_promoted: stats.agency_primary_promoted,
+        agency_alt_added: stats.agency_alt_added,
+        integrity_scores_bumped: stats.integrity_scores_bumped,
+      },
+      apify_run_id: joinedRunId,
+      error_message: stats.errors.length > 0 ? stats.errors.join(' | ').substring(0, 500) : null,
     }).eq('id', syncLogId);
+
+    // Heavy/arbitrary stats → side-table
+    try {
+      await admin.from('pulse_sync_log_payloads').upsert({
+        sync_log_id: syncLogId,
+        result_summary: {
+          message: summaryMessage,
+          apify_run_ids: stats.apify_run_ids,
+          apify_billed_cost_usd: stats.apify_billed_cost_usd,
+          value_producing_cost_usd: stats.value_producing_cost_usd,
+          candidates: stats.candidates,
+          items_returned: stats.items_returned,
+          items_processed: stats.items_processed,
+          items_withdrawn: stats.items_withdrawn,
+          batches_attempted: stats.batches_attempted,
+          batches_succeeded: stats.batches_succeeded,
+          batches_skipped_wall: stats.batches_skipped_wall,
+          agent_primary_promoted: stats.agent_primary_promoted,
+          agent_alt_added: stats.agent_alt_added,
+          agency_primary_promoted: stats.agency_primary_promoted,
+          agency_alt_added: stats.agency_alt_added,
+          integrity_scores_bumped: stats.integrity_scores_bumped,
+          already_enriched_within_14d: stats.already_enriched_within_14d,
+          errors: stats.errors,
+        },
+      }, { onConflict: 'sync_log_id' });
+    } catch (pErr: any) {
+      console.warn('pulseDetailEnrich: side-table payload write failed (non-fatal):', pErr?.message);
+    }
 
     return jsonResponse({
       ok: true,
@@ -914,11 +1030,34 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       ...stats,
     });
   } catch (err: any) {
+    // B46: use the canonical 'failed' status (not 'error') to match the
+    // existing status vocab on pulse_sync_logs. Stash the raw error detail
+    // in the side-table for debugging.
+    const errMsg = (err?.message || 'unknown').substring(0, 500);
     await admin.from('pulse_sync_logs').update({
-      status: 'error', completed_at: new Date().toISOString(),
-      error_message: (err?.message || 'unknown').substring(0, 500),
+      status: 'failed', completed_at: new Date().toISOString(),
+      error_message: errMsg,
     }).eq('id', syncLogId);
-    await breakerRecordFailure(admin);
+    try {
+      await admin.from('pulse_sync_log_payloads').upsert({
+        sync_log_id: syncLogId,
+        result_summary: {
+          error_message: errMsg,
+          error_stack: err?.stack ? String(err.stack).substring(0, 2000) : null,
+          fatal: true,
+        },
+      }, { onConflict: 'sync_log_id' });
+    } catch { /* best-effort */ }
+    // B41: only trip the circuit breaker on errors that implicate upstream
+    // (Apify / memo23). A supabase RPC failure, JSON parse error, or similar
+    // internal hiccup should NOT mark the external source unhealthy.
+    const msg = String(err?.message || '');
+    const isUpstream = ['Apify', 'memo23', 'HTTP_', 'TIMED-OUT', 'READY'].some(tag => msg.includes(tag));
+    if (isUpstream) {
+      await breakerRecordFailure(admin);
+    } else {
+      console.warn('[pulseDetailEnrich] non-upstream fatal; circuit breaker NOT tripped:', msg.substring(0, 200));
+    }
     console.error('pulseDetailEnrich fatal:', err);
     return errorResponse(err?.message || 'pulseDetailEnrich failed', 500);
   }
