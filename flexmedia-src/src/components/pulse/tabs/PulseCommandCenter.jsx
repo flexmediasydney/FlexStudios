@@ -1,7 +1,7 @@
 /**
- * PulseCommandCenter — 6-card command center overview tab for Industry Pulse.
- * Cards: Weekly Trend, Top Agents Not In CRM, Recent Agent Movements,
- *        Conversion Funnel, Suburb Distribution, Recent Timeline.
+ * PulseCommandCenter — 7-card command center overview tab for Industry Pulse.
+ * Cards: Weekly Trend, Top Agents Not In CRM, Recent Enrichment Activity,
+ *        Hot Signals (7d), Conversion Funnel, Suburb Distribution, Recent Timeline.
  */
 import React, { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,7 @@ import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
-import { TrendingUp, Users, ArrowRight, UserPlus, MapPin, Activity, ExternalLink } from "lucide-react";
+import { TrendingUp, Users, UserPlus, MapPin, Activity, ExternalLink, Sparkles, AtSign, Phone, Zap, Flame, Home, FileImage } from "lucide-react";
 import {
   isActiveListing,
   isRelationshipState,
@@ -186,24 +186,28 @@ function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm, onOpenEntity }) {
   );
 }
 
-// ── Card 3: Recent Agent Movements ────────────────────────────────────────────
-// Data source: `pulse_timeline` where event_type='agency_change'.
-// (Previously relied on `pulse_agents.previous_agency_name / agency_changed_at`
-// which are never populated — so the card was always empty. Timeline has every
-// detected agency change with full provenance.)
+// ── Card 3: Recent Enrichment Activity ────────────────────────────────────────
+// Data source: `pulse_timeline` rows for enrichment-flavored event_types.
+// (Previously read `event_type='agency_change'`, which is never emitted — 0 rows.
+// Enrichment events have 200+ rows and reflect the actual moving parts ops sees.)
 
-/** Fallback: parse "Ray White X -> Belle Property Y" from description text. */
-function parseAgencyChangeDescription(desc) {
-  if (!desc || typeof desc !== "string") return { from: null, to: null };
-  // Accept "A -> B", "A → B", or "A to B" (loose)
-  const m = desc.match(/^(.+?)\s*(?:->|→|\bto\b)\s*(.+)$/i);
-  if (!m) return { from: null, to: null };
-  return { from: m[1].trim(), to: m[2].trim() };
-}
+const ENRICHMENT_EVENT_TYPES = new Set([
+  "agent_email_discovered",
+  "agent_mobile_discovered",
+  "detail_enriched",
+  "first_seen",
+]);
 
-function RecentMovementsCard({ pulseAgents, pulseTimeline, onOpenEntity }) {
-  const movements = useMemo(() => {
-    // Build a quick lookup from rea_agent_id / id → agent for name resolution
+const ENRICHMENT_CONFIG = {
+  agent_email_discovered:  { icon: AtSign,   color: "text-emerald-500", label: "Email discovered" },
+  agent_mobile_discovered: { icon: Phone,    color: "text-sky-500",     label: "Mobile discovered" },
+  detail_enriched:         { icon: Sparkles, color: "text-violet-500",  label: "Detail enriched" },
+  first_seen:              { icon: Zap,      color: "text-cyan-500",    label: "First seen" },
+};
+
+function RecentEnrichmentCard({ pulseAgents, pulseTimeline, onOpenEntity }) {
+  const items = useMemo(() => {
+    // Build lookup for name resolution on agent-typed rows.
     const agentByReaId = new Map();
     const agentById = new Map();
     for (const a of pulseAgents || []) {
@@ -212,40 +216,27 @@ function RecentMovementsCard({ pulseAgents, pulseTimeline, onOpenEntity }) {
     }
 
     return (pulseTimeline || [])
-      .filter((e) => e.event_type === "agency_change")
+      .filter((e) => ENRICHMENT_EVENT_TYPES.has(e.event_type))
       .slice(0, 10)
       .map((e) => {
-        const prevVal = e.previous_value || {};
-        const newVal = e.new_value || {};
-        const parsed = parseAgencyChangeDescription(e.description);
-
-        // Resolve agent name: prefer title (already "X moved agencies"),
-        // fallback to current pulse_agents lookup by rea_id / pulse_entity_id.
         const lookupAgent =
           (e.rea_id && agentByReaId.get(String(e.rea_id))) ||
           (e.pulse_entity_id && agentById.get(e.pulse_entity_id)) ||
           null;
-        // Title is usually "Sonia Malhotra moved agencies" — strip the suffix
-        // so we can show a clean name in the row.
-        const titleName =
-          e.title && /moved agencies$/i.test(e.title)
-            ? e.title.replace(/\s+moved agencies\s*$/i, "").trim()
-            : null;
-        const agentName =
-          titleName ||
-          lookupAgent?.full_name ||
+        const displayName =
           e.title ||
-          "Unknown agent";
-
+          lookupAgent?.full_name ||
+          (e.entity_type ? `${e.entity_type} ${(e.pulse_entity_id || "").slice(0, 8)}` : "Entity");
+        const entityType = e.entity_type || (lookupAgent ? "agent" : null);
+        const openId = e.pulse_entity_id || lookupAgent?.id || null;
         return {
           id: e.id,
-          agentName,
-          fromAgency: prevVal.agency_name || parsed.from || "Unknown",
-          toAgency: newVal.agency_name || parsed.to || "—",
+          eventType: e.event_type,
+          displayName,
+          description: e.description || null,
           createdAt: e.created_at,
-          // For click handler — prefer pulse_entity_id (pulse_agents.id) but
-          // fall back to the looked-up agent id.
-          openId: e.pulse_entity_id || lookupAgent?.id || null,
+          entityType,
+          openId,
         };
       });
   }, [pulseTimeline, pulseAgents]);
@@ -254,45 +245,171 @@ function RecentMovementsCard({ pulseAgents, pulseTimeline, onOpenEntity }) {
     <Card className="rounded-xl border-0 shadow-sm">
       <CardHeader className="pb-2 pt-4 px-4">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <ArrowRight className="h-4 w-4 text-purple-500" />
-          Recent Agent Movements
+          <Sparkles className="h-4 w-4 text-violet-500" />
+          Recent Enrichment Activity
         </CardTitle>
-        <p className="text-[10px] text-muted-foreground">Latest detected agency changes</p>
+        <p className="text-[10px] text-muted-foreground">Contacts discovered, details enriched, first-seen</p>
       </CardHeader>
       <CardContent className="px-4 pb-4">
-        {movements.length === 0 ? (
-          <p className="text-xs text-muted-foreground/50 py-6 text-center">No agency changes detected recently</p>
+        {items.length === 0 ? (
+          <p className="text-xs text-muted-foreground/50 py-6 text-center">No enrichment events yet</p>
         ) : (
           <div className="space-y-2">
-            {movements.map((m) => {
-              // Tier 3: row click opens the agent slideout via parent dispatcher.
+            {items.map((m) => {
+              const cfg = ENRICHMENT_CONFIG[m.eventType] || { icon: Activity, color: "text-muted-foreground", label: m.eventType };
+              const Icon = cfg.icon;
               const body = (
                 <>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium truncate">{m.agentName}</span>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Icon className={`h-3 w-3 shrink-0 ${cfg.color}`} />
+                      <span className="font-medium truncate">{m.displayName}</span>
+                    </div>
                     <span className="text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">
                       {fmtShortDate(m.createdAt)}
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-muted-foreground">
-                    <span className="truncate line-through opacity-60">{m.fromAgency}</span>
-                    <ArrowRight className="h-2.5 w-2.5 shrink-0 text-purple-400" />
-                    <span className="truncate text-foreground/80 font-medium">{m.toAgency}</span>
+                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-muted-foreground pl-4.5">
+                    <span className={`${cfg.color} font-medium`}>{cfg.label}</span>
+                    {m.description && (
+                      <>
+                        <span className="opacity-40">·</span>
+                        <span className="truncate opacity-80">{m.description}</span>
+                      </>
+                    )}
                   </div>
                 </>
               );
-              const canOpen = onOpenEntity && m.openId;
+              const canOpen = onOpenEntity && m.openId && m.entityType;
               return canOpen ? (
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => onOpenEntity({ type: "agent", id: m.openId })}
+                  onClick={() => onOpenEntity({ type: m.entityType, id: m.openId })}
                   className="w-full text-xs text-left rounded p-1 -m-1 hover:bg-muted/30 transition-colors"
                 >
                   {body}
                 </button>
               ) : (
                 <div key={m.id} className="text-xs">{body}</div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Card: Hot Signals (7d) ────────────────────────────────────────────────────
+// Reads `pulse_signals` when populated (Fixer 6 pipeline). Falls back to
+// timeline event_types `client_new_listing` + `listing_floorplan_added` as
+// proxies while signals remain empty. 7-day rolling window.
+
+const HOT_SIGNAL_PROXY_EVENTS = new Set(["client_new_listing", "listing_floorplan_added"]);
+
+const SIGNAL_PROXY_CONFIG = {
+  client_new_listing:       { icon: Home,      color: "text-emerald-500", label: "Client new listing" },
+  listing_floorplan_added:  { icon: FileImage, color: "text-blue-500",    label: "Floorplan added" },
+};
+
+function HotSignalsCard({ pulseSignals, pulseTimeline, onOpenEntity }) {
+  const items = useMemo(() => {
+    const cutoff = Date.now() - 7 * 86400000;
+
+    // Primary: pulse_signals (when populated)
+    const signals = (pulseSignals || [])
+      .filter((s) => {
+        if (!s.created_at) return false;
+        const t = new Date(s.created_at).getTime();
+        return !isNaN(t) && t >= cutoff;
+      })
+      .slice(0, 10)
+      .map((s) => ({
+        id: s.id,
+        source: "signal",
+        title: s.title || s.signal_type || "Signal",
+        description: s.description || null,
+        createdAt: s.created_at,
+        entityType: s.entity_type || null,
+        openId: s.pulse_entity_id || s.entity_id || null,
+        iconType: s.signal_type || "signal",
+      }));
+
+    if (signals.length > 0) return signals;
+
+    // Fallback: proxy events in timeline
+    return (pulseTimeline || [])
+      .filter((e) => {
+        if (!HOT_SIGNAL_PROXY_EVENTS.has(e.event_type)) return false;
+        if (!e.created_at) return false;
+        const t = new Date(e.created_at).getTime();
+        return !isNaN(t) && t >= cutoff;
+      })
+      .slice(0, 10)
+      .map((e) => ({
+        id: e.id,
+        source: "timeline",
+        title: e.title || e.event_type,
+        description: e.description || null,
+        createdAt: e.created_at,
+        entityType: e.entity_type || null,
+        openId: e.pulse_entity_id || null,
+        iconType: e.event_type,
+      }));
+  }, [pulseSignals, pulseTimeline]);
+
+  return (
+    <Card className="rounded-xl border-0 shadow-sm">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Flame className="h-4 w-4 text-orange-500" />
+          Hot Signals (7d)
+        </CardTitle>
+        <p className="text-[10px] text-muted-foreground">
+          {items.length > 0 && items[0].source === "signal"
+            ? "From pulse_signals"
+            : "Proxy: new client listings + floorplan adds"}
+        </p>
+      </CardHeader>
+      <CardContent className="px-4 pb-4">
+        {items.length === 0 ? (
+          <p className="text-xs text-muted-foreground/50 py-6 text-center">No hot signals in the last 7 days</p>
+        ) : (
+          <div className="space-y-2">
+            {items.map((s) => {
+              const cfg = SIGNAL_PROXY_CONFIG[s.iconType] || { icon: Flame, color: "text-orange-500", label: s.iconType };
+              const Icon = cfg.icon;
+              const body = (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Icon className={`h-3 w-3 shrink-0 ${cfg.color}`} />
+                      <span className="font-medium truncate">{s.title}</span>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">
+                      {fmtShortDate(s.createdAt)}
+                    </span>
+                  </div>
+                  {s.description && (
+                    <div className="mt-0.5 text-[10px] text-muted-foreground truncate pl-4.5">
+                      {s.description}
+                    </div>
+                  )}
+                </>
+              );
+              const canOpen = onOpenEntity && s.openId && s.entityType;
+              return canOpen ? (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => onOpenEntity({ type: s.entityType, id: s.openId })}
+                  className="w-full text-xs text-left rounded p-1 -m-1 hover:bg-muted/30 transition-colors"
+                >
+                  {body}
+                </button>
+              ) : (
+                <div key={s.id} className="text-xs">{body}</div>
               );
             })}
           </div>
@@ -386,7 +503,7 @@ function SuburbDistributionCard({ pulseListings }) {
           <MapPin className="h-4 w-4 text-rose-500" />
           Suburb Distribution
         </CardTitle>
-        <p className="text-[10px] text-muted-foreground">Top 15 by for-sale listings</p>
+        <p className="text-[10px] text-muted-foreground">Top 15 by active listings</p>
       </CardHeader>
       <CardContent className="px-4 pb-4">
         {data.length === 0 ? (
@@ -511,8 +628,13 @@ export default function PulseCommandCenter({
         onAddToCrm={onAddToCrm}
         onOpenEntity={onOpenEntity}
       />
-      <RecentMovementsCard
+      <RecentEnrichmentCard
         pulseAgents={pulseAgents}
+        pulseTimeline={pulseTimeline}
+        onOpenEntity={onOpenEntity}
+      />
+      <HotSignalsCard
+        pulseSignals={pulseSignals}
         pulseTimeline={pulseTimeline}
         onOpenEntity={onOpenEntity}
       />

@@ -11,6 +11,7 @@
  */
 
 import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
@@ -658,13 +659,40 @@ export function AgentSlideout({
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
               {agent.mobile && (
-                <a
-                  href={`tel:${agent.mobile}`}
-                  className="flex items-center gap-2 text-foreground hover:text-primary transition-colors"
-                >
-                  <Phone className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                  <span className="truncate">{agent.mobile}</span>
-                </a>
+                <div className="flex flex-col">
+                  <a
+                    href={`tel:${agent.mobile}`}
+                    className="flex items-center gap-2 text-foreground hover:text-primary transition-colors"
+                  >
+                    <Phone className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    <span className="truncate">{agent.mobile}</span>
+                  </a>
+                  {(() => {
+                    const alts = alternateContacts(agent, "mobile");
+                    if (alts.length === 0) return null;
+                    return (
+                      <details className="mt-1 text-[11px] text-muted-foreground ml-5">
+                        <summary className="cursor-pointer hover:text-foreground">
+                          +{alts.length} other mobile{alts.length > 1 ? "s" : ""}
+                        </summary>
+                        <ul className="ml-3 mt-1 space-y-0.5">
+                          {alts.map((a, i) => (
+                            <li key={i}>
+                              <a href={`tel:${a.value}`} className="hover:underline">
+                                {a.value}
+                              </a>
+                              {a.sources && a.sources.length > 0 && (
+                                <span className="ml-1 text-[10px] opacity-60">
+                                  · {a.sources.join(", ")}
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    );
+                  })()}
+                </div>
               )}
               {agent.business_phone && agent.business_phone !== agent.mobile && (
                 <a
@@ -676,13 +704,74 @@ export function AgentSlideout({
                 </a>
               )}
               {agent.email && (
-                <a
-                  href={`mailto:${agent.email}`}
-                  className="flex items-center gap-2 text-foreground hover:text-primary transition-colors sm:col-span-2"
-                >
-                  <Mail className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                  <span className="truncate">{agent.email}</span>
-                </a>
+                <div className="flex flex-col sm:col-span-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <a
+                      href={`mailto:${agent.email}`}
+                      className="flex items-center gap-2 text-foreground hover:text-primary transition-colors min-w-0"
+                    >
+                      <Mail className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      <span className="truncate">{agent.email}</span>
+                    </a>
+                    {(() => {
+                      // Provenance chip: show current email source + confidence if present.
+                      const src = agent.email_source;
+                      const conf = agent.email_confidence;
+                      if (!src) return null;
+                      const altCount = alternateContacts(agent, "email").length;
+                      const sourceLabel =
+                        src === "detail_page_lister" ? "REA listing"
+                        : src === "websift_profile" ? "REA profile"
+                        : src === "list_enrich" ? "REA list"
+                        : src === "legacy" ? "legacy"
+                        : src;
+                      const verifiedCopy =
+                        altCount > 0
+                          ? `verified ${altCount + 1} sources`
+                          : `via ${sourceLabel}`;
+                      return (
+                        <Badge
+                          variant="outline"
+                          className="text-[9px] px-1.5 py-0 font-normal text-muted-foreground"
+                          title={`Source: ${src}${conf != null ? ` · confidence ${conf}` : ""}`}
+                        >
+                          {verifiedCopy}
+                          {conf != null && <span className="opacity-60 ml-1">{conf}%</span>}
+                        </Badge>
+                      );
+                    })()}
+                  </div>
+                  {(() => {
+                    const alts = alternateContacts(agent, "email");
+                    if (alts.length === 0) return null;
+                    return (
+                      <details className="mt-1 text-[11px] text-muted-foreground ml-5">
+                        <summary className="cursor-pointer hover:text-foreground">
+                          +{alts.length} other email{alts.length > 1 ? "s" : ""}
+                        </summary>
+                        <ul className="ml-3 mt-1 space-y-0.5">
+                          {alts.map((a, i) => (
+                            <li key={i}>
+                              <a href={`mailto:${a.value}`} className="hover:underline">
+                                {a.value}
+                              </a>
+                              {a.sources && a.sources.length > 0 && (
+                                <span className="ml-1 text-[10px] opacity-60">
+                                  · {a.sources.join(", ")}
+                                </span>
+                              )}
+                              {a.confidence != null && (
+                                <span className="ml-1 text-[10px] opacity-60">
+                                  · {a.confidence}%
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    );
+                  })()}
+                </div>
               )}
               {!agent.mobile && !agent.email && (
                 <p className="text-xs text-muted-foreground">No contact info enriched yet</p>
@@ -748,31 +837,58 @@ export function AgentSlideout({
           </section>
 
           {/* ── Stats ── */}
-          <section className="space-y-2">
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Performance
-            </h3>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-lg border border-border p-3 text-center">
-                <p className="text-lg font-bold tabular-nums text-foreground">
-                  {agent.sales_as_lead ?? "—"}
-                </p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Sales as Lead</p>
-              </div>
-              <div className="rounded-lg border border-border p-3 text-center">
-                <p className="text-lg font-bold tabular-nums text-foreground">
-                  {fmtPrice(agent.avg_sold_price)}
-                </p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Median Sold</p>
-              </div>
-              <div className="rounded-lg border border-border p-3 text-center">
-                <p className="text-lg font-bold tabular-nums text-foreground">
-                  {agent.avg_days_on_market > 0 ? `${agent.avg_days_on_market}d` : "—"}
-                </p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Avg DOM</p>
-              </div>
-            </div>
-          </section>
+          {(() => {
+            // AG02: 84% of agents have zero performance fields populated —
+            // rendering a hollow grid of "—/—/—" is noise. Guard on any real
+            // signal and fall back to a single-line status when nothing is
+            // enriched yet.
+            const hasAnyPerf = Boolean(
+              agent.sales_as_lead ||
+                agent.avg_sold_price ||
+                agent.avg_days_on_market ||
+                agent.rea_rating
+            );
+            if (!hasAnyPerf) {
+              const activeCount = agent.total_listings_active ?? 0;
+              return (
+                <section className="space-y-2">
+                  <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Performance
+                  </h3>
+                  <p className="text-xs text-muted-foreground italic">
+                    Performance metrics pending enrichment — {activeCount} active listing{activeCount !== 1 ? "s" : ""} detected.
+                  </p>
+                </section>
+              );
+            }
+            return (
+              <section className="space-y-2">
+                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Performance
+                </h3>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-lg border border-border p-3 text-center">
+                    <p className="text-lg font-bold tabular-nums text-foreground">
+                      {agent.sales_as_lead ?? "—"}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Sales as Lead</p>
+                  </div>
+                  <div className="rounded-lg border border-border p-3 text-center">
+                    <p className="text-lg font-bold tabular-nums text-foreground">
+                      {fmtPrice(agent.avg_sold_price)}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Median Sold</p>
+                  </div>
+                  <div className="rounded-lg border border-border p-3 text-center">
+                    <p className="text-lg font-bold tabular-nums text-foreground">
+                      {agent.avg_days_on_market > 0 ? `${agent.avg_days_on_market}d` : "—"}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Avg DOM</p>
+                  </div>
+                </div>
+              </section>
+            );
+          })()}
 
           {/* ── Reviews ── */}
           {(agent.rea_rating || agent.rea_review_count > 0) && (
@@ -827,13 +943,19 @@ export function AgentSlideout({
               </h3>
               <div className="flex flex-wrap gap-1.5">
                 {suburbs.map((sub) => (
-                  <Badge
+                  <Link
                     key={sub}
-                    variant="secondary"
-                    className="text-[10px] px-2 py-0.5 font-normal"
+                    to={`/IndustryPulse?tab=agents&suburb=${encodeURIComponent(sub)}`}
+                    onClick={() => onClose?.()}
+                    title={`Filter agents by ${sub}`}
                   >
-                    {sub}
-                  </Badge>
+                    <Badge
+                      variant="secondary"
+                      className="text-[10px] px-2 py-0.5 font-normal cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
+                    >
+                      {sub}
+                    </Badge>
+                  </Link>
                 ))}
               </div>
             </section>
@@ -1018,6 +1140,7 @@ const SORT_COLS = {
   name: (a) => (a.full_name || "").toLowerCase(),
   agency: (a) => (a.agency_name || "").toLowerCase(),
   suburb: (a) => (a.agency_suburb || "").toLowerCase(),
+  first_seen_at: (a) => (a.first_seen_at ? new Date(a.first_seen_at).getTime() : 0),
 };
 
 // UI-sort-key → DB column. PostgREST only understands real column names;
@@ -1032,6 +1155,7 @@ const SERVER_SORT_MAP = {
   name: "full_name",
   agency: "agency_name",
   suburb: "agency_suburb",
+  first_seen_at: "first_seen_at",
 };
 
 // CSV export cap (same rationale as PulseListings).
@@ -1060,6 +1184,7 @@ export default function PulseAgentIntel({
   crmAgents = [],
   crmAgencies = [],
   pulseMappings = [],
+  targetSuburbs = [],
   search = "",
   stats = {},
   addToCrmFromCommand,
@@ -1070,10 +1195,32 @@ export default function PulseAgentIntel({
   const [agentFilter, setAgentFilter] = useState("all"); // all | not_in_crm | in_crm
   const [integrityFilter, setIntegrityFilter] = useState("all"); // all | high | medium | low
   const [mappingFilter, setMappingFilter] = useState("all"); // all | mapped | suggested | unmapped
+  // Region filter — Auditor-11 F1. "all" = no region constraint; otherwise we
+  // filter agency_suburb ∈ (suburbs in the chosen region from pulse_target_suburbs).
+  const [regionFilter, setRegionFilter] = useState("all");
   // Page size persists in localStorage so the user's choice survives reloads.
   const [pageSize, setPageSize] = useState(readStoredPageSize);
   const [agentSort, setAgentSort] = useState({ col: "sales_as_lead", dir: "desc" });
-  const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: "" });
+
+  // AG06: Tier 3 drill-through — pre-fill the suburb column filter from
+  // ?suburb= when an Active Suburbs badge in an agent slideout (or future
+  // deep-links) lands us on this tab. Mirrors the PulseListings pattern.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const suburbParam = searchParams.get("suburb");
+  const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: suburbParam || "" });
+
+  // Consume the URL param once seeded, so back/forward + refresh don't
+  // re-seed the filter and the URL stays tidy.
+  useEffect(() => {
+    if (!suburbParam) return;
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("suburb");
+      return np;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suburbParam]);
+
   const [agentPage, setAgentPage] = useState(0);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [addToCrmCandidate, setAddToCrmCandidate] = useState(null);
@@ -1086,6 +1233,23 @@ export default function PulseAgentIntel({
   useEffect(() => {
     try { window.localStorage.setItem(LS_AUTO_REFRESH_KEY, autoRefresh ? "1" : "0"); } catch { /* quota / SSR */ }
   }, [autoRefresh]);
+
+  // ── Region filter derivations (Auditor-11 F1) ─────────────────────────────
+  // Distinct regions for the dropdown + suburb list for the chosen region,
+  // memoised off targetSuburbs (tiny list — ~150 rows — so this is ~free).
+  const regions = useMemo(() => {
+    const set = new Set();
+    for (const s of targetSuburbs || []) {
+      if (s?.region) set.add(s.region);
+    }
+    return Array.from(set).sort();
+  }, [targetSuburbs]);
+  const suburbsInRegion = useMemo(() => {
+    if (regionFilter === "all") return null;
+    return (targetSuburbs || [])
+      .filter((s) => s?.region === regionFilter && s?.name)
+      .map((s) => s.name);
+  }, [targetSuburbs, regionFilter]);
 
   // ── Build mapping-status lookup keyed by pulse_agent_id ────────────────────
   const mappingByAgent = useMemo(() => {
@@ -1134,7 +1298,7 @@ export default function PulseAgentIntel({
   //    drive a new query, so the page index must reset or we'd page past).
   useEffect(() => {
     setAgentPage(0);
-  }, [agentFilter, integrityFilter, mappingFilter, agentColFilters.agency, agentColFilters.suburb, search, agentSort.col, agentSort.dir, pageSize]);
+  }, [agentFilter, integrityFilter, mappingFilter, regionFilter, agentColFilters.agency, agentColFilters.suburb, search, agentSort.col, agentSort.dir, pageSize]);
 
   // ── Server-side query builder ─────────────────────────────────────────────
   // Returns a PostgREST query with every server-applicable filter applied.
@@ -1164,6 +1328,17 @@ export default function PulseAgentIntel({
       q = q.ilike("agency_suburb", `%${suburbQ.replace(/[%_]/g, "\\$&")}%`);
     }
 
+    // Region filter (Auditor-11 F1). Expanded into an `agency_suburb IN (...)`
+    // clause. Guard against an empty list (would produce a PostgREST error
+    // and also kill the page) by falling through to an impossible match.
+    if (suburbsInRegion) {
+      if (suburbsInRegion.length === 0) {
+        q = q.eq("id", "00000000-0000-0000-0000-000000000000");
+      } else {
+        q = q.in("agency_suburb", suburbsInRegion);
+      }
+    }
+
     // B14: global search now uses the trigger-maintained `search_text` column
     // (primary + all alternates concatenated, lowercased) backed by a GIN
     // trigram index. One ilike substring match is both faster than the old
@@ -1179,17 +1354,17 @@ export default function PulseAgentIntel({
     q = q.order(sortCol, { ascending: agentSort.dir === "asc", nullsFirst: false });
 
     return q;
-  }, [agentFilter, integrityFilter, agentColFilters, search, agentSort]);
+  }, [agentFilter, integrityFilter, agentColFilters, search, agentSort, suburbsInRegion]);
 
   // Page fetch
   const queryKey = useMemo(
     () => ["pulse-agents-page", {
-      agentFilter, integrityFilter,
+      agentFilter, integrityFilter, regionFilter,
       agency: agentColFilters.agency, suburb: agentColFilters.suburb,
       search, sortCol: agentSort.col, sortDir: agentSort.dir,
       page: agentPage, pageSize,
     }],
-    [agentFilter, integrityFilter, agentColFilters, search, agentSort, agentPage, pageSize],
+    [agentFilter, integrityFilter, regionFilter, agentColFilters, search, agentSort, agentPage, pageSize],
   );
 
   const { data: pageData, isLoading, isFetching } = useQuery({
@@ -1357,6 +1532,21 @@ export default function PulseAgentIntel({
           ))}
         </select>
 
+        {/* Region filter (Auditor-11 F1) — expands to agency_suburb IN (...) */}
+        {regions.length > 0 && (
+          <select
+            value={regionFilter}
+            onChange={(e) => { setRegionFilter(e.target.value); setAgentPage(0); }}
+            className="h-7 text-xs rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+            title="Filter by region — expands to all suburbs in that region"
+          >
+            <option value="all">All regions</option>
+            {regions.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+        )}
+
         <div className="ml-auto flex items-center gap-2">
           <Button
             variant="outline"
@@ -1463,6 +1653,14 @@ export default function PulseAgentIntel({
                 <th className="py-2.5 px-2 text-right font-medium text-muted-foreground hidden xl:table-cell whitespace-nowrap">
                   Synced
                 </th>
+                {/* First seen (Added) — AG09: sortable column */}
+                <th
+                  className="py-2.5 px-2 text-right font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground hidden xl:table-cell whitespace-nowrap"
+                  onClick={() => toggleSort("first_seen_at")}
+                  title="When this agent first appeared in Industry Pulse"
+                >
+                  Added <SortIcon col="first_seen_at" sort={agentSort} />
+                </th>
                 {/* CRM */}
                 <th className="py-2.5 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">
                   CRM
@@ -1500,6 +1698,8 @@ export default function PulseAgentIntel({
                 <td className="py-1 px-2 hidden sm:table-cell" />
                 {/* Last-synced — no filter */}
                 <td className="py-1 px-2 hidden xl:table-cell" />
+                {/* Added (first_seen_at) — no filter */}
+                <td className="py-1 px-2 hidden xl:table-cell" />
                 {/* Suburb filter (lives in CRM column for space, but targets suburb) */}
                 <td className="py-1 px-3">
                   <input
@@ -1518,7 +1718,7 @@ export default function PulseAgentIntel({
               {isLoading && paginated.length === 0 && (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={13}
                     className="py-12 text-center text-sm text-muted-foreground"
                   >
                     <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
@@ -1529,7 +1729,7 @@ export default function PulseAgentIntel({
               {!isLoading && paginated.length === 0 && (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={13}
                     className="py-12 text-center text-sm text-muted-foreground"
                   >
                     <Users className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
@@ -1689,6 +1889,14 @@ export default function PulseAgentIntel({
                           </Badge>
                         ) : null;
                       })()}
+                    </td>
+
+                    {/* Added — first_seen_at (AG09) */}
+                    <td
+                      className="py-2 px-2 text-right text-[10px] text-muted-foreground hidden xl:table-cell whitespace-nowrap"
+                      title={agent.first_seen_at ? new Date(agent.first_seen_at).toLocaleString() : "Unknown"}
+                    >
+                      {fmtAgo(agent.first_seen_at)}
                     </td>
 
                     {/* CRM status */}
