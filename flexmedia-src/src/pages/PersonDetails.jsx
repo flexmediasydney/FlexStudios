@@ -1315,17 +1315,25 @@ export default function PersonDetails() {
             )}
 
             {activeTab === 'touchpoints' && (
-              <div className="space-y-6">
-                <NurturingSequences agentId={agentId} agentName={agent?.name} />
-                <TouchpointTimeline entityType="agent" entityId={agentId} entityLabel={agent?.name} />
+              <div className="h-full overflow-y-auto">
+                <div className="space-y-6 p-4 pb-6">
+                  <NurturingSequences agentId={agentId} agentName={agent?.name} />
+                  <TouchpointTimeline entityType="agent" entityId={agentId} entityLabel={agent?.name} />
+                </div>
               </div>
             )}
 
             {activeTab === 'retention' && (
-              <RetentionSubtab entityType="agent" entityId={agentId} entityLabel={agent?.name} />
+              <div className="h-full overflow-y-auto">
+                <RetentionSubtab entityType="agent" entityId={agentId} entityLabel={agent?.name} />
+              </div>
             )}
             {activeTab === 'intelligence' && (
-              <PulseIntelligencePanel entityType="agent" crmEntityId={agentId} crmEntity={agent} />
+              <div className="h-full overflow-y-auto">
+                <div className="p-4 pb-6">
+                  <PulseIntelligencePanel entityType="agent" crmEntityId={agentId} crmEntity={agent} />
+                </div>
+              </div>
             )}
           </div>
         </div>

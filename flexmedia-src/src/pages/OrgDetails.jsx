@@ -647,14 +647,24 @@ export default function OrgDetails() {
             )}
 
             {activeTab === 'touchpoints' && (
-              <TouchpointTimeline entityType="agency" entityId={agencyId} entityLabel={agency?.name} />
+              <div className="h-full overflow-y-auto">
+                <div className="p-4 pb-6">
+                  <TouchpointTimeline entityType="agency" entityId={agencyId} entityLabel={agency?.name} />
+                </div>
+              </div>
             )}
 
             {activeTab === 'retention' && (
-              <RetentionSubtab entityType="agency" entityId={agencyId} entityLabel={agency?.name} />
+              <div className="h-full overflow-y-auto">
+                <RetentionSubtab entityType="agency" entityId={agencyId} entityLabel={agency?.name} />
+              </div>
             )}
             {activeTab === 'intelligence' && (
-              <PulseIntelligencePanel entityType="agency" crmEntityId={agencyId} crmEntity={agency} />
+              <div className="h-full overflow-y-auto">
+                <div className="p-4 pb-6">
+                  <PulseIntelligencePanel entityType="agency" crmEntityId={agencyId} crmEntity={agency} />
+                </div>
+              </div>
             )}
           </div>
         </div>
