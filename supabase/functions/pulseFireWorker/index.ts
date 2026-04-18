@@ -1,4 +1,4 @@
-import { getAdminClient, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
+import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
 /**
  * pulseFireWorker — Queue-draining executor (new in migration 093)
@@ -47,6 +47,18 @@ function sleep(ms: number) {
 
 serveWithAudit('pulseFireWorker', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
+
+  // ── Auth guard ─────────────────────────────────────────────────────────
+  // pg_cron (job 39) sends a service-role JWT in Authorization. Reject
+  // unauthenticated POSTs outright — without this guard, anyone hitting
+  // /functions/v1/pulseFireWorker triggers a full queue drain (DoS/abuse).
+  const user = await getUserFromReq(req).catch(() => null);
+  const isServiceRole = user?.id === '__service_role__';
+  if (!isServiceRole) {
+    if (!user) return errorResponse('Authentication required', 401);
+    if (user.role !== 'master_admin') return errorResponse('Forbidden', 403);
+  }
+
   const admin = getAdminClient();
   const workerStart = Date.now();
   let lastActivityAt = workerStart;

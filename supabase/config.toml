@@ -626,7 +626,13 @@ verify_jwt = false
 [functions.pulseDataSync]
 verify_jwt = false
 
+[functions.pulseDetailEnrich]
+verify_jwt = false
+
 [functions.pulseFireScrapes]
+verify_jwt = false
+
+[functions.pulseFireWorker]
 verify_jwt = false
 
 [functions.pulseScheduledScrape]
