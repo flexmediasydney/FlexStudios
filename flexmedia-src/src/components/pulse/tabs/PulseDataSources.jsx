@@ -220,49 +220,6 @@ function StatusBadge({ status }) {
   return <Badge variant="outline" className="text-[10px] px-1.5 py-0">{status || "—"}</Badge>;
 }
 
-// ── Approach diagrams ─────────────────────────────────────────────────────────
-
-function PerSuburbDiagram({ suburbCount, perSuburb }) {
-  const total = (suburbCount || 0) * (perSuburb || 0);
-  return (
-    <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 border">
-        <MapPin className="h-3 w-3 text-muted-foreground" />
-        <span className="font-mono font-semibold">{suburbCount || "—"}</span>
-        <span className="text-muted-foreground">suburbs</span>
-      </span>
-      <Repeat className="h-3 w-3 text-muted-foreground" />
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 border">
-        <span className="font-mono font-semibold">{perSuburb}</span>
-        <span className="text-muted-foreground">each</span>
-      </span>
-      <span className="text-muted-foreground">=</span>
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 border border-primary/20 text-primary">
-        <span className="font-mono font-semibold">~{total.toLocaleString()}</span>
-      </span>
-    </div>
-  );
-}
-
-function BoundingBoxDiagram({ region = "Greater Sydney", maxItems = 500 }) {
-  return (
-    <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 border">
-        <Globe className="h-3 w-3 text-muted-foreground" />
-        <span className="font-mono font-semibold">1 URL</span>
-      </span>
-      <span className="text-muted-foreground">-&gt;</span>
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted/70 border">
-        <span className="text-muted-foreground">{region}</span>
-      </span>
-      <span className="text-muted-foreground">-&gt;</span>
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/10 border border-primary/20 text-primary">
-        <span className="font-mono font-semibold">up to {maxItems}</span>
-      </span>
-    </div>
-  );
-}
-
 // ── pulse_sync_runs data hook ─────────────────────────────────────────────────
 
 /**
@@ -1236,36 +1193,48 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
           </div>
         </div>
 
-        {/* Approach + schedule row */}
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <Badge
-              variant="outline"
-              className={cn(
-                "text-[9px] px-1.5 py-0 uppercase tracking-wide font-semibold",
-                !isBoundingBox
-                  ? "border-indigo-400/50 text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-300"
-                  : "border-cyan-400/50 text-cyan-700 bg-cyan-50 dark:bg-cyan-900/30 dark:text-cyan-300",
-              )}
-            >
-              {!isBoundingBox ? <Repeat className="h-2.5 w-2.5 mr-1" /> : <Globe className="h-2.5 w-2.5 mr-1" />}
-              {approachLabel}
-            </Badge>
-            {cronStr ? (
-              <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-mono" title={cronStr}>
-                <Clock className="h-2.5 w-2.5 mr-1" />
-                {scheduleDisplay}
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
-                On-demand
-              </Badge>
+        {/* Approach + schedule + config tokens (single compact row) */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge
+            variant="outline"
+            className={cn(
+              "text-[9px] px-1.5 py-0 uppercase tracking-wide font-semibold",
+              !isBoundingBox
+                ? "border-indigo-400/50 text-indigo-700 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-300"
+                : "border-cyan-400/50 text-cyan-700 bg-cyan-50 dark:bg-cyan-900/30 dark:text-cyan-300",
             )}
-          </div>
-          {!isBoundingBox ? (
-            <PerSuburbDiagram suburbCount={activeSuburbCount} perSuburb={perSuburbMax} />
+          >
+            {!isBoundingBox ? <Repeat className="h-2.5 w-2.5 mr-1" /> : <Globe className="h-2.5 w-2.5 mr-1" />}
+            {approachLabel}
+          </Badge>
+          {cronStr ? (
+            <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-mono" title={cronStr}>
+              <Clock className="h-2.5 w-2.5 mr-1" />
+              {scheduleDisplay}
+            </Badge>
           ) : (
-            <BoundingBoxDiagram region="Greater Sydney" maxItems={actorInput.maxItems || perSuburbMax} />
+            <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
+              On-demand
+            </Badge>
+          )}
+          <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-mono text-muted-foreground" title="max_results_per_suburb">
+            ≤{sourceConfig.max_results_per_suburb ?? "—"} each
+          </Badge>
+          {!isBoundingBox ? (
+            <>
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-mono text-muted-foreground" title={`max_suburbs=${sourceConfig.max_suburbs ?? "—"}, min_priority=${sourceConfig.min_priority ?? 0}`}>
+                {sourceConfig.max_suburbs ?? "—"} / {activeSuburbCount} pool
+              </Badge>
+              {sourceConfig.min_priority > 0 && (
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-mono text-muted-foreground" title="min_priority filter">
+                  p≥{sourceConfig.min_priority}
+                </Badge>
+              )}
+            </>
+          ) : (
+            <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-mono text-muted-foreground" title="Cost estimate">
+              {meta.costNote}
+            </Badge>
           )}
         </div>
 
@@ -1309,31 +1278,6 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
           )}
         </div>
 
-        {/* Config summary row: max_results, max_suburbs, min_priority */}
-        <div className="grid grid-cols-3 gap-1 text-[9px]">
-          <div className="rounded bg-background/60 border px-2 py-1">
-            <div className="text-muted-foreground uppercase tracking-wide">Max results</div>
-            <div className="font-mono font-semibold">{sourceConfig.max_results_per_suburb ?? "—"}</div>
-          </div>
-          {!isBoundingBox ? (
-            <>
-              <div className="rounded bg-background/60 border px-2 py-1">
-                <div className="text-muted-foreground uppercase tracking-wide">Max suburbs</div>
-                <div className="font-mono font-semibold">{sourceConfig.max_suburbs ?? "—"}</div>
-              </div>
-              <div className="rounded bg-background/60 border px-2 py-1">
-                <div className="text-muted-foreground uppercase tracking-wide">Min priority</div>
-                <div className="font-mono font-semibold">{sourceConfig.min_priority ?? 0}</div>
-              </div>
-            </>
-          ) : (
-            <div className="col-span-2 rounded bg-background/60 border px-2 py-1">
-              <div className="text-muted-foreground uppercase tracking-wide">Cost estimate</div>
-              <div className="font-mono font-semibold">{meta.costNote}</div>
-            </div>
-          )}
-        </div>
-
         {/* Suburb coverage (last cron dispatch) — answers "did the cron cover the
             pool?". Distinct from the per-suburb fetch counts in RunSummary
             below, which describe what ONE suburb returned.
@@ -1374,16 +1318,15 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
         )}
 
         {/* Next run — computed from DB cron string */}
-        <div className="flex items-center justify-between text-[10px] text-muted-foreground px-1">
-          <span className="flex items-center gap-1">
+        {cronStr && (
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground px-1">
             <Calendar className="h-3 w-3" />
-            Next: <span className="font-medium text-foreground">{cronStr ? nextRunFromCron(cronStr) : "—"}</span>
-          </span>
-          <span className="flex items-center gap-1">
+            Next: <span className="font-medium text-foreground">{nextRunFromCron(cronStr)}</span>
+            <span className="text-muted-foreground/40">·</span>
             <Coins className="h-3 w-3" />
-            <span className="font-medium text-foreground">{meta.costNote}</span>
-          </span>
-        </div>
+            <span>{meta.costNote}</span>
+          </div>
+        )}
 
         {/* Multi-run history (collapsed list) */}
         {historyRuns.length > 0 && (
@@ -2807,7 +2750,7 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
             )}
           </Button>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {visibleSources.map((config) => (
             <SourceCard
               key={config.source_id}
