@@ -26,6 +26,7 @@ import { fmtDate, fixTimestamp } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ProjectForm from "@/components/projects/ProjectForm";
+import TonomoPendingDeltaBanner from "@/components/projects/TonomoPendingDeltaBanner";
 import TaskManagement from "@/components/projects/TaskManagement";
 import ProjectMediaGallery from "@/components/projects/ProjectMediaGallery";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
@@ -1520,6 +1521,13 @@ export default function ProjectDetails() {
                     <ExternalLink className="h-4 w-4" /> View Deliverables
                   </a>
                 </div>
+              )}
+              {canSeePricing && project?.tonomo_pending_delta && (
+                <TonomoPendingDeltaBanner
+                  project={project}
+                  canEdit={memoizedCanEdit}
+                  onResolved={() => refetchEntityList("Project")}
+                />
               )}
               {canSeePricing && (
                 <ErrorBoundary>

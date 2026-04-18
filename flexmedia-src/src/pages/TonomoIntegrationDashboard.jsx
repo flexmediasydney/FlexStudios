@@ -13,6 +13,7 @@ import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import TonomoPendingDeltaBanner from "@/components/projects/TonomoPendingDeltaBanner";
 
 function calcBookingHealth(project) {
   const checks = [];
@@ -783,6 +784,11 @@ function PendingReviewCard({ project }) {
               {project.pending_review_reason && (
                 <p className="italic text-muted-foreground">{project.pending_review_reason}</p>
               )}
+              {project.tonomo_pending_delta && (
+                <p>
+                  <Badge className="bg-amber-100 text-amber-800 border-amber-200">Tonomo drift detected</Badge>
+                </p>
+              )}
             </div>
           </div>
           <div className="flex flex-col gap-2">
@@ -796,6 +802,19 @@ function PendingReviewCard({ project }) {
             </Button>
           </div>
           </div>
+
+          {project.tonomo_pending_delta && (
+            <div className="mt-3">
+              <TonomoPendingDeltaBanner
+                project={project}
+                canEdit={true}
+                compact
+                onResolved={() => {
+                  queryClient.invalidateQueries({ queryKey: ['pendingReviewProjects'] });
+                }}
+              />
+            </div>
+          )}
 
           {/* Health indicator */}
           {(() => {
