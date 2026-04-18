@@ -60,6 +60,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
+import AttachmentLightbox from "@/components/common/AttachmentLightbox";
 import {
   displayPrice as sharedDisplayPrice,
   stalenessInfo,
@@ -236,6 +237,8 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
   const [heroErr, setHeroErr] = useState(false);
   // Tier 4: source-history drill
   const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
+  // LS09: lightbox index for gallery click-through
+  const [lightboxIndex, setLightboxIndex] = useState(null);
 
   if (!listing) return null;
 
@@ -570,28 +573,49 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
             )}
           </div>
 
-          {/* Image gallery */}
-          {images.length > 0 && (
-            <div className="border-t border-border/60 pt-3">
-              <p className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide">
-                Gallery
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {images.map((img, i) => {
-                  const src = typeof img === "string" ? img : img?.url || img?.src;
-                  if (!src) return null;
-                  return (
-                    <img
+          {/* Image gallery — LS09: click to open lightbox, lazy-loaded thumbs */}
+          {images.length > 0 && (() => {
+            const srcs = images
+              .map((img) => (typeof img === "string" ? img : img?.url || img?.src))
+              .filter(Boolean);
+            const lightboxFiles = srcs.map((url, i) => ({
+              file_name: `Photo ${i + 1}`,
+              file_url: url,
+              file_type: "image/jpeg",
+            }));
+            return (
+              <div className="border-t border-border/60 pt-3">
+                <p className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide">
+                  Gallery
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {srcs.map((src, i) => (
+                    <button
                       key={i}
-                      src={src}
-                      alt={`Photo ${i + 1}`}
-                      className="h-16 w-24 object-cover rounded border border-border"
-                    />
-                  );
-                })}
+                      type="button"
+                      onClick={() => setLightboxIndex(i)}
+                      className="block p-0 border-0 bg-transparent cursor-pointer"
+                      title={`Open photo ${i + 1}`}
+                    >
+                      <img
+                        src={src}
+                        alt={`Photo ${i + 1}`}
+                        loading="lazy"
+                        className="h-16 w-24 object-cover rounded border border-border hover:ring-2 hover:ring-primary/50 transition"
+                      />
+                    </button>
+                  ))}
+                </div>
+                {lightboxIndex !== null && (
+                  <AttachmentLightbox
+                    files={lightboxFiles}
+                    initialIndex={lightboxIndex}
+                    onClose={() => setLightboxIndex(null)}
+                  />
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Floorplans — detail-enriched (migration 108+) */}
           {(() => {
@@ -616,6 +640,7 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
                           <img
                             src={fp.thumb || fp.url}
                             alt={`Floorplan ${i + 1}`}
+                            loading="lazy"
                             className="h-20 w-28 object-contain rounded border border-border bg-white hover:shadow-md transition-shadow"
                           />
                         </a>
@@ -755,6 +780,7 @@ const SERVER_SORTABLE = new Set([
   "asking_price", "sold_price", "days_on_market",
   "bedrooms", "bathrooms", "parking", "land_size",
   "listing_type", "agent_name", "agency_name", "address",
+  "property_type", "price_text",
 ]);
 
 // Safety cap on the CSV export of the FULL filtered set. 10k × ~40 columns ≈ 4MB,
@@ -764,8 +790,13 @@ const CSV_EXPORT_CAP = 10000;
 // localStorage keys — persisted across reload / tab switches.
 const LS_PAGE_SIZE_KEY = "pulse_listings_page_size";
 const LS_AUTO_REFRESH_KEY = "pulse_listings_auto_refresh";
+const LS_EXCLUDE_WITHDRAWN_KEY = "pulse_listings_exclude_withdrawn";
 // Listings are "less urgent than Sources/inbox" per spec — default OFF.
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
+
+// LS06: listing types where we default-hide withdrawn campaigns. Sold/UC
+// listings should still be visible even if later withdrawn.
+const WITHDRAWN_DEFAULT_ON_TYPES = new Set(["for_sale", "for_rent", "all"]);
 
 /** Read a numeric setting from localStorage, falling back to a default. */
 function readStoredPageSize() {
@@ -776,6 +807,12 @@ function readStoredPageSize() {
 function readStoredAutoRefresh() {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(LS_AUTO_REFRESH_KEY) === "1";
+}
+function readStoredExcludeWithdrawn() {
+  if (typeof window === "undefined") return true;
+  const raw = window.localStorage.getItem(LS_EXCLUDE_WITHDRAWN_KEY);
+  // Default ON when nothing has been stored yet.
+  return raw === null ? true : raw === "1";
 }
 
 export default function PulseListingsTab({
@@ -817,6 +854,10 @@ export default function PulseListingsTab({
   // Auto-refresh: opt-in, default off. "Less urgent than Sources/inbox"
   // per spec — listings change every few minutes at most.
   const [autoRefresh, setAutoRefresh] = useState(readStoredAutoRefresh);
+  // LS06: "Exclude withdrawn" — default ON for for_sale/for_rent/all; the
+  // toggle is still shown/stored for sold/under_contract but has no effect
+  // there (those listings shouldn't fan out withdrawn states in practice).
+  const [excludeWithdrawn, setExcludeWithdrawn] = useState(readStoredExcludeWithdrawn);
 
   // Persist page-size changes the moment they happen.
   useEffect(() => {
@@ -828,10 +869,15 @@ export default function PulseListingsTab({
     try { window.localStorage.setItem(LS_AUTO_REFRESH_KEY, autoRefresh ? "1" : "0"); } catch { /* quota / SSR */ }
   }, [autoRefresh]);
 
+  // Persist exclude-withdrawn toggle.
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_EXCLUDE_WITHDRAWN_KEY, excludeWithdrawn ? "1" : "0"); } catch { /* quota / SSR */ }
+  }, [excludeWithdrawn]);
+
   // Reset to page 0 when filters/sort/search change so we never page past the
   // new result window. Must happen AFTER a filter change and BEFORE the
   // useQuery fires (React runs state updates before committing).
-  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, pageSize, search, listingSort.col, listingSort.dir]);
+  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, pageSize, search, listingSort.col, listingSort.dir, excludeWithdrawn]);
 
   // ── Sorting helper ──────────────────────────────────────────────────────────
   const handleSort = useCallback(
@@ -857,6 +903,12 @@ export default function PulseListingsTab({
       q = q.eq("listing_type", listingFilter);
     }
 
+    // LS06: exclude withdrawn campaigns when the toggle is on, but only for
+    // listing types where withdrawn ≠ final state (for_sale / for_rent / all).
+    if (excludeWithdrawn && WITHDRAWN_DEFAULT_ON_TYPES.has(listingFilter)) {
+      q = q.is("listing_withdrawn_at", null);
+    }
+
     // Column filter (server-side ilike OR across likely fields)
     const colQ = (listingColFilter || "").trim();
     if (colQ) {
@@ -877,16 +929,16 @@ export default function PulseListingsTab({
     q = q.order(sortCol, { ascending: listingSort.dir === "asc", nullsFirst: false });
 
     return q;
-  }, [listingFilter, listingColFilter, search, listingSort]);
+  }, [listingFilter, listingColFilter, search, listingSort, excludeWithdrawn]);
 
   // ── Page fetch via react-query ─────────────────────────────────────────────
   const queryKey = useMemo(
     () => ["pulse-listings-page", {
       listingFilter, listingColFilter, search,
       sortCol: listingSort.col, sortDir: listingSort.dir,
-      page: listingPage, pageSize,
+      page: listingPage, pageSize, excludeWithdrawn,
     }],
-    [listingFilter, listingColFilter, search, listingSort, listingPage, pageSize],
+    [listingFilter, listingColFilter, search, listingSort, listingPage, pageSize, excludeWithdrawn],
   );
 
   const { data, isLoading, isFetching, refetch } = useQuery({
@@ -943,9 +995,18 @@ export default function PulseListingsTab({
         "address", "suburb", "postcode", "listing_type", "asking_price", "sold_price",
         "bedrooms", "bathrooms", "parking", "land_size", "days_on_market",
         "agent_name", "agency_name", "listed_date", "sold_date",
+        "auction_date", "auction_time_known", "listing_withdrawn_at", "first_seen_at",
+        "floorplan_urls", "video_url",
         "property_key", "source_url", "last_synced_at",
       ];
-      exportCsv(`pulse_listings_${new Date().toISOString().slice(0, 10)}.csv`, header, all);
+      // Serialise array/object cells so the CSV stays single-line-per-row.
+      const flatRows = all.map((r) => ({
+        ...r,
+        floorplan_urls: Array.isArray(r.floorplan_urls)
+          ? r.floorplan_urls.join(" | ")
+          : (r.floorplan_urls ?? ""),
+      }));
+      exportCsv(`pulse_listings_${new Date().toISOString().slice(0, 10)}.csv`, header, flatRows);
     } catch (err) {
       // eslint-disable-next-line no-alert
       window.alert(`CSV export failed: ${err?.message || err}`);
@@ -1320,6 +1381,8 @@ export default function PulseListingsTab({
         <ListingSlideout
           listing={selectedListing}
           pulseAgents={pulseAgents}
+          pulseAgencies={pulseAgencies}
+          onOpenEntity={onOpenEntity}
           onClose={() => setSelectedListing(null)}
         />
       )}

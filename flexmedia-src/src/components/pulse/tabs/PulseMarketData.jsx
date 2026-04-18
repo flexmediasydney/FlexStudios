@@ -9,8 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+  LineChart, Line, Legend, PieChart, Pie,
 } from "recharts";
-import { Home, DollarSign, Clock, TrendingUp, MapPin, Users, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
+import { Home, DollarSign, Clock, TrendingUp, MapPin, Users, ArrowUpDown, ChevronUp, ChevronDown, Activity, PieChart as PieChartIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isActiveListing, parsePriceText } from "@/components/pulse/utils/listingHelpers";
 
@@ -168,9 +169,45 @@ function SummaryStats({ pulseListings }) {
   );
 }
 
+// ── ISO week helper ──────────────────────────────────────────────────────────
+//
+// Returns { key, label, start } for the ISO week containing `date`. Key is a
+// sortable string like "2026-W15" (ISO-8601 Monday-start). Label is a short
+// display form ("15 Apr"). `start` is the Date of the Monday 00:00 local.
+
+function isoWeekInfo(date) {
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return null;
+  // Shift to local Monday 00:00
+  const day = d.getDay(); // 0..6, Sun..Sat
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() + mondayOffset);
+
+  // ISO week number: Thursday of same week determines the ISO year
+  const thursday = new Date(monday);
+  thursday.setDate(monday.getDate() + 3);
+  const firstThursday = new Date(thursday.getFullYear(), 0, 4);
+  const firstThursdayMonday = new Date(firstThursday);
+  const ftDay = firstThursday.getDay();
+  firstThursdayMonday.setDate(
+    firstThursday.getDate() + (ftDay === 0 ? -6 : 1 - ftDay)
+  );
+  const weekNum =
+    1 +
+    Math.round(
+      (monday.getTime() - firstThursdayMonday.getTime()) / (7 * 24 * 60 * 60 * 1000)
+    );
+  const key = `${thursday.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+  const label = monday.toLocaleDateString("en-AU", {
+    day: "numeric",
+    month: "short",
+  });
+  return { key, label, start: monday };
+}
+
 // ── Section 2: Top Listing Agents ─────────────────────────────────────────────
 
-function TopListingAgentsTable({ pulseListings, crmAgents }) {
+function TopListingAgentsTable({ pulseListings, crmAgents, pulseAgents, onOpenEntity }) {
   const rows = useMemo(() => {
     const forSale = pulseListings.filter((l) => l.listing_type === "for_sale");
 
@@ -179,27 +216,45 @@ function TopListingAgentsTable({ pulseListings, crmAgents }) {
       (crmAgents || []).map((a) => (a.name || "").toLowerCase().trim())
     );
 
-    const countMap = {};
-    const agencyMap = {};
+    // Normalise agent names before grouping — collapse "J Smith" / "John Smith"
+    // / "JOHN SMITH" only when they actually match by lowercase+trim. We keep
+    // the original display form from the first occurrence so the UI still
+    // renders sensibly.
+    const countMap = {};   // normKey → count
+    const displayMap = {}; // normKey → canonical display name (first seen)
+    const agencyMap = {};  // normKey → agency
+    const reaIdMap = {};   // normKey → first seen agent_rea_id
 
     forSale.forEach((l) => {
-      const name = l.agent_name;
-      if (!name) return;
-      countMap[name] = (countMap[name] || 0) + 1;
-      if (!agencyMap[name] && l.agency_name) agencyMap[name] = l.agency_name;
+      const rawName = l.agent_name;
+      if (!rawName) return;
+      const normKey = rawName.toLowerCase().trim();
+      if (!normKey) return;
+      countMap[normKey] = (countMap[normKey] || 0) + 1;
+      if (!displayMap[normKey]) displayMap[normKey] = rawName.trim();
+      if (!agencyMap[normKey] && l.agency_name) agencyMap[normKey] = l.agency_name;
+      if (!reaIdMap[normKey] && l.agent_rea_id) reaIdMap[normKey] = l.agent_rea_id;
     });
 
     return Object.entries(countMap)
-      .map(([name, count]) => ({
-        name,
-        agency: agencyMap[name] || "—",
-        count,
-        isCrmClient: crmNameSet.has(name.toLowerCase().trim()),
-      }))
+      .map(([normKey, count]) => {
+        const reaId = reaIdMap[normKey] || null;
+        const pulseAgent = reaId
+          ? (pulseAgents || []).find((a) => a.rea_agent_id === reaId)
+          : null;
+        return {
+          name: displayMap[normKey],
+          agency: agencyMap[normKey] || "—",
+          count,
+          isCrmClient: crmNameSet.has(normKey),
+          agentReaId: reaId,
+          pulseAgentId: pulseAgent?.id || null,
+        };
+      })
       .sort((a, b) => b.count - a.count)
       .slice(0, 15)
       .map((row, i) => ({ ...row, rank: i + 1 }));
-  }, [pulseListings, crmAgents]);
+  }, [pulseListings, crmAgents, pulseAgents]);
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
@@ -226,10 +281,20 @@ function TopListingAgentsTable({ pulseListings, crmAgents }) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {rows.map((row) => {
+                  const canOpen = !!(onOpenEntity && row.pulseAgentId);
+                  return (
                   <tr
                     key={row.name}
-                    className="border-b border-border/20 hover:bg-muted/20 transition-colors"
+                    onClick={
+                      canOpen
+                        ? () => onOpenEntity({ type: "agent", id: row.pulseAgentId })
+                        : undefined
+                    }
+                    className={cn(
+                      "border-b border-border/20 hover:bg-muted/20 transition-colors",
+                      canOpen && "cursor-pointer"
+                    )}
                   >
                     <td className="py-1.5 pr-3 text-muted-foreground/60 tabular-nums">{row.rank}</td>
                     <td className="py-1.5 pr-3 font-medium truncate max-w-[120px]">{row.name}</td>
@@ -249,7 +314,8 @@ function TopListingAgentsTable({ pulseListings, crmAgents }) {
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -367,7 +433,16 @@ function SuburbHeatmapTable({ pulseListings }) {
       }
       const s = suburbMap[l.suburb];
       s.count++;
-      if (l.asking_price > 0) { s.priceSum += l.asking_price; s.priceCount++; }
+      // Apply same parsePriceText fallback as the main chart — prefer numeric
+      // asking_price, fall back to parsing price_text. Skip rentals (weekly
+      // rent is not a property value). Grows sample to ~70%.
+      if (l.listing_type !== "for_rent") {
+        const effectivePrice =
+          l.asking_price && l.asking_price > 0
+            ? l.asking_price
+            : parsePriceText(l.price_text);
+        if (effectivePrice > 0) { s.priceSum += effectivePrice; s.priceCount++; }
+      }
       if (l.days_on_market > 0) { s.domSum += l.days_on_market; s.domCount++; }
     });
 
@@ -473,11 +548,202 @@ function SuburbHeatmapTable({ pulseListings }) {
   );
 }
 
+// ── Section 5: Weekly Trend Chart ────────────────────────────────────────────
+
+function WeeklyTrendChart({ pulseListings }) {
+  const data = useMemo(() => {
+    // Build last 13 ISO weeks, ending with the current week. Listings are
+    // bucketed separately by listed_date (new) and sold_date (sold).
+    const nowInfo = isoWeekInfo(new Date());
+    if (!nowInfo) return [];
+
+    // Generate 13 weeks back from now
+    const weeks = [];
+    for (let i = 12; i >= 0; i--) {
+      const start = new Date(nowInfo.start);
+      start.setDate(start.getDate() - i * 7);
+      const info = isoWeekInfo(start);
+      if (info) weeks.push({ ...info, new: 0, sold: 0 });
+    }
+    const byKey = Object.fromEntries(weeks.map((w) => [w.key, w]));
+    const earliest = weeks[0]?.start;
+
+    pulseListings.forEach((l) => {
+      if (l.listed_date) {
+        const info = isoWeekInfo(l.listed_date);
+        if (info && earliest && info.start >= earliest && byKey[info.key]) {
+          byKey[info.key].new += 1;
+        }
+      }
+      if (l.sold_date) {
+        const info = isoWeekInfo(l.sold_date);
+        if (info && earliest && info.start >= earliest && byKey[info.key]) {
+          byKey[info.key].sold += 1;
+        }
+      }
+    });
+
+    return weeks;
+  }, [pulseListings]);
+
+  const hasData = data.some((w) => w.new > 0 || w.sold > 0);
+
+  return (
+    <Card className="rounded-xl border-0 shadow-sm">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Activity className="h-4 w-4 text-indigo-500" />
+          Weekly Trend — New vs Sold
+        </CardTitle>
+        <p className="text-[10px] text-muted-foreground">Last 13 weeks by ISO week</p>
+      </CardHeader>
+      <CardContent className="px-2 pb-4">
+        {!hasData ? (
+          <div className="h-[200px] flex items-center justify-center">
+            <p className="text-xs text-muted-foreground/50">No weekly trend data available</p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={data} margin={{ top: 8, right: 16, left: -16, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+              <XAxis dataKey="label" {...axisStyle} tickLine={false} axisLine={false} />
+              <YAxis {...axisStyle} tickLine={false} axisLine={false} allowDecimals={false} width={32} />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                labelFormatter={(label, payload) => {
+                  const entry = payload && payload[0] && payload[0].payload;
+                  return entry ? `Week of ${entry.label} (${entry.key})` : label;
+                }}
+                formatter={(v, name) => [v, name]}
+              />
+              <Legend wrapperStyle={{ fontSize: 11 }} iconSize={10} />
+              <Line
+                type="monotone"
+                dataKey="new"
+                name="New Listings"
+                stroke="#10b981"
+                strokeWidth={2}
+                dot={{ r: 2 }}
+                activeDot={{ r: 4 }}
+              />
+              <Line
+                type="monotone"
+                dataKey="sold"
+                name="Sold"
+                stroke="#ef4444"
+                strokeWidth={2}
+                dot={{ r: 2 }}
+                activeDot={{ r: 4 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Section 6: Market Breakdown Donut ────────────────────────────────────────
+
+// Colour-coded consistent with the listing-type badges used in PulseListings.
+const BREAKDOWN_SLICES = [
+  { key: "for_sale", label: "For Sale", color: "#10b981" },        // emerald-500
+  { key: "for_rent", label: "For Rent", color: "#3b82f6" },        // blue-500
+  { key: "under_contract", label: "Under Contract", color: "#f59e0b" }, // amber-500
+  { key: "sold", label: "Sold", color: "#ef4444" },                // red-500
+];
+
+function MarketBreakdownDonut({ pulseListings }) {
+  const { data, total } = useMemo(() => {
+    const cutoff = new Date(Date.now() - 90 * 86400000);
+    const recent = pulseListings.filter((l) => {
+      // Include if either listed_date or sold_date falls inside last 90 days,
+      // else fall back to created_at. This matches the spirit of "last 90d"
+      // without dropping listings that are currently on-market but were
+      // listed earlier.
+      const ref =
+        l.sold_date || l.listed_date || l.created_at;
+      return ref && new Date(ref) >= cutoff;
+    });
+
+    const counts = Object.fromEntries(BREAKDOWN_SLICES.map((s) => [s.key, 0]));
+    recent.forEach((l) => {
+      if (l.listing_type && counts.hasOwnProperty(l.listing_type)) {
+        counts[l.listing_type] += 1;
+      }
+    });
+
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    const data = BREAKDOWN_SLICES.map((s) => ({
+      name: s.label,
+      key: s.key,
+      value: counts[s.key],
+      color: s.color,
+    }));
+    return { data, total };
+  }, [pulseListings]);
+
+  const hasData = total > 0;
+
+  return (
+    <Card className="rounded-xl border-0 shadow-sm">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <PieChartIcon className="h-4 w-4 text-fuchsia-500" />
+          Market Breakdown
+        </CardTitle>
+        <p className="text-[10px] text-muted-foreground">
+          By listing type · last 90 days
+          {hasData ? <> · <span className="tabular-nums">n = {total.toLocaleString()}</span></> : null}
+        </p>
+      </CardHeader>
+      <CardContent className="px-2 pb-4">
+        {!hasData ? (
+          <div className="h-[220px] flex items-center justify-center">
+            <p className="text-xs text-muted-foreground/50">No breakdown data available</p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <PieChart>
+              <Tooltip
+                contentStyle={tooltipStyle}
+                formatter={(v, name) => {
+                  const pct = total > 0 ? ((v / total) * 100).toFixed(1) : "0";
+                  return [`${v} (${pct}%)`, name];
+                }}
+              />
+              <Legend wrapperStyle={{ fontSize: 11 }} iconSize={10} />
+              <Pie
+                data={data}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                innerRadius={48}
+                outerRadius={80}
+                paddingAngle={2}
+                stroke="hsl(var(--card))"
+                strokeWidth={2}
+              >
+                {data.map((entry) => (
+                  <Cell key={entry.key} fill={entry.color} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 // ── Filter constants ─────────────────────────────────────────────────────────
 
 const TIME_RANGE_OPTIONS = [
+  { value: "7", label: "Last 7 days" },
+  { value: "14", label: "Last 14 days" },
   { value: "30", label: "Last 30 days" },
   { value: "90", label: "Last 90 days" },
   { value: "all", label: "All time" },
@@ -502,8 +768,9 @@ export default function PulseMarketData({
   pulseTimeline = [],
   stats = {},
   search = "",
+  onOpenEntity,
 }) {
-  const [timeRange, setTimeRange] = useState("all");
+  const [timeRange, setTimeRange] = useState("30");
   const [propertyType, setPropertyType] = useState("all");
 
   // Filter listings by time range and property type
@@ -581,9 +848,20 @@ export default function PulseMarketData({
       {/* Section 1: Summary stats */}
       <SummaryStats pulseListings={filteredListings} />
 
+      {/* Section 5 + 6: Weekly trend + Market breakdown donut */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <WeeklyTrendChart pulseListings={filteredListings} />
+        <MarketBreakdownDonut pulseListings={filteredListings} />
+      </div>
+
       {/* Section 2 + 3: Agents table + Price distribution side-by-side on large screens */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TopListingAgentsTable pulseListings={filteredListings} crmAgents={crmAgents} />
+        <TopListingAgentsTable
+          pulseListings={filteredListings}
+          crmAgents={crmAgents}
+          pulseAgents={pulseAgents}
+          onOpenEntity={onOpenEntity}
+        />
         <PriceDistributionChart pulseListings={filteredListings} />
       </div>
 

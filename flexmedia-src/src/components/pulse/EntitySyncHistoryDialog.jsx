@@ -9,6 +9,7 @@
  * entity_type + entity_id, ordered by seen_at DESC, limit 50.
  */
 import React, { useEffect, useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
 import {
   Dialog,
@@ -121,15 +122,16 @@ function HistoryRow({ row }) {
 
         {/* Drill-through link (opens DrillDialog via URL pattern) */}
         {row.sync_log_id && (
-          <a
-            href={`/IndustryPulse?tab=sources&sync_log_id=${row.sync_log_id}`}
+          <Link
+            to={`/IndustryPulse?tab=sources&sync_log_id=${row.sync_log_id}`}
+            replace={false}
             className="shrink-0 inline-flex items-center gap-0.5 text-[10px] text-primary hover:underline"
             title="Open source payload"
             onClick={(e) => e.stopPropagation()}
           >
             payload
             <ExternalLink className="h-2.5 w-2.5" />
-          </a>
+          </Link>
         )}
 
         {/* Expand toggle (only when changes_summary has content) */}

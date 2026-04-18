@@ -12,6 +12,7 @@
  *   compact        — reduced padding, hides descriptions, filters system events
  */
 import React, { useMemo } from "react";
+import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
@@ -250,6 +251,7 @@ export default function PulseTimeline({
   maxHeight = "max-h-[600px]",
   emptyMessage = "No timeline events yet",
   compact = false,
+  onOpenEntity,
 }) {
   // In compact mode, filter out system events
   const filteredEntries = useMemo(() => {
@@ -291,6 +293,10 @@ export default function PulseTimeline({
               const prevVal = entry.previous_value;
               const newVal = entry.new_value;
 
+              const canDrill = !!(onOpenEntity && entry.pulse_entity_id && entry.entity_type);
+              const handleEntryClick = canDrill
+                ? () => onOpenEntity({ type: entry.entity_type, id: entry.pulse_entity_id })
+                : undefined;
               return (
                 <div key={entry.id || i} className={cn("flex group relative", compact ? "gap-2" : "gap-3")}>
                   {/* Timeline line + dot */}
@@ -307,8 +313,23 @@ export default function PulseTimeline({
                     )}
                   </div>
 
-                  {/* Content */}
-                  <div className={cn("flex-1 min-w-0", compact ? "pb-2" : "pb-4")}>
+                  {/* Content — clickable when entry carries pulse_entity_id + entity_type */}
+                  <div
+                    className={cn(
+                      "flex-1 min-w-0",
+                      compact ? "pb-2" : "pb-4",
+                      canDrill && "cursor-pointer rounded-md hover:bg-muted/40 transition-colors -mx-1 px-1"
+                    )}
+                    onClick={handleEntryClick}
+                    role={canDrill ? "button" : undefined}
+                    tabIndex={canDrill ? 0 : undefined}
+                    onKeyDown={canDrill ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleEntryClick();
+                      }
+                    } : undefined}
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className={cn(
@@ -330,14 +351,15 @@ export default function PulseTimeline({
                             entry carries a sync_log_id. Will light up fully
                             when URL-driven DrillDialog is wired (planned Tier 4). */}
                         {entry.sync_log_id && (
-                          <a
-                            href={`/IndustryPulse?tab=sources&sync_log_id=${entry.sync_log_id}`}
+                          <Link
+                            to={`/IndustryPulse?tab=sources&sync_log_id=${entry.sync_log_id}`}
+                            replace={false}
                             onClick={(e) => e.stopPropagation()}
                             className="text-muted-foreground/40 hover:text-primary transition-colors"
                             title="Open source run details"
                           >
                             <Info className={cn(compact ? "h-2.5 w-2.5" : "h-3 w-3")} />
-                          </a>
+                          </Link>
                         )}
                       </div>
                     </div>

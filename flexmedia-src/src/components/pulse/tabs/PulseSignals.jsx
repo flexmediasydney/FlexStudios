@@ -12,30 +12,36 @@ import { Plus, Zap, ArrowDownUp } from "lucide-react";
 
 // ── Filter config ─────────────────────────────────────────────────────────────
 
+// Level values must match pulse_signals.level CHECK constraint and PulseSignalCard/QuickAdd
+// vocab (industry/organisation/person). Earlier iteration used high/medium/low which
+// doesn't match anything in the DB — result was an always-empty grid.
 const LEVEL_OPTIONS = [
-  { value: "all",    label: "All Levels" },
-  { value: "high",   label: "High" },
-  { value: "medium", label: "Medium" },
-  { value: "low",    label: "Low" },
+  { value: "all",          label: "All Levels" },
+  { value: "industry",     label: "Industry" },
+  { value: "organisation", label: "Organisation" },
+  { value: "person",       label: "Person" },
 ];
 
+// Status values must match pulse_signals.status CHECK (new/acknowledged/actioned/dismissed).
 const STATUS_OPTIONS = [
   { value: "all",          label: "All Status" },
   { value: "new",          label: "New" },
   { value: "acknowledged", label: "Acknowledged" },
-  { value: "resolved",     label: "Resolved" },
+  { value: "actioned",     label: "Actioned" },
+  { value: "dismissed",    label: "Dismissed" },
 ];
 
 const LEVEL_COLORS = {
-  high:   "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-  medium: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  low:    "bg-slate-100 text-slate-600 dark:bg-slate-800/50 dark:text-slate-400",
+  industry:     "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  organisation: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  person:       "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
 };
 
 const STATUS_COLORS = {
   new:          "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-  acknowledged: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400",
-  resolved:     "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  acknowledged: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  actioned:     "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  dismissed:    "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
 };
 
 // ── Filter bar ────────────────────────────────────────────────────────────────
@@ -61,7 +67,8 @@ const SORT_OPTIONS = [
   { value: "level",  label: "By level" },
 ];
 
-const LEVEL_PRIORITY = { high: 0, medium: 1, low: 2 };
+// Priority used by "By level" sort: industry first, then org, then person.
+const LEVEL_PRIORITY = { industry: 0, organisation: 1, person: 2 };
 
 export default function PulseSignals({ pulseSignals = [], search = "" }) {
   const [levelFilter, setLevelFilter] = useState("all");
@@ -86,7 +93,10 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
       if (levelFilter  !== "all" && s.level  !== levelFilter)  return false;
       if (statusFilter !== "all" && s.status !== statusFilter) return false;
       if (q) {
-        const hay = [s.title, s.description, s.agent_name, s.agency_name]
+        // PulseSignal has no agent_name/agency_name columns — those were
+        // phantom references from a pre-schema draft. Search only the fields
+        // that actually exist on the record.
+        const hay = [s.title, s.description, s.suggested_action, s.category]
           .filter(Boolean)
           .join(" ")
           .toLowerCase();

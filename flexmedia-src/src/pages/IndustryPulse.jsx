@@ -632,7 +632,7 @@ export default function IndustryPulse() {
 
         <TabsContent value="timeline" className="mt-2">
           <ErrorBoundary>
-            <PulseTimelineTab />
+            <PulseTimelineTab {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
       </Tabs>

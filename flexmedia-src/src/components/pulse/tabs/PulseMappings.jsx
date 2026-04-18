@@ -3,6 +3,8 @@
  * Shows pulse_crm_mappings with confirm/reject actions.
  */
 import React, { useState, useMemo, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { createPageUrl } from "@/utils";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent } from "@/components/ui/card";
@@ -137,15 +139,16 @@ function MappingRow({ mapping, pulseName, crmName, onConfirm, onReject, confirmi
            IndustryPulse (?tab=&pulse_id=) drives the right slideout. */}
       <td className="py-2.5 pr-3 max-w-[180px]">
         {pulseName && mapping.pulse_entity_id ? (
-          <a
-            href={`/IndustryPulse?tab=${mapping.entity_type === "agency" ? "agencies" : "agents"}&pulse_id=${mapping.pulse_entity_id}`}
+          <Link
+            to={`/IndustryPulse?tab=${mapping.entity_type === "agency" ? "agencies" : "agents"}&pulse_id=${mapping.pulse_entity_id}&entity_type=${mapping.entity_type}`}
+            replace={false}
             className="text-xs font-medium truncate text-primary hover:underline flex items-center gap-1"
             onClick={(e) => e.stopPropagation()}
             title="Open Pulse record"
           >
             {pulseName}
             <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
-          </a>
+          </Link>
         ) : (
           <p className="text-xs font-medium truncate">
             {pulseName || <span className="text-muted-foreground italic">—</span>}
@@ -159,16 +162,17 @@ function MappingRow({ mapping, pulseName, crmName, onConfirm, onReject, confirmi
       {/* CRM entity */}
       <td className="py-2.5 pr-3 max-w-[180px]">
         {crmName && mapping.crm_entity_id ? (
-          <a
-            href={mapping.entity_type === "agency"
-              ? `/organisations/${mapping.crm_entity_id}`
-              : `/people/${mapping.crm_entity_id}`}
+          <Link
+            to={mapping.entity_type === "agency"
+              ? createPageUrl("OrgDetails") + `?id=${mapping.crm_entity_id}`
+              : createPageUrl("PersonDetails") + `?id=${mapping.crm_entity_id}`}
+            replace={false}
             className="text-xs font-medium truncate text-primary hover:underline flex items-center gap-1"
             onClick={(e) => e.stopPropagation()}
           >
             {crmName}
             <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
-          </a>
+          </Link>
         ) : (
           <p className="text-xs font-medium truncate">
             {crmName || <span className="text-muted-foreground italic">—</span>}

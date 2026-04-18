@@ -48,7 +48,7 @@ const ENTITY_TYPE_OPTIONS = [
   { value: "system", label: "System" },
 ];
 
-export default function PulseTimelineTab() {
+export default function PulseTimelineTab({ onOpenEntity }) {
   const [eventTypeFilter, setEventTypeFilter] = useState("all");
   const [entityTypeFilter, setEntityTypeFilter] = useState("all");
   const [timeWindow, setTimeWindow] = useState("7d");
@@ -283,6 +283,7 @@ export default function PulseTimelineTab() {
               ? "No events match the current filters."
               : "No timeline events yet."
           }
+          onOpenEntity={onOpenEntity}
         />
 
         {/* Pagination footer */}
