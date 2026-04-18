@@ -1164,22 +1164,14 @@ export default function PulseAgentIntel({
       q = q.ilike("agency_suburb", `%${suburbQ.replace(/[%_]/g, "\\$&")}%`);
     }
 
-    // Global search (OR across name/agency/email/mobile/suburb/job_title
-    // plus JSONB containment for alternate emails/mobiles so hits surface
-    // agents whose PRIMARY value doesn't match but an alternate does).
+    // B14: global search now uses the trigger-maintained `search_text` column
+    // (primary + all alternates concatenated, lowercased) backed by a GIN
+    // trigram index. One ilike substring match is both faster than the old
+    // OR+JSONB-containment chain and automatically covers alternates.
     const globalQ = (search || "").trim();
     if (globalQ) {
-      const s = globalQ.replace(/[%_]/g, "\\$&");
-      // PostgREST .or() requires JSON-embedded values to be properly escaped;
-      // wrap the containment operand in `cs.[{...}]` and JSON-stringify the
-      // value so double-quotes are included. When the search contains commas
-      // or parens PostgREST can get confused; our search is a free-text
-      // phrase so this works for typical email/phone substrings.
-      const jsonNeedle = JSON.stringify({ value: globalQ });
-      q = q.or(
-        `full_name.ilike.%${s}%,agency_name.ilike.%${s}%,email.ilike.%${s}%,mobile.ilike.%${s}%,agency_suburb.ilike.%${s}%,job_title.ilike.%${s}%,` +
-        `alternate_emails.cs.[${jsonNeedle}],alternate_mobiles.cs.[${jsonNeedle}]`
-      );
+      const s = globalQ.toLowerCase().replace(/[%_]/g, "\\$&");
+      q = q.ilike("search_text", `%${s}%`);
     }
 
     // Sort — translate UI sort-key to DB column, fall back to sales_as_lead

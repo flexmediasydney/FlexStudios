@@ -164,9 +164,14 @@ serveWithAudit('cleanAgentEmails', async (req) => {
         // check guards against clobbering.
         const existingSource = row.email_source as string | null;
         const existingConfidence = (row.email_confidence as number | null) ?? 0;
-        const detailSourced = existingSource === 'detail_page_lister' || existingSource === 'detail_page_agency';
+        // B19: match detail sources by prefix so any future detail_page_*
+        // variant (not just lister/agency) is automatically protected. Also
+        // flip the confidence comparison to `>=` so a primary recorded at
+        // exactly the hygiene threshold (65) keeps its protection instead
+        // of losing it on the off-by-one edge.
+        const detailSourced = typeof existingSource === 'string' && existingSource.startsWith('detail_page_');
         const HYGIENE_CONFIDENCE = 65;
-        const primaryProtected = detailSourced && existingConfidence > HYGIENE_CONFIDENCE;
+        const primaryProtected = detailSourced && existingConfidence >= HYGIENE_CONFIDENCE;
 
         // B20: all email writes should go through pulse_merge_contact so the
         // alternate_emails array stays consistent with the primary. For the

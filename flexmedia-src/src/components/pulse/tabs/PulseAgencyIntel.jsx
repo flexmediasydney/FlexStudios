@@ -1173,16 +1173,14 @@ export default function PulseAgencyIntel({
       q = q.ilike("suburb", `%${sc.replace(/[%_]/g, "\\$&")}%`);
     }
 
+    // B14: global search now uses the trigger-maintained `search_text` column
+    // (primary + all alternates concatenated, lowercased) backed by a GIN
+    // trigram index. One ilike substring match replaces the OR + JSONB
+    // containment chain and covers alternates automatically.
     const globalQ = (search || "").trim();
     if (globalQ) {
-      const s = globalQ.replace(/[%_]/g, "\\$&");
-      // JSONB containment extensions so hits surface agencies whose PRIMARY
-      // value doesn't match but an alternate does (migration 108+).
-      const jsonNeedle = JSON.stringify({ value: globalQ });
-      q = q.or(
-        `name.ilike.%${s}%,suburb.ilike.%${s}%,phone.ilike.%${s}%,email.ilike.%${s}%,` +
-        `alternate_emails.cs.[${jsonNeedle}],alternate_phones.cs.[${jsonNeedle}]`
-      );
+      const s = globalQ.toLowerCase().replace(/[%_]/g, "\\$&");
+      q = q.ilike("search_text", `%${s}%`);
     }
 
     const sortCol = AGENCY_SERVER_SORT_MAP[agencySort.col] || "agent_count";

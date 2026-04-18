@@ -182,13 +182,16 @@ const _MONTHS_AU = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep
  *
  *   "2026-05-02T14:30:00+00:00" → "Sat 2 May 2026, 2:30pm"
  *
- * When the time portion is exactly 00:00 UTC we assume this is a pre-enrich
- * legacy value (auction_date used to be a `date`, time was synthesised) and
- * drop the time from the display — just "Sat 2 May 2026".
+ * B15: prefer the explicit `timeKnown` flag from the caller (usually
+ * `listing.auction_time_known`) rather than sniffing for "00:00 UTC", because
+ * a legitimate 10am AEST auction equals 00:00 UTC and was being mis-rendered
+ * as date-only. When `timeKnown === false`, render date only. When
+ * `timeKnown === true` or `undefined` (legacy call-sites without access to
+ * the flag), render with time.
  *
  * Returns "" for null/invalid input.
  */
-export function formatAuctionDateTime(auctionTs) {
+export function formatAuctionDateTime(auctionTs, timeKnown) {
   if (!auctionTs) return "";
   const d = new Date(auctionTs);
   if (isNaN(d.getTime())) return "";
@@ -199,13 +202,9 @@ export function formatAuctionDateTime(auctionTs) {
   const year = d.getFullYear();
   const datePart = `${dayName} ${dayNum} ${monthName} ${year}`;
 
-  // Detect legacy "midnight UTC" marker. The original column was `date` so
-  // timestamptz rows with exactly 00:00:00Z most likely have no real time.
-  const isLegacyMidnight =
-    d.getUTCHours() === 0 &&
-    d.getUTCMinutes() === 0 &&
-    d.getUTCSeconds() === 0;
-  if (isLegacyMidnight) return datePart;
+  // B15: explicit flag wins. When the caller tells us the time is NOT known
+  // (auction_time_known=false), render date only — regardless of UTC hour.
+  if (timeKnown === false) return datePart;
 
   // Render local time as h:mm am/pm.
   let hour = d.getHours();
@@ -366,20 +365,45 @@ export function parseMediaItems(listing) {
     ? fpRaw.filter(Boolean).map((url, i) => ({ url, thumb: null, order_index: i }))
     : [];
 
+  // B16: legacy images[] is a flat text[] of URLs with no type info. Old code
+  // assumed every entry was a photo, but some legacy rows have floorplan/video
+  // URLs mixed in. Classify by URL pattern so those surface to the right bucket.
   const imgRaw = _parseMaybeJson(listing.images);
-  const photos = Array.isArray(imgRaw)
-    ? imgRaw
-        .map((img, i) => {
-          const url = typeof img === "string" ? img : img?.url || img?.src;
-          if (!url) return null;
-          return { url, thumb: typeof img === "object" ? img?.thumb || null : null, order_index: i };
-        })
-        .filter(Boolean)
-    : [];
+  const photos = [];
+  let legacyVideoFromImages = null;
+  if (Array.isArray(imgRaw)) {
+    imgRaw.forEach((img, i) => {
+      const url = typeof img === "string" ? img : img?.url || img?.src;
+      if (!url) return;
+      const urlLc = String(url).toLowerCase();
+      const rec = {
+        url,
+        thumb: typeof img === "object" ? img?.thumb || null : null,
+        order_index: i,
+      };
+      if (
+        urlLc.includes("youtube.com") ||
+        urlLc.includes("youtu.be") ||
+        urlLc.includes("img.youtube.com")
+      ) {
+        // B16: video URL hiding in images[] — only capture first one
+        if (!legacyVideoFromImages) legacyVideoFromImages = rec;
+      } else if (
+        urlLc.includes("floorplan") ||
+        urlLc.includes("floor-plan") ||
+        urlLc.includes("/fp/")
+      ) {
+        // B16: floorplan URL misfiled in images[]
+        floorplans.push({ ...rec, order_index: floorplans.length });
+      } else {
+        photos.push(rec);
+      }
+    });
+  }
 
   const video = listing.video_url
     ? { url: listing.video_url, thumb: listing.video_thumb_url || null }
-    : null;
+    : legacyVideoFromImages; // B16: fall through to video we pulled from images[]
 
   return { photos, floorplans, video };
 }

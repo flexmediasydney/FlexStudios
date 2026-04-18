@@ -649,9 +649,14 @@ serveWithAudit('pulseDataSync', async (req) => {
       processedAgents.push({
         full_name: reaName,
         email: rea.email || null, // May come from websift, also cross-enriched from listing data
-        mobile: rea.mobile ? String(rea.mobile) : null,
-        business_phone: rea.businessPhone ? String(rea.businessPhone) : null,
-        phone: rea.businessPhone ? String(rea.businessPhone) : null,
+        // B46: normalize primary phone fields with the same JS helper used
+        // everywhere else in this file so the value written here matches the
+        // shape pulse_merge_contact / pulse_normalize_phone would produce on
+        // alternates. Prevents drift where mobile/business_phone keep the
+        // raw "+614…" / "(02) …" form while alternates get normalized.
+        mobile: normalizeMobile(rea.mobile) || null,
+        business_phone: normalizeMobile(rea.businessPhone) || null,
+        phone: normalizeMobile(rea.businessPhone) || null,
         agency_name: rea.agency?.name || null,
         agency_rea_id: rea.agency?.id || null,
         agency_suburb: rea._suburb,
@@ -708,6 +713,12 @@ serveWithAudit('pulseDataSync', async (req) => {
         suburbs_active: JSON.stringify([rea._suburb]),
         last_synced_at: now,
         last_sync_log_id: syncLogId,  // Migration 100: drill-back reference
+        // B32: always send first_seen_at on upsert. The companion migration
+        // installs a pulse_preserve_first_seen_at trigger that keeps the
+        // existing value on UPDATE, so it's safe to set unconditionally — on
+        // INSERT this records the true first-seen timestamp, on UPDATE the
+        // trigger reverts any overwrite back to the stored original.
+        first_seen_at: now,
         is_in_crm: false,
         is_prospect: false,
       });
@@ -1710,24 +1721,34 @@ serveWithAudit('pulseDataSync', async (req) => {
             const n = normalizeMobile(freshAgent.business_phone);
             if (n) agentMobilePool.add(n);
           }
+          // B22: JS normalizeMobile and SQL pulse_normalize_phone can diverge on
+          // edge cases (extensions, parentheses, leading-zero handling). Stored
+          // alternates were already normalized on insert via pulse_merge_contact
+          // → pulse_normalize_phone, so trust them as-is instead of re-running
+          // the JS normalizer and risking a mismatch. (CRM contact phones
+          // below still use JS normalizeMobile — CRM data follows different
+          // conventions and never passes through the SQL normalizer.)
           if (Array.isArray(freshAgent?.alternate_mobiles)) {
             for (const alt of freshAgent.alternate_mobiles) {
-              const n = normalizeMobile(alt?.value || '');
+              const n = (alt?.value || '').trim() || null;
               if (n) agentMobilePool.add(n);
             }
           }
           if (Array.isArray(freshAgent?.alternate_phones)) {
             for (const alt of freshAgent.alternate_phones) {
-              const n = normalizeMobile(alt?.value || '');
+              const n = (alt?.value || '').trim() || null;
               if (n) agentMobilePool.add(n);
             }
           }
         } catch { /* fall back to stale snapshot below */ }
         // Fallback to snapshot if fresh read failed
+        // B22: snapshot values also came from pulse_agents.alternate_mobiles,
+        // which are normalized on write — trust them as-is (parity with the
+        // fresh-read path above).
         const existingAgentSnap = existingByReaIdSnapshot.get(reaId);
         if (agentMobilePool.size === 0 && existingAgentSnap?.alternate_mobiles && Array.isArray(existingAgentSnap.alternate_mobiles)) {
           for (const alt of existingAgentSnap.alternate_mobiles) {
-            const n = normalizeMobile(alt?.value || '');
+            const n = (alt?.value || '').trim() || null;
             if (n) agentMobilePool.add(n);
           }
         }

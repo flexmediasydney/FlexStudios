@@ -552,7 +552,8 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
             {listing.auction_date && (
               <div>
                 <p className="text-muted-foreground">Auction</p>
-                <p className="font-medium">{formatAuctionDateTime(listing.auction_date) || fmtDate(listing.auction_date)}</p>
+                {/* B15: pass auction_time_known so legitimate 10am AEST (00:00 UTC) renders with time */}
+                <p className="font-medium">{formatAuctionDateTime(listing.auction_date, listing.auction_time_known) || fmtDate(listing.auction_date)}</p>
               </div>
             )}
             {listing.next_inspection && (

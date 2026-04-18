@@ -548,7 +548,8 @@ export default function PropertyDetails() {
               <Tag className="h-4 w-4 text-amber-600 shrink-0" />
               <div className="text-xs">
                 <p className="font-semibold text-amber-800 dark:text-amber-300">Auction</p>
-                <p className="text-foreground">{formatAuctionDateTime(currentListing.auction_date)}</p>
+                {/* B15: pass auction_time_known so legitimate 10am AEST (00:00 UTC) renders with time */}
+                <p className="text-foreground">{formatAuctionDateTime(currentListing.auction_date, currentListing.auction_time_known)}</p>
               </div>
             </CardContent>
           </Card>
