@@ -1225,6 +1225,7 @@ export default function PulseAgencyIntel({
   crmAgents = [],
   crmAgencies = [],
   pulseMappings = [],
+  targetSuburbs = [],
   search = "",
   stats = {},
   onOpenEntity,
@@ -1233,6 +1234,8 @@ export default function PulseAgencyIntel({
   const [agencyFilter, setAgencyFilter] = useState("all"); // all | not_in_crm | in_crm
   const [agencySort, setAgencySort] = useState({ col: "live_agent_count", dir: "desc" });
   const [agencyColFilter, setAgencyColFilter] = useState(""); // suburb text filter
+  // Region filter (Auditor-11 F1) — "all" or a region name from pulse_target_suburbs.
+  const [regionFilter, setRegionFilter] = useState("all");
   const [agencyPage, setAgencyPage] = useState(0);
   // Page size persists in localStorage so user choice survives reloads.
   const [pageSize, setPageSize] = useState(readStoredPageSize);
@@ -1258,10 +1261,25 @@ export default function PulseAgencyIntel({
     return m;
   }, [pulseAgents]);
 
+  /* ── Region filter derivations (Auditor-11 F1) ──────────────────────── */
+  const regions = useMemo(() => {
+    const set = new Set();
+    for (const s of targetSuburbs || []) {
+      if (s?.region) set.add(s.region);
+    }
+    return Array.from(set).sort();
+  }, [targetSuburbs]);
+  const suburbsInRegion = useMemo(() => {
+    if (regionFilter === "all") return null;
+    return (targetSuburbs || [])
+      .filter((s) => s?.region === regionFilter && s?.name)
+      .map((s) => s.name);
+  }, [targetSuburbs, regionFilter]);
+
   /* ── Reset page on any filter/sort change (server-pagination refactor) ── */
   useEffect(() => {
     setAgencyPage(0);
-  }, [agencyFilter, agencyColFilter, search, agencySort.col, agencySort.dir, pageSize]);
+  }, [agencyFilter, agencyColFilter, regionFilter, search, agencySort.col, agencySort.dir, pageSize]);
 
   /* ── Server-side query builder ──────────────────────────────────────── */
   const buildQuery = useCallback((selectCols, withCount) => {
@@ -1275,6 +1293,15 @@ export default function PulseAgencyIntel({
     const sc = (agencyColFilter || "").trim();
     if (sc) {
       q = q.ilike("suburb", `%${sc.replace(/[%_]/g, "\\$&")}%`);
+    }
+
+    // Region filter (Auditor-11 F1) — expands to `suburb IN (...)`.
+    if (suburbsInRegion) {
+      if (suburbsInRegion.length === 0) {
+        q = q.eq("id", "00000000-0000-0000-0000-000000000000");
+      } else {
+        q = q.in("suburb", suburbsInRegion);
+      }
     }
 
     // B14: global search now uses the trigger-maintained `search_text` column
@@ -1291,16 +1318,16 @@ export default function PulseAgencyIntel({
     q = q.order(sortCol, { ascending: agencySort.dir === "asc", nullsFirst: false });
 
     return q;
-  }, [agencyFilter, agencyColFilter, search, agencySort]);
+  }, [agencyFilter, agencyColFilter, search, agencySort, suburbsInRegion]);
 
   /* ── Page fetch ─────────────────────────────────────────────────────── */
   const queryKey = useMemo(
     () => ["pulse-agencies-page", {
-      agencyFilter, agencyColFilter, search,
+      agencyFilter, agencyColFilter, regionFilter, search,
       sortCol: agencySort.col, sortDir: agencySort.dir,
       page: agencyPage, pageSize,
     }],
-    [agencyFilter, agencyColFilter, search, agencySort, agencyPage, pageSize],
+    [agencyFilter, agencyColFilter, regionFilter, search, agencySort, agencyPage, pageSize],
   );
 
   const { data: pageData, isLoading, isFetching } = useQuery({
@@ -1450,6 +1477,21 @@ export default function PulseAgencyIntel({
             </button>
           ))}
         </div>
+
+        {/* Region filter (Auditor-11 F1) */}
+        {regions.length > 0 && (
+          <select
+            value={regionFilter}
+            onChange={(e) => { setRegionFilter(e.target.value); setAgencyPage(0); }}
+            className="h-7 text-xs rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+            title="Filter by region — expands to all suburbs in that region"
+          >
+            <option value="all">All regions</option>
+            {regions.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+        )}
 
         {/* Suburb column filter */}
         <div className="relative flex-1 max-w-xs">

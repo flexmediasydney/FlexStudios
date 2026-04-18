@@ -822,6 +822,7 @@ export default function PulseListingsTab({
   // stat cards, but the TABLE no longer reads from it — we fetch per-page below.
   pulseListings = [],
   crmAgents = [],
+  targetSuburbs = [],
   search = "",
   onOpenEntity,
 }) {
@@ -833,6 +834,8 @@ export default function PulseListingsTab({
   const [listingFilter, setListingFilter] = useState("all");
   const [listingSort, setListingSort] = useState({ col: "listed_date", dir: "desc" });
   const [listingColFilter, setListingColFilter] = useState(suburbParam || "");
+  // Region filter (Auditor-11 F1) — expands to suburb IN (...) at query time.
+  const [regionFilter, setRegionFilter] = useState("all");
   const [listingPage, setListingPage] = useState(0);
 
   // Consume the URL param once we've seeded state so back/forward doesn't
@@ -874,10 +877,25 @@ export default function PulseListingsTab({
     try { window.localStorage.setItem(LS_EXCLUDE_WITHDRAWN_KEY, excludeWithdrawn ? "1" : "0"); } catch { /* quota / SSR */ }
   }, [excludeWithdrawn]);
 
+  // ── Region filter derivations (Auditor-11 F1) ─────────────────────────────
+  const regions = useMemo(() => {
+    const set = new Set();
+    for (const s of targetSuburbs || []) {
+      if (s?.region) set.add(s.region);
+    }
+    return Array.from(set).sort();
+  }, [targetSuburbs]);
+  const suburbsInRegion = useMemo(() => {
+    if (regionFilter === "all") return null;
+    return (targetSuburbs || [])
+      .filter((s) => s?.region === regionFilter && s?.name)
+      .map((s) => s.name);
+  }, [targetSuburbs, regionFilter]);
+
   // Reset to page 0 when filters/sort/search change so we never page past the
   // new result window. Must happen AFTER a filter change and BEFORE the
   // useQuery fires (React runs state updates before committing).
-  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, pageSize, search, listingSort.col, listingSort.dir, excludeWithdrawn]);
+  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, regionFilter, pageSize, search, listingSort.col, listingSort.dir, excludeWithdrawn]);
 
   // ── Sorting helper ──────────────────────────────────────────────────────────
   const handleSort = useCallback(
@@ -916,6 +934,15 @@ export default function PulseListingsTab({
       q = q.or(`address.ilike.%${s}%,suburb.ilike.%${s}%,agency_name.ilike.%${s}%,agent_name.ilike.%${s}%`);
     }
 
+    // Region filter (Auditor-11 F1) — expands to suburb IN (...).
+    if (suburbsInRegion) {
+      if (suburbsInRegion.length === 0) {
+        q = q.eq("id", "00000000-0000-0000-0000-000000000000");
+      } else {
+        q = q.in("suburb", suburbsInRegion);
+      }
+    }
+
     // PF02: global search uses the trigger-maintained `search_text` column
     // (address + suburb + postcode + agent_name + agency_name + price_text +
     // property_type + listing_type, lowercased) backed by a GIN trigram
@@ -933,16 +960,16 @@ export default function PulseListingsTab({
     q = q.order(sortCol, { ascending: listingSort.dir === "asc", nullsFirst: false });
 
     return q;
-  }, [listingFilter, listingColFilter, search, listingSort, excludeWithdrawn]);
+  }, [listingFilter, listingColFilter, search, listingSort, excludeWithdrawn, suburbsInRegion]);
 
   // ── Page fetch via react-query ─────────────────────────────────────────────
   const queryKey = useMemo(
     () => ["pulse-listings-page", {
-      listingFilter, listingColFilter, search,
+      listingFilter, listingColFilter, regionFilter, search,
       sortCol: listingSort.col, sortDir: listingSort.dir,
       page: listingPage, pageSize, excludeWithdrawn,
     }],
-    [listingFilter, listingColFilter, search, listingSort, listingPage, pageSize, excludeWithdrawn],
+    [listingFilter, listingColFilter, regionFilter, search, listingSort, listingPage, pageSize, excludeWithdrawn],
   );
 
   const { data, isLoading, isFetching, refetch } = useQuery({
@@ -1060,6 +1087,20 @@ export default function PulseListingsTab({
 
         {/* Column text filter */}
         <div className="flex items-center gap-2 sm:ml-auto">
+          {/* Region filter (Auditor-11 F1) */}
+          {regions.length > 0 && (
+            <select
+              value={regionFilter}
+              onChange={(e) => { setRegionFilter(e.target.value); setListingPage(0); }}
+              className="h-7 text-xs rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+              title="Filter by region — expands to all suburbs in that region"
+            >
+              <option value="all">All regions</option>
+              {regions.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          )}
           <div className="relative">
             <Input
               placeholder="Filter by suburb, agent, agency…"

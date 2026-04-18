@@ -113,16 +113,28 @@ function WeeklyTrendCard({ pulseListings }) {
 }
 
 // ── Card 2: Top Agents Not In CRM ─────────────────────────────────────────────
+// Auditor-11 F3: replaced the single-axis sort (total_listings_active) with a
+// composite prospect score so high-value contacts with contact info + high
+// average price rank above noisy high-volume juniors.
+function prospectScore(a) {
+  return (
+    (a.total_listings_active || 0) * 1.0 +
+    ((a.avg_sold_price || 0) / 1_000_000) * 2.0 +
+    (a.mobile ? 10 : 0) +
+    (a.email ? 10 : 0) +
+    ((a.rea_rating || 0) * 3)
+  );
+}
 
 function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm, onOpenEntity }) {
-  const agents = useMemo(
-    () =>
-      (pulseAgents || [])
-        .filter((a) => a.is_in_crm === false)
-        .sort((a, b) => (b.total_listings_active || 0) - (a.total_listings_active || 0))
-        .slice(0, 10),
-    [pulseAgents]
-  );
+  const agents = useMemo(() => {
+    // Attach the score once, then sort — lets us display it per-row cheaply.
+    return (pulseAgents || [])
+      .filter((a) => a.is_in_crm === false)
+      .map((a) => ({ ...a, _prospect_score: prospectScore(a) }))
+      .sort((a, b) => b._prospect_score - a._prospect_score)
+      .slice(0, 10);
+  }, [pulseAgents]);
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
@@ -131,7 +143,9 @@ function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm, onOpenEntity }) {
           <Users className="h-4 w-4 text-amber-500" />
           Top Agents Not In CRM
         </CardTitle>
-        <p className="text-[10px] text-muted-foreground">Sorted by active listings</p>
+        <p className="text-[10px] text-muted-foreground">
+          Ranked by prospect score (listings + $ + contactability + rating)
+        </p>
       </CardHeader>
       <CardContent className="px-4 pb-4">
         {agents.length === 0 ? (
@@ -147,7 +161,17 @@ function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm, onOpenEntity }) {
                     <p className="text-xs font-medium truncate">{agent.full_name || "—"}</p>
                     <p className="text-[10px] text-muted-foreground truncate">{agent.agency_name || "—"}</p>
                   </div>
-                  <Badge variant="secondary" className="text-[9px] px-1.5 py-0 shrink-0 tabular-nums">
+                  {/* Prospect score badge (F3) — replaces the old listings-only count. */}
+                  <Badge
+                    variant="secondary"
+                    className="text-[9px] px-1.5 py-0 shrink-0 tabular-nums bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40"
+                    title={`Listings ${agent.total_listings_active ?? 0} · avg $${((agent.avg_sold_price || 0) / 1_000_000).toFixed(2)}M · rating ${agent.rea_rating ?? 0}`}
+                  >
+                    Prospect: {Math.round(agent._prospect_score)}
+                  </Badge>
+                  {/* Keep listings count visible as a secondary hint so users
+                      still know the volume dimension after we re-ranked. */}
+                  <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0 tabular-nums">
                     {agent.total_listings_active ?? 0}
                   </Badge>
                   <Button
@@ -604,6 +628,205 @@ function RecentTimelineCard({ pulseTimeline, onViewFullTimeline }) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
+// ── Feature 2: Sold Last 7 Days ─────────────────────────────────────────────
+// Ranks territory agencies by sold-count in the last 7 days. Each row shows a
+// green "In CRM" badge when the agency has is_in_crm=true, otherwise shows the
+// gap explicitly (amber "Not in CRM"). Clicking a row opens the agency in the
+// slideout. Data source: pulseListings (already server-loaded up to 5k rows
+// per useEntityList cap — fine for 7-day window even in the busiest month).
+
+function SoldLast7DaysCard({ pulseListings, pulseAgencies, onOpenEntity }) {
+  const { rows, totalAgencies } = useMemo(() => {
+    const cutoff = Date.now() - 7 * 86_400_000;
+    const byAgency = new Map();
+    for (const l of pulseListings || []) {
+      if (l.listing_type !== "sold") continue;
+      if (!l.sold_date) continue;
+      const d = new Date(l.sold_date).getTime();
+      if (isNaN(d) || d < cutoff) continue;
+      const key = l.agency_rea_id || (l.agency_name || "").trim().toLowerCase();
+      if (!key) continue;
+      const existing = byAgency.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.total_value += Number(l.sold_price) || 0;
+      } else {
+        byAgency.set(key, {
+          key,
+          agency_rea_id: l.agency_rea_id || null,
+          agency_name: l.agency_name || "Unknown agency",
+          count: 1,
+          total_value: Number(l.sold_price) || 0,
+        });
+      }
+    }
+    // Match each aggregate back to a pulse_agencies row for is_in_crm + id
+    const agencyByReaId = new Map();
+    const agencyByName = new Map();
+    for (const a of pulseAgencies || []) {
+      if (a.rea_agency_id) agencyByReaId.set(String(a.rea_agency_id), a);
+      if (a.name) agencyByName.set(a.name.trim().toLowerCase(), a);
+    }
+    const enriched = Array.from(byAgency.values()).map((r) => {
+      const match =
+        (r.agency_rea_id && agencyByReaId.get(String(r.agency_rea_id))) ||
+        agencyByName.get(r.agency_name.trim().toLowerCase()) ||
+        null;
+      return {
+        ...r,
+        pulse_agency_id: match?.id || null,
+        is_in_crm: match?.is_in_crm ?? null,
+      };
+    });
+    enriched.sort((a, b) => b.count - a.count || b.total_value - a.total_value);
+    return { rows: enriched.slice(0, 20), totalAgencies: enriched.length };
+  }, [pulseListings, pulseAgencies]);
+
+  return (
+    <Card className="rounded-xl border-0 shadow-sm">
+      <CardHeader className="pb-2 pt-4 px-4">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Flame className="h-4 w-4 text-orange-500" />
+          Sold Last 7 Days
+          {totalAgencies > 0 && (
+            <Badge variant="outline" className="text-[9px] px-1.5 py-0 font-normal">
+              {totalAgencies} {totalAgencies === 1 ? "agency" : "agencies"}
+            </Badge>
+          )}
+        </CardTitle>
+        <p className="text-[10px] text-muted-foreground">
+          Top 20 agencies by sold count (last 7 days) — In-CRM badge highlights gaps
+        </p>
+      </CardHeader>
+      <CardContent className="px-4 pb-4">
+        {rows.length === 0 ? (
+          <p className="text-xs text-muted-foreground/50 py-6 text-center">No sales recorded in the last 7 days</p>
+        ) : (
+          <div className="space-y-1.5 max-h-[320px] overflow-y-auto">
+            {rows.map((r) => {
+              const canOpen = onOpenEntity && r.pulse_agency_id;
+              const body = (
+                <>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate">{r.agency_name}</p>
+                    <p className="text-[10px] text-muted-foreground tabular-nums">
+                      {r.total_value > 0 ? `$${(r.total_value / 1_000_000).toFixed(1)}M total` : "—"}
+                    </p>
+                  </div>
+                  {r.is_in_crm === true ? (
+                    <Badge
+                      variant="secondary"
+                      className="text-[9px] px-1.5 py-0 shrink-0 bg-emerald-50 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/40"
+                    >
+                      In CRM
+                    </Badge>
+                  ) : r.is_in_crm === false ? (
+                    <Badge
+                      variant="secondary"
+                      className="text-[9px] px-1.5 py-0 shrink-0 bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/40"
+                    >
+                      Not in CRM
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 shrink-0 text-muted-foreground">
+                      Unknown
+                    </Badge>
+                  )}
+                  <Badge variant="secondary" className="text-[9px] px-1.5 py-0 shrink-0 tabular-nums">
+                    {r.count}
+                  </Badge>
+                </>
+              );
+              return canOpen ? (
+                <button
+                  key={r.key}
+                  type="button"
+                  onClick={() => onOpenEntity({ type: "agency", id: r.pulse_agency_id })}
+                  className="w-full flex items-center gap-2 py-1 group text-left rounded hover:bg-muted/30 transition-colors"
+                >
+                  {body}
+                </button>
+              ) : (
+                <div key={r.key} className="flex items-center gap-2 py-1">
+                  {body}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Feature 4: Money on the table banner ───────────────────────────────────
+// Sum of asking/sold prices for listings whose agency is_in_crm = false.
+// Gives an at-a-glance $-value of territory coverage we don't have in CRM.
+// We join listings → pulse_agencies via agency_rea_id (primary) then fall
+// back to agency_name for pre-id-backfill rows.
+function MoneyOnTheTableBanner({ pulseListings, pulseAgencies }) {
+  const { total, listingCount } = useMemo(() => {
+    // Build agency-by-id map for O(1) lookups across all listings.
+    const notInCrmByReaId = new Set();
+    const notInCrmByName = new Set();
+    const inCrmByReaId = new Set();
+    const inCrmByName = new Set();
+    for (const a of pulseAgencies || []) {
+      if (a.is_in_crm === false) {
+        if (a.rea_agency_id) notInCrmByReaId.add(String(a.rea_agency_id));
+        if (a.name) notInCrmByName.add(a.name.trim().toLowerCase());
+      } else if (a.is_in_crm === true) {
+        if (a.rea_agency_id) inCrmByReaId.add(String(a.rea_agency_id));
+        if (a.name) inCrmByName.add(a.name.trim().toLowerCase());
+      }
+    }
+    let sum = 0;
+    let count = 0;
+    for (const l of pulseListings || []) {
+      // Only count listings whose agency we've classified as NOT in CRM.
+      const reaIdKey = l.agency_rea_id ? String(l.agency_rea_id) : null;
+      const nameKey = (l.agency_name || "").trim().toLowerCase() || null;
+      const isNotInCrm =
+        (reaIdKey && notInCrmByReaId.has(reaIdKey)) ||
+        (!reaIdKey && nameKey && notInCrmByName.has(nameKey));
+      if (!isNotInCrm) continue;
+      // Skip if the same listing's agency is ALSO found in the in-CRM set —
+      // we have duplicate-name agencies in the wild. Prefer in-CRM classification.
+      if (reaIdKey && inCrmByReaId.has(reaIdKey)) continue;
+      const price = Number(l.asking_price) || Number(l.sold_price) || 0;
+      if (price <= 0) continue;
+      sum += price;
+      count += 1;
+    }
+    return { total: sum, listingCount: count };
+  }, [pulseListings, pulseAgencies]);
+
+  if (total <= 0) return null;
+
+  const formatted =
+    total >= 1_000_000_000
+      ? `$${(total / 1_000_000_000).toFixed(2)}B`
+      : total >= 1_000_000
+      ? `$${(total / 1_000_000).toFixed(1)}M`
+      : total >= 1_000
+      ? `$${Math.round(total / 1_000)}K`
+      : `$${total}`;
+
+  return (
+    <div className="flex items-center justify-end">
+      <div
+        className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 dark:bg-amber-950/30 dark:border-amber-800/40"
+        title={`${listingCount.toLocaleString()} territory listing${listingCount === 1 ? "" : "s"} whose agency is not in CRM yet`}
+      >
+        <Zap className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+        <span className="text-xs font-semibold tabular-nums text-amber-900 dark:text-amber-200">
+          {formatted} in territory listings not in CRM
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function PulseCommandCenter({
   pulseAgents = [],
   pulseAgencies = [],
@@ -621,34 +844,47 @@ export default function PulseCommandCenter({
   onViewFullTimeline,
 }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <WeeklyTrendCard pulseListings={pulseListings} />
-      <TopAgentsNotInCrmCard
-        pulseAgents={pulseAgents}
-        onAddToCrm={onAddToCrm}
-        onOpenEntity={onOpenEntity}
+    <div className="space-y-3">
+      {/* Feature 4: money-on-the-table banner — top-right of tab content */}
+      <MoneyOnTheTableBanner
+        pulseListings={pulseListings}
+        pulseAgencies={pulseAgencies}
       />
-      <RecentEnrichmentCard
-        pulseAgents={pulseAgents}
-        pulseTimeline={pulseTimeline}
-        onOpenEntity={onOpenEntity}
-      />
-      <HotSignalsCard
-        pulseSignals={pulseSignals}
-        pulseTimeline={pulseTimeline}
-        onOpenEntity={onOpenEntity}
-      />
-      <ConversionFunnelCard
-        pulseAgents={pulseAgents}
-        crmAgents={crmAgents}
-        projects={projects}
-        stats={stats}
-      />
-      <SuburbDistributionCard pulseListings={pulseListings} />
-      <RecentTimelineCard
-        pulseTimeline={pulseTimeline}
-        onViewFullTimeline={onViewFullTimeline}
-      />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <WeeklyTrendCard pulseListings={pulseListings} />
+        <TopAgentsNotInCrmCard
+          pulseAgents={pulseAgents}
+          onAddToCrm={onAddToCrm}
+          onOpenEntity={onOpenEntity}
+        />
+        {/* Feature 2: sold-last-7-days — ranks agencies, shows CRM-match badge */}
+        <SoldLast7DaysCard
+          pulseListings={pulseListings}
+          pulseAgencies={pulseAgencies}
+          onOpenEntity={onOpenEntity}
+        />
+        <RecentEnrichmentCard
+          pulseAgents={pulseAgents}
+          pulseTimeline={pulseTimeline}
+          onOpenEntity={onOpenEntity}
+        />
+        <HotSignalsCard
+          pulseSignals={pulseSignals}
+          pulseTimeline={pulseTimeline}
+          onOpenEntity={onOpenEntity}
+        />
+        <ConversionFunnelCard
+          pulseAgents={pulseAgents}
+          crmAgents={crmAgents}
+          projects={projects}
+          stats={stats}
+        />
+        <SuburbDistributionCard pulseListings={pulseListings} />
+        <RecentTimelineCard
+          pulseTimeline={pulseTimeline}
+          onViewFullTimeline={onViewFullTimeline}
+        />
+      </div>
     </div>
   );
 }
