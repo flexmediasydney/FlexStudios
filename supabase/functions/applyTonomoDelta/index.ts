@@ -31,17 +31,30 @@ Deno.serve(async (req) => {
 
   const admin = getAdminClient();
 
-  // Load the caller's user record to check role
-  const { data: callerUser } = await admin
-    .from('users')
-    .select('id, email, full_name, role')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (!callerUser) return errorResponse('User record not found', 403, req);
-  const role = (callerUser.role || '').toLowerCase();
+  // Load the caller's user record to check role.
+  // Service-role bypass: getUserFromReq returns AppUser with role='master_admin'
+  // and id='__service_role__' for sb_secret_* / service-role JWT bearers.
+  let callerUser: { id?: string | null; email?: string | null; full_name?: string | null; role?: string | null } | null = null;
+  const initialRole = (user.role || '').toLowerCase();
+  if (user.id && user.id !== '__service_role__') {
+    const { data } = await admin
+      .from('users')
+      .select('id, email, full_name, role')
+      .eq('id', user.id)
+      .maybeSingle();
+    callerUser = data;
+  }
+  const role = (callerUser?.role || initialRole || '').toLowerCase();
   if (role !== 'master_admin' && role !== 'admin') {
     return errorResponse('Admin role required', 403, req);
+  }
+  if (!callerUser) {
+    callerUser = {
+      id: user.id,
+      email: user.email || 'system@flexstudios.app',
+      full_name: user.full_name || 'System',
+      role: initialRole,
+    };
   }
 
   let body: any;
