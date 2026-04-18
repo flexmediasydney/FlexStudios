@@ -20,7 +20,7 @@
  * renders prices / media / dates identically. Do NOT roll inline fallbacks.
  */
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { createPageUrl } from "@/utils";
@@ -135,6 +135,9 @@ export default function PropertyDetails() {
   const [tab, setTab] = useState("timeline");
   const tabsRef = useRef(null);
 
+  // Shortcut-help overlay (triggered by `?`)
+  const [helpOpen, setHelpOpen] = useState(false);
+
   // Flash-highlight state: Price-Timeline-Chart dots fire this; TimelineTab
   // listens for it and momentarily highlights the matching card.
   const [flashedEventId, setFlashedEventId] = useState(null);
@@ -149,23 +152,6 @@ export default function PropertyDetails() {
     // Clear flash after 2s so it can re-trigger
     window.setTimeout(() => setFlashedEventId(null), 2000);
   }, []);
-  useEffect(() => {
-    const onKey = (e) => {
-      // Only intercept when focus isn't inside an input/textarea/button
-      const t = document.activeElement;
-      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
-      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        const idx = TAB_ORDER.indexOf(tab);
-        if (idx < 0) return;
-        const next = e.key === "ArrowLeft"
-          ? TAB_ORDER[(idx - 1 + TAB_ORDER.length) % TAB_ORDER.length]
-          : TAB_ORDER[(idx + 1) % TAB_ORDER.length];
-        setTab(next);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [tab]);
 
   // ── Data fetch — single RPC via react-query ────────────────────────────
   const {
@@ -190,12 +176,17 @@ export default function PropertyDetails() {
   });
 
   // ── Favorite (LocalStorage) ────────────────────────────────────────────
+  // NOTE: checked for a `favorite_properties` column on `users` — none exists
+  // as of 2026-04. Keeping localStorage-only per spec. If/when that column is
+  // added, sync here via api.users.update().
   const [isFavorite, setIsFavorite] = useState(false);
+  const [favoriteCount, setFavoriteCount] = useState(0);
   useEffect(() => {
     if (!propertyKey) return;
     try {
       const favs = JSON.parse(localStorage.getItem("flex_favorite_properties") || "[]");
       setIsFavorite(favs.includes(propertyKey));
+      setFavoriteCount(favs.length);
     } catch { /* noop */ }
   }, [propertyKey]);
   const toggleFavorite = useCallback(() => {
@@ -212,6 +203,7 @@ export default function PropertyDetails() {
       }
       localStorage.setItem("flex_favorite_properties", JSON.stringify(next));
       setIsFavorite(next.includes(propertyKey));
+      setFavoriteCount(next.length);
     } catch { /* noop */ }
   }, [propertyKey]);
 
@@ -223,6 +215,125 @@ export default function PropertyDetails() {
     } catch {
       toast.error("Failed to copy link");
     }
+  }, []);
+
+  // Update document.title so the browser tab reflects the property. Rich
+  // OG/preview tags are a SSR concern (vanilla Vite SPA serves fixed meta at
+  // build time) so we skip them here — see Phase 2 spec.
+  useEffect(() => {
+    const prop = dossier?.property;
+    if (!prop) return;
+    const addr = prop.display_address || "Property";
+    const suburb = prop.suburb || "";
+    const prev = document.title;
+    document.title = suburb ? `${addr}, ${suburb} · FlexMedia` : `${addr} · FlexMedia`;
+    return () => { document.title = prev; };
+  }, [dossier]);
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────
+  // Stash latest values in refs so the keydown closure always sees current
+  // state without having to re-register the listener on every render.
+  const toggleFavoriteRef = useRef(toggleFavorite);
+  const dossierRef = useRef(dossier);
+  const tabRef = useRef(tab);
+  const helpOpenRef = useRef(helpOpen);
+  useEffect(() => { toggleFavoriteRef.current = toggleFavorite; }, [toggleFavorite]);
+  useEffect(() => { dossierRef.current = dossier; }, [dossier]);
+  useEffect(() => { tabRef.current = tab; }, [tab]);
+  useEffect(() => { helpOpenRef.current = helpOpen; }, [helpOpen]);
+
+  useEffect(() => {
+    // Simple state machine: tracks pending `g` prefix for chorded jumps.
+    // Timeout after 1000ms resets so stray `g` presses don't linger forever.
+    // Shortcuts skip when focus is in a form field or contentEditable element.
+    let gPending = false;
+    let gTimer = null;
+    const clearG = () => {
+      gPending = false;
+      if (gTimer) { clearTimeout(gTimer); gTimer = null; }
+    };
+    const GOTO_MAP = {
+      t: "timeline",
+      m: "media",
+      l: "listings",
+      p: "projects",
+      a: "agents",
+      k: "market",
+    };
+
+    const onKey = (e) => {
+      const t = document.activeElement;
+      if (t) {
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+        if (t.isContentEditable) return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      // Arrow-key tab navigation
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const currentTab = tabRef.current;
+        const idx = TAB_ORDER.indexOf(currentTab);
+        if (idx < 0) return;
+        const next = e.key === "ArrowLeft"
+          ? TAB_ORDER[(idx - 1 + TAB_ORDER.length) % TAB_ORDER.length]
+          : TAB_ORDER[(idx + 1) % TAB_ORDER.length];
+        setTab(next);
+        return;
+      }
+
+      // g-chord second key
+      if (gPending) {
+        const target = GOTO_MAP[e.key.toLowerCase()];
+        clearG();
+        if (target) {
+          e.preventDefault();
+          setTab(target);
+          requestAnimationFrame(() => {
+            tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          });
+        }
+        return;
+      }
+
+      // g-chord first key
+      if (e.key === "g") {
+        gPending = true;
+        gTimer = setTimeout(clearG, 1000);
+        return;
+      }
+
+      if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+        e.preventDefault();
+        setHelpOpen((v) => !v);
+        return;
+      }
+      if (e.key === "Escape" && helpOpenRef.current) {
+        setHelpOpen(false);
+        return;
+      }
+      if (e.key === "c") {
+        e.preventDefault();
+        const address = dossierRef.current?.property?.display_address;
+        if (address) {
+          try {
+            navigator.clipboard.writeText(address);
+            toast.success("Copied!");
+          } catch { toast.error("Failed to copy"); }
+        }
+        return;
+      }
+      if (e.key === "f") {
+        e.preventDefault();
+        toggleFavoriteRef.current?.();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      clearG();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Derived values from dossier ────────────────────────────────────────
@@ -320,8 +431,10 @@ export default function PropertyDetails() {
       <StickyHeader
         property={property}
         isFavorite={isFavorite}
+        favoriteCount={favoriteCount}
         onToggleFavorite={toggleFavorite}
         onShare={shareLink}
+        onShowHelp={() => setHelpOpen(true)}
       />
 
       <div className="px-3 pt-2 space-y-3 lg:px-6">
@@ -346,6 +459,8 @@ export default function PropertyDetails() {
                 <SignalRibbon
                   signals={signals}
                   relistCandidate={relistCandidate}
+                  property={property}
+                  currentListing={currentListing}
                 />
               </ErrorBoundary>
             )}
@@ -525,13 +640,78 @@ export default function PropertyDetails() {
           </aside>
         </div>
       </div>
+
+      {/* ── KEYBOARD SHORTCUT HELP OVERLAY ── */}
+      {helpOpen && (
+        <ShortcutHelpOverlay onClose={() => setHelpOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+// ── Keyboard shortcut help overlay ───────────────────────────────────────
+
+function ShortcutHelpOverlay({ onClose }) {
+  const rows = [
+    { keys: ["g", "t"], desc: "Jump to Timeline tab" },
+    { keys: ["g", "m"], desc: "Jump to Media tab" },
+    { keys: ["g", "l"], desc: "Jump to Listings tab" },
+    { keys: ["g", "p"], desc: "Jump to Projects tab" },
+    { keys: ["g", "a"], desc: "Jump to Agents tab" },
+    { keys: ["g", "k"], desc: "Jump to Market tab" },
+    { keys: ["←"], desc: "Previous tab" },
+    { keys: ["→"], desc: "Next tab" },
+    { keys: ["c"], desc: "Copy address to clipboard" },
+    { keys: ["f"], desc: "Toggle favorite" },
+    { keys: ["?"], desc: "Show / hide this help" },
+    { keys: ["Esc"], desc: "Close this help" },
+  ];
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard shortcuts"
+    >
+      <div
+        className="bg-background border border-border rounded-xl shadow-xl max-w-xl w-full p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onClose} title="Close (Esc)">
+            <span className="text-lg leading-none">×</span>
+          </Button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+          {rows.map((r, i) => (
+            <div key={i} className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-muted-foreground truncate">{r.desc}</span>
+              <span className="flex items-center gap-1 shrink-0">
+                {r.keys.map((k, j) => (
+                  <kbd
+                    key={j}
+                    className="px-1.5 py-0.5 rounded border border-border bg-muted font-mono text-[10px] tabular-nums"
+                  >
+                    {k}
+                  </kbd>
+                ))}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-3">
+          Shortcuts are disabled while typing in form fields. Chord keys (g t, g m…) must be pressed within 1 second.
+        </p>
+      </div>
     </div>
   );
 }
 
 // ── Sticky header ────────────────────────────────────────────────────────
 
-function StickyHeader({ property, isFavorite, onToggleFavorite, onShare }) {
+function StickyHeader({ property, isFavorite, favoriteCount = 0, onToggleFavorite, onShare, onShowHelp }) {
   const statusInfo = useMemo(() => {
     if (!property?.current_listing_type) {
       if (property?.latest_sold_date) {
@@ -583,12 +763,24 @@ function StickyHeader({ property, isFavorite, onToggleFavorite, onShare }) {
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {isFavorite && favoriteCount > 1 && (
+            <span
+              className="hidden md:inline text-[10px] text-muted-foreground tabular-nums mr-1"
+              title={`Favorited (along with ${favoriteCount - 1} other propert${favoriteCount - 1 === 1 ? "y" : "ies"}${property?.suburb ? ` — see Properties list`: ""})`}
+            >
+              ★ Favorited (+{favoriteCount - 1} more)
+            </span>
+          )}
           <Button
             variant="ghost"
             size="sm"
             className="h-8 w-8 p-0"
             onClick={onToggleFavorite}
-            title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+            title={
+              isFavorite
+                ? `Remove from favorites (f)${favoriteCount > 1 ? ` — ${favoriteCount - 1} other favorited` : ""}`
+                : "Add to favorites (f)"
+            }
           >
             <Star className={cn(
               "h-4 w-4",
@@ -604,6 +796,17 @@ function StickyHeader({ property, isFavorite, onToggleFavorite, onShare }) {
           >
             <Share2 className="h-4 w-4" />
           </Button>
+          {onShowHelp && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 text-muted-foreground hidden sm:inline-flex"
+              onClick={onShowHelp}
+              title="Keyboard shortcuts (?)"
+            >
+              <span className="text-xs font-semibold">?</span>
+            </Button>
+          )}
         </div>
       </div>
     </div>
@@ -912,7 +1115,7 @@ function AgentCardInline({ agent, fallbackName, fallbackAgency }) {
 
 // ── Signal ribbon — stacks banners ───────────────────────────────────────
 
-function SignalRibbon({ signals, relistCandidate }) {
+function SignalRibbon({ signals, relistCandidate, property, currentListing }) {
   // Convert relist_candidate into a synthetic signal at the top when present.
   const all = [];
   if (relistCandidate?.is_candidate) {
@@ -925,18 +1128,40 @@ function SignalRibbon({ signals, relistCandidate }) {
     });
   }
   for (const s of signals || []) all.push(s);
-  if (all.length === 0) return null;
+
+  // Session-scoped dismissal — hides a banner until the user reloads the tab.
+  const [dismissed, setDismissed] = useState(() => new Set());
+  const visible = all.filter((s, i) => {
+    const key = s.id || `synth-${i}-${s.signal_type || ""}`;
+    return !dismissed.has(key);
+  });
+  if (visible.length === 0) return null;
 
   return (
     <div className="space-y-2">
-      {all.map((s, i) => (
-        <SignalBanner key={s.id || `synth-${i}`} signal={s} />
-      ))}
+      {all.map((s, i) => {
+        const key = s.id || `synth-${i}-${s.signal_type || ""}`;
+        if (dismissed.has(key)) return null;
+        return (
+          <SignalBanner
+            key={key}
+            signal={s}
+            property={property}
+            currentListing={currentListing}
+            onDismiss={() => setDismissed((prev) => {
+              const next = new Set(prev);
+              next.add(key);
+              return next;
+            })}
+          />
+        );
+      })}
     </div>
   );
 }
 
-function SignalBanner({ signal }) {
+function SignalBanner({ signal, property, currentListing, onDismiss }) {
+  const navigate = useNavigate();
   // Map signal_type → colour. Falls back to amber.
   const type = signal.signal_type || "";
   let cls = "border-amber-300 bg-amber-50/70 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200";
@@ -956,15 +1181,49 @@ function SignalBanner({ signal }) {
   const rawMsg = signal.message || signal.title || signal.signal_type || "Signal";
   const msg = rawMsg.length > 80 ? rawMsg.slice(0, 77) + "…" : rawMsg;
 
+  // Action wiring (Phase 2): pick label + handler per signal_type.
+  // - listing_relisted / relist_candidate → "Book re-shoot" (new ProjectDetails)
+  // - listing_auction_scheduled → "View in REA" (opens listing.source_url)
+  // - everything else → "Dismiss" (hides for the session)
+  let actionLabel = "Dismiss";
+  let actionHandler = onDismiss;
+  let actionTitle = "Hide this signal for the current session";
+  let actionDisabled = false;
+
+  if (type === "listing_relisted" || type === "relist_candidate" || type.includes("relist")) {
+    actionLabel = "Book re-shoot";
+    actionTitle = "Create a new FlexStudios project for this property";
+    actionHandler = () => {
+      const addr = property?.display_address || "";
+      navigate(`/ProjectDetails?id=new&address=${encodeURIComponent(addr)}`);
+    };
+  } else if (type === "listing_auction_scheduled" || type.includes("auction")) {
+    const url = currentListing?.source_url || signal.source_url;
+    if (url) {
+      actionLabel = "View in REA";
+      actionTitle = "Open the listing on realestate.com.au";
+      actionHandler = () => window.open(url, "_blank", "noopener,noreferrer");
+    } else {
+      actionDisabled = true;
+      actionTitle = "No listing URL available";
+    }
+  }
+
   return (
     <div className={cn("rounded-lg border px-3 py-2 flex items-center gap-2.5", cls)}>
       <Icon className="h-4 w-4 shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-xs sm:text-sm font-medium truncate">{msg}</p>
       </div>
-      {/* Action button — deferred to Phase 2 per spec */}
-      <Button variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled title="Action coming in Phase 2">
-        Action
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 text-xs shrink-0"
+        onClick={actionHandler}
+        disabled={actionDisabled}
+        title={actionTitle}
+      >
+        {actionLabel}
       </Button>
     </div>
   );
