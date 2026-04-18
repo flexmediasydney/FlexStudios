@@ -277,6 +277,14 @@ function BoundingBoxDiagram({ region = "Greater Sydney", maxItems = 500 }) {
 function usePulseSyncRuns(sourceId, limit = 10) {
   const [runs, setRuns] = useState([]);
   const [activeBatch, setActiveBatch] = useState(null);
+  // `latestBatch` is the most recent pulse_fire_batches row of ANY status.
+  // Used as the AUTHORITATIVE "last run" number on the source card — a chunked
+  // dispatch may span multiple 15-min `pulse_sync_runs` buckets (showing e.g.
+  // 141/141 for bucket 1 and 42/42 for bucket 2), but the batch row says
+  // "183 of 183 dispatched" for the whole cohort, which is what users expect
+  // to see on the card. `activeBatch` is a strict subset (status='running')
+  // of `latestBatch`.
+  const [latestBatch, setLatestBatch] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // An operation is active if there's a non-terminal batch row OR if any run has
@@ -295,7 +303,7 @@ function usePulseSyncRuns(sourceId, limit = 10) {
 
     const fetchRuns = async () => {
       try {
-        const [runsRes, batchRes] = await Promise.all([
+        const [runsRes, activeBatchRes, latestBatchRes] = await Promise.all([
           api._supabase
             .from("pulse_sync_runs")
             .select("*")
@@ -304,9 +312,17 @@ function usePulseSyncRuns(sourceId, limit = 10) {
             .limit(limit),
           api._supabase
             .from("pulse_fire_batches")
-            .select("id,status,total_count,dispatched_count,current_offset,batch_size,started_at,last_batch_at")
+            .select("id,status,total_count,dispatched_count,current_offset,batch_size,started_at,last_batch_at,completed_at")
             .eq("source_id", sourceId)
             .eq("status", "running")
+            .order("started_at", { ascending: false })
+            .limit(1),
+          // Latest batch regardless of status — the authoritative "last run"
+          // counter for the source card.
+          api._supabase
+            .from("pulse_fire_batches")
+            .select("id,status,total_count,dispatched_count,current_offset,batch_size,started_at,last_batch_at,completed_at,error_message")
+            .eq("source_id", sourceId)
             .order("started_at", { ascending: false })
             .limit(1),
         ]);
@@ -315,7 +331,8 @@ function usePulseSyncRuns(sourceId, limit = 10) {
         setRuns(runsRes.data || []);
         // Batch fetch failures are non-fatal — `pulse_fire_batches` table is new
         // (migration 084) and might not exist in older environments.
-        setActiveBatch(batchRes.error ? null : (batchRes.data?.[0] || null));
+        setActiveBatch(activeBatchRes.error ? null : (activeBatchRes.data?.[0] || null));
+        setLatestBatch(latestBatchRes.error ? null : (latestBatchRes.data?.[0] || null));
       } catch (err) {
         console.warn("pulse_sync_runs fetch failed:", err.message);
       } finally {
@@ -333,7 +350,7 @@ function usePulseSyncRuns(sourceId, limit = 10) {
     };
   }, [sourceId, limit, hasActive]);
 
-  return { runs, activeBatch, loading };
+  return { runs, activeBatch, latestBatch, loading };
 }
 
 // ── pulse_source_card_stats RPC hook ──────────────────────────────────────────
@@ -457,6 +474,8 @@ function DispatchTable({ dispatches = [], onDrill }) {
           <tr className="border-b border-border/50 text-muted-foreground">
             <th className="text-left pb-1 font-medium">Suburb</th>
             <th className="text-left pb-1 font-medium">Status</th>
+            {/* Batch attribution (migration 088) — blank for ad-hoc syncs */}
+            <th className="text-center pb-1 font-medium">Batch</th>
             <th className="text-right pb-1 font-medium">Duration</th>
             <th className="text-right pb-1 font-medium">Fetched</th>
             <th className="text-right pb-1 font-medium">New</th>
@@ -505,6 +524,18 @@ function DispatchTable({ dispatches = [], onDrill }) {
                   {suburbLabel}
                 </td>
                 <td className="py-1 pr-2">{statusEl}</td>
+                <td className="py-1 pr-2 text-center">
+                  {d.batch_number != null && d.total_batches != null ? (
+                    <span
+                      className="font-mono text-muted-foreground tabular-nums"
+                      title={d.batch_id ? `Batch ${d.batch_number} of ${d.total_batches} · id ${String(d.batch_id).slice(0, 8)}…` : undefined}
+                    >
+                      {d.batch_number}/{d.total_batches}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground/30">—</span>
+                  )}
+                </td>
                 <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
                   {fmtDurationSec(d.duration_sec)}
                 </td>
@@ -536,12 +567,50 @@ function DispatchTable({ dispatches = [], onDrill }) {
 
 // --- Single run summary block (latest run or historical entry) ---
 
-function RunSummary({ run, isBoundingBox, expanded, onToggle, onDrillDispatch }) {
-  const total = run.total_dispatches || 0;
-  const succeeded = run.succeeded || 0;
-  const failed = run.failed || 0;
-  const inProgress = run.in_progress || 0;
-  const allFailed = total > 0 && failed === total;
+function RunSummary({ run, latestBatch, isBoundingBox, expanded, onToggle, onDrillDispatch }) {
+  // ── Authoritative vs bucket-level counters ───────────────────────────────
+  // When a chunked dispatch spans multiple 15-min buckets, `run` (from the
+  // pulse_sync_runs view) reports only the latest bucket — e.g. 141/141 when
+  // the full dispatch was 183/183 across two buckets. `latestBatch` (from
+  // pulse_fire_batches) reports the whole cohort, which is what "Last run"
+  // should mean on the source card.
+  //
+  // Heuristic for when to trust the batch row over the bucket row:
+  //   - `latestBatch` exists AND
+  //   - its started_at is within 10 minutes of (or after) run.run_started_at
+  //     — i.e. this batch row belongs to the same logical cron dispatch.
+  //
+  // If the newest batch is much older than the latest 15-min bucket, the
+  // bucket is a newer manual/ad-hoc run and we should keep displaying bucket
+  // numbers. The 10-min threshold matches the worst-case chunked-dispatch
+  // wall-clock (most finish in <5 min; 30s-stagger sources may run 8-10 min).
+  const batchBelongsToRun = useMemo(() => {
+    if (!latestBatch) return false;
+    const batchMs = new Date(latestBatch.started_at).getTime();
+    const runMs = new Date(run.run_started_at).getTime();
+    // batch started within 20min before/after run bucket → same logical op
+    return Math.abs(runMs - batchMs) < 20 * 60 * 1000;
+  }, [latestBatch, run.run_started_at]);
+
+  const [showBreakdown, setShowBreakdown] = useState(false);
+
+  // Canonical numbers displayed on the card. When batch is authoritative we
+  // use total_count / dispatched_count (no succeeded/failed breakdown — that
+  // still lives in the bucket view); otherwise bucket numbers.
+  const useBatchNumbers = batchBelongsToRun && !isBoundingBox;
+
+  const bucketTotal = run.total_dispatches || 0;
+  const bucketSucceeded = run.succeeded || 0;
+  const bucketFailed = run.failed || 0;
+  const bucketInProgress = run.in_progress || 0;
+
+  const total = useBatchNumbers ? (latestBatch.total_count || 0) : bucketTotal;
+  const succeeded = bucketSucceeded; // still sourced from bucket — batch table has no status breakdown
+  const failed = bucketFailed;
+  const inProgress = bucketInProgress;
+  const dispatched = useBatchNumbers ? (latestBatch.dispatched_count || 0) : (succeeded + failed);
+
+  const allFailed = bucketTotal > 0 && bucketFailed === bucketTotal;
   const hasPartialFail = failed > 0 && failed < total;
   const runDurationSec = Math.max(
     0,
@@ -616,7 +685,30 @@ function RunSummary({ run, isBoundingBox, expanded, onToggle, onDrillDispatch })
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1 text-muted-foreground uppercase tracking-wide font-semibold">
           <Clock className="h-3 w-3" />
-          Last run · {fmtRelativeTs(run.run_started_at)}
+          Last run · {fmtRelativeTs(useBatchNumbers ? latestBatch.started_at : run.run_started_at)}
+          {/* Batch attribution:
+              - When useBatchNumbers is true (chunked dispatch spanning multiple
+                15-min buckets), show the authoritative whole-cohort range via a
+                "cohort" badge — the bucket-level batch_label is de-emphasised
+                behind the "Show breakdown" toggle below.
+              - Otherwise preserve the existing behaviour where run.batch_label
+                (pre-formatted "Batches 3–6 of 10" from migration 089) is
+                inlined as before. */}
+          {useBatchNumbers ? (
+            <span
+              className="inline-flex items-center gap-0.5 ml-1 normal-case tracking-normal font-mono text-muted-foreground/80"
+              title={`Full dispatch cohort (batch id ${String(latestBatch.id).slice(0, 8)}…, status ${latestBatch.status})`}
+            >
+              · full cohort
+            </span>
+          ) : run.batch_label && (
+            <span
+              className="inline-flex items-center gap-0.5 ml-1 normal-case tracking-normal font-mono text-muted-foreground/80"
+              title={`Chunked dispatch — this 15-min window covers batch(es) ${run.batch_label}`}
+            >
+              · Batch {run.batch_label}
+            </span>
+          )}
           {isLongRunning && (
             <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400 ml-1 normal-case tracking-normal">
               <Clock className="h-2.5 w-2.5" />
@@ -639,15 +731,35 @@ function RunSummary({ run, isBoundingBox, expanded, onToggle, onDrillDispatch })
         </div>
       </div>
 
-      {/* Progress bar */}
-      <RunProgressBar run={run} />
+      {/* Progress bar — batch-level progress when authoritative, else bucket. */}
+      {useBatchNumbers ? (
+        <div className="space-y-1">
+          <div className="h-1.5 rounded-full bg-muted/60 overflow-hidden">
+            <div
+              className={cn(
+                "h-full transition-all",
+                latestBatch.status === "running" ? "bg-blue-500 animate-pulse" :
+                latestBatch.status === "failed" ? "bg-red-500" :
+                latestBatch.status === "timed_out" ? "bg-amber-500" :
+                "bg-emerald-500"
+              )}
+              style={{ width: total > 0 ? `${Math.min(100, (dispatched / total) * 100)}%` : "0%" }}
+            />
+          </div>
+        </div>
+      ) : (
+        <RunProgressBar run={run} />
+      )}
 
       {/* Status counters */}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="font-medium">
-          {succeeded + failed}/{total} suburbs
+          {dispatched}/{total} suburbs
           {inProgress > 0 && (
             <span className="text-blue-600 dark:text-blue-400"> · {inProgress} in progress</span>
+          )}
+          {useBatchNumbers && latestBatch.status === "running" && (
+            <span className="text-blue-600 dark:text-blue-400 ml-1">(dispatch running)</span>
           )}
         </span>
         {allFailed && (
@@ -694,6 +806,39 @@ function RunSummary({ run, isBoundingBox, expanded, onToggle, onDrillDispatch })
         <span>·</span>
         <span>Duration: {fmtDurationSec(runDurationSec)}</span>
       </div>
+
+      {/* When batch-level numbers are being used, let the user drill down
+          into the 15-min bucket (latest sync_runs row). This keeps the
+          authoritative "183/183 cohort" line clean while still exposing the
+          "but what did the latest bucket do?" detail on demand. */}
+      {useBatchNumbers && run.batch_label && (
+        <div className="pt-1 border-t border-border/40">
+          <button
+            type="button"
+            onClick={() => setShowBreakdown((v) => !v)}
+            className="flex items-center gap-1 text-[9px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wide font-semibold"
+          >
+            {showBreakdown ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            <span>Latest 15-min bucket</span>
+            <span className="font-normal normal-case tracking-normal ml-1 tabular-nums">
+              · {bucketSucceeded + bucketFailed}/{bucketTotal} · Batch {run.batch_label}
+            </span>
+          </button>
+          {showBreakdown && (
+            <div className="mt-1 pl-4 text-[10px] text-muted-foreground space-y-0.5">
+              <div>
+                Bucket started: <span className="font-mono">{fmtRelativeTs(run.run_started_at)}</span>
+              </div>
+              <div>
+                Last activity: <span className="font-mono">{fmtRelativeTs(run.run_last_activity)}</span>
+              </div>
+              <div>
+                {bucketSucceeded} succeeded · {bucketFailed} failed · {bucketInProgress} running
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Failed-suburbs list on partial fail */}
       {hasPartialFail && !expanded && (
@@ -973,7 +1118,10 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
 
   // Pull aggregated runs from the view + active chunked batch (for cross-batch
   // "in progress" continuity that sync_logs alone can't tell us about).
-  const { runs: syncRuns, activeBatch } = usePulseSyncRuns(sourceConfig.source_id, 10);
+  // `latestBatch` is the authoritative "last cron dispatch" counter (spans all
+  // 15-min buckets of a chunked run); `latestRun` is only the latest 15-min
+  // slice from pulse_sync_runs and can under-count.
+  const { runs: syncRuns, activeBatch, latestBatch } = usePulseSyncRuns(sourceConfig.source_id, 10);
   const latestRun = syncRuns[0] || null;
   const historyRuns = syncRuns.slice(1);
   const isBoundingBox = sourceConfig.approach === "bounding_box";
@@ -1213,6 +1361,7 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
         ) : latestRun ? (
           <RunSummary
             run={latestRun}
+            latestBatch={latestBatch}
             isBoundingBox={isBoundingBox}
             expanded={runExpanded}
             onToggle={isBoundingBox ? null : () => setRunExpanded((v) => !v)}
@@ -1851,7 +2000,9 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
         .from("pulse_sync_logs")
         .select(
           "id, source_id, source_label, status, started_at, completed_at, " +
-          "result_summary, triggered_by, triggered_by_name, apify_run_id, error_message",
+          "result_summary, triggered_by, triggered_by_name, apify_run_id, error_message, " +
+          // Batch attribution (migration 088) — rendered as "3/10" chip below.
+          "batch_id, batch_number, total_batches",
           { count: "exact" }
         )
         .order("started_at", { ascending: false });
@@ -2072,7 +2223,7 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                 : "No sync logs yet."}
             </p>
           ) : (
-            <table className="w-full text-xs min-w-[640px]">
+            <table className="w-full text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b">
                   <th className="text-left pb-2 font-medium text-muted-foreground">Source</th>
@@ -2080,6 +2231,7 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                   <th className="text-left pb-2 font-medium text-muted-foreground">Started</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Duration</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Records</th>
+                  <th className="text-left pb-2 font-medium text-muted-foreground" title="Chunked dispatch batch (N of M). Blank for ad-hoc/manual syncs.">Batch</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Triggered by</th>
                   <th className="pb-2" />
                 </tr>
@@ -2094,6 +2246,19 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                     <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">{fmtTs(log.started_at)}</td>
                     <td className="py-2 pr-3 text-muted-foreground">{fmtDuration(log.started_at, log.completed_at)}</td>
                     <td className="py-2 pr-3 text-muted-foreground">{recordsSummary(log)}</td>
+                    <td className="py-2 pr-3">
+                      {log.batch_number != null && log.total_batches != null ? (
+                        <Badge
+                          variant="outline"
+                          className="text-[9px] px-1.5 py-0 tabular-nums font-mono"
+                          title={log.batch_id ? `Batch ${log.batch_number} of ${log.total_batches} — batch_id ${log.batch_id.slice(0, 8)}…` : undefined}
+                        >
+                          {log.batch_number}/{log.total_batches}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
+                    </td>
                     <td className="py-2 pr-3 text-muted-foreground text-[10px] max-w-[140px] truncate" title={log.triggered_by_name || log.triggered_by || ""}>
                       {log.triggered_by_name || log.triggered_by || "—"}
                     </td>
