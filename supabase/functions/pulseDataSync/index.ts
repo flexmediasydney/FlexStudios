@@ -366,6 +366,12 @@ serveWithAudit('pulseDataSync', async (req) => {
       batch_id = null,
       batch_number = null,
       total_batches = null,
+      // Queue-based dispatch (migration 093). Set by pulseFireWorker via
+      // pulse_fire_queue_dispatch_via_net. pulseDataSync MUST call back via
+      // pulse_fire_queue_record_outcome on success/failure so the queue row
+      // transitions out of 'running' state. If this id is present and we
+      // forget to call back, the worker's reconciler will re-queue after 5min.
+      fire_queue_id = null,
     } = body;
 
     // ── v3 config-driven dispatch helpers ────────────────────────────────
@@ -547,6 +553,21 @@ serveWithAudit('pulseDataSync', async (req) => {
           }).eq('id', syncLogId);
         } catch (logErr) {
           console.error('pulseDataSync: failed to mark sync log as timed_out:', logErr);
+        }
+      }
+      // Queue callback (migration 093): timeout counts as a transient failure
+      // so the worker reschedules with backoff rather than dead-lettering.
+      if (fire_queue_id) {
+        try {
+          await admin.rpc('pulse_fire_queue_record_outcome', {
+            p_id: fire_queue_id,
+            p_success: false,
+            p_error: `pulseDataSync wall-budget exceeded (${suburbsProcessed.length}/${suburbs.length} suburbs)`,
+            p_category: 'transient',
+            p_sync_log_id: syncLogId,
+          });
+        } catch (qErr) {
+          console.error('pulseDataSync: fire_queue callback (timeout) failed:', qErr);
         }
       }
       return jsonResponse({
@@ -1591,6 +1612,21 @@ serveWithAudit('pulseDataSync', async (req) => {
       } catch { /* non-fatal */ }
     }
 
+    // Queue callback (migration 093): close the loop for pulseFireWorker.
+    // Without this, the queue row stays 'running' and the worker's reconciler
+    // will re-queue us after 5 min — which would be a double-sync bug.
+    if (fire_queue_id) {
+      try {
+        await admin.rpc('pulse_fire_queue_record_outcome', {
+          p_id: fire_queue_id,
+          p_success: true,
+          p_sync_log_id: syncLogId,
+        });
+      } catch (qErr) {
+        console.error('pulseDataSync: fire_queue callback (success) failed:', qErr);
+      }
+    }
+
     return jsonResponse({
       success: true,
       _version: 'v2.0',
@@ -1625,6 +1661,7 @@ serveWithAudit('pulseDataSync', async (req) => {
 
   } catch (error: any) {
     console.error('pulseDataSync error:', error);
+    const errMsg = (error?.message || String(error) || 'unknown error').substring(0, 2000);
     // CRITICAL: Always mark the sync log as failed so pulseFireScrapes' 30-min
     // "already running" guard doesn't block subsequent scrapes. Use a DIRECT
     // admin client update (not the PulseSyncLog entity helper) so wrapper
@@ -1632,7 +1669,6 @@ serveWithAudit('pulseDataSync', async (req) => {
     // doesn't prevent us from returning an error response to the caller.
     if (syncLogId) {
       try {
-        const errMsg = (error?.message || String(error) || 'unknown error').substring(0, 2000);
         await admin.from('pulse_sync_logs').update({
           status: 'failed',
           completed_at: new Date().toISOString(),
@@ -1643,6 +1679,31 @@ serveWithAudit('pulseDataSync', async (req) => {
         console.error('pulseDataSync: failed to mark sync log as failed:', logErr);
       }
     }
-    return errorResponse(error?.message || 'pulseDataSync failed');
+
+    // Queue callback (migration 093): record failure so the item is either
+    // re-queued with backoff or dead-lettered based on attempts/category.
+    // Categorize: 4xx-like fatal misconfigs are permanent; Apify 429 / rate
+    // limit substrings are rate_limit; everything else transient.
+    if (body?.fire_queue_id) {
+      const msgLc = errMsg.toLowerCase();
+      const category =
+        msgLc.includes('429') || msgLc.includes('rate limit') || msgLc.includes('rate-limit') ? 'rate_limit' :
+        msgLc.includes('missing') && msgLc.includes('config') ? 'permanent' :
+        msgLc.includes('apify_token') ? 'permanent' :
+        'transient';
+      try {
+        await admin.rpc('pulse_fire_queue_record_outcome', {
+          p_id: body.fire_queue_id,
+          p_success: false,
+          p_error: errMsg,
+          p_category: category,
+          p_sync_log_id: syncLogId,
+        });
+      } catch (qErr) {
+        console.error('pulseDataSync: fire_queue callback (failure) failed:', qErr);
+      }
+    }
+
+    return errorResponse(errMsg);
   }
 });
