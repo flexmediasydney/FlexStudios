@@ -26,7 +26,7 @@ import { Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   TrendingUp, Users, Home, Clock, AlertTriangle, CheckCircle2, DollarSign,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
   BarChart3, User, Loader2, BookOpen, Database, History, Sparkles, Palette,
-  UserPlus, X
+  UserPlus, X, Copy, Check, Map as MapIcon, ChevronRight, Download
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -114,6 +114,47 @@ function hexToRgba(hex, alpha) {
 }
 
 /**
+ * Rank suburbs by listing count within an agency's active listings (#25).
+ */
+function computeSuburbRanking(listings) {
+  if (!Array.isArray(listings) || listings.length === 0) return [];
+  const counts = new Map();
+  for (const l of listings) {
+    const s = (l?.suburb || "").trim();
+    if (!s) continue;
+    counts.set(s, (counts.get(s) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([suburb, count]) => ({ suburb, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/**
+ * Write rows to a CSV file with an optional UTF-8 BOM prefix (#29). The BOM
+ * is important for Excel to autodetect the encoding on non-ASCII agent
+ * names (O'Neill, accented chars).
+ */
+function exportCsvWithBom(filename, header, rows) {
+  const escape = (v) => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [header.join(",")];
+  for (const r of rows) lines.push(header.map((h) => escape(r[h])).join(","));
+  const body = "\uFEFF" + lines.join("\n");
+  const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const el = document.createElement("a");
+  el.href = url;
+  el.download = filename;
+  document.body.appendChild(el);
+  el.click();
+  document.body.removeChild(el);
+  URL.revokeObjectURL(url);
+}
+
+/**
  * Aggregate sales_breakdown across an agency's roster. pulse_agencies has
  * no sales_breakdown column, so the dossier computes this client-side from
  * the per-agent rows. Sums counts; weights median price / days-on-site by
@@ -188,6 +229,48 @@ function sortRoster(list, sortKey) {
 
 const normName = (s) =>
   (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+
+/* #30: inline address cluster — text + Copy + "Open in Maps" icon. */
+function AddressCluster({ address, className }) {
+  const [copied, setCopied] = useState(false);
+  if (!address) return null;
+  const doCopy = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
+  const mapsHref = `https://www.google.com/maps?q=${encodeURIComponent(address)}`;
+  return (
+    <span className={cn("inline-flex items-center gap-1.5", className)}>
+      <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <span className="truncate">{address}</span>
+      <button
+        type="button"
+        onClick={doCopy}
+        title={copied ? "Copied!" : "Copy address"}
+        className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+      </button>
+      <a
+        href={mapsHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        title="Open in Google Maps"
+        className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <MapIcon className="h-3 w-3" />
+      </a>
+    </span>
+  );
+}
 
 const parseJSON = (val, field = "<unknown>") => {
   if (!val) return null;
@@ -337,8 +420,13 @@ const SectionHeader = ({ icon: Icon, children, count }) => (
 
 /* ── Stat box ────────────────────────────────────────────────────────────────── */
 
-const StatBox = ({ value, label }) => (
-  <div className="bg-muted/40 rounded-lg p-2.5 text-center">
+/* #31: StatBox now accepts an optional brand color for a 3px left border. */
+const StatBox = ({ value, label, brandColor, title }) => (
+  <div
+    className="bg-muted/40 rounded-lg p-2.5 text-center"
+    style={brandColor ? { borderLeft: `3px solid ${brandColor}` } : undefined}
+    title={title}
+  >
     <p className="text-lg font-bold">{value}</p>
     <p className="text-[9px] text-muted-foreground">{label}</p>
   </div>
@@ -433,6 +521,11 @@ export default function PulseIntelligencePanel({
   const [mappingActionBusy, setMappingActionBusy] = useState(false);
   // AG05: roster sort — default = Active listings
   const [rosterSort, setRosterSort] = useState(ROSTER_SORT_DEFAULT);
+  // #25: toggle all suburbs
+  const [showAllSuburbs, setShowAllSuburbs] = useState(false);
+  // #28: bulk-select set of pulse_agent ids (uncrm'd only).
+  const [selectedAgentIds, setSelectedAgentIds] = useState(() => new Set());
+  const [bulkAddingToCrm, setBulkAddingToCrm] = useState(false);
   const navigate = useNavigate();
 
   /* ── IP01: Single-RPC dossier fetch ──────────────────────────────────────
@@ -668,14 +761,139 @@ export default function PulseIntelligencePanel({
       const name = normName(pulseData.name || crmEntity?.name);
       if (name) base = legacyAgents.filter(a => normName(a.agency_name) === name);
     }
-    return sortRoster(base, rosterSort);
-  }, [USE_DOSSIER_RPC, dossier, entityType, pulseData, crmEntity, legacyAgents, rosterSort]);
+    return sortRoster(base, rosterSort, rosterSortDir);
+  }, [USE_DOSSIER_RPC, dossier, entityType, pulseData, crmEntity, legacyAgents, rosterSort, rosterSortDir]);
 
   // AG06: aggregate sales_breakdown from roster for the agency dossier chart.
   const rosterSalesBreakdown = useMemo(
     () => aggregateRosterSalesBreakdown(agencyAgents),
     [agencyAgents]
   );
+
+  // #25: per-suburb ranking from agency listings (agency dossier only).
+  const suburbRanking = useMemo(
+    () => (entityType === "agency" ? computeSuburbRanking(entityListings) : []),
+    [entityType, entityListings]
+  );
+
+  // #28: toggle a single agent id in the bulk-select set (uncrm'd only).
+  const toggleAgentSelection = useCallback((ag) => {
+    if (!ag) return;
+    const mapping = agentMappingIndex.get(`pid:${ag.id}`) || (ag.rea_agent_id ? agentMappingIndex.get(`rea:${ag.rea_agent_id}`) : null);
+    if (mapping?.crm_entity_id) return; // already in CRM — not selectable
+    setSelectedAgentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(ag.id)) next.delete(ag.id);
+      else next.add(ag.id);
+      return next;
+    });
+    // Note: agentMappingIndex is defined below — useCallback captures by closure
+    // at next render, so an initial-render toggle is fine because state starts
+    // empty. Keeping the dep array empty avoids circular useCallback deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // #28: bulk add uncrm'd selected agents to CRM. Fails-soft per row.
+  const handleBulkAddAgentsToCrm = useCallback(async () => {
+    if (selectedAgentIds.size === 0) return;
+    setBulkAddingToCrm(true);
+    let ok = 0, fail = 0;
+    try {
+      const targets = agencyAgents.filter((ag) => selectedAgentIds.has(ag.id));
+      for (const ag of targets) {
+        try {
+          // Resolve / create agency for this agent (defaults to current)
+          let agencyId = null;
+          if (ag.agency_rea_id) {
+            const { data: existing } = await supabase
+              .from("agencies")
+              .select("id")
+              .eq("rea_agency_id", ag.agency_rea_id)
+              .maybeSingle();
+            agencyId = existing?.id || null;
+          }
+          if (!agencyId && ag.agency_name) {
+            const newAg = await api.entities.Agency.create({
+              name: ag.agency_name,
+              rea_agency_id: ag.agency_rea_id || null,
+              source: "pulse",
+            });
+            agencyId = newAg?.id;
+          }
+          const newAgent = await api.entities.Agent.create({
+            full_name: ag.full_name || "Unknown",
+            email: ag.email || null,
+            mobile: ag.mobile || null,
+            business_phone: ag.business_phone || null,
+            job_title: ag.job_title || null,
+            current_agency_id: agencyId,
+            rea_agent_id: ag.rea_agent_id || null,
+            source: "pulse",
+          });
+          await api.entities.PulseCrmMapping.create({
+            entity_type: "agent",
+            pulse_entity_id: ag.id,
+            crm_entity_id: newAgent.id,
+            rea_id: ag.rea_agent_id || null,
+            match_type: "manual",
+            confidence: "confirmed",
+          });
+          await api.entities.PulseAgent.update(ag.id, { is_in_crm: true });
+          ok += 1;
+        } catch (err) {
+          console.error(`[#28] Bulk add failed for agent ${ag.id}:`, err);
+          fail += 1;
+        }
+      }
+      await refetchEntityList("PulseCrmMapping").catch(() => {});
+      await refetchEntityList("PulseAgent").catch(() => {});
+      await refetchEntityList("Agent").catch(() => {});
+      await refetchDossier();
+      if (ok > 0) toast.success(`Added ${ok} agent${ok > 1 ? "s" : ""} to CRM${fail > 0 ? ` (${fail} failed)` : ""}`);
+      if (ok === 0 && fail > 0) toast.error(`All ${fail} adds failed. Check console.`);
+      setSelectedAgentIds(new Set());
+    } finally {
+      setBulkAddingToCrm(false);
+    }
+  }, [selectedAgentIds, agencyAgents, refetchDossier]);
+
+  // #29: export roster CSV (UTF-8 BOM).
+  const handleExportRoster = useCallback(() => {
+    if (!agencyAgents || agencyAgents.length === 0) return;
+    const header = [
+      "full_name", "email", "mobile", "job_title",
+      "sales_as_lead", "reviews_avg", "is_in_crm",
+    ];
+    const rows = agencyAgents.map((ag) => {
+      const mapping = agentMappingIndex.get(`pid:${ag.id}`) || (ag.rea_agent_id ? agentMappingIndex.get(`rea:${ag.rea_agent_id}`) : null);
+      return {
+        full_name: ag.full_name || "",
+        email: ag.email || "",
+        mobile: ag.mobile || ag.business_phone || "",
+        job_title: ag.job_title || "",
+        sales_as_lead: ag.sales_as_lead ?? ag.total_sold_12m ?? "",
+        reviews_avg: ag.reviews_avg ?? ag.rea_rating ?? "",
+        is_in_crm: mapping?.crm_entity_id ? "true" : "false",
+      };
+    });
+    const slug = (pulseData?.name || "agency")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 40);
+    exportCsvWithBom(
+      `roster_${slug}_${new Date().toISOString().slice(0, 10)}.csv`,
+      header, rows
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agencyAgents, pulseData]);
+
+  // #24: deep-link to Listings tab filtered to this agency.
+  const handleViewAllAgencyListings = useCallback(() => {
+    const reaId = pulseData?.rea_agency_id || crmEntity?.rea_agency_id;
+    if (!reaId) return;
+    navigate(`/IndustryPulse?tab=listings&agency_rea_id=${encodeURIComponent(reaId)}`);
+  }, [pulseData, crmEntity, navigate]);
 
   // Sales breakdown / suburbs — derived from pulse_record, path-independent
   const salesBreakdown = useMemo(
@@ -948,6 +1166,7 @@ export default function PulseIntelligencePanel({
       {/* ═══ AGENT DOSSIER ═══════════════════════════════════════════════ */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {entityType === "agent" && a && (<>
+        <UITabsContent value="overview" className="space-y-4 mt-2" hidden={dossierTab !== "overview"}>
 
         {/* ── 2. Profile Card ──────────────────────────────────────────── */}
         <Card>
@@ -1089,49 +1308,44 @@ export default function PulseIntelligencePanel({
           </CardContent>
         </Card>
 
-        {/* ── 4. Active Listings (For Sale + Rent) ─────────────────────── */}
-        <Card>
-          <CardContent className="p-4">
-            <SectionHeader icon={Home} count={activeListings.length}>Active Listings</SectionHeader>
-            {activeListings.length > 0 ? (
-              <div className="space-y-1 max-h-72 overflow-y-auto">
-                {activeListings.slice(0, 20).map(l => (
-                  <ListingRow key={l.id} l={l} />
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground/60">No active listings found</p>
-            )}
-          </CardContent>
-        </Card>
+        {/* Active + Sold moved into Listings tab below (#71) */}
 
-        {/* ── 5. Recently Sold ─────────────────────────────────────────── */}
-        <Card>
-          <CardContent className="p-4">
-            <SectionHeader icon={DollarSign} count={soldListings.length}>Recently Sold</SectionHeader>
-            {soldListings.length > 0 ? (
-              <div className="space-y-1 max-h-64 overflow-y-auto">
-                {soldListings.slice(0, 20).map(l => (
-                  <ListingRow key={l.id} l={l} showSoldInfo />
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground/60">No sold listings found</p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* ── 6. Sales Breakdown ───────────────────────────────────────── */}
+        {/* ── 6. Sales Breakdown — #74 clickable bars filter Listings tab */}
         {salesBreakdown && Object.keys(salesBreakdown).length > 0 && (
-          <Card>
+          <Card id="dossier-breakdown" className={cn("print-section-break transition-shadow", flashSection === "breakdown" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
-              <SectionHeader icon={BarChart3}>Sales by Property Type</SectionHeader>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <SectionHeader icon={BarChart3}>Sales by Property Type</SectionHeader>
+                {breakdownTypeFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setBreakdownTypeFilter(null)}
+                    className="text-[9px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                    title="Clear property-type filter"
+                  >
+                    <X className="h-2.5 w-2.5" /> Clear
+                  </button>
+                )}
+              </div>
               <div className="space-y-1.5">
                 {Object.entries(salesBreakdown).map(([type, data]) => {
                   const maxCount = Math.max(...Object.values(salesBreakdown).map(d => d.count || 0), 1);
                   const pct = Math.round(((data.count || 0) / maxCount) * 100);
+                  const isActive = breakdownTypeFilter === type;
                   return (
-                    <div key={type} className="space-y-0.5">
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        setBreakdownTypeFilter(isActive ? null : type);
+                        handleDossierTabChange("listings");
+                      }}
+                      className={cn(
+                        "w-full text-left space-y-0.5 rounded px-1 py-0.5 transition-colors",
+                        isActive ? "bg-red-50 dark:bg-red-950/20 ring-1 ring-red-400/40" : "hover:bg-muted/40"
+                      )}
+                      title={`Filter listings to ${type}`}
+                    >
                       <div className="flex items-center justify-between text-xs">
                         <span className="capitalize font-medium">{type}</span>
                         <span className="text-muted-foreground tabular-nums">
@@ -1141,9 +1355,9 @@ export default function PulseIntelligencePanel({
                         </span>
                       </div>
                       <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full bg-red-400 dark:bg-red-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        <div className={cn("h-full rounded-full transition-all", isActive ? "bg-red-600 dark:bg-red-400" : "bg-red-400 dark:bg-red-500")} style={{ width: `${pct}%` }} />
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -1153,7 +1367,7 @@ export default function PulseIntelligencePanel({
 
         {/* ── 7. Awards ────────────────────────────────────────────────── */}
         {a.awards && (
-          <Card>
+          <Card id="dossier-awards" className={cn("print-section-break transition-shadow", flashSection === "awards" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
               <SectionHeader icon={Award}>Awards</SectionHeader>
               <div className="text-xs text-muted-foreground whitespace-pre-line bg-amber-50/50 dark:bg-amber-950/10 rounded p-2.5 border border-amber-200/30">
@@ -1165,7 +1379,7 @@ export default function PulseIntelligencePanel({
 
         {/* ── 7b. Biography ────────────────────────────────────────── */}
         {a.biography && (
-          <Card>
+          <Card className="print-section-break">
             <CardContent className="p-4">
               <SectionHeader icon={BookOpen}>About</SectionHeader>
               <p className="text-sm text-muted-foreground whitespace-pre-line">{a.biography}</p>
@@ -1175,7 +1389,7 @@ export default function PulseIntelligencePanel({
 
         {/* ── 8. Specialty Suburbs ─────────────────────────────────────── */}
         {suburbsList.length > 0 && (
-          <Card>
+          <Card id="dossier-suburbs" className={cn("print-section-break transition-shadow", flashSection === "suburbs" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
               <SectionHeader icon={MapPin}>Specialty Suburbs</SectionHeader>
               <div className="flex flex-wrap gap-1.5">
@@ -1191,7 +1405,7 @@ export default function PulseIntelligencePanel({
 
         {/* ── 9. Social & Profile Links ────────────────────────────────── */}
         {(a.social_facebook || a.social_instagram || a.social_linkedin || a.rea_profile_url) && (
-          <Card>
+          <Card id="dossier-social" className={cn("print-section-break transition-shadow", flashSection === "social" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4 space-y-2">
               {(a.social_facebook || a.social_instagram || a.social_linkedin) && (
                 <div>
@@ -1234,7 +1448,7 @@ export default function PulseIntelligencePanel({
             IP12: unmount the whole card when there's no mapping AND no
             cross-linked projects — nothing to show, no reason for chrome. */}
         {(mapping || entityProjects.length > 0) && (
-          <Card>
+          <Card id="dossier-crm" className={cn("print-section-break transition-shadow", flashSection === "crm" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
               <SectionHeader icon={Briefcase} count={entityProjects.length}>CRM Cross-Reference</SectionHeader>
               {mapping ? (
@@ -1341,12 +1555,66 @@ export default function PulseIntelligencePanel({
             )}
           </CardContent>
         </Card>
+        </UITabsContent>
+
+        {/* ── Listings tab (agent): Active + Sold, filtered by breakdown click */}
+        <UITabsContent value="listings" className="space-y-4 mt-2" forceMount={dossierTab === "listings" ? undefined : undefined} hidden={dossierTab !== "listings"}>
+          <Card id="dossier-active" className={cn("print-section-break transition-shadow", flashSection === "active" && "ring-2 ring-primary/60 ring-offset-2")}>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <SectionHeader icon={Home} count={activeListings.length}>Active Listings</SectionHeader>
+                {breakdownTypeFilter && (
+                  <span className="inline-flex items-center gap-1 text-[9px] text-muted-foreground">
+                    <Filter className="h-2.5 w-2.5" />
+                    filter: <span className="capitalize font-medium text-foreground">{breakdownTypeFilter}</span>
+                    <button type="button" onClick={() => setBreakdownTypeFilter(null)} className="text-[9px] hover:text-foreground inline-flex items-center">
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                )}
+              </div>
+              {(() => {
+                const rows = breakdownTypeFilter
+                  ? activeListings.filter(l => (l.property_type || "").toLowerCase() === breakdownTypeFilter.toLowerCase())
+                  : activeListings;
+                return rows.length > 0 ? (
+                  <div className="space-y-1 max-h-72 overflow-y-auto print-expand">
+                    {rows.slice(0, 20).map(l => (<ListingRow key={l.id} l={l} />))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/60">
+                    {breakdownTypeFilter ? `No active ${breakdownTypeFilter} listings` : "No active listings found"}
+                  </p>
+                );
+              })()}
+            </CardContent>
+          </Card>
+
+          <Card id="dossier-sold" className={cn("print-section-break transition-shadow", flashSection === "sold" && "ring-2 ring-primary/60 ring-offset-2")}>
+            <CardContent className="p-4">
+              <SectionHeader icon={DollarSign} count={soldListings.length}>Recently Sold</SectionHeader>
+              {(() => {
+                const rows = breakdownTypeFilter
+                  ? soldListings.filter(l => (l.property_type || "").toLowerCase() === breakdownTypeFilter.toLowerCase())
+                  : soldListings;
+                return rows.length > 0 ? (
+                  <div className="space-y-1 max-h-64 overflow-y-auto print-expand">
+                    {rows.slice(0, 20).map(l => (<ListingRow key={l.id} l={l} showSoldInfo />))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/60">No sold listings found</p>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        </UITabsContent>
       </>)}
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* ═══ AGENCY DOSSIER ══════════════════════════════════════════════ */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {entityType === "agency" && a && (<>
+        <UITabsContent value="overview" className="space-y-4 mt-2" hidden={dossierTab !== "overview"}>
 
         {/* ── 2. Agency Profile Card ─────────────────────────────────────
             AG07: brand color accent — 3px top-border in brand_color_primary +
@@ -1360,7 +1628,7 @@ export default function PulseIntelligencePanel({
             ? { borderTop: `3px solid ${brand}`, backgroundColor: tint }
             : undefined;
           return (
-            <Card style={cardStyle}>
+            <Card id="dossier-profile" style={cardStyle} className={cn("print-section-break transition-shadow", flashSection === "profile" && "ring-2 ring-primary/60 ring-offset-2")}>
               <CardContent className="p-4">
                 <div className="flex items-start gap-4">
                   {a.logo_url ? (
@@ -1375,14 +1643,36 @@ export default function PulseIntelligencePanel({
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-bold text-lg leading-tight">{a.name}</h3>
+                    {/* #31: agency name — 6% brand bg chip when populated. */}
+                    <h3
+                      className="font-bold text-lg leading-tight rounded px-1 -mx-1 inline-block"
+                      style={
+                        brand
+                          ? { backgroundColor: hexToRgba(a.brand_color_primary, 0.06) }
+                          : undefined
+                      }
+                    >{a.name}</h3>
                     {(a.suburb || a.address) && (
-                      <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
-                        <MapPin className="h-3 w-3" />
-                        {a.address || a.suburb}
-                        {a.state ? `, ${a.state}` : ""}
-                        {a.postcode ? ` ${a.postcode}` : ""}
-                      </div>
+                      (() => {
+                        const parts = [
+                          a.address || a.suburb,
+                          a.state ? `, ${a.state}` : "",
+                          a.postcode ? ` ${a.postcode}` : "",
+                        ].filter(Boolean).join("");
+                        // #30: if we have a meaningful address, render the
+                        // Copy + Maps cluster. Otherwise keep the plain pin.
+                        const hasFullAddr = !!a.address;
+                        return hasFullAddr ? (
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            <AddressCluster address={parts} />
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                            <MapPin className="h-3 w-3" />
+                            {parts}
+                          </div>
+                        );
+                      })()
                     )}
                     {/* Contact row — with primary + alternates for email/phone.
                         email is NEW on pulse_agencies (migration 108+).
@@ -1394,27 +1684,30 @@ export default function PulseIntelligencePanel({
                         <div className="mt-1.5 space-y-1">
                           <div className="flex items-center gap-3 flex-wrap">
                             {phoneInfo.value && (
-                              <div className="flex items-center gap-1 text-xs">
+                              <div className="group flex items-center gap-1 text-xs">
                                 <Phone className="h-3 w-3 text-muted-foreground" />
                                 <a href={`tel:${phoneInfo.value}`} className="text-primary hover:underline">{phoneInfo.value}</a>
                                 <ContactProvBadges info={phoneInfo} />
+                                <CopyInlineButton value={phoneInfo.value} label="Copy phone" />
                               </div>
                             )}
                             {emailInfo.value && (
-                              <div className="flex items-center gap-1 text-xs">
+                              <div className="group flex items-center gap-1 text-xs">
                                 <Mail className="h-3 w-3 text-muted-foreground" />
                                 <a href={`mailto:${emailInfo.value}`} className="text-primary hover:underline">{emailInfo.value}</a>
                                 <ContactProvBadges info={emailInfo} />
+                                <CopyInlineButton value={emailInfo.value} label="Copy email" />
                               </div>
                             )}
                             {a.website && (
-                              <div className="flex items-center gap-1 text-xs">
+                              <div className="group flex items-center gap-1 text-xs">
                                 <Globe className="h-3 w-3 text-muted-foreground" />
                                 <a
                                   href={a.website.startsWith("http") ? a.website : `https://${a.website}`}
                                   target="_blank" rel="noopener noreferrer"
                                   className="text-primary hover:underline truncate max-w-[200px]"
                                 >{a.website}</a>
+                                <CopyInlineButton value={a.website} label="Copy website" />
                               </div>
                             )}
                           </div>
@@ -1443,16 +1736,14 @@ export default function PulseIntelligencePanel({
         {/* ── 2b. Head Office (migration 108+: HQ address) ─────────────────
             AG22: split out from the old "Branding" card so the section header
             doesn't say "Branding" when only an address is present (address
-            coverage ~60%, brand colors ~7%). */}
+            coverage ~60%, brand colors ~7%). #30: address cluster with
+            Copy + "Open in Maps" icons. */}
         {a.address_street && (
           <Card>
             <CardContent className="p-4">
               <SectionHeader icon={MapPin}>Head Office</SectionHeader>
-              <div className="flex items-start gap-2 text-xs">
-                <MapPin className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
-                <div className="min-w-0">
-                  <p className="font-medium">{a.address_street}</p>
-                </div>
+              <div className="text-xs font-medium">
+                <AddressCluster address={a.address_street} />
               </div>
             </CardContent>
           </Card>
@@ -1491,54 +1782,91 @@ export default function PulseIntelligencePanel({
         )}
 
         {/* ── 3. Key Metrics (4-col grid) ──────────────────────────────── */}
-        <Card>
-          <CardContent className="p-4">
-            <SectionHeader icon={TrendingUp}>Key Metrics</SectionHeader>
-            <div className="grid grid-cols-4 gap-2">
-              <StatBox value={agencyAgents.length || a.agent_count || 0} label="Total Agents" />
-              <StatBox value={a.active_listings || 0} label="Active Listings" />
-              <StatBox value={a.total_sold_12m || 0} label="Sold (12m)" />
-              <StatBox
-                value={a.avg_agent_rating ? Number(a.avg_agent_rating).toFixed(1) : "\u2014"}
-                label="Avg Agent Rating"
-              />
-            </div>
-          </CardContent>
-        </Card>
+        {(() => {
+          // #31: brand-color left border on each StatBox when populated.
+          const brandColor = hexToRgba(a.brand_color_primary, 1);
+          // AG12: weighted fallback rating + tooltip when avg_agent_rating is
+          // null (only ~9% populated) but we can compute from the roster.
+          const ratedCount = agencyAgents.filter(
+            (ag) => (ag?.reviews_avg || 0) > 0 && (ag?.reviews_count || 0) > 0
+          ).length;
+          let fallbackRating = null;
+          if (ratedCount > 0) {
+            const sumR = agencyAgents.reduce(
+              (s, ag) => s + (ag.reviews_avg > 0 && ag.reviews_count > 0 ? ag.reviews_avg * ag.reviews_count : 0),
+              0
+            );
+            const sumC = agencyAgents.reduce(
+              (s, ag) => s + (ag.reviews_avg > 0 && ag.reviews_count > 0 ? ag.reviews_count : 0),
+              0
+            );
+            fallbackRating = sumC > 0 ? +(sumR / sumC).toFixed(2) : null;
+          }
+          const displayRating = a.avg_agent_rating ?? fallbackRating ?? null;
+          const isFallback = a.avg_agent_rating == null && fallbackRating != null;
+          return (
+            <Card>
+              <CardContent className="p-4">
+                <SectionHeader icon={TrendingUp}>Key Metrics</SectionHeader>
+                <div className="grid grid-cols-4 gap-2">
+                  <StatBox brandColor={brandColor || undefined} value={agencyAgents.length || a.agent_count || 0} label="Total Agents" />
+                  <StatBox brandColor={brandColor || undefined} value={a.active_listings || 0} label="Active Listings" />
+                  <StatBox brandColor={brandColor || undefined} value={a.total_sold_12m || 0} label="Sold (12m)" />
+                  <StatBox
+                    brandColor={brandColor || undefined}
+                    title={
+                      isFallback
+                        ? `Computed from ${ratedCount} rostered agents' reviews`
+                        : undefined
+                    }
+                    value={displayRating ? Number(displayRating).toFixed(1) : "\u2014"}
+                    label="Avg Agent Rating"
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* ── 4. Agent Roster ──────────────────────────────────────────── */}
         {agencyAgents.length > 0 && (
-          <Card>
+          <Card id="dossier-roster" className={cn("print-section-break transition-shadow", flashSection === "roster" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
               <div className="flex items-center justify-between gap-2 mb-2">
                 <SectionHeader icon={Users} count={agencyAgents.length}>Agent Roster</SectionHeader>
-                {/* AG05: sort options — default "Active listings" matches the
-                    photography pitch ("who's shooting a lot right now?"). */}
-                {agencyAgents.length > 1 && (
-                  <label className="inline-flex items-center gap-1 text-[10px] text-muted-foreground mb-2">
-                    <span className="uppercase tracking-wide">Sort</span>
-                    <select
-                      value={rosterSort}
-                      onChange={(e) => setRosterSort(e.target.value)}
-                      className="h-6 text-[10px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
-                      aria-label="Sort roster by"
-                    >
-                      {ROSTER_SORT_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                )}
               </div>
-              <div className="border rounded-lg overflow-hidden">
+              <div className="border rounded-lg overflow-hidden print-expand">
                 <table className="w-full text-xs">
                   <thead className="bg-muted/30">
                     <tr>
-                      <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground">Agent</th>
-                      <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground">Position</th>
-                      <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground">Sold</th>
-                      <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground">Rating</th>
-                      <th className="px-2 py-1.5 w-12"></th>
+                      {/* #75 — column sort; click toggles direction on active column */}
+                      {(() => {
+                        const ArrowIcon = rosterSortDir === "asc" ? ArrowUp : ArrowDown;
+                        const col = (key, label, alignRight = false) => (
+                          <th
+                            className={cn(
+                              "px-2 py-1.5 font-semibold text-muted-foreground cursor-pointer select-none hover:text-foreground",
+                              alignRight ? "text-left" : "text-left"
+                            )}
+                            onClick={() => handleRosterSortClick(key)}
+                            aria-sort={rosterSort === key ? (rosterSortDir === "asc" ? "ascending" : "descending") : "none"}
+                          >
+                            <span className="inline-flex items-center gap-0.5">
+                              {label}
+                              {rosterSort === key && <ArrowIcon className="h-2.5 w-2.5" />}
+                            </span>
+                          </th>
+                        );
+                        return (
+                          <>
+                            {col("name", "Agent")}
+                            {col("position", "Position")}
+                            {col("sold", "Sold")}
+                            {col("rating", "Rating")}
+                            <th className="px-2 py-1.5 w-12"></th>
+                          </>
+                        );
+                      })()}
                     </tr>
                   </thead>
                   <tbody>
@@ -1588,59 +1916,32 @@ export default function PulseIntelligencePanel({
           </Card>
         )}
 
-        {/* ── 5. Agency Listings ───────────────────────────────────────── */}
-        {forSaleListings.length > 0 && (
-          <Card>
-            <CardContent className="p-4">
-              <SectionHeader icon={Home} count={forSaleListings.length}>For Sale</SectionHeader>
-              <div className="space-y-1 max-h-64 overflow-y-auto">
-                {forSaleListings.slice(0, 20).map(l => (
-                  <ListingRow key={l.id} l={l} />
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {/* Agency Listings moved to Listings tab below (#71) */}
 
-        {forRentListings.length > 0 && (
-          <Card>
-            <CardContent className="p-4">
-              <SectionHeader icon={Home} count={forRentListings.length}>For Rent</SectionHeader>
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {forRentListings.slice(0, 20).map(l => (
-                  <ListingRow key={l.id} l={l} />
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {soldListings.length > 0 && (
-          <Card>
-            <CardContent className="p-4">
-              <SectionHeader icon={DollarSign} count={soldListings.length}>Recently Sold</SectionHeader>
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {soldListings.slice(0, 20).map(l => (
-                  <ListingRow key={l.id} l={l} showSoldInfo />
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* ── 5b. Sales by Property Type (AG06) ─────────────────────────
+        {/* ── 5b. Sales by Property Type (AG06) — #74 clickable filter ─
             pulse_agencies has no sales_breakdown column (0% populated), so
-            we roll up the per-agent sales_breakdown jsonb across the roster.
-            Mirrors the agent dossier chart above. */}
+            we roll up the per-agent sales_breakdown jsonb across the roster. */}
         {rosterSalesBreakdown && Object.keys(rosterSalesBreakdown).length > 0 && (
-          <Card>
+          <Card id="dossier-breakdown" className={cn("print-section-break transition-shadow", flashSection === "breakdown" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
-              <SectionHeader icon={BarChart3}>
-                Sales by Property Type
-                <span className="text-[9px] font-normal normal-case text-muted-foreground/70 ml-1">
-                  rolled up from roster
-                </span>
-              </SectionHeader>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <SectionHeader icon={BarChart3}>
+                  Sales by Property Type
+                  <span className="text-[9px] font-normal normal-case text-muted-foreground/70 ml-1">
+                    rolled up from roster
+                  </span>
+                </SectionHeader>
+                {breakdownTypeFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setBreakdownTypeFilter(null)}
+                    className="text-[9px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                    title="Clear property-type filter"
+                  >
+                    <X className="h-2.5 w-2.5" /> Clear
+                  </button>
+                )}
+              </div>
               <div className="space-y-1.5">
                 {Object.entries(rosterSalesBreakdown).map(([type, data]) => {
                   const maxCount = Math.max(
@@ -1648,8 +1949,21 @@ export default function PulseIntelligencePanel({
                     1
                   );
                   const pct = Math.round(((data.count || 0) / maxCount) * 100);
+                  const isActive = breakdownTypeFilter === type;
                   return (
-                    <div key={type} className="space-y-0.5">
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        setBreakdownTypeFilter(isActive ? null : type);
+                        handleDossierTabChange("listings");
+                      }}
+                      className={cn(
+                        "w-full text-left space-y-0.5 rounded px-1 py-0.5 transition-colors",
+                        isActive ? "bg-red-50 dark:bg-red-950/20 ring-1 ring-red-400/40" : "hover:bg-muted/40"
+                      )}
+                      title={`Filter listings to ${type}`}
+                    >
                       <div className="flex items-center justify-between text-xs">
                         <span className="capitalize font-medium">{type}</span>
                         <span className="text-muted-foreground tabular-nums">
@@ -1659,9 +1973,9 @@ export default function PulseIntelligencePanel({
                         </span>
                       </div>
                       <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div className="h-full bg-red-400 dark:bg-red-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        <div className={cn("h-full rounded-full transition-all", isActive ? "bg-red-600 dark:bg-red-400" : "bg-red-400 dark:bg-red-500")} style={{ width: `${pct}%` }} />
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -1671,7 +1985,7 @@ export default function PulseIntelligencePanel({
 
         {/* ── 6. Active Suburbs ────────────────────────────────────────── */}
         {suburbsList.length > 0 && (
-          <Card>
+          <Card id="dossier-suburbs" className={cn("print-section-break transition-shadow", flashSection === "suburbs" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
               <SectionHeader icon={MapPin}>Active Suburbs</SectionHeader>
               <div className="flex flex-wrap gap-1.5">
@@ -1748,6 +2062,7 @@ export default function PulseIntelligencePanel({
             )}
           </CardContent>
         </Card>
+        </UITabsContent>
       </>)}
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
