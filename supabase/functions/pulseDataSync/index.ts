@@ -218,13 +218,22 @@ function parsePrice(raw: string | null): number | null {
 
 /**
  * Parse listing status from price text — detects "Under Contract", "Sold", "Auction" etc.
+ *
+ * IMPORTANT: auction phrasing like "Auction Unless Sold Prior", "Auction (unless sold prior)",
+ * "Auction | Unless Sold Prior", "AUCTION UNLESS SOLD PRIOR!" etc. contains the substring
+ * "sold" but the listing is still FOR SALE. We must not flip these to `sold`. We check
+ * for these conditional-auction phrases BEFORE the "sold" substring check, and we also
+ * guard the "sold" match with negative-context checks.
  */
 function parseListingStatus(priceText: string | null, defaultType: string): string {
   if (!priceText) return defaultType;
   const s = priceText.toLowerCase();
   if (s.includes('under contract') || s.includes('under offer')) return 'under_contract';
-  if (s.includes('sold')) return 'sold';
+  // Conditional-auction phrases: still for_sale, just auctioning with a "sell prior" option
+  // Match: "unless sold", "if not sold", "before sold", "prior to sold" (with any punctuation/spacing)
+  if (/\b(unless|if\s+not|before|prior\s+to)\s+sold\b/.test(s)) return defaultType;
   if (s.includes('auction')) return defaultType; // Still active, just auction method
+  if (s.includes('sold')) return 'sold';
   return defaultType;
 }
 
