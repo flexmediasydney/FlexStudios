@@ -185,7 +185,11 @@ serveWithAudit('pulseFireScrapes', async (req) => {
     }
 
     // ── Enqueue: one row per suburb ────────────────────────────────────────
-    const queueRows = eligible.map(s => {
+    // Each row gets a 1-based batch_number within this cohort. Queue order
+    // may not match dispatch order (priority / claim race), but the number
+    // is still a useful "3 of 72" tag on the source-card run history.
+    // Migration 121 plumbs this through to pulse_sync_logs.batch_number.
+    const queueRows = eligible.map((s, idx) => {
       // Inflate the actor_input template for this specific suburb
       const slug = s.name.toLowerCase().replace(/\s+/g, '-');
       const inflated: Record<string, any> = {};
@@ -211,6 +215,7 @@ serveWithAudit('pulseFireScrapes', async (req) => {
         actor_input: inflated,
         status: 'pending',
         triggered_by_name,
+        batch_number: idx + 1,
       };
     });
 

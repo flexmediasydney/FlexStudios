@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { Home, DollarSign, Clock, TrendingUp, MapPin, Users, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isActiveListing } from "@/components/pulse/utils/listingHelpers";
+import { isActiveListing, parsePriceText } from "@/components/pulse/utils/listingHelpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ const BRACKET_COLORS = ["#64748b", "#3b82f6", "#6366f1", "#8b5cf6", "#ec4899"];
 
 // ── Section 1: Summary Stats ──────────────────────────────────────────────────
 
-function StatCard({ label, value, icon: Icon, color }) {
+function StatCard({ label, value, icon: Icon, color, subLabel }) {
   return (
     <Card className="rounded-xl border-0 shadow-sm">
       <CardContent className="p-3 flex items-center gap-3">
@@ -80,6 +80,9 @@ function StatCard({ label, value, icon: Icon, color }) {
             {value}
           </p>
           <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
+          {subLabel ? (
+            <p className="text-[9px] text-muted-foreground/70 mt-0.5 tabular-nums">{subLabel}</p>
+          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -97,11 +100,29 @@ function SummaryStats({ pulseListings }) {
 
     const totalListings = onMarket.length;
 
-    const withPrice = onMarket.filter((l) => l.asking_price > 0);
+    // Price sample: prefer numeric `asking_price`; fall back to parsing
+    // `price_text` ("Offers above $1.2M", "$850,000", etc.). Skip rentals —
+    // weekly rent is not a property value. This grows the sample from ~32%
+    // to ~70% of for_sale listings and de-biases the average (numeric-only
+    // advertisers skew toward expensive properties).
+    const priceable = onMarket.filter((l) => l.listing_type !== "for_rent");
+    const withPrice = priceable
+      .map((l) => ({
+        ...l,
+        _effectivePrice:
+          l.asking_price && l.asking_price > 0
+            ? l.asking_price
+            : parsePriceText(l.price_text),
+      }))
+      .filter((l) => l._effectivePrice > 0);
     const avgPrice =
       withPrice.length > 0
-        ? Math.round(withPrice.reduce((s, l) => s + l.asking_price, 0) / withPrice.length)
+        ? Math.round(
+            withPrice.reduce((s, l) => s + l._effectivePrice, 0) / withPrice.length
+          )
         : 0;
+    const priceSampleSize = withPrice.length;
+    const priceSampleTotal = priceable.length;
 
     const withDom = pulseListings.filter((l) => l.days_on_market > 0);
     const avgDom =
@@ -113,7 +134,7 @@ function SummaryStats({ pulseListings }) {
       (l) => l.listed_date && new Date(l.listed_date) >= startOfMonth
     ).length;
 
-    return { totalListings, avgPrice, avgDom, newThisMonth };
+    return { totalListings, avgPrice, avgDom, newThisMonth, priceSampleSize, priceSampleTotal };
   }, [pulseListings]);
 
   return (
@@ -129,6 +150,7 @@ function SummaryStats({ pulseListings }) {
         value={fmtPrice(stats.avgPrice)}
         icon={DollarSign}
         color="text-green-500"
+        subLabel={`n = ${stats.priceSampleSize.toLocaleString()} of ${stats.priceSampleTotal.toLocaleString()}`}
       />
       <StatCard
         label="Avg Days on Market"
@@ -240,18 +262,32 @@ function TopListingAgentsTable({ pulseListings, crmAgents }) {
 // ── Section 3: Price Distribution ────────────────────────────────────────────
 
 function PriceDistributionChart({ pulseListings }) {
-  const data = useMemo(() => {
-    // On-market listings (for_sale + for_rent + under_contract) with a price.
-    // Previously for_sale-only — under_contract silently fell out.
-    const onMarket = pulseListings.filter(
-      (l) => isActiveListing(l) && l.asking_price > 0
+  const { data, sampleSize, sampleTotal } = useMemo(() => {
+    // On-market listings (for_sale + under_contract) with a price. Rentals
+    // excluded — weekly rent is not a property value. Previously limited to
+    // numeric `asking_price` only (~32% of for_sale); now falls back to
+    // parsing `price_text` which lifts the sample to ~70%.
+    const priceable = pulseListings.filter(
+      (l) => isActiveListing(l) && l.listing_type !== "for_rent"
     );
-    return PRICE_BRACKETS.map((bracket) => ({
-      label: bracket.label,
-      count: onMarket.filter(
-        (l) => l.asking_price >= bracket.min && l.asking_price < bracket.max
-      ).length,
-    }));
+    const withPrice = priceable
+      .map((l) => ({
+        _effectivePrice:
+          l.asking_price && l.asking_price > 0
+            ? l.asking_price
+            : parsePriceText(l.price_text),
+      }))
+      .filter((l) => l._effectivePrice > 0);
+    return {
+      data: PRICE_BRACKETS.map((bracket) => ({
+        label: bracket.label,
+        count: withPrice.filter(
+          (l) => l._effectivePrice >= bracket.min && l._effectivePrice < bracket.max
+        ).length,
+      })),
+      sampleSize: withPrice.length,
+      sampleTotal: priceable.length,
+    };
   }, [pulseListings]);
 
   const hasData = data.some((d) => d.count > 0);
@@ -263,7 +299,11 @@ function PriceDistributionChart({ pulseListings }) {
           <DollarSign className="h-4 w-4 text-green-500" />
           Price Distribution
         </CardTitle>
-        <p className="text-[10px] text-muted-foreground">For-sale listings by price bracket</p>
+        <p className="text-[10px] text-muted-foreground">
+          For-sale listings by price bracket
+          {" · "}
+          <span className="tabular-nums">n = {sampleSize.toLocaleString()} of {sampleTotal.toLocaleString()}</span>
+        </p>
       </CardHeader>
       <CardContent className="px-2 pb-4">
         {!hasData ? (

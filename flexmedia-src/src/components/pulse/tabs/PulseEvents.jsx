@@ -115,6 +115,16 @@ function deriveStatus(event) {
   return d < new Date() ? "attended" : "upcoming";
 }
 
+function relevanceChipClass(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400";
+  if (n <= 20) return "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400";
+  if (n <= 40) return "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300";
+  if (n <= 60) return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300";
+  if (n <= 80) return "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300";
+  return "bg-red-100 text-red-700 font-bold dark:bg-red-900/40 dark:text-red-300";
+}
+
 // ── Add Event Dialog ──────────────────────────────────────────────────────────
 
 const EMPTY_FORM = {
@@ -124,7 +134,7 @@ const EMPTY_FORM = {
   category: "other",
   source: "manual",
   location: "",
-  url: "",
+  source_url: "",
   description: "",
 };
 
@@ -256,8 +266,8 @@ function AddEventDialog({ open, onClose }) {
             <label className="text-xs font-medium text-muted-foreground">URL</label>
             <Input
               placeholder="https://…"
-              value={form.url}
-              onChange={(e) => set("url", e.target.value)}
+              value={form.source_url}
+              onChange={(e) => set("source_url", e.target.value)}
               className="h-8 text-sm"
             />
           </div>
@@ -340,15 +350,20 @@ function EventCard({ event, onUpdateStatus }) {
         </div>
 
         {/* Organiser + location */}
-        {(event.organiser || event.location) && (
+        {(event.organiser || event.location || event.venue) && (
           <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
             {event.organiser && (
               <span className="font-medium text-foreground">{event.organiser}</span>
             )}
-            {event.location && (
-              <span className="flex items-center gap-1">
-                <MapPin className="h-3 w-3 flex-shrink-0" />
-                {event.location}
+            {(event.venue || event.location) && (
+              <span className="flex items-start gap-1">
+                <MapPin className="h-3 w-3 flex-shrink-0 mt-0.5" />
+                <span className="flex flex-col leading-tight">
+                  {event.venue && (
+                    <span className="text-foreground">{event.venue}</span>
+                  )}
+                  {event.location && <span>{event.location}</span>}
+                </span>
               </span>
             )}
           </div>
@@ -376,12 +391,37 @@ function EventCard({ event, onUpdateStatus }) {
               {event.source}
             </span>
           )}
+          {Number.isFinite(Number(event.relevance_score)) && (
+            <span
+              className={cn(
+                "text-[10px] font-medium px-2 py-0.5 rounded-full",
+                relevanceChipClass(event.relevance_score)
+              )}
+              title="Relevance score"
+            >
+              {Number(event.relevance_score)}
+            </span>
+          )}
         </div>
 
+        {/* Tags */}
+        {Array.isArray(event.tags) && event.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {event.tags.map((tag, i) => (
+              <span
+                key={`${tag}-${i}`}
+                className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/60"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* URL */}
-        {event.url && (
+        {event.source_url && (
           <a
-            href={event.url}
+            href={event.source_url}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"

@@ -384,9 +384,16 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
   }
 
   // ── Open a sync_log row ───────────────────────────────────────────────
+  // Migration 121: populate source_label + suburb so the run-history row on
+  // the source card has something to render. We don't know the final batch
+  // counts yet at this point — the finalising update below fills in
+  // batch_number / total_batches / exact `X listings` once we've decided how
+  // many candidates this invocation is processing.
+  const initialLabel = `${SOURCE_ID} · ${priorityMode} · ${trigger}`;
   const { data: syncLog, error: syncLogErr } = await admin.from('pulse_sync_logs').insert({
     sync_type: 'pulse_detail_enrich',   // NOT NULL
     source_id: SOURCE_ID,
+    source_label: initialLabel,
     status: 'running',
     triggered_by: trigger,
     triggered_by_name: `pulseDetailEnrich:${trigger}:${priorityMode}`,
@@ -457,8 +464,12 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       // is completed/failed/running/timed_out (NOT ok/partial/error). Heavy
       // stats (message, cost, run ids) go to pulse_sync_log_payloads per
       // migration 095.
+      // Migration 121: stamp suburb so the UI shows "no candidates" rather
+      // than a blank row.
       await admin.from('pulse_sync_logs').update({
         status: 'completed', completed_at: new Date().toISOString(),
+        suburb: 'no candidates',
+        source_label: `rea_detail_enrich · no candidates · ${priorityMode}`,
         records_fetched: 0, records_updated: 0,
       }).eq('id', syncLogId);
       await admin.from('pulse_sync_log_payloads').upsert({
@@ -472,6 +483,8 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       // B46: schema-compliant (see above)
       await admin.from('pulse_sync_logs').update({
         status: 'completed', completed_at: new Date().toISOString(),
+        suburb: `${candidates.length} listing${candidates.length === 1 ? '' : 's'} (dry run)`,
+        source_label: `rea_detail_enrich · ${candidates.length} listings (dry run) · ${priorityMode}`,
         records_fetched: candidates.length,
       }).eq('id', syncLogId);
       await admin.from('pulse_sync_log_payloads').upsert({
@@ -977,9 +990,20 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
     const finalStatus = stats.errors.length > 0 ? 'failed' : 'completed';
     const joinedRunId = stats.apify_run_ids.filter(Boolean).join(',') || null;
 
+    // Migration 121: stamp suburb (used as the "scope" column on the run-
+    // history row) + batch_number/total_batches so the card shows e.g.
+    // "15 listings · Batch 3/3". For pulseDetailEnrich there's no geographic
+    // suburb — we use the candidate count as the suburb-equivalent tag.
+    const scopeTag = `${stats.candidates} listing${stats.candidates === 1 ? '' : 's'}`;
+    const detailLabel = `rea_detail_enrich · ${scopeTag} · ${priorityMode}`;
+
     await admin.from('pulse_sync_logs').update({
       status: finalStatus,
       completed_at: new Date().toISOString(),
+      source_label: detailLabel,
+      suburb: scopeTag,
+      batch_number: stats.batches_succeeded > 0 ? stats.batches_succeeded : null,
+      total_batches: stats.batches_attempted > 0 ? stats.batches_attempted : null,
       records_fetched: stats.items_returned,
       records_updated: stats.items_processed,
       records_detail: {

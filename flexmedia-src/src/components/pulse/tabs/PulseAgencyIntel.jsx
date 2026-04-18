@@ -82,6 +82,39 @@ function normAgencyKey(s) {
   return (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/**
+ * Compute an agency's average agent rating from its roster, weighted by
+ * review count. Used as a fallback when `agency.avg_agent_rating` is null —
+ * that column is only ~9% populated, so most agencies would show "—" without
+ * this fallback.
+ */
+function computeAgencyRating(agents) {
+  if (!Array.isArray(agents)) return null;
+  const weighted = agents
+    .filter((a) => a && a.reviews_avg > 0 && a.reviews_count > 0)
+    .map((a) => ({ r: a.reviews_avg * a.reviews_count, c: a.reviews_count }));
+  if (weighted.length === 0) return null;
+  const sumR = weighted.reduce((s, w) => s + w.r, 0);
+  const sumC = weighted.reduce((s, w) => s + w.c, 0);
+  return sumC > 0 ? +(sumR / sumC).toFixed(2) : null;
+}
+
+/**
+ * Resolve roster agents for an agency from a pulseAgents list. Mirrors the
+ * lookup logic inside the slideout's useMemo roster, but standalone so the
+ * table cell renderer can use it per-row without extra hooks.
+ */
+function rosterForAgency(agency, pulseAgents) {
+  if (!agency || !Array.isArray(pulseAgents)) return [];
+  if (agency.rea_agency_id) {
+    const byId = pulseAgents.filter((a) => a.agency_rea_id === agency.rea_agency_id);
+    if (byId.length > 0) return byId;
+  }
+  const key = normAgencyKey(agency.name);
+  if (!key) return [];
+  return pulseAgents.filter((a) => normAgencyKey(a.agency_name) === key);
+}
+
 function fmtAgo(d) {
   if (!d) return "—";
   const t = new Date(d).getTime();
@@ -745,22 +778,72 @@ export function AgencySlideout({
             </h3>
             <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
               {agency.phone && (
-                <a
-                  href={`tel:${agency.phone}`}
-                  className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Phone className="h-3.5 w-3.5 text-primary" />
-                  {agency.phone}
-                </a>
+                <div className="flex flex-col">
+                  <a
+                    href={`tel:${agency.phone}`}
+                    className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Phone className="h-3.5 w-3.5 text-primary" />
+                    {agency.phone}
+                  </a>
+                  {(() => {
+                    const alts = alternateContacts(agency, "phone");
+                    if (alts.length === 0) return null;
+                    return (
+                      <details className="mt-1 text-[11px] text-muted-foreground ml-5">
+                        <summary className="cursor-pointer hover:text-foreground">
+                          +{alts.length} other phone{alts.length > 1 ? "s" : ""}
+                        </summary>
+                        <ul className="ml-3 mt-1 space-y-0.5">
+                          {alts.map((a, i) => (
+                            <li key={i}>
+                              <a
+                                href={`tel:${a.value}`}
+                                className="hover:underline"
+                              >
+                                {a.value}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    );
+                  })()}
+                </div>
               )}
               {agency.email && (
-                <a
-                  href={`mailto:${agency.email}`}
-                  className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Mail className="h-3.5 w-3.5 text-primary" />
-                  {agency.email}
-                </a>
+                <div className="flex flex-col">
+                  <a
+                    href={`mailto:${agency.email}`}
+                    className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Mail className="h-3.5 w-3.5 text-primary" />
+                    {agency.email}
+                  </a>
+                  {(() => {
+                    const alts = alternateContacts(agency, "email");
+                    if (alts.length === 0) return null;
+                    return (
+                      <details className="mt-1 text-[11px] text-muted-foreground ml-5">
+                        <summary className="cursor-pointer hover:text-foreground">
+                          +{alts.length} other email{alts.length > 1 ? "s" : ""}
+                        </summary>
+                        <ul className="ml-3 mt-1 space-y-0.5">
+                          {alts.map((a, i) => (
+                            <li key={i}>
+                              <a
+                                href={`mailto:${a.value}`}
+                                className="hover:underline"
+                              >
+                                {a.value}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    );
+                  })()}
+                </div>
               )}
               {agency.website && (
                 <a
@@ -773,10 +856,10 @@ export function AgencySlideout({
                   {agency.website.replace(/^https?:\/\//, "").replace(/\/$/, "")}
                 </a>
               )}
-              {agency.address && (
+              {(agency.address_street || agency.address) && (
                 <span className="flex items-center gap-1.5 text-muted-foreground">
                   <MapPin className="h-3.5 w-3.5 text-primary" />
-                  {agency.address}
+                  {agency.address_street || agency.address}
                 </span>
               )}
               {agency.rea_profile_url && (
@@ -798,7 +881,12 @@ export function AgencySlideout({
             <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide mb-2">
               Performance
             </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div
+              className={cn(
+                "grid grid-cols-2 gap-2",
+                agency.avg_listing_price > 0 ? "sm:grid-cols-5" : "sm:grid-cols-4"
+              )}
+            >
               <StatBox
                 label="Agents"
                 value={
@@ -815,24 +903,36 @@ export function AgencySlideout({
                 label="Sold (12m)"
                 value={agency.total_sold_12m > 0 ? agency.total_sold_12m : "—"}
               />
-              <StatBox
-                label="Avg Rating"
-                value={
-                  agency.avg_agent_rating > 0 ? (
-                    <span className="flex items-center justify-center gap-0.5">
-                      <Star className="h-4 w-4 text-amber-400 fill-amber-400" />
-                      {Number(agency.avg_agent_rating).toFixed(1)}
-                    </span>
-                  ) : (
-                    "—"
-                  )
-                }
-                sub={
-                  agency.total_reviews > 0
-                    ? `${agency.total_reviews} reviews`
-                    : undefined
-                }
-              />
+              {agency.avg_listing_price > 0 && (
+                <StatBox
+                  label="Avg Listing $"
+                  value={fmtPrice(agency.avg_listing_price)}
+                />
+              )}
+              {(() => {
+                const displayRating =
+                  agency.avg_agent_rating ?? computeAgencyRating(roster) ?? null;
+                return (
+                  <StatBox
+                    label="Avg Rating"
+                    value={
+                      displayRating > 0 ? (
+                        <span className="flex items-center justify-center gap-0.5">
+                          <Star className="h-4 w-4 text-amber-400 fill-amber-400" />
+                          {Number(displayRating).toFixed(1)}
+                        </span>
+                      ) : (
+                        "—"
+                      )
+                    }
+                    sub={
+                      agency.total_reviews > 0
+                        ? `${agency.total_reviews} reviews`
+                        : undefined
+                    }
+                  />
+                );
+              })()}
             </div>
           </section>
 
@@ -1609,10 +1709,16 @@ export default function PulseAgencyIntel({
                     <td className="px-2 py-2 text-right tabular-nums hidden lg:table-cell font-medium">
                       {fmtPrice(ag.avg_sold_price)}
                     </td>
-                    {/* Rating */}
+                    {/* Rating — fallback to weighted roster mean when
+                        avg_agent_rating is null (only ~9% populated). */}
                     <td className="px-2 py-2 text-right hidden xl:table-cell">
                       <span className="flex items-center justify-end gap-0.5">
-                        <StarRating value={ag.avg_agent_rating} />
+                        <StarRating
+                          value={
+                            ag.avg_agent_rating ??
+                            computeAgencyRating(rosterForAgency(ag, pulseAgents))
+                          }
+                        />
                       </span>
                     </td>
                     {/* Last synced */}

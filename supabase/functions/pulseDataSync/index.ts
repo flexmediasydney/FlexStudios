@@ -351,6 +351,10 @@ serveWithAudit('pulseDataSync', async (req) => {
       dryRun = false,
       source_id = null,
       source_label = null,
+      // Explicit suburb override for the main-table `suburb` column (migration
+      // 121). Queue dispatches set this; manual/test calls can omit it and
+      // we'll fall back to suburbs[0].
+      suburb: suburbOverride = null,
       triggered_by = null,
       triggered_by_name = null,
       // Bounding box mode: single URL covers entire region (legacy params)
@@ -410,10 +414,19 @@ serveWithAudit('pulseDataSync', async (req) => {
     // See migration 095 for RCA. We still write input_config below — just
     // to the side-table.
     if (!dryRun) {
+      // Resolve the suburb scalar for the main-table column (migration 121).
+      // Prefer the explicit `suburb` body param (set by the queue dispatch
+      // RPC) and fall back to suburbs[0] for non-queue callers.
+      const suburbForLog: string | null =
+        (typeof suburbOverride === 'string' && suburbOverride.length > 0)
+          ? suburbOverride
+          : (Array.isArray(suburbs) && suburbs.length > 0 ? String(suburbs[0]) : null);
+
       const log = await entities.PulseSyncLog.create({
         sync_type: source_id || 'full_sweep',
         source_id: source_id || null,
         source_label: source_label || null,
+        suburb: suburbForLog,
         status: 'running',
         started_at: now,
         triggered_by: triggered_by || null,

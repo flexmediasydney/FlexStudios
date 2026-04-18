@@ -187,15 +187,68 @@ function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm, onOpenEntity }) {
 }
 
 // ── Card 3: Recent Agent Movements ────────────────────────────────────────────
+// Data source: `pulse_timeline` where event_type='agency_change'.
+// (Previously relied on `pulse_agents.previous_agency_name / agency_changed_at`
+// which are never populated — so the card was always empty. Timeline has every
+// detected agency change with full provenance.)
 
-function RecentMovementsCard({ pulseAgents, onOpenEntity }) {
+/** Fallback: parse "Ray White X -> Belle Property Y" from description text. */
+function parseAgencyChangeDescription(desc) {
+  if (!desc || typeof desc !== "string") return { from: null, to: null };
+  // Accept "A -> B", "A → B", or "A to B" (loose)
+  const m = desc.match(/^(.+?)\s*(?:->|→|\bto\b)\s*(.+)$/i);
+  if (!m) return { from: null, to: null };
+  return { from: m[1].trim(), to: m[2].trim() };
+}
+
+function RecentMovementsCard({ pulseAgents, pulseTimeline, onOpenEntity }) {
   const movements = useMemo(() => {
-    const d30 = new Date(Date.now() - 30 * 86400000);
-    return (pulseAgents || [])
-      .filter((a) => a.agency_changed_at && new Date(a.agency_changed_at) > d30)
-      .sort((a, b) => new Date(b.agency_changed_at) - new Date(a.agency_changed_at))
-      .slice(0, 10);
-  }, [pulseAgents]);
+    // Build a quick lookup from rea_agent_id / id → agent for name resolution
+    const agentByReaId = new Map();
+    const agentById = new Map();
+    for (const a of pulseAgents || []) {
+      if (a.rea_agent_id) agentByReaId.set(String(a.rea_agent_id), a);
+      if (a.id) agentById.set(a.id, a);
+    }
+
+    return (pulseTimeline || [])
+      .filter((e) => e.event_type === "agency_change")
+      .slice(0, 10)
+      .map((e) => {
+        const prevVal = e.previous_value || {};
+        const newVal = e.new_value || {};
+        const parsed = parseAgencyChangeDescription(e.description);
+
+        // Resolve agent name: prefer title (already "X moved agencies"),
+        // fallback to current pulse_agents lookup by rea_id / pulse_entity_id.
+        const lookupAgent =
+          (e.rea_id && agentByReaId.get(String(e.rea_id))) ||
+          (e.pulse_entity_id && agentById.get(e.pulse_entity_id)) ||
+          null;
+        // Title is usually "Sonia Malhotra moved agencies" — strip the suffix
+        // so we can show a clean name in the row.
+        const titleName =
+          e.title && /moved agencies$/i.test(e.title)
+            ? e.title.replace(/\s+moved agencies\s*$/i, "").trim()
+            : null;
+        const agentName =
+          titleName ||
+          lookupAgent?.full_name ||
+          e.title ||
+          "Unknown agent";
+
+        return {
+          id: e.id,
+          agentName,
+          fromAgency: prevVal.agency_name || parsed.from || "Unknown",
+          toAgency: newVal.agency_name || parsed.to || "—",
+          createdAt: e.created_at,
+          // For click handler — prefer pulse_entity_id (pulse_agents.id) but
+          // fall back to the looked-up agent id.
+          openId: e.pulse_entity_id || lookupAgent?.id || null,
+        };
+      });
+  }, [pulseTimeline, pulseAgents]);
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
@@ -204,45 +257,42 @@ function RecentMovementsCard({ pulseAgents, onOpenEntity }) {
           <ArrowRight className="h-4 w-4 text-purple-500" />
           Recent Agent Movements
         </CardTitle>
-        <p className="text-[10px] text-muted-foreground">Agency changes in last 30 days</p>
+        <p className="text-[10px] text-muted-foreground">Latest detected agency changes</p>
       </CardHeader>
       <CardContent className="px-4 pb-4">
         {movements.length === 0 ? (
           <p className="text-xs text-muted-foreground/50 py-6 text-center">No agency changes detected recently</p>
         ) : (
           <div className="space-y-2">
-            {movements.map((agent) => {
+            {movements.map((m) => {
               // Tier 3: row click opens the agent slideout via parent dispatcher.
               const body = (
                 <>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium truncate">{agent.full_name || "—"}</span>
+                    <span className="font-medium truncate">{m.agentName}</span>
                     <span className="text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">
-                      {fmtShortDate(agent.agency_changed_at)}
+                      {fmtShortDate(m.createdAt)}
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-muted-foreground">
-                    <span className="truncate line-through opacity-60">
-                      {agent.previous_agency_name || "Unknown"}
-                    </span>
+                    <span className="truncate line-through opacity-60">{m.fromAgency}</span>
                     <ArrowRight className="h-2.5 w-2.5 shrink-0 text-purple-400" />
-                    <span className="truncate text-foreground/80 font-medium">
-                      {agent.agency_name || "—"}
-                    </span>
+                    <span className="truncate text-foreground/80 font-medium">{m.toAgency}</span>
                   </div>
                 </>
               );
-              return onOpenEntity ? (
+              const canOpen = onOpenEntity && m.openId;
+              return canOpen ? (
                 <button
-                  key={agent.id}
+                  key={m.id}
                   type="button"
-                  onClick={() => onOpenEntity({ type: "agent", id: agent.id })}
+                  onClick={() => onOpenEntity({ type: "agent", id: m.openId })}
                   className="w-full text-xs text-left rounded p-1 -m-1 hover:bg-muted/30 transition-colors"
                 >
                   {body}
                 </button>
               ) : (
-                <div key={agent.id} className="text-xs">{body}</div>
+                <div key={m.id} className="text-xs">{body}</div>
               );
             })}
           </div>
@@ -461,7 +511,11 @@ export default function PulseCommandCenter({
         onAddToCrm={onAddToCrm}
         onOpenEntity={onOpenEntity}
       />
-      <RecentMovementsCard pulseAgents={pulseAgents} onOpenEntity={onOpenEntity} />
+      <RecentMovementsCard
+        pulseAgents={pulseAgents}
+        pulseTimeline={pulseTimeline}
+        onOpenEntity={onOpenEntity}
+      />
       <ConversionFunnelCard
         pulseAgents={pulseAgents}
         crmAgents={crmAgents}

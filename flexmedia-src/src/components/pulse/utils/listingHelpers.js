@@ -70,6 +70,72 @@ export function formatPriceShort(n) {
   return `$${n}`;
 }
 
+// ── Free-text price parser ───────────────────────────────────────────────
+
+/**
+ * Extract a numeric price from a free-text `price_text` string.
+ *
+ * Only ~32% of for_sale listings have a numeric `asking_price`; the other
+ * ~68% have the price only in `price_text` strings like:
+ *
+ *   "Offers above $1.2M"     → 1_200_000
+ *   "$850,000"               → 850_000
+ *   "$950K"                  → 950_000
+ *   "$1.5-1.8M"              → 1_500_000   (lower bound)
+ *   "Offers over $2,500,000" → 2_500_000
+ *   "Contact Agent" / "For Sale" / "Auction" / "Price on Request" → null
+ *   "From $650/wk"           → null        (rentals skipped)
+ *
+ * Using this as a fallback grows the Market Data price sample from the
+ * biased ~32% (high-end advertisers) to ~70% of for_sale listings.
+ *
+ * Returns null when no usable number is found.
+ */
+export function parsePriceText(priceText) {
+  if (!priceText || typeof priceText !== "string") return null;
+  const text = priceText.trim();
+  if (!text) return null;
+
+  const lower = text.toLowerCase();
+
+  // Skip weekly rentals — a weekly rent figure is NOT a property value.
+  if (/\/\s*(wk|week|w|pw|pm)\b/.test(lower) || /\bper\s+(week|month)\b/.test(lower)) {
+    return null;
+  }
+
+  // Grab the FIRST $-prefixed number in the string (lower bound of a range
+  // like "$1.5-1.8M"). Capture groups: 1 = number, 2 = optional K/M suffix.
+  const match = text.match(/\$\s*([0-9]+(?:[.,][0-9]+)*)\s*([kKmM])?/);
+  if (!match) return null;
+
+  // Normalise "1,200,000" / "1.2" / "850" into a plain number.
+  // Strategy: strip commas, then parseFloat so "1.2" stays 1.2.
+  let numStr = match[1].replace(/,/g, "");
+  const num = parseFloat(numStr);
+  if (!isFinite(num) || num <= 0) return null;
+
+  // For ranges like "$1.5-1.8M" the M suffix is attached to the upper bound
+  // but semantically applies to both. If the lower bound captured no suffix
+  // AND we see a K/M right after the range's upper number, borrow it.
+  let suffix = (match[2] || "").toLowerCase();
+  if (!suffix) {
+    const rangeMatch = text
+      .slice(match.index + match[0].length)
+      .match(/^\s*[-–—to]+\s*[0-9]+(?:[.,][0-9]+)*\s*([kKmM])/);
+    if (rangeMatch) suffix = rangeMatch[1].toLowerCase();
+  }
+  let value;
+  if (suffix === "m") value = num * 1_000_000;
+  else if (suffix === "k") value = num * 1_000;
+  else value = num;
+
+  // Sanity floor: anything under $10k isn't a property sale price.
+  if (value < 10_000) return null;
+
+  // Round to a sensible precision (whole dollars — no fractional cents).
+  return Math.round(value);
+}
+
 // ── Listing type labels + badge colors ───────────────────────────────────
 
 /**
