@@ -1535,6 +1535,32 @@ serveWithAudit('pulseDataSync', async (req) => {
             console.warn(`Create-missing-agents upsert error: ${error.message?.substring(0, 300)}`);
           } else {
             console.log(`Created ${listingOnlyAgentRows.length} agents from listing data (previously orphan FKs)`);
+            // Emit first_seen for each bridge-created agent so the Intelligence
+            // slideouts have at least one canonical event to render. Prior to
+            // migration 132 this path silently skipped timeline entirely;
+            // see also pulse_reconcile_bridge_agents_from_listings() which
+            // emits first_seen inline for the cron reconciler path.
+            try {
+              const { data: bridgeInserted = [] } = await admin.from('pulse_agents')
+                .select('id, rea_agent_id, full_name, agency_name, agency_rea_id')
+                .in('rea_agent_id', listingOnlyAgentRows.map((a: any) => a.rea_agent_id));
+              const timelineRows = bridgeInserted.map((pa: any) => ({
+                entity_type: 'agent',
+                pulse_entity_id: pa.id,
+                rea_id: pa.rea_agent_id,
+                event_type: 'first_seen',
+                event_category: 'system',
+                title: `${pa.full_name || 'Unknown agent'} first detected`,
+                description: `Agent first seen via listing bridge${pa.agency_name ? ` at ${pa.agency_name}` : ''}`,
+                new_value: { agency_name: pa.agency_name, agency_rea_id: pa.agency_rea_id, source: 'rea_listings_bridge' },
+                source: 'rea_listings_bridge',
+              }));
+              if (timelineRows.length > 0) {
+                await admin.from('pulse_timeline').insert(timelineRows);
+              }
+            } catch (e) {
+              console.warn(`bridge-agent first_seen emit failed: ${(e as Error)?.message?.substring(0, 300)}`);
+            }
           }
         }
 
@@ -1568,6 +1594,28 @@ serveWithAudit('pulseDataSync', async (req) => {
             console.warn(`Create-missing-agencies upsert error: ${error.message?.substring(0, 300)}`);
           } else {
             console.log(`Created ${listingOnlyAgencyRows.length} agencies from listing data (previously orphan FKs)`);
+            // Companion first_seen emit — see agent-bridge rationale above.
+            try {
+              const { data: bridgeInserted = [] } = await admin.from('pulse_agencies')
+                .select('id, rea_agency_id, name')
+                .in('rea_agency_id', listingOnlyAgencyRows.map((a: any) => a.rea_agency_id));
+              const timelineRows = bridgeInserted.map((ag: any) => ({
+                entity_type: 'agency',
+                pulse_entity_id: ag.id,
+                rea_id: ag.rea_agency_id,
+                event_type: 'first_seen',
+                event_category: 'system',
+                title: `${ag.name || 'Unknown agency'} first detected`,
+                description: 'Agency first seen via listing bridge',
+                new_value: { name: ag.name, rea_agency_id: ag.rea_agency_id, source: 'rea_listings_bridge' },
+                source: 'rea_listings_bridge',
+              }));
+              if (timelineRows.length > 0) {
+                await admin.from('pulse_timeline').insert(timelineRows);
+              }
+            } catch (e) {
+              console.warn(`bridge-agency first_seen emit failed: ${(e as Error)?.message?.substring(0, 300)}`);
+            }
           }
         }
 

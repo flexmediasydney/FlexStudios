@@ -570,6 +570,32 @@ export function AgencySlideout({
   // Tier 4: source-history drill
   const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
 
+  // Fetch per-agency timeline via the dossier RPC — the global `pulseTimeline`
+  // prop is capped at 500 rows across the platform, so for most agencies it
+  // missed every event they'd ever had. The RPC fans out to their listings'
+  // events too. See companion fix in AgentSlideout.
+  const { data: agencyDossier } = useQuery({
+    queryKey: ["pulse_dossier_slideout", "agency", agency?.id],
+    queryFn: async () => {
+      if (!agency?.id) return null;
+      const { data, error } = await api._supabase.rpc("pulse_get_dossier", {
+        p_entity_type: "agency",
+        p_entity_id: agency.id,
+      });
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!agency?.id,
+    staleTime: 30_000,
+  });
+  const slideoutTimeline = useMemo(() => {
+    if (agencyDossier?.timeline?.length) return agencyDossier.timeline;
+    return (pulseTimeline || []).filter(e =>
+      reaIdEquals(e.rea_id, agency?.rea_agency_id) ||
+      e.pulse_entity_id === agency?.id
+    );
+  }, [agencyDossier, pulseTimeline, agency]);
+
   /* Check if already in CRM */
   const existingCrmAgency = useMemo(
     () => crmAgencies.find((c) => normAgencyKey(c.name) === normAgencyKey(agency?.name)),
@@ -1075,12 +1101,7 @@ export function AgencySlideout({
               <Activity className="h-3.5 w-3.5" /> Timeline
             </h4>
             <PulseTimeline
-              entries={(pulseTimeline || []).filter(e =>
-                // reaIdEquals coerces both sides to string — rea_id drifts
-                // between text + int shapes and strict === silently missed matches.
-                reaIdEquals(e.rea_id, agency?.rea_agency_id) ||
-                e.pulse_entity_id === agency?.id
-              )}
+              entries={slideoutTimeline}
               maxHeight="max-h-[300px]"
               emptyMessage="No timeline events for this agency"
               compact

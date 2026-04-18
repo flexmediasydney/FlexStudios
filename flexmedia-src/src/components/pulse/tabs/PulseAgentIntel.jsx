@@ -543,6 +543,35 @@ export function AgentSlideout({
   // Tier 4: source-history drill
   const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
 
+  // Fetch per-agent timeline via the dossier RPC. The global `pulseTimeline`
+  // prop is capped at the 500 most-recent events across the entire platform;
+  // for any agent whose activity isn't in that tail (which is almost every
+  // agent given our volume), the prop-filter rendered an empty list.
+  // The RPC runs the same filter server-side + fans out to their listings'
+  // events, matching what the PersonDetails Intelligence tab already does.
+  const { data: agentDossier } = useQuery({
+    queryKey: ["pulse_dossier_slideout", "agent", agent?.id],
+    queryFn: async () => {
+      if (!agent?.id) return null;
+      const { data, error } = await api._supabase.rpc("pulse_get_dossier", {
+        p_entity_type: "agent",
+        p_entity_id: agent.id,
+      });
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!agent?.id,
+    staleTime: 30_000,
+  });
+  const slideoutTimeline = useMemo(() => {
+    if (agentDossier?.timeline?.length) return agentDossier.timeline;
+    // Fallback: prop-filter (catches the rare hit in the 500-row window).
+    return (pulseTimeline || []).filter(e =>
+      reaIdEquals(e.rea_id, agent?.rea_agent_id) ||
+      e.pulse_entity_id === agent?.id
+    );
+  }, [agentDossier, pulseTimeline, agent]);
+
   // Tier 3 drill-through: look up CRM mapping so the "In CRM" badge can link
   // straight to the CRM record (PersonDetails).
   const crmMapping = useMemo(() => {
@@ -1052,12 +1081,7 @@ export function AgentSlideout({
               <Activity className="h-3.5 w-3.5" /> Timeline
             </h4>
             <PulseTimeline
-              entries={(pulseTimeline || []).filter(e =>
-                // reaIdEquals coerces both sides to string — rea_id drifts
-                // between text + int shapes and strict === silently missed matches.
-                reaIdEquals(e.rea_id, agent?.rea_agent_id) ||
-                e.pulse_entity_id === agent?.id
-              )}
+              entries={slideoutTimeline}
               maxHeight="max-h-[300px]"
               emptyMessage="No timeline events for this agent"
               compact
