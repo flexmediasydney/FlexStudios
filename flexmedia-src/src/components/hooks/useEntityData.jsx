@@ -44,12 +44,23 @@ const subscriptions   = new Map(); // entityName → unsubscribeFn
 
 const CACHE_TTL  = 5 * 60 * 1000; // 5 minutes
 const LIST_LIMIT = 1000;           // default: fetch up to 1000; limit applied client-side
-// Large tables need higher fetch limits so per-page client-side slices don't silently drop rows
+// Large tables need higher fetch limits so per-page client-side slices don't silently drop rows.
+//
+// Pulse intelligence data can grow into the tens of thousands once the cron
+// starts covering all of NSW/VIC/QLD. The tabs that display these
+// (PulseListings, PulseAgentIntel, PulseAgencyIntel) use server-side pagination
+// (range + count:exact) so the TABLE itself doesn't rely on this cap. The cap
+// here only governs the shared cache that the parent Pulse page + cross-tab
+// slideouts + stat cards consume. 25k is generous headroom (~4x today's size)
+// while keeping memory reasonable (~75MB for 25k listings × 3KB each). Once
+// we cross ~50k and stat cards become the bottleneck, the parent page should
+// migrate to `count:exact, head:true` aggregate queries instead of pulling
+// the full list into memory.
 const ENTITY_LIST_LIMITS = {
-  PulseListing: 5000,
-  PulseAgent: 5000,
-  PulseAgency: 2000,
-  PulseTimeline: 2000,
+  PulseListing: 25000,
+  PulseAgent: 25000,
+  PulseAgency: 10000,
+  PulseTimeline: 10000,
   // ProjectTask can grow fast: ~17 tasks per project × hundreds of projects + revisions
   ProjectTask: 5000,
   TaskTimeLog: 5000,

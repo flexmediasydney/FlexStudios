@@ -31,7 +31,17 @@ import L from "leaflet";
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions(LEAFLET_ICON_OPTIONS);
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+const DEFAULT_PAGE_SIZE = 50;
+const LS_PAGE_SIZE_KEY = "properties_page_size";
+
+/** Read page size from localStorage, falling back to default. */
+function readStoredPageSize() {
+  if (typeof window === "undefined") return DEFAULT_PAGE_SIZE;
+  const raw = Number(window.localStorage.getItem(LS_PAGE_SIZE_KEY));
+  return PAGE_SIZE_OPTIONS.includes(raw) ? raw : DEFAULT_PAGE_SIZE;
+}
+
 const SYDNEY_CENTER = [-33.8688, 151.2093];
 const TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
 const TILE_ATTR = "&copy; OpenStreetMap &copy; CARTO";
@@ -95,9 +105,18 @@ export default function Properties() {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("all");
   const [page, setPage] = useState(0);
+  // Page size persists in localStorage so user choice survives reloads.
+  const [pageSize, setPageSize] = useState(readStoredPageSize);
   const [stats, setStats] = useState(null);
   const [suburbs, setSuburbs] = useState([]);
   const [suburbSort, setSuburbSort] = useState("total_properties");
+
+  // Persist page-size changes and reset to page 0 when size changes (else
+  // a user bumping 25→200 would sit on a now-nonexistent page 7).
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_PAGE_SIZE_KEY, String(pageSize)); } catch { /* quota / SSR */ }
+    setPage(0);
+  }, [pageSize]);
 
   // List view fetch
   const fetchProperties = useCallback(async () => {
@@ -117,7 +136,7 @@ export default function Properties() {
       if (tab === "sold") q = q.eq("current_listing_type", "sold");
 
       q = q.order("last_seen_at", { ascending: false, nullsFirst: false })
-        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+        .range(page * pageSize, page * pageSize + pageSize - 1);
 
       const { data, error, count } = await q;
       if (error) throw error;
@@ -130,7 +149,7 @@ export default function Properties() {
     } finally {
       setLoading(false);
     }
-  }, [search, tab, page, view]);
+  }, [search, tab, page, pageSize, view]);
   useEffect(() => { fetchProperties(); }, [fetchProperties]);
 
   // Map view fetch — all properties with coords
@@ -197,7 +216,7 @@ export default function Properties() {
     })();
   }, []);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const onViewChange = (v) => { setView(v); setPage(0); };
   const onTabChange = (v) => { setTab(v); setPage(0); };
@@ -298,6 +317,8 @@ export default function Properties() {
           total={total}
           page={page}
           setPage={setPage}
+          pageSize={pageSize}
+          setPageSize={setPageSize}
           totalPages={totalPages}
           hasSearch={!!search}
         />
@@ -350,7 +371,7 @@ function StatCard({ label, value, icon: Icon, color, subtitle }) {
 
 /* ── List view ───────────────────────────────────────────────────────────── */
 
-function ListView({ properties, loading, total, page, setPage, totalPages, hasSearch }) {
+function ListView({ properties, loading, total, page, setPage, pageSize, setPageSize, totalPages, hasSearch }) {
   return (
     <>
       <Card className="rounded-xl">
@@ -372,10 +393,10 @@ function ListView({ properties, loading, total, page, setPage, totalPages, hasSe
           )}
         </CardContent>
       </Card>
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
+      {total > 0 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground flex-wrap gap-2">
           <p>
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total.toLocaleString()}
+            Showing {(page * pageSize + 1).toLocaleString()}–{Math.min((page + 1) * pageSize, total).toLocaleString()} of {total.toLocaleString()}
           </p>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}>
@@ -385,6 +406,17 @@ function ListView({ properties, loading, total, page, setPage, totalPages, hasSe
             <Button variant="outline" size="sm" onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}>
               Next
             </Button>
+            {/* Page-size selector (persists to localStorage) */}
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              className="h-7 text-[11px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
+              title="Rows per page"
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} / page</option>
+              ))}
+            </select>
           </div>
         </div>
       )}
