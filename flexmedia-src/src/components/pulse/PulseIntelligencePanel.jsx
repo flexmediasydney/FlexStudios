@@ -11,9 +11,13 @@
  *   entityName: CRM record display name (informational only)
  *   crmEntity: full CRM entity record (optional, used for rea_agent_id fallback)
  */
-import React, { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import React, { useMemo, useState, useCallback } from "react";
+import { useNavigate, Link } from "react-router-dom";
+import { createPageUrl } from "@/utils";
+import { useQuery } from "@tanstack/react-query";
+import { api, supabase } from "@/api/supabaseClient";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -21,7 +25,8 @@ import PulseTimeline from "@/components/pulse/PulseTimeline";
 import { Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   TrendingUp, Users, Home, Clock, AlertTriangle, CheckCircle2, DollarSign,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
-  BarChart3, User, Loader2, BookOpen, Database, History, Sparkles, Palette
+  BarChart3, User, Loader2, BookOpen, Database, History, Sparkles, Palette,
+  UserPlus, X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
@@ -603,7 +608,7 @@ export default function PulseIntelligencePanel({
                   <div className="flex items-center gap-1.5 mt-1 text-xs">
                     <Building2 className="h-3 w-3 text-muted-foreground" />
                     {agencyMapping?.crm_entity_id ? (
-                      <a href={`/organisations/${agencyMapping.crm_entity_id}`} className="font-medium text-primary hover:underline">{a.agency_name}</a>
+                      <Link to={createPageUrl("OrgDetails") + `?id=${agencyMapping.crm_entity_id}`} replace={false} className="font-medium text-primary hover:underline">{a.agency_name}</Link>
                     ) : (
                       <span className="font-medium">{a.agency_name}</span>
                     )}
@@ -1126,7 +1131,7 @@ export default function PulseIntelligencePanel({
                           className={cn("border-t hover:bg-muted/20", hasCrm && "cursor-pointer")}
                           // Tier 3: drill through to CRM record without losing
                           // the current tab/state — use client-side nav.
-                          onClick={hasCrm ? () => navigate(`/people/${agMapping.crm_entity_id}`) : undefined}
+                          onClick={hasCrm ? () => navigate(createPageUrl("PersonDetails") + `?id=${agMapping.crm_entity_id}`) : undefined}
                         >
                           <td className="px-2 py-1.5">
                             <p className="font-medium">{ag.full_name}</p>

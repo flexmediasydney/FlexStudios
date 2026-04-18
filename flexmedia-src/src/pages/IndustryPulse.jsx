@@ -215,18 +215,23 @@ export default function IndustryPulse() {
   }, [setSearchParams]);
 
   // ── URL-driven entity opening (Tier 3 drill-through) ──────────────────────
-  // PulseMappings and PropertyDetails can link with `?pulse_id=<id>` + an
-  // entity type (tab drives the type: agents → agent, agencies → agency,
-  // listings → listing). Once the matching entity dataset has loaded we push
-  // onto the stack and clear the param so the URL stays clean.
+  // PulseMappings, PulseTimeline and other sources link with
+  // `?pulse_id=<id>&entity_type=<agent|agency|listing>`. We keep the params
+  // in the URL so the back/forward buttons + bookmarks round-trip the full
+  // drill state. The effect is idempotent: it checks the stack top before
+  // pushing, so re-consumes from rerenders are safe.
   const pulseIdParam = searchParams.get("pulse_id");
+  const entityTypeParam = searchParams.get("entity_type");
   useEffect(() => {
     if (!pulseIdParam) return;
+    // Prefer explicit ?entity_type=; fall back to deriving from ?tab= for
+    // backwards-compat with older links.
     const tParam = searchParams.get("tab");
-    const entityType = tParam === "agencies" ? "agency"
-      : tParam === "listings" ? "listing"
-      : tParam === "agents" ? "agent"
-      : null;
+    const entityType = entityTypeParam
+      || (tParam === "agencies" ? "agency"
+        : tParam === "listings" ? "listing"
+        : tParam === "agents" ? "agent"
+        : null);
     if (!entityType) return;
     // Don't dispatch until the underlying list is populated (avoid race on
     // slow networks). Skip if we already have the same entity on top.
@@ -241,21 +246,34 @@ export default function IndustryPulse() {
       if (top && top.type === entityType && top.id === pulseIdParam) return s;
       return [...s, { type: entityType, id: pulseIdParam }];
     });
-    // Strip the query param so re-renders don't re-dispatch; keep ?tab.
-    setSearchParams((prev) => {
-      const np = new URLSearchParams(prev);
-      np.delete("pulse_id");
-      return np;
-    }, { replace: true });
-  }, [pulseIdParam, searchParams, pulseAgents, pulseAgencies, pulseListings, setSearchParams]);
+    // URL stays as-is. If the user navigates back or bookmarks the page, the
+    // same ?pulse_id= + ?entity_type= will reopen the slideout idempotently.
+  }, [pulseIdParam, entityTypeParam, searchParams, pulseAgents, pulseAgencies, pulseListings]);
 
   const [search, setSearch] = useState("");
   const [addToCrmFromCommand, setAddToCrmFromCommand] = useState(null);
 
   // ── Cross-tab drill-through stack ───────────────────────────────────────────
   // Each entry: { type: 'agent' | 'agency' | 'listing', id: string }
+  // The *top* of the stack is mirrored into the URL as ?pulse_id=&entity_type=
+  // so browser back/forward + bookmarks round-trip drill state.
   const [entityStack, setEntityStack] = useState([]);
   const currentEntity = entityStack[entityStack.length - 1] || null;
+
+  // Sync the URL params with a target entity (or clear them when null).
+  const syncEntityParams = useCallback((entity) => {
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (entity) {
+        np.set("pulse_id", entity.id);
+        np.set("entity_type", entity.type);
+      } else {
+        np.delete("pulse_id");
+        np.delete("entity_type");
+      }
+      return np;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   const openEntity = useCallback((entity) => {
     if (!entity || !entity.type || !entity.id) return;
@@ -265,15 +283,22 @@ export default function IndustryPulse() {
       if (top && top.type === entity.type && top.id === entity.id) return s;
       return [...s, entity];
     });
-  }, []);
+    syncEntityParams(entity);
+  }, [syncEntityParams]);
 
   const popEntity = useCallback(() => {
-    setEntityStack((s) => s.slice(0, -1));
-  }, []);
+    setEntityStack((s) => {
+      const next = s.slice(0, -1);
+      const top = next[next.length - 1] || null;
+      syncEntityParams(top);
+      return next;
+    });
+  }, [syncEntityParams]);
 
   const closeAllEntities = useCallback(() => {
     setEntityStack([]);
-  }, []);
+    syncEntityParams(null);
+  }, [syncEntityParams]);
 
   // Handler: CommandCenter "Add" button switches to agents tab and triggers dialog
   const handleAddToCrmFromCommand = useCallback((agent) => {

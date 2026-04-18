@@ -3,7 +3,9 @@
  * REA-only. Tabular agency roster with live agent counts, full-detail slideout.
  */
 import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { createPageUrl } from "@/utils";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card } from "@/components/ui/card";
@@ -430,14 +432,15 @@ const AgentRow = ({ agent, isInCrm, isSelected, onSelect, crmEntityId }) => {
         )}
         <CrmBadge inCrm={!!isInCrm} />
         {isInCrm && crmEntityId && (
-          <a
-            href={`/people/${crmEntityId}`}
+          <Link
+            to={createPageUrl("PersonDetails") + `?id=${crmEntityId}`}
+            replace={false}
             onClick={(e) => e.stopPropagation()}
             className="text-primary hover:underline text-[9px] flex items-center gap-0.5"
             title="View in CRM"
           >
             <ExternalLink className="h-2.5 w-2.5" />
-          </a>
+          </Link>
         )}
       </div>
     </button>
@@ -738,14 +741,15 @@ export function AgencySlideout({
                     <REABadge />
                     {/* Tier 3: when mapped, the In CRM badge links to OrgDetails. */}
                     {isInCrm && crmAgencyMapping?.crm_entity_id ? (
-                      <a
-                        href={`/organisations/${crmAgencyMapping.crm_entity_id}`}
+                      <Link
+                        to={createPageUrl("OrgDetails") + `?id=${crmAgencyMapping.crm_entity_id}`}
+                        replace={false}
                         className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 px-1.5 py-0 text-[9px] font-medium leading-4 hover:underline"
                         title="Open CRM record"
                       >
                         In CRM
                         <ExternalLink className="h-2.5 w-2.5" />
-                      </a>
+                      </Link>
                     ) : (
                       <CrmBadge inCrm={isInCrm} />
                     )}
