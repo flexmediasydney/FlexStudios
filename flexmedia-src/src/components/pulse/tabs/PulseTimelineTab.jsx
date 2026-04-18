@@ -6,8 +6,15 @@
  * for at-a-glance visibility; the "View full timeline" link there navigates
  * here so ops can drill the entire history.
  *
- * Why server-side: client-side `slice(0, 20)` was hiding 90%+ of events on
- * busy weeks. PulseTimeline can run thousands of rows after a big sync.
+ * Two view modes:
+ *   - List  — the existing card/row timeline (grouped by month, detail panels).
+ *   - Table — compact/comfortable dense table, sortable + per-column filters,
+ *             virtualized (react-virtual) so unbounded row counts stay fluid.
+ *
+ * Why server-side pagination for List: client-side `slice(0, 20)` was hiding
+ * 90%+ of events on busy weeks. PulseTimeline can run thousands of rows after
+ * a big sync. The Table view fetches in large pages (unbounded size) and lets
+ * the user load more via infinite scroll / "Load 100 more".
  */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -17,17 +24,21 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   SelectGroup, SelectLabel,
 } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import PulseTimeline, { EVENT_CONFIG } from "@/components/pulse/PulseTimeline";
 import {
   Activity, Clock, ChevronLeft, ChevronRight, Filter, Loader2, X, AlertCircle,
-  HelpCircle, RefreshCw, Search, Download,
+  HelpCircle, RefreshCw, Search, Download, List as ListIcon, Table as TableIcon,
+  ArrowUp, ArrowDown, ArrowUpDown, Columns, Rows, ChevronDown,
 } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { exportFilteredCsv } from "@/components/pulse/utils/qolHelpers";
 import PresetControls from "@/components/pulse/utils/PresetControls";
 
@@ -89,6 +100,32 @@ const ENTITY_TYPE_OPTIONS = [
   { value: "listing", label: "Listing" },
   { value: "system", label: "System" },
 ];
+
+// LocalStorage keys for the Table view (density, visible columns, view mode).
+const LS_VIEW_MODE        = "pulse_timeline_view_mode";          // "list" | "table"
+const LS_TABLE_DENSITY    = "pulse_timeline_table_density";      // "compact" | "comfortable"
+const LS_TABLE_COLS       = "pulse_timeline_table_columns_v1";   // JSON array of visible col keys
+
+// Canonical table columns — order used for both CSV export + render.
+const TABLE_COLUMNS = [
+  { key: "select",      label: "",            sortable: false, filterable: false, width: "w-8"  },
+  { key: "when",        label: "When",        sortable: true,  filterable: true,  width: "w-28" },
+  { key: "event",       label: "Event",       sortable: true,  filterable: true,  width: "w-44" },
+  { key: "category",    label: "Category",    sortable: true,  filterable: true,  width: "w-28" },
+  { key: "title",       label: "Title",       sortable: true,  filterable: false, width: ""     },
+  { key: "entity",      label: "Entity",      sortable: true,  filterable: true,  width: "w-56" },
+  { key: "source",      label: "Source",      sortable: true,  filterable: true,  width: "w-32" },
+  { key: "description", label: "Description", sortable: false, filterable: false, width: ""     },
+];
+
+// Default visible columns — user can toggle via the Columns dropdown.
+const DEFAULT_VISIBLE_COLS = TABLE_COLUMNS.map(c => c.key);
+
+// How many extra rows the Table fetches per "page" (infinite scroll chunk).
+const TABLE_CHUNK = 100;
+// Scroll-trigger margin (px) — auto-load more when the user scrolls within
+// this many pixels of the bottom of the virtualized list.
+const AUTOLOAD_MARGIN_PX = 200;
 
 // ── Timeline Legend dialog ────────────────────────────────────────────────
 // Explains every event type the system can emit, grouped by category, with
@@ -292,6 +329,34 @@ function TimelineLegendDialog({ open, onClose }) {
   );
 }
 
+// ── Helpers: format relative + full timestamps ────────────────────────────
+function fmtRelativeStr(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "—";
+  const diff = Math.max(0, Date.now() - d.getTime());
+  if (diff < 60_000) return "Just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
+  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+}
+function fmtFullStr(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-AU", {
+    day: "numeric", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+}
+
+// Truncate a string to n chars with an ellipsis.
+function truncate(s, n = 80) {
+  if (!s) return "";
+  return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
+}
+
 export default function PulseTimelineTab({ onOpenEntity }) {
   // #57: URL-driven filter state. Hydrate once on mount from ?event_type=&source=&...
   // and re-serialise on every change. We use a local state mirror to keep the
@@ -316,6 +381,52 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   // Legend modal — explains every event type; opened from header or empty state.
   const [legendOpen, setLegendOpen] = useState(false);
 
+  // ── View mode (List | Table) ────────────────────────────────────────────
+  const [viewMode, setViewMode] = useState(() => {
+    try { return localStorage.getItem(LS_VIEW_MODE) || "list"; } catch { return "list"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(LS_VIEW_MODE, viewMode); } catch { /* ignore */ }
+  }, [viewMode]);
+
+  // ── Table-only state ────────────────────────────────────────────────────
+  const [tableRows, setTableRows] = useState([]);
+  const [tableTotal, setTableTotal] = useState(0);
+  const [tableLoaded, setTableLoaded] = useState(0);     // how many rows loaded so far
+  const [tableLoading, setTableLoading] = useState(false);
+  const [tableError, setTableError] = useState(null);
+  const [sortKey, setSortKey] = useState("when");        // default sort by created_at
+  const [sortDir, setSortDir] = useState("desc");
+  // Per-column inline filters
+  const [colFilters, setColFilters] = useState({
+    when_from: "", when_to: "",
+    event: [],                // multi-select event_types
+    category: "all",
+    entity: "",               // text search across entity name + type
+    source: "all",
+  });
+  const [density, setDensity] = useState(() => {
+    try { return localStorage.getItem(LS_TABLE_DENSITY) || "comfortable"; } catch { return "comfortable"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(LS_TABLE_DENSITY, density); } catch { /* ignore */ }
+  }, [density]);
+  const [visibleCols, setVisibleCols] = useState(() => {
+    try {
+      const raw = localStorage.getItem(LS_TABLE_COLS);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch { /* ignore */ }
+    return DEFAULT_VISIBLE_COLS;
+  });
+  useEffect(() => {
+    try { localStorage.setItem(LS_TABLE_COLS, JSON.stringify(visibleCols)); } catch { /* ignore */ }
+  }, [visibleCols]);
+  const [selected, setSelected] = useState(() => new Set());
+
+  // Entity name cache populated lazily from tableRows (agent/agency/listing lookups).
+  const [entityNameMap, setEntityNameMap] = useState({}); // `${type}:${id}` -> display name
+
   // #47: last-visit tracking for "N new events since last visit".
   // On mount we snapshot the stored ts and count events created after it; a
   // sticky pill above the list lets the user "load" (sets the marker to now).
@@ -326,7 +437,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   }
   const [newEventsSinceLastVisit, setNewEventsSinceLastVisit] = useState(0);
 
-  // Reset page when filters change
+  // Reset page when filters change (List view only)
   useEffect(() => { setPage(0); }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, pageSize]);
 
   // #57: write filter state back to the URL whenever it changes.
@@ -344,8 +455,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
     const before = searchParams.toString();
     const after = next.toString();
     if (before !== after) setSearchParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow]);
+  }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, searchParams, setSearchParams]);
 
   // Fetch event-type registry + distinct sources once at mount. These are small
   // (~30 rows, ~5 sources) and rarely change — no need to refresh on every page.
@@ -408,6 +518,16 @@ export default function PulseTimelineTab({ onOpenEntity }) {
     return ordered;
   }, [eventTypeRegistry]);
 
+  // Map: event_type -> category, built from the registry. Used for the Table
+  // view's Category column.
+  const eventTypeToCategory = useMemo(() => {
+    const m = new Map();
+    for (const r of eventTypeRegistry) {
+      if (r.event_type) m.set(r.event_type, r.category || "other");
+    }
+    return m;
+  }, [eventTypeRegistry]);
+
   const fetchPage = useCallback(async () => {
     setError(null);
     try {
@@ -449,16 +569,18 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, page, pageSize]);
 
   useEffect(() => {
+    if (viewMode !== "list") return; // skip list fetch when in table mode
     setLoading(true);
     fetchPage();
-  }, [fetchPage]);
+  }, [fetchPage, viewMode]);
 
-  // Auto-refresh every 30s when enabled
+  // Auto-refresh every 30s when enabled (List view only — Table uses its own
+  // infinite-scroll pagination and would churn scroll position on refresh).
   useEffect(() => {
-    if (!autoRefresh) return;
+    if (!autoRefresh || viewMode !== "list") return;
     const id = setInterval(() => { fetchPage(); }, 30_000);
     return () => clearInterval(id);
-  }, [autoRefresh, fetchPage]);
+  }, [autoRefresh, fetchPage, viewMode]);
 
   // #47: on mount, count how many pulse_timeline rows exist with created_at
   // > stored last-viewed timestamp. We do a separate head-count query so the
@@ -519,16 +641,327 @@ export default function PulseTimelineTab({ onOpenEntity }) {
     (sourceFilter !== "all" ? 1 : 0) +
     (timeWindow !== "7d" ? 1 : 0);
 
-  const fmtRelative = useCallback((ts) => {
-    if (!ts) return "—";
-    const d = new Date(ts);
-    if (isNaN(d.getTime())) return "—";
-    const diff = Math.max(0, Date.now() - d.getTime());
-    if (diff < 60_000) return "Just now";
-    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-    return d.toLocaleString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-  }, []);
+  const fmtRelative = useCallback((ts) => fmtRelativeStr(ts), []);
+
+  // ── Table data fetch ────────────────────────────────────────────────────
+  // Fetches rows in large chunks (100 by default) and appends to tableRows.
+  // Server-side applies the "global" filters (event_type, entity, source, time
+  // window) + sort; the per-column inline filters apply client-side on top
+  // (avoids rewriting the query for every keystroke).
+  const fetchTableChunk = useCallback(async ({ reset = false } = {}) => {
+    setTableError(null);
+    setTableLoading(true);
+    try {
+      let q = api._supabase
+        .from("pulse_timeline")
+        .select("*", { count: "exact" });
+
+      // Global filters mirror the List-view filters exactly so the user can
+      // share behaviour between modes.
+      if (eventTypeFilter !== "all") q = q.eq("event_type", eventTypeFilter);
+      if (entityTypeFilter !== "all") q = q.eq("entity_type", entityTypeFilter);
+      if (sourceFilter !== "all") q = q.eq("source", sourceFilter);
+      const tw = TIME_WINDOWS.find(t => t.value === timeWindow);
+      if (tw && tw.ms != null) {
+        q = q.gte("created_at", new Date(Date.now() - tw.ms).toISOString());
+      }
+
+      // Map Table sortKey → DB column. Everything else sorts client-side.
+      const serverSortCol = (() => {
+        switch (sortKey) {
+          case "when":     return "created_at";
+          case "event":    return "event_type";
+          case "title":    return "title";
+          case "entity":   return "entity_type";
+          case "source":   return "source";
+          default:         return "created_at";
+        }
+      })();
+      q = q.order(serverSortCol, { ascending: sortDir === "asc" });
+
+      const from = reset ? 0 : tableLoaded;
+      const to = from + TABLE_CHUNK - 1;
+      q = q.range(from, to);
+
+      const { data, error: qErr, count } = await q;
+      if (qErr) throw qErr;
+      const newRows = data || [];
+      setTableRows(prev => (reset ? newRows : [...prev, ...newRows]));
+      setTableLoaded(prev => (reset ? newRows.length : prev + newRows.length));
+      setTableTotal(count || 0);
+    } catch (err) {
+      setTableError(err?.message || "Fetch failed");
+    } finally {
+      setTableLoading(false);
+    }
+  }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, sortKey, sortDir, tableLoaded]);
+
+  // Reset + refetch when entering Table view or when any global filter / sort
+  // changes. Uses reset:true to clear previously-loaded rows.
+  useEffect(() => {
+    if (viewMode !== "table") return;
+    setTableRows([]);
+    setTableLoaded(0);
+    setSelected(new Set());
+    // Use a local fetch (can't rely on fetchTableChunk closure over tableLoaded).
+    (async () => {
+      setTableError(null);
+      setTableLoading(true);
+      try {
+        let q = api._supabase
+          .from("pulse_timeline")
+          .select("*", { count: "exact" });
+        if (eventTypeFilter !== "all") q = q.eq("event_type", eventTypeFilter);
+        if (entityTypeFilter !== "all") q = q.eq("entity_type", entityTypeFilter);
+        if (sourceFilter !== "all") q = q.eq("source", sourceFilter);
+        const tw = TIME_WINDOWS.find(t => t.value === timeWindow);
+        if (tw && tw.ms != null) {
+          q = q.gte("created_at", new Date(Date.now() - tw.ms).toISOString());
+        }
+        const serverSortCol = (() => {
+          switch (sortKey) {
+            case "when":   return "created_at";
+            case "event":  return "event_type";
+            case "title":  return "title";
+            case "entity": return "entity_type";
+            case "source": return "source";
+            default:       return "created_at";
+          }
+        })();
+        q = q.order(serverSortCol, { ascending: sortDir === "asc" });
+        q = q.range(0, TABLE_CHUNK - 1);
+        const { data, error: qErr, count } = await q;
+        if (qErr) throw qErr;
+        setTableRows(data || []);
+        setTableLoaded((data || []).length);
+        setTableTotal(count || 0);
+      } catch (err) {
+        setTableError(err?.message || "Fetch failed");
+      } finally {
+        setTableLoading(false);
+      }
+    })();
+  }, [viewMode, eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, sortKey, sortDir]);
+
+  // Lazy-load entity names for rows that have pulse_entity_id + entity_type.
+  // Fetches in batched lookups (one per entity_type) and caches by `${type}:${id}`.
+  useEffect(() => {
+    if (viewMode !== "table" || tableRows.length === 0) return;
+    const needByType = { agent: [], agency: [], listing: [] };
+    for (const r of tableRows) {
+      if (!r.pulse_entity_id) continue;
+      const key = `${r.entity_type}:${r.pulse_entity_id}`;
+      if (entityNameMap[key]) continue;
+      if (needByType[r.entity_type]) needByType[r.entity_type].push(r.pulse_entity_id);
+    }
+    const anyNeed = Object.values(needByType).some(arr => arr.length > 0);
+    if (!anyNeed) return;
+
+    let cancelled = false;
+    (async () => {
+      const updates = {};
+      const tasks = [];
+      if (needByType.agent.length) {
+        tasks.push(
+          api._supabase
+            .from("pulse_agents")
+            .select("id, display_name, first_name, last_name")
+            .in("id", Array.from(new Set(needByType.agent)))
+            .then(({ data }) => {
+              for (const a of (data || [])) {
+                const name = a.display_name || [a.first_name, a.last_name].filter(Boolean).join(" ") || "Agent";
+                updates[`agent:${a.id}`] = name;
+              }
+            })
+        );
+      }
+      if (needByType.agency.length) {
+        tasks.push(
+          api._supabase
+            .from("pulse_agencies")
+            .select("id, name")
+            .in("id", Array.from(new Set(needByType.agency)))
+            .then(({ data }) => {
+              for (const a of (data || [])) {
+                updates[`agency:${a.id}`] = a.name || "Agency";
+              }
+            })
+        );
+      }
+      if (needByType.listing.length) {
+        tasks.push(
+          api._supabase
+            .from("pulse_listings")
+            .select("id, display_address, suburb")
+            .in("id", Array.from(new Set(needByType.listing)))
+            .then(({ data }) => {
+              for (const l of (data || [])) {
+                updates[`listing:${l.id}`] = l.display_address || l.suburb || "Listing";
+              }
+            })
+        );
+      }
+      try { await Promise.all(tasks); } catch { /* non-fatal */ }
+      if (!cancelled && Object.keys(updates).length > 0) {
+        setEntityNameMap(prev => ({ ...prev, ...updates }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [viewMode, tableRows, entityNameMap]);
+
+  // ── Client-side filter + sort for the Table ─────────────────────────────
+  const filteredTableRows = useMemo(() => {
+    let out = tableRows;
+    // When range
+    if (colFilters.when_from) {
+      const from = new Date(colFilters.when_from).getTime();
+      if (!isNaN(from)) out = out.filter(r => new Date(r.created_at).getTime() >= from);
+    }
+    if (colFilters.when_to) {
+      // include the full day
+      const to = new Date(colFilters.when_to).getTime() + 86_400_000 - 1;
+      if (!isNaN(to)) out = out.filter(r => new Date(r.created_at).getTime() <= to);
+    }
+    // Event multi-select
+    if (colFilters.event && colFilters.event.length > 0) {
+      const set = new Set(colFilters.event);
+      out = out.filter(r => set.has(r.event_type));
+    }
+    // Category
+    if (colFilters.category && colFilters.category !== "all") {
+      out = out.filter(r => (eventTypeToCategory.get(r.event_type) || "other") === colFilters.category);
+    }
+    // Entity text search — matches entity_type OR cached name OR pulse_entity_id substring
+    if (colFilters.entity && colFilters.entity.trim()) {
+      const q = colFilters.entity.trim().toLowerCase();
+      out = out.filter(r => {
+        const key = `${r.entity_type}:${r.pulse_entity_id}`;
+        const name = (entityNameMap[key] || "").toLowerCase();
+        return (r.entity_type || "").toLowerCase().includes(q)
+          || name.includes(q)
+          || String(r.pulse_entity_id || "").toLowerCase().includes(q);
+      });
+    }
+    // Source dropdown (column-level; overrides the global source only when ≠ "all")
+    if (colFilters.source && colFilters.source !== "all") {
+      out = out.filter(r => r.source === colFilters.source);
+    }
+
+    // Client-side sort for columns not handled server-side (category).
+    if (sortKey === "category") {
+      const dir = sortDir === "asc" ? 1 : -1;
+      out = [...out].sort((a, b) => {
+        const ca = eventTypeToCategory.get(a.event_type) || "other";
+        const cb = eventTypeToCategory.get(b.event_type) || "other";
+        return ca.localeCompare(cb) * dir;
+      });
+    }
+    return out;
+  }, [tableRows, colFilters, sortKey, sortDir, eventTypeToCategory, entityNameMap]);
+
+  // ── Virtualizer ────────────────────────────────────────────────────────
+  const parentRef = useRef(null);
+  const rowHeight = density === "compact" ? 32 : 56;
+  const rowVirtualizer = useVirtualizer({
+    count: filteredTableRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 10,
+  });
+
+  // Infinite scroll — when the virtualizer reports we're near the end AND
+  // there are more rows on the server, load the next chunk.
+  useEffect(() => {
+    const el = parentRef.current;
+    if (!el || viewMode !== "table") return;
+    const onScroll = () => {
+      if (tableLoading) return;
+      if (tableLoaded >= tableTotal) return;
+      const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
+      if (distanceFromBottom < AUTOLOAD_MARGIN_PX) {
+        fetchTableChunk();
+      }
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [viewMode, tableLoading, tableLoaded, tableTotal, fetchTableChunk]);
+
+  // Header click → sort toggle.
+  const onHeaderSort = (key) => {
+    const col = TABLE_COLUMNS.find(c => c.key === key);
+    if (!col || !col.sortable) return;
+    if (sortKey === key) {
+      setSortDir(d => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  // ── Selection helpers ──────────────────────────────────────────────────
+  const toggleSelected = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const selectAllVisible = () => {
+    setSelected(new Set(filteredTableRows.map(r => r.id)));
+  };
+  const clearSelection = () => setSelected(new Set());
+
+  // ── CSV export (Table) ─────────────────────────────────────────────────
+  const tableCsvExport = () => {
+    const headers = [
+      { key: "id",              label: "id" },
+      { key: "created_at",      label: "created_at" },
+      { key: "event_type",      label: "event_type" },
+      { key: "category",        label: "category" },
+      { key: "entity_type",     label: "entity_type" },
+      { key: "pulse_entity_id", label: "pulse_entity_id" },
+      { key: "entity_name",     label: "entity_name" },
+      { key: "source",          label: "source" },
+      { key: "title",           label: "title" },
+      { key: "description",     label: "description" },
+      { key: "rea_id",          label: "rea_id" },
+      { key: "sync_log_id",     label: "sync_log_id" },
+    ];
+    const rowsToExport = selected.size > 0
+      ? filteredTableRows.filter(r => selected.has(r.id))
+      : filteredTableRows;
+    const decorated = rowsToExport.map(r => ({
+      ...r,
+      category: eventTypeToCategory.get(r.event_type) || "other",
+      entity_name: entityNameMap[`${r.entity_type}:${r.pulse_entity_id}`] || "",
+    }));
+    const stamp = new Date().toISOString().slice(0, 10);
+    exportFilteredCsv(`pulse_timeline_${stamp}.csv`, headers, decorated);
+  };
+
+  const eventTypeOptionsFlat = useMemo(() => {
+    // Flattened list of event type options for the multi-select in the
+    // Event column. Preserves group order.
+    const out = [];
+    for (const grp of groupedEventOptions) {
+      for (const item of grp.items) {
+        out.push({ ...item, category: grp.category });
+      }
+    }
+    return out;
+  }, [groupedEventOptions]);
+
+  const toggleColVisible = (key) => {
+    setVisibleCols(prev => {
+      if (prev.includes(key)) {
+        // Refuse to hide the last remaining column — always keep at least one.
+        if (prev.length <= 1) return prev;
+        return prev.filter(k => k !== key);
+      }
+      // Maintain canonical order.
+      return TABLE_COLUMNS.filter(c => prev.includes(c.key) || c.key === key).map(c => c.key);
+    });
+  };
 
   return (
     <>
@@ -539,7 +972,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
             <Activity className="h-4 w-4 text-cyan-500" />
             Pulse Timeline
             <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-              {total.toLocaleString()} events
+              {(viewMode === "table" ? tableTotal : total).toLocaleString()} events
             </Badge>
             {filterCount > 0 && (
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1">
@@ -557,31 +990,75 @@ export default function PulseTimelineTab({ onOpenEntity }) {
               <HelpCircle className="h-3 w-3" />
               Legend
             </Button>
+            {/* View mode toggle — segmented control */}
+            <div
+              className="inline-flex items-center rounded-md border bg-background p-0.5"
+              data-print-hide="true"
+            >
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                className={cn(
+                  "flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors",
+                  viewMode === "list"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                aria-pressed={viewMode === "list"}
+              >
+                <ListIcon className="h-3 w-3" />
+                List
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("table")}
+                className={cn(
+                  "flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors",
+                  viewMode === "table"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                aria-pressed={viewMode === "table"}
+              >
+                <TableIcon className="h-3 w-3" />
+                Table
+              </button>
+            </div>
           </CardTitle>
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-            {lastFetched && (
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground" data-print-hide="true">
+            {lastFetched && viewMode === "list" && (
               <span className="flex items-center gap-1">
                 <Clock className="h-3 w-3" />
                 {fmtRelative(lastFetched)}
               </span>
             )}
-            <label className="flex items-center gap-1.5 cursor-pointer select-none">
-              <Switch
-                checked={autoRefresh}
-                onCheckedChange={setAutoRefresh}
-                aria-label="Auto-refresh every 30s"
-              />
-              <span>Auto-refresh</span>
-            </label>
+            {viewMode === "list" && (
+              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                <Switch
+                  checked={autoRefresh}
+                  onCheckedChange={setAutoRefresh}
+                  aria-label="Auto-refresh every 30s"
+                />
+                <span>Auto-refresh</span>
+              </label>
+            )}
             <Button
               variant="outline"
               size="sm"
               className="h-7 px-2 text-[10px] gap-1"
-              onClick={() => { setLoading(true); fetchPage(); }}
-              disabled={loading}
+              onClick={() => {
+                if (viewMode === "list") { setLoading(true); fetchPage(); }
+                else {
+                  // Force a reset refetch on Table.
+                  setSortKey(k => k); // no-op to retrigger effect
+                  setTableRows([]); setTableLoaded(0);
+                  fetchTableChunk({ reset: true });
+                }
+              }}
+              disabled={viewMode === "list" ? loading : tableLoading}
               title="Refresh now"
             >
-              <Loader2 className={loading ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
+              <Loader2 className={(viewMode === "list" ? loading : tableLoading) ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
               Refresh
             </Button>
             {/* #51: filter preset save/load (Timeline namespace) */}
@@ -597,29 +1074,33 @@ export default function PulseTimelineTab({ onOpenEntity }) {
                 if (p?.timeWindow)       setTimeWindow(p.timeWindow);
               }}
             />
-            {/* #52: export the current page of filtered rows as CSV */}
+            {/* #52: export the currently-visible rows as CSV */}
             <Button
               variant="outline"
               size="sm"
               className="h-7 px-2 text-[10px] gap-1"
-              disabled={rows.length === 0}
+              disabled={viewMode === "list" ? rows.length === 0 : filteredTableRows.length === 0}
               onClick={() => {
-                const headers = [
-                  { key: "id",               label: "id" },
-                  { key: "created_at",       label: "created_at" },
-                  { key: "event_type",       label: "event_type" },
-                  { key: "entity_type",      label: "entity_type" },
-                  { key: "pulse_entity_id",  label: "pulse_entity_id" },
-                  { key: "source",           label: "source" },
-                  { key: "title",            label: "title" },
-                  { key: "description",      label: "description" },
-                  { key: "rea_id",           label: "rea_id" },
-                  { key: "sync_log_id",      label: "sync_log_id" },
-                ];
-                const stamp = new Date().toISOString().slice(0, 10);
-                exportFilteredCsv(`pulse_timeline_${stamp}.csv`, headers, rows);
+                if (viewMode === "list") {
+                  const headers = [
+                    { key: "id",               label: "id" },
+                    { key: "created_at",       label: "created_at" },
+                    { key: "event_type",       label: "event_type" },
+                    { key: "entity_type",      label: "entity_type" },
+                    { key: "pulse_entity_id",  label: "pulse_entity_id" },
+                    { key: "source",           label: "source" },
+                    { key: "title",            label: "title" },
+                    { key: "description",      label: "description" },
+                    { key: "rea_id",           label: "rea_id" },
+                    { key: "sync_log_id",      label: "sync_log_id" },
+                  ];
+                  const stamp = new Date().toISOString().slice(0, 10);
+                  exportFilteredCsv(`pulse_timeline_${stamp}.csv`, headers, rows);
+                } else {
+                  tableCsvExport();
+                }
               }}
-              title="Download the currently visible timeline page as CSV"
+              title="Download visible timeline rows as CSV"
             >
               <Download className="h-3 w-3" />
               CSV
@@ -627,8 +1108,8 @@ export default function PulseTimelineTab({ onOpenEntity }) {
           </div>
         </div>
 
-        {/* Filter row */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mt-3">
+        {/* Filter row — shared by both views */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mt-3" data-print-hide="true">
           <div>
             <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
               Event type
@@ -698,25 +1179,63 @@ export default function PulseTimelineTab({ onOpenEntity }) {
               </SelectContent>
             </Select>
           </div>
-          <div>
-            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
-              Page size
-            </label>
-            <Select value={String(pageSize)} onValueChange={(v) => setPageSize(parseInt(v, 10))}>
-              <SelectTrigger className="h-8 text-xs mt-0.5">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PAGE_SIZE_OPTIONS.map(n => (
-                  <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {viewMode === "list" ? (
+            <div>
+              <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+                Page size
+              </label>
+              <Select value={String(pageSize)} onValueChange={(v) => setPageSize(parseInt(v, 10))}>
+                <SelectTrigger className="h-8 text-xs mt-0.5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZE_OPTIONS.map(n => (
+                    <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            <div>
+              <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+                Density
+              </label>
+              <div className="inline-flex items-center rounded-md border bg-background p-0.5 mt-0.5 h-8">
+                <button
+                  type="button"
+                  onClick={() => setDensity("compact")}
+                  className={cn(
+                    "flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors",
+                    density === "compact"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  aria-pressed={density === "compact"}
+                >
+                  <Rows className="h-3 w-3" />
+                  Compact
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDensity("comfortable")}
+                  className={cn(
+                    "flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors",
+                    density === "comfortable"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  aria-pressed={density === "comfortable"}
+                >
+                  <Rows className="h-3 w-3" />
+                  Comfortable
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {filterCount > 0 && (
-          <div className="mt-2">
+          <div className="mt-2" data-print-hide="true">
             <Button
               variant="ghost"
               size="sm"
@@ -735,8 +1254,8 @@ export default function PulseTimelineTab({ onOpenEntity }) {
         )}
       </CardHeader>
       <CardContent className="px-4 pb-4">
-        {/* #47: sticky "N new events since last visit" pill */}
-        {newEventsSinceLastVisit > 0 && (
+        {/* #47: sticky "N new events since last visit" pill — List view only */}
+        {newEventsSinceLastVisit > 0 && viewMode === "list" && (
           <div className="sticky top-0 z-10 mb-3">
             <button
               type="button"
@@ -752,7 +1271,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
           </div>
         )}
 
-        {error && (
+        {viewMode === "list" && error && (
           <div className="rounded-md border border-red-300 bg-red-50/60 dark:bg-red-950/20 p-3 mb-3 text-xs flex items-start gap-2">
             <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
             <div>
@@ -762,38 +1281,74 @@ export default function PulseTimelineTab({ onOpenEntity }) {
           </div>
         )}
 
-        {rows.length === 0 && !loading ? (
-          <div className="py-12 text-center">
-            <Clock className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
-            <p className="text-sm font-medium text-muted-foreground">
-              {filterCount > 0 ? "No events match the current filters." : "No timeline events yet."}
-            </p>
-            <p className="text-xs text-muted-foreground/60 mt-1">
-              Not sure what you&apos;re looking at?{" "}
-              <button
-                type="button"
-                className="underline underline-offset-2 hover:text-foreground transition-colors"
-                onClick={() => setLegendOpen(true)}
-              >
-                See the Legend
-              </button>.
-            </p>
-          </div>
+        {viewMode === "list" ? (
+          // ── List view (existing) ─────────────────────────────────────
+          rows.length === 0 && !loading ? (
+            <div className="py-12 text-center">
+              <Clock className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
+              <p className="text-sm font-medium text-muted-foreground">
+                {filterCount > 0 ? "No events match the current filters." : "No timeline events yet."}
+              </p>
+              <p className="text-xs text-muted-foreground/60 mt-1">
+                Not sure what you&apos;re looking at?{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-foreground transition-colors"
+                  onClick={() => setLegendOpen(true)}
+                >
+                  See the Legend
+                </button>.
+              </p>
+            </div>
+          ) : (
+            <PulseTimeline
+              entries={rows}
+              maxHeight="max-h-[640px]"
+              emptyMessage={
+                filterCount > 0
+                  ? "No events match the current filters."
+                  : "No timeline events yet."
+              }
+              onOpenEntity={onOpenEntity}
+            />
+          )
         ) : (
-          <PulseTimeline
-            entries={rows}
-            maxHeight="max-h-[640px]"
-            emptyMessage={
-              filterCount > 0
-                ? "No events match the current filters."
-                : "No timeline events yet."
-            }
+          // ── Table view ───────────────────────────────────────────────
+          <TableView
+            rows={filteredTableRows}
+            totalRows={tableTotal}
+            loadedRows={tableLoaded}
+            loading={tableLoading}
+            error={tableError}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onHeaderSort={onHeaderSort}
+            colFilters={colFilters}
+            setColFilters={setColFilters}
+            density={density}
+            visibleCols={visibleCols}
+            toggleColVisible={toggleColVisible}
+            eventTypeOptionsFlat={eventTypeOptionsFlat}
+            eventTypeToCategory={eventTypeToCategory}
+            sourceOptions={sourceOptions}
+            entityNameMap={entityNameMap}
+            selected={selected}
+            toggleSelected={toggleSelected}
+            selectAllVisible={selectAllVisible}
+            clearSelection={clearSelection}
+            tableCsvExport={tableCsvExport}
+            parentRef={parentRef}
+            rowVirtualizer={rowVirtualizer}
+            rowHeight={rowHeight}
+            fetchMore={() => fetchTableChunk()}
             onOpenEntity={onOpenEntity}
+            setLegendOpen={setLegendOpen}
+            filterCount={filterCount}
           />
         )}
 
-        {/* Pagination footer */}
-        {total > 0 && (
+        {/* Pagination footer — List view only */}
+        {viewMode === "list" && total > 0 && (
           <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/40">
             <p className="text-[10px] text-muted-foreground">
               Showing <span className="font-medium text-foreground tabular-nums">{showingFrom.toLocaleString()}</span>
@@ -830,4 +1385,496 @@ export default function PulseTimelineTab({ onOpenEntity }) {
     <TimelineLegendDialog open={legendOpen} onClose={() => setLegendOpen(false)} />
     </>
   );
+}
+
+/* ── TableView ──────────────────────────────────────────────────────────────
+ * Extracted to its own component so the parent tab stays readable. All data
+ * + handlers are threaded through props; no internal fetches.
+ */
+function TableView({
+  rows, totalRows, loadedRows, loading, error,
+  sortKey, sortDir, onHeaderSort,
+  colFilters, setColFilters,
+  density, visibleCols, toggleColVisible,
+  eventTypeOptionsFlat, eventTypeToCategory, sourceOptions, entityNameMap,
+  selected, toggleSelected, selectAllVisible, clearSelection,
+  tableCsvExport,
+  parentRef, rowVirtualizer, rowHeight,
+  fetchMore,
+  onOpenEntity, setLegendOpen, filterCount,
+}) {
+  const visibleColDefs = TABLE_COLUMNS.filter(c => visibleCols.includes(c.key));
+
+  // Render sort indicator arrows on the header.
+  const SortIndicator = ({ colKey }) => {
+    if (sortKey !== colKey) return <ArrowUpDown className="h-3 w-3 opacity-40" />;
+    return sortDir === "asc"
+      ? <ArrowUp className="h-3 w-3" />
+      : <ArrowDown className="h-3 w-3" />;
+  };
+
+  return (
+    <div className="space-y-2">
+      {/* Top action bar: column visibility + bulk actions */}
+      <div className="flex items-center justify-between gap-2 flex-wrap" data-print-hide="true">
+        <div className="flex items-center gap-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-7 px-2 text-[10px] gap-1">
+                <Columns className="h-3 w-3" />
+                Columns
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-56 p-2">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">
+                Visible columns
+              </p>
+              <div className="space-y-1">
+                {TABLE_COLUMNS.filter(c => c.key !== "select").map(c => (
+                  <label
+                    key={c.key}
+                    className="flex items-center gap-2 text-xs cursor-pointer py-0.5 hover:bg-muted rounded px-1"
+                  >
+                    <Checkbox
+                      checked={visibleCols.includes(c.key)}
+                      onCheckedChange={() => toggleColVisible(c.key)}
+                    />
+                    <span>{c.label}</span>
+                  </label>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+          {selected.size > 0 && (
+            <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-2 py-1">
+              <span className="text-[10px] font-medium">
+                {selected.size} selected
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 px-1 text-[10px]"
+                onClick={selectAllVisible}
+              >
+                Select all visible
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 px-1 text-[10px]"
+                onClick={clearSelection}
+              >
+                Clear
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-5 px-2 text-[10px] gap-1"
+                onClick={tableCsvExport}
+              >
+                <Download className="h-3 w-3" />
+                Export {selected.size} CSV
+              </Button>
+            </div>
+          )}
+        </div>
+        <div className="text-[10px] text-muted-foreground tabular-nums">
+          Showing <span className="font-medium text-foreground">{rows.length.toLocaleString()}</span>
+          {" "}of <span className="font-medium text-foreground">{totalRows.toLocaleString()}</span> events
+          {loadedRows < totalRows && (
+            <span className="ml-1 text-muted-foreground/60">(loaded {loadedRows.toLocaleString()})</span>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-md border border-red-300 bg-red-50/60 dark:bg-red-950/20 p-3 text-xs flex items-start gap-2">
+          <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium text-red-700 dark:text-red-400">Failed to load timeline</p>
+            <p className="text-muted-foreground mt-0.5 font-mono text-[10px]">{error}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="border border-border/40 rounded-md overflow-hidden">
+        {/* Header + column filters */}
+        <div data-print-hide="true" className="bg-muted/50 border-b border-border/40">
+          <table className="w-full table-fixed">
+            <thead>
+              <tr>
+                {visibleColDefs.map(col => (
+                  <th
+                    key={col.key}
+                    className={cn(
+                      "text-left text-[10px] uppercase tracking-wide text-muted-foreground font-semibold px-2 py-1.5",
+                      col.width,
+                      col.sortable && "cursor-pointer select-none hover:text-foreground"
+                    )}
+                    onClick={col.sortable ? () => onHeaderSort(col.key) : undefined}
+                  >
+                    <div className="flex items-center gap-1">
+                      {col.key === "select" ? (
+                        <Checkbox
+                          checked={rows.length > 0 && selected.size >= rows.length}
+                          onCheckedChange={(v) => {
+                            if (v) selectAllVisible(); else clearSelection();
+                          }}
+                          aria-label="Select all"
+                        />
+                      ) : (
+                        <>
+                          <span>{col.label}</span>
+                          {col.sortable && <SortIndicator colKey={col.key} />}
+                        </>
+                      )}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+              {/* Column-level filter row */}
+              <tr>
+                {visibleColDefs.map(col => (
+                  <th key={`${col.key}-filter`} className="px-2 pb-1.5 align-top">
+                    {col.key === "when" && (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="date"
+                          value={colFilters.when_from}
+                          onChange={(e) => setColFilters(f => ({ ...f, when_from: e.target.value }))}
+                          className="h-6 text-[10px] px-1"
+                          placeholder="From"
+                          title="From date"
+                        />
+                        <Input
+                          type="date"
+                          value={colFilters.when_to}
+                          onChange={(e) => setColFilters(f => ({ ...f, when_to: e.target.value }))}
+                          className="h-6 text-[10px] px-1"
+                          placeholder="To"
+                          title="To date"
+                        />
+                      </div>
+                    )}
+                    {col.key === "event" && (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            className="h-6 w-full text-[10px] border rounded px-1.5 bg-background hover:bg-muted flex items-center justify-between"
+                          >
+                            <span className="truncate">
+                              {colFilters.event.length === 0
+                                ? "All events"
+                                : `${colFilters.event.length} selected`}
+                            </span>
+                            <ChevronDown className="h-3 w-3 shrink-0" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="w-64 p-2 max-h-80 overflow-y-auto">
+                          <div className="flex items-center justify-between mb-1">
+                            <p className="text-[10px] uppercase text-muted-foreground">Filter events</p>
+                            {colFilters.event.length > 0 && (
+                              <button
+                                type="button"
+                                className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                                onClick={() => setColFilters(f => ({ ...f, event: [] }))}
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                          {eventTypeOptionsFlat.map(opt => (
+                            <label
+                              key={opt.value}
+                              className="flex items-center gap-2 text-xs cursor-pointer py-0.5 hover:bg-muted rounded px-1"
+                            >
+                              <Checkbox
+                                checked={colFilters.event.includes(opt.value)}
+                                onCheckedChange={() => {
+                                  setColFilters(f => {
+                                    const set = new Set(f.event);
+                                    if (set.has(opt.value)) set.delete(opt.value);
+                                    else set.add(opt.value);
+                                    return { ...f, event: Array.from(set) };
+                                  });
+                                }}
+                              />
+                              <span className="truncate">{opt.label}</span>
+                            </label>
+                          ))}
+                        </PopoverContent>
+                      </Popover>
+                    )}
+                    {col.key === "category" && (
+                      <select
+                        value={colFilters.category}
+                        onChange={(e) => setColFilters(f => ({ ...f, category: e.target.value }))}
+                        className="h-6 w-full text-[10px] border rounded px-1 bg-background"
+                      >
+                        <option value="all">All</option>
+                        {CATEGORY_ORDER.map(c => (
+                          <option key={c} value={c}>{CATEGORY_LABELS[c] || c}</option>
+                        ))}
+                      </select>
+                    )}
+                    {col.key === "entity" && (
+                      <Input
+                        type="text"
+                        value={colFilters.entity}
+                        onChange={(e) => setColFilters(f => ({ ...f, entity: e.target.value }))}
+                        className="h-6 text-[10px] px-1.5"
+                        placeholder="Search…"
+                      />
+                    )}
+                    {col.key === "source" && (
+                      <select
+                        value={colFilters.source}
+                        onChange={(e) => setColFilters(f => ({ ...f, source: e.target.value }))}
+                        className="h-6 w-full text-[10px] border rounded px-1 bg-background"
+                      >
+                        <option value="all">All</option>
+                        {sourceOptions.map(src => (
+                          <option key={src} value={src}>{src}</option>
+                        ))}
+                      </select>
+                    )}
+                    {/* Other columns: no inline filter */}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          </table>
+        </div>
+
+        {/* Virtualized body */}
+        {rows.length === 0 && !loading ? (
+          <div className="py-12 text-center">
+            <Clock className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">
+              {filterCount > 0 ? "No events match the current filters." : "No timeline events yet."}
+            </p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              Not sure what you&apos;re looking at?{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground transition-colors"
+                onClick={() => setLegendOpen(true)}
+              >
+                See the Legend
+              </button>.
+            </p>
+          </div>
+        ) : (
+          <div
+            ref={parentRef}
+            className="overflow-auto max-h-[640px] relative"
+          >
+            <table className="w-full table-fixed">
+              <colgroup>
+                {visibleColDefs.map(c => (
+                  <col key={c.key} className={c.width} />
+                ))}
+              </colgroup>
+              <tbody style={{ display: "block", height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+                {/* Offset spacer approach — since <table> doesn't play nicely
+                    with absolute-positioned virtual items, we render just the
+                    visible window of rows with a top padding row to push them
+                    down to the right scroll offset. */}
+                {rowVirtualizer.getVirtualItems().length > 0 && (
+                  <tr style={{ height: rowVirtualizer.getVirtualItems()[0].start, display: "block" }} />
+                )}
+                {rowVirtualizer.getVirtualItems().map(virtualRow => {
+                  const r = rows[virtualRow.index];
+                  if (!r) return null;
+                  return (
+                    <tr
+                      key={r.id}
+                      className={cn(
+                        "border-b border-border/40 hover:bg-muted/40 transition-colors",
+                        selected.has(r.id) && "bg-blue-50/50 dark:bg-blue-950/20"
+                      )}
+                      style={{
+                        height: rowHeight,
+                        display: "table",
+                        tableLayout: "fixed",
+                        width: "100%",
+                      }}
+                    >
+                      {renderRowCells(r, {
+                        visibleCols, density, selected, toggleSelected,
+                        eventTypeToCategory, entityNameMap, onOpenEntity,
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {loading && (
+              <div className="flex items-center justify-center py-3 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                Loading…
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Footer: loaded / total + manual "Load more" */}
+      {totalRows > 0 && (
+        <div className="flex items-center justify-between pt-2 text-[10px] text-muted-foreground">
+          <span>
+            Showing <span className="font-medium text-foreground tabular-nums">{rows.length.toLocaleString()}</span>
+            {" "}of <span className="font-medium text-foreground tabular-nums">{totalRows.toLocaleString()}</span> events
+          </span>
+          {loadedRows < totalRows && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-[10px]"
+              onClick={fetchMore}
+              disabled={loading}
+            >
+              {loading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+              Load {Math.min(TABLE_CHUNK, totalRows - loadedRows)} more
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Render the body cells for a row. Factored out so virtualized rows and the
+   main flow share identical markup. */
+function renderRowCells(r, ctx) {
+  const { visibleCols, density, selected, toggleSelected, eventTypeToCategory, entityNameMap, onOpenEntity } = ctx;
+  const isColVisible = (key) => visibleCols.includes(key);
+  const cfg = EVENT_CONFIG[r.event_type] || { icon: RefreshCw, color: "bg-gray-400", label: r.event_type };
+  const Icon = cfg.icon;
+  const category = eventTypeToCategory.get(r.event_type) || "other";
+  const entityKey = `${r.entity_type}:${r.pulse_entity_id}`;
+  const entityName = entityNameMap[entityKey] || (r.pulse_entity_id ? String(r.pulse_entity_id).slice(0, 8) : "");
+  const canDrill = !!(onOpenEntity && r.pulse_entity_id && r.entity_type && r.entity_type !== "system");
+  const isSelected = selected.has(r.id);
+  const cells = [];
+
+  if (isColVisible("select")) {
+    cells.push(
+      <td key="select" className="px-2 align-middle w-8">
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={() => toggleSelected(r.id)}
+          aria-label={`Select row ${r.id}`}
+        />
+      </td>
+    );
+  }
+  if (isColVisible("when")) {
+    cells.push(
+      <td key="when" className="px-2 align-middle whitespace-nowrap text-[11px] text-muted-foreground tabular-nums w-28">
+        <span title={fmtFullStr(r.created_at)}>{fmtRelativeStr(r.created_at)}</span>
+      </td>
+    );
+  }
+  if (isColVisible("event")) {
+    cells.push(
+      <td key="event" className="px-2 align-middle w-44">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className={cn("rounded-full flex items-center justify-center h-4 w-4 shrink-0", cfg.color)}>
+            <Icon className="h-2.5 w-2.5 text-white" />
+          </div>
+          <span className="text-[11px] font-medium truncate" title={r.event_type}>
+            {cfg.label || r.event_type}
+          </span>
+        </div>
+      </td>
+    );
+  }
+  if (isColVisible("category")) {
+    cells.push(
+      <td key="category" className="px-2 align-middle w-28">
+        <Badge
+          variant="secondary"
+          className={cn("text-[9px] px-1.5 py-0", CATEGORY_BADGE_COLORS[category] || "")}
+        >
+          {CATEGORY_LABELS[category] || category}
+        </Badge>
+      </td>
+    );
+  }
+  if (isColVisible("title")) {
+    cells.push(
+      <td key="title" className="px-2 align-middle">
+        <span
+          className="text-[11px] font-medium truncate block"
+          title={r.title}
+        >
+          {truncate(r.title, 80)}
+        </span>
+      </td>
+    );
+  }
+  if (isColVisible("entity")) {
+    cells.push(
+      <td key="entity" className="px-2 align-middle w-56">
+        {r.pulse_entity_id ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (canDrill) onOpenEntity({ type: r.entity_type, id: r.pulse_entity_id });
+            }}
+            disabled={!canDrill}
+            className={cn(
+              "flex items-center gap-1 text-[11px] truncate max-w-full",
+              canDrill
+                ? "text-primary hover:underline cursor-pointer"
+                : "text-muted-foreground cursor-default"
+            )}
+            title={`${r.entity_type}: ${entityName}`}
+          >
+            <Badge variant="outline" className="text-[8px] px-1 py-0 shrink-0">
+              {r.entity_type}
+            </Badge>
+            <span className="truncate">{entityName}</span>
+          </button>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/60">—</span>
+        )}
+      </td>
+    );
+  }
+  if (isColVisible("source")) {
+    cells.push(
+      <td key="source" className="px-2 align-middle w-32">
+        {r.source ? (
+          <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground font-mono">
+            {r.source}
+          </Badge>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/60">—</span>
+        )}
+      </td>
+    );
+  }
+  if (isColVisible("description")) {
+    cells.push(
+      <td key="description" className="px-2 align-middle">
+        {density === "comfortable" && r.description ? (
+          <span
+            className="text-[11px] text-muted-foreground truncate block"
+            title={r.description}
+          >
+            {truncate(r.description, 80)}
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/40">—</span>
+        )}
+      </td>
+    );
+  }
+  return cells;
 }
