@@ -632,6 +632,9 @@ verify_jwt = false
 [functions.pulseScheduledScrape]
 verify_jwt = false
 
+[functions.pulseSignalGenerator]
+verify_jwt = false
+
 [functions.recalculateProjectPricingServerSide]
 verify_jwt = false
 
