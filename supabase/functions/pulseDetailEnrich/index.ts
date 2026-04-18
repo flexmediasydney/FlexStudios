@@ -255,13 +255,24 @@ async function breakerRecordFailure(admin: any) {
 
 // ── Timeline emission (idempotent via idempotency_key) ──────────────────
 
-async function emitTimeline(admin: any, events: any[]) {
-  if (events.length === 0) return;
-  // Best-effort insert; duplicate idempotency_keys are caught by unique constraint
-  const { error } = await admin.from('pulse_timeline').insert(events);
-  if (error && !String(error.message || '').includes('duplicate')) {
-    console.warn('emitTimeline error (non-fatal):', error.message);
+async function emitTimeline(admin: any, events: any[]): Promise<{ inserted: number; errors: string[] }> {
+  if (events.length === 0) return { inserted: 0, errors: [] };
+  // Best-effort insert; duplicate idempotency_keys are caught by unique constraint.
+  // We try bulk first, then fall back to per-row inserts so one bad row doesn't
+  // drop the whole batch (which was the silent failure in the initial ship).
+  const { error, count } = await admin.from('pulse_timeline').insert(events, { count: 'exact' });
+  if (!error) return { inserted: count || events.length, errors: [] };
+  // Dedup-only errors — expected, not a real problem
+  if (String(error.message || '').includes('duplicate')) return { inserted: 0, errors: [] };
+  // Otherwise try per-row for partial success
+  const errors: string[] = [String(error.message || '').substring(0, 200)];
+  let inserted = 0;
+  for (const e of events) {
+    const { error: e2 } = await admin.from('pulse_timeline').insert(e);
+    if (!e2) inserted++;
+    else if (!String(e2.message || '').includes('duplicate')) errors.push(String(e2.message).substring(0, 150));
   }
+  return { inserted, errors };
 }
 
 // ── Main handler ────────────────────────────────────────────────────────
@@ -485,6 +496,14 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
         await admin.from('pulse_listings').update(listingUpdates).eq('id', cand.id);
         stats.items_processed++;
 
+        // Base detail_enriched event (one per listing per day)
+        timelineEvents.push({
+          entity_type: 'listing', pulse_entity_id: cand.id, event_type: 'detail_enriched',
+          event_category: 'system', title: 'Listing detail-enriched',
+          description: `Fields refreshed via memo23 actor`,
+          source: SOURCE_ID, idempotency_key: `detail_enriched:${cand.source_listing_id}:${now.toISOString().slice(0, 10)}`,
+        });
+
         // Timeline events for new data discovered
         const prevEnrichedAt = cand.detail_enriched_at;
         if (soldDateIso && !cand.sold_date) {
@@ -698,7 +717,18 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
                 p_table: 'pulse_agencies', p_row_id: agencyRow.id,
                 p_field: 'email', p_value: agencyEmail, p_source: SRC_AGENCY,
               });
-              tallyAgency(extractAction(r));
+              const action = extractAction(r);
+              tallyAgency(action);
+              if (action === 'primary_set_from_null' || action === 'alt_added') {
+                timelineEvents.push({
+                  entity_type: 'agency', pulse_entity_id: agencyRow.id, rea_id: agencyReaId,
+                  event_type: 'agency_contact_discovered', event_category: 'contact',
+                  title: `New agency email discovered`,
+                  description: String(agencyEmail).toLowerCase(),
+                  source: SOURCE_ID,
+                  idempotency_key: `agency_email_discovered:${agencyReaId}:${String(agencyEmail).toLowerCase()}`,
+                });
+              }
             }
             // Phone
             const agencyPhone = agency.phoneNumber || item.agencyPhone || null;
@@ -707,7 +737,18 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
                 p_table: 'pulse_agencies', p_row_id: agencyRow.id,
                 p_field: 'phone', p_value: agencyPhone, p_source: SRC_AGENCY,
               });
-              tallyAgency(extractAction(r));
+              const action = extractAction(r);
+              tallyAgency(action);
+              if (action === 'primary_set_from_null' || action === 'alt_added') {
+                timelineEvents.push({
+                  entity_type: 'agency', pulse_entity_id: agencyRow.id, rea_id: agencyReaId,
+                  event_type: 'agency_contact_discovered', event_category: 'contact',
+                  title: `New agency phone discovered`,
+                  description: String(agencyPhone),
+                  source: SOURCE_ID,
+                  idempotency_key: `agency_phone_discovered:${agencyReaId}:${agencyPhone}`,
+                });
+              }
             }
             // Plain fields (website, address, brand colors) — don't overwrite if already set
             const aUpdates: Record<string, any> = {};
@@ -727,7 +768,12 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       }
 
       // Bulk inserts
-      if (timelineEvents.length > 0) await emitTimeline(admin, timelineEvents);
+      if (timelineEvents.length > 0) {
+        const tlResult = await emitTimeline(admin, timelineEvents);
+        if (tlResult.errors.length > 0) {
+          tlResult.errors.slice(0, 3).forEach(e => stats.errors.push(`timeline: ${e}`));
+        }
+      }
       if (historyRows.length > 0) {
         const { error } = await admin.from('pulse_entity_sync_history').insert(historyRows);
         if (error) stats.errors.push(`history insert: ${error.message?.substring(0, 150)}`);
