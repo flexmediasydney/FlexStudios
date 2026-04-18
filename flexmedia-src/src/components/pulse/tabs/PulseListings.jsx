@@ -916,11 +916,15 @@ export default function PulseListingsTab({
       q = q.or(`address.ilike.%${s}%,suburb.ilike.%${s}%,agency_name.ilike.%${s}%,agent_name.ilike.%${s}%`);
     }
 
-    // Global search (same pattern; also matches price_text)
+    // PF02: global search uses the trigger-maintained `search_text` column
+    // (address + suburb + postcode + agent_name + agency_name + price_text +
+    // property_type + listing_type, lowercased) backed by a GIN trigram
+    // index. Single ilike call — same pattern as PulseAgentIntel /
+    // PulseAgencyIntel. See migration 124_performance_indexes.sql.
     const globalQ = (search || "").trim();
     if (globalQ) {
-      const s = globalQ.replace(/[%_]/g, "\\$&");
-      q = q.or(`address.ilike.%${s}%,suburb.ilike.%${s}%,agency_name.ilike.%${s}%,agent_name.ilike.%${s}%,price_text.ilike.%${s}%`);
+      const s = globalQ.toLowerCase().replace(/[%_]/g, "\\$&");
+      q = q.ilike("search_text", `%${s}%`);
     }
 
     // Server-side sort — falls back to created_at desc for columns PostgREST
@@ -1095,6 +1099,30 @@ export default function PulseListingsTab({
               aria-label="Auto-refresh every 60s"
             />
             <span>Auto-refresh</span>
+          </label>
+          {/* LS06: Exclude withdrawn — default ON for for_sale/for_rent/all.
+              Disabled (shown faded) when current type filter is sold/UC since
+              it has no effect there. */}
+          <label
+            className={cn(
+              "flex items-center gap-1.5 text-[11px] cursor-pointer select-none",
+              WITHDRAWN_DEFAULT_ON_TYPES.has(listingFilter)
+                ? "text-muted-foreground"
+                : "text-muted-foreground/50 cursor-not-allowed"
+            )}
+            title={
+              WITHDRAWN_DEFAULT_ON_TYPES.has(listingFilter)
+                ? "Hide listings flagged as withdrawn on REA"
+                : "Not applicable — current type doesn't surface withdrawn campaigns"
+            }
+          >
+            <Switch
+              checked={excludeWithdrawn}
+              onCheckedChange={setExcludeWithdrawn}
+              disabled={!WITHDRAWN_DEFAULT_ON_TYPES.has(listingFilter)}
+              aria-label="Exclude withdrawn listings"
+            />
+            <span>Exclude withdrawn</span>
           </label>
           <span className="text-[11px] text-muted-foreground whitespace-nowrap">
             {isFetching ? (
