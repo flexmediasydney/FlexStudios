@@ -3,7 +3,8 @@ import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useNavigate } from 'react-router-dom';
 import { useSmartEntityData } from '@/components/hooks/useSmartEntityData';
 import { useEntityList, refetchEntityList, updateEntityInCache } from '@/components/hooks/useEntityData';
-import { api } from '@/api/supabaseClient';
+import { api, supabase } from '@/api/supabaseClient';
+import { useQueryClient } from '@tanstack/react-query';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
 import { fmtDate, fmtTimestampCustom, fixTimestamp } from '@/components/utils/dateUtils';
@@ -577,6 +578,25 @@ export default function PersonDetails() {
     setActiveTab(tab);
     sessionStorage.setItem(`tab-person-${agentId}`, tab);
   };
+
+  // #79 — prefetch dossier RPC on Intelligence tab hover so the tab loads
+  // instantly on click. Safe to fire repeatedly; react-query dedupes.
+  const queryClient = useQueryClient();
+  const handlePrefetchDossier = useCallback(() => {
+    if (!agentId) return;
+    queryClient.prefetchQuery({
+      queryKey: ["pulse_dossier", "agent", agentId],
+      queryFn: async () => {
+        const { data, error } = await supabase.rpc("pulse_get_dossier", {
+          p_entity_type: "agent",
+          p_entity_id: agentId,
+        });
+        if (error) throw error;
+        return data;
+      },
+      staleTime: 30_000,
+    });
+  }, [agentId, queryClient]);
 
   const handleEmailActivity = useCallback((action, data) => {
     setEmailActivities(prev => [
@@ -1209,6 +1229,8 @@ export default function PersonDetails() {
               <button
                 key={tab.id}
                 onClick={() => handleTabChange(tab.id)}
+                onMouseEnter={tab.id === 'intelligence' ? handlePrefetchDossier : undefined}
+                onFocus={tab.id === 'intelligence' ? handlePrefetchDossier : undefined}
                 className={cn(
                   "flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors",
                   activeTab === tab.id

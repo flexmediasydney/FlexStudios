@@ -1890,21 +1890,34 @@ export default function PulseAgencyIntel({
                         </p>
                       )}
                     </td>
-                    {/* Phone */}
+                    {/* Phone + AG10: +N alternates badge for parity with email */}
                     <td className="px-2 py-2 hidden md:table-cell text-muted-foreground">
                       {ag.phone ? (
-                        <a
-                          href={`tel:${ag.phone}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="hover:text-foreground transition-colors"
-                        >
-                          {ag.phone}
-                        </a>
+                        <div className="flex items-center gap-1">
+                          <a
+                            href={`tel:${ag.phone}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="hover:text-foreground transition-colors"
+                          >
+                            {ag.phone}
+                          </a>
+                          {(() => {
+                            const alts = alternateContacts(ag, "phone");
+                            return alts.length > 0 ? (
+                              <span
+                                className="inline-flex items-center text-[9px] font-semibold px-1 py-0 rounded bg-muted text-muted-foreground shrink-0"
+                                title={`${alts.length} other phone${alts.length !== 1 ? "s" : ""} seen`}
+                              >
+                                +{alts.length}
+                              </span>
+                            ) : null;
+                          })()}
+                        </div>
                       ) : (
                         <span className="text-muted-foreground/30">—</span>
                       )}
                     </td>
-                    {/* Email (NEW migration 108+) + alternate-count badge */}
+                    {/* Email (NEW migration 108+) + AG11: ContactProvBadges + alt count */}
                     <td className="px-2 py-2 hidden lg:table-cell">
                       {ag.email ? (
                         <div className="flex items-center gap-1">
@@ -1915,6 +1928,10 @@ export default function PulseAgencyIntel({
                           >
                             {ag.email}
                           </a>
+                          {(() => {
+                            const info = primaryContact(ag, "email");
+                            return info?.value ? <ContactProvBadges info={info} /> : null;
+                          })()}
                           {(() => {
                             const alts = alternateContacts(ag, "email");
                             return alts.length > 0 ? (

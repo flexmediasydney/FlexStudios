@@ -1834,53 +1834,132 @@ export default function PulseIntelligencePanel({
             <CardContent className="p-4">
               <div className="flex items-center justify-between gap-2 mb-2">
                 <SectionHeader icon={Users} count={agencyAgents.length}>Agent Roster</SectionHeader>
+                {/* #29: Export roster CSV (UTF-8 BOM) */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[10px] gap-1"
+                  onClick={handleExportRoster}
+                  title="Export roster as CSV (UTF-8 with BOM)"
+                >
+                  <Download className="h-3 w-3" />
+                  Export roster
+                </Button>
               </div>
+              {/* #28: bulk add action bar */}
+              {selectedAgentIds.size > 0 && (
+                <div className="flex items-center justify-between gap-2 mb-2 p-2 rounded-lg border border-primary/30 bg-primary/5">
+                  <span className="text-xs">
+                    <strong className="tabular-nums">{selectedAgentIds.size}</strong>{" "}
+                    agent{selectedAgentIds.size > 1 ? "s" : ""} selected
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[10px]"
+                      onClick={() => setSelectedAgentIds(new Set())}
+                      disabled={bulkAddingToCrm}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-6 px-2 text-[10px] gap-1"
+                      onClick={handleBulkAddAgentsToCrm}
+                      disabled={bulkAddingToCrm}
+                    >
+                      {bulkAddingToCrm ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <UserPlus className="h-3 w-3" />
+                      )}
+                      Add {selectedAgentIds.size} to CRM
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div className="border rounded-lg overflow-hidden print-expand">
                 <table className="w-full text-xs">
-                  <thead className="bg-muted/30">
-                    <tr>
-                      {/* #75 — column sort; click toggles direction on active column */}
-                      {(() => {
-                        const ArrowIcon = rosterSortDir === "asc" ? ArrowUp : ArrowDown;
-                        const col = (key, label, alignRight = false) => (
-                          <th
-                            className={cn(
-                              "px-2 py-1.5 font-semibold text-muted-foreground cursor-pointer select-none hover:text-foreground",
-                              alignRight ? "text-left" : "text-left"
-                            )}
-                            onClick={() => handleRosterSortClick(key)}
-                            aria-sort={rosterSort === key ? (rosterSortDir === "asc" ? "ascending" : "descending") : "none"}
-                          >
-                            <span className="inline-flex items-center gap-0.5">
-                              {label}
-                              {rosterSort === key && <ArrowIcon className="h-2.5 w-2.5" />}
-                            </span>
-                          </th>
-                        );
-                        return (
-                          <>
-                            {col("name", "Agent")}
-                            {col("position", "Position")}
-                            {col("sold", "Sold")}
-                            {col("rating", "Rating")}
-                            <th className="px-2 py-1.5 w-12"></th>
-                          </>
-                        );
-                      })()}
-                    </tr>
-                  </thead>
+                  {/* #31: thead tinted with 4% alpha of brand color when set */}
+                  {(() => {
+                    const brandThead = hexToRgba(a.brand_color_primary, 0.04);
+                    return (
+                      <thead
+                        style={brandThead ? { backgroundColor: brandThead } : undefined}
+                        className={cn(brandThead ? "" : "bg-muted/30")}
+                      >
+                        <tr>
+                          {/* #28: checkbox column */}
+                          <th className="px-2 py-1.5 w-6"></th>
+                          {/* #75 — column sort */}
+                          {(() => {
+                            const ArrowIcon = rosterSortDir === "asc" ? ArrowUp : ArrowDown;
+                            const col = (key, label) => (
+                              <th
+                                key={key}
+                                className="px-2 py-1.5 font-semibold text-muted-foreground cursor-pointer select-none hover:text-foreground text-left"
+                                onClick={() => handleRosterSortClick(key)}
+                                aria-sort={rosterSort === key ? (rosterSortDir === "asc" ? "ascending" : "descending") : "none"}
+                              >
+                                <span className="inline-flex items-center gap-0.5">
+                                  {label}
+                                  {rosterSort === key && <ArrowIcon className="h-2.5 w-2.5" />}
+                                </span>
+                              </th>
+                            );
+                            return (
+                              <>
+                                {col("name", "Agent")}
+                                {col("position", "Position")}
+                                {col("sold", "Sold")}
+                                {col("rating", "Rating")}
+                                <th className="px-2 py-1.5 w-12"></th>
+                              </>
+                            );
+                          })()}
+                        </tr>
+                      </thead>
+                    );
+                  })()}
                   <tbody>
                     {agencyAgents.slice(0, 30).map(ag => {
                       const agMapping = agentMappingIndex.get(`pid:${ag.id}`) || (ag.rea_agent_id ? agentMappingIndex.get(`rea:${ag.rea_agent_id}`) : null);
                       const hasCrm = !!agMapping?.crm_entity_id;
+                      const checked = selectedAgentIds.has(ag.id);
+                      // #23: every row drills through on click.
+                      //   In CRM  -> PersonDetails (legacy)
+                      //   Not CRM -> IndustryPulse dossier via ?pulse_id
+                      const onRowClick = hasCrm
+                        ? () => navigate(createPageUrl("PersonDetails") + `?id=${agMapping.crm_entity_id}`)
+                        : () => navigate(`/IndustryPulse?entity_type=agent&pulse_id=${encodeURIComponent(ag.id)}`);
                       return (
                         <tr
                           key={ag.id}
-                          className={cn("border-t hover:bg-muted/20", hasCrm && "cursor-pointer")}
-                          // Tier 3: drill through to CRM record without losing
-                          // the current tab/state — use client-side nav.
-                          onClick={hasCrm ? () => navigate(createPageUrl("PersonDetails") + `?id=${agMapping.crm_entity_id}`) : undefined}
+                          className="border-t hover:bg-muted/20 cursor-pointer"
+                          onClick={onRowClick}
                         >
+                          {/* #28: checkbox — only usable for uncrm'd */}
+                          <td className="px-2 py-1.5 w-6" onClick={(e) => e.stopPropagation()}>
+                            {!hasCrm ? (
+                              <span
+                                role="checkbox"
+                                aria-checked={checked}
+                                onClick={() => toggleAgentSelection(ag)}
+                                className={cn(
+                                  "inline-flex h-4 w-4 rounded border items-center justify-center cursor-pointer transition-colors",
+                                  checked
+                                    ? "bg-primary border-primary text-primary-foreground"
+                                    : "border-border hover:border-primary/60"
+                                )}
+                                title={checked ? "Deselect" : "Select for bulk add to CRM"}
+                              >
+                                {checked && <Check className="h-3 w-3" />}
+                              </span>
+                            ) : (
+                              <span className="inline-block h-4 w-4" aria-hidden />
+                            )}
+                          </td>
                           <td className="px-2 py-1.5">
                             <p className="font-medium">{ag.full_name}</p>
                             {ag.job_title && <p className="text-[9px] text-muted-foreground">{ag.job_title}</p>}
@@ -1917,6 +1996,23 @@ export default function PulseIntelligencePanel({
         )}
 
         {/* Agency Listings moved to Listings tab below (#71) */}
+        {/* #24: "View all listings" deep-link — filtered to this agency
+            when pulse_record has a rea_agency_id. Other filters are cleared
+            on arrival (the IndustryPulse Listings tab reads agency_rea_id
+            and clears everything else). */}
+        {(pulseData?.rea_agency_id || crmEntity?.rea_agency_id) && entityListings.length > 0 && (
+          <div className="flex justify-end -mt-1">
+            <button
+              type="button"
+              onClick={handleViewAllAgencyListings}
+              className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline font-medium"
+              title="Open the Listings tab filtered to this agency"
+            >
+              View all {entityListings.length} listings
+              <ChevronRight className="h-3 w-3" />
+            </button>
+          </div>
+        )}
 
         {/* ── 5b. Sales by Property Type (AG06) — #74 clickable filter ─
             pulse_agencies has no sales_breakdown column (0% populated), so
@@ -1983,18 +2079,58 @@ export default function PulseIntelligencePanel({
           </Card>
         )}
 
-        {/* ── 6. Active Suburbs ────────────────────────────────────────── */}
-        {suburbsList.length > 0 && (
+        {/* ── 6. Active Suburbs — #25: ranked by listing count ─
+            Prefer listing-based ranking. Falls back to the flat chip cloud
+            when no listings are available. */}
+        {(suburbRanking.length > 0 || suburbsList.length > 0) && (
           <Card id="dossier-suburbs" className={cn("print-section-break transition-shadow", flashSection === "suburbs" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
-              <SectionHeader icon={MapPin}>Active Suburbs</SectionHeader>
-              <div className="flex flex-wrap gap-1.5">
-                {suburbsList.map(s => (
-                  <Badge key={s} variant="outline" className="text-[9px] px-2 py-0.5 bg-red-50/50 dark:bg-red-950/10 border-red-200/50 text-red-700 dark:text-red-400">
-                    {s}
-                  </Badge>
-                ))}
+              <div className="flex items-center justify-between mb-2">
+                <SectionHeader icon={MapPin}>
+                  {suburbRanking.length > 0 ? "Suburb Concentration" : "Active Suburbs"}
+                </SectionHeader>
+                {suburbRanking.length > 5 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllSuburbs((p) => !p)}
+                    className="text-[10px] text-primary hover:underline"
+                  >
+                    {showAllSuburbs ? "Show top 5" : `Show all ${suburbRanking.length}`}
+                  </button>
+                )}
               </div>
+              {suburbRanking.length > 0 ? (
+                <div className="space-y-1">
+                  {(showAllSuburbs ? suburbRanking : suburbRanking.slice(0, 5)).map((s) => {
+                    const max = suburbRanking[0]?.count || 1;
+                    const pct = Math.round((s.count / max) * 100);
+                    return (
+                      <div key={s.suburb} className="space-y-0.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium truncate">{s.suburb}</span>
+                          <span className="text-muted-foreground tabular-nums">
+                            {s.count} listing{s.count !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-400 dark:bg-blue-500 rounded-full transition-all"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {suburbsList.map(s => (
+                    <Badge key={s} variant="outline" className="text-[9px] px-2 py-0.5 bg-red-50/50 dark:bg-red-950/10 border-red-200/50 text-red-700 dark:text-red-400">
+                      {s}
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -2183,6 +2319,77 @@ function AddToCrmInlineDialog({ entityType, pulseRecord, onClose, onSuccess }) {
   const [saving, setSaving] = useState(false);
   const isAgent = entityType === "agent";
 
+  // #76 — dedup warning: hit the CRM for a potential duplicate before the
+  // user confirms. OR-joined on email / phone / rea_id; first hit wins.
+  const table = isAgent ? "agents" : "agencies";
+  const dedupQuery = useQuery({
+    queryKey: ["add-to-crm-dedup", entityType, pulseRecord?.id],
+    queryFn: async () => {
+      const email = pulseRecord?.email;
+      const phone = isAgent
+        ? (pulseRecord?.mobile || pulseRecord?.business_phone)
+        : pulseRecord?.phone;
+      const reaId = isAgent
+        ? pulseRecord?.rea_agent_id
+        : pulseRecord?.rea_agency_id;
+      const clauses = [];
+      if (email) clauses.push(`email.eq.${email}`);
+      if (phone) clauses.push(`phone.eq.${phone}`);
+      if (reaId) {
+        const col = isAgent ? "rea_agent_id" : "rea_agency_id";
+        clauses.push(`${col}.eq.${reaId}`);
+      }
+      if (clauses.length === 0) return null;
+      const { data, error } = await supabase
+        .from(table)
+        .select("id,name,email,phone")
+        .or(clauses.join(","))
+        .limit(1)
+        .maybeSingle();
+      if (error && error.code !== "PGRST116") {
+        // swallow — dedup is best-effort, don't block the dialog
+        return null;
+      }
+      return data || null;
+    },
+    enabled: !!pulseRecord,
+    staleTime: 30_000,
+  });
+  const duplicate = dedupQuery.data;
+  const [dupAck, setDupAck] = useState(false);
+  // If the duplicate clears (refetch returns null) auto-clear ack.
+  useEffect(() => {
+    if (!duplicate) setDupAck(false);
+  }, [duplicate]);
+
+  async function handleLinkToExisting() {
+    if (!duplicate) return;
+    setSaving(true);
+    try {
+      await api.entities.PulseCrmMapping.create({
+        entity_type: entityType,
+        pulse_entity_id: pulseRecord.id,
+        crm_entity_id: duplicate.id,
+        rea_id: isAgent ? (pulseRecord.rea_agent_id || null) : (pulseRecord.rea_agency_id || null),
+        match_type: "manual",
+        confidence: "confirmed",
+      });
+      if (isAgent) {
+        await api.entities.PulseAgent.update(pulseRecord.id, { is_in_crm: true });
+      } else {
+        await api.entities.PulseAgency.update(pulseRecord.id, { is_in_crm: true });
+      }
+      await refetchEntityList("PulseCrmMapping").catch(() => {});
+      toast.success(`Linked to existing ${isAgent ? "agent" : "agency"} ${duplicate.name}`);
+      await onSuccess?.();
+    } catch (err) {
+      console.error("Link-to-existing failed:", err);
+      toast.error("Link failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleConfirm() {
     setSaving(true);
     try {
@@ -2327,6 +2534,52 @@ function AddToCrmInlineDialog({ entityType, pulseRecord, onClose, onSuccess }) {
               </>
             )}
           </div>
+          {/* #76 — duplicate warning */}
+          {duplicate && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800/40 p-2.5 space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="text-xs space-y-0.5 flex-1 min-w-0">
+                  <p className="font-semibold text-amber-900 dark:text-amber-200">
+                    Similar {isAgent ? "agent" : "agency"} exists
+                  </p>
+                  <p className="text-amber-800 dark:text-amber-300 truncate">
+                    <span className="font-medium">{duplicate.name}</span>
+                    {duplicate.email && <span className="text-muted-foreground"> · {duplicate.email}</span>}
+                    {duplicate.phone && <span className="text-muted-foreground"> · {duplicate.phone}</span>}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  to={createPageUrl(isAgent ? "PersonDetails" : "OrgDetails") + `?id=${duplicate.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] text-primary hover:underline inline-flex items-center gap-0.5"
+                >
+                  <ExternalLink className="h-2.5 w-2.5" /> Open existing
+                </Link>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[10px]"
+                  disabled={saving}
+                  onClick={handleLinkToExisting}
+                >
+                  Link to existing instead
+                </Button>
+                <label className="inline-flex items-center gap-1 text-[10px] text-amber-900 dark:text-amber-200 ml-auto">
+                  <input
+                    type="checkbox"
+                    checked={dupAck}
+                    onChange={(e) => setDupAck(e.target.checked)}
+                    className="h-3 w-3"
+                  />
+                  Create anyway (acknowledge duplicate)
+                </label>
+              </div>
+            </div>
+          )}
           <p className="text-[10px] text-muted-foreground">
             Creates a new CRM {isAgent ? "Agent" : "Agency"} record and a confirmed
             Pulse mapping so future syncs update this record.
@@ -2336,7 +2589,12 @@ function AddToCrmInlineDialog({ entityType, pulseRecord, onClose, onSuccess }) {
           <Button variant="outline" size="sm" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button size="sm" onClick={handleConfirm} disabled={saving}>
+          <Button
+            size="sm"
+            onClick={handleConfirm}
+            disabled={saving || (duplicate && !dupAck)}
+            title={duplicate && !dupAck ? "Acknowledge the duplicate first, or Link to existing" : undefined}
+          >
             {saving ? "Creating\u2026" : "Confirm & Add"}
           </Button>
         </DialogFooter>
