@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import {
   Database, Users, Home, DollarSign, Clock, CheckCircle2,
   AlertTriangle, Loader2, Plus, Trash2, Settings2,
-  ChevronDown, ChevronUp, Eye, MapPin, ToggleLeft, ToggleRight,
+  ChevronDown, ChevronUp, Eye, MapPin,
   ExternalLink, Repeat, Globe, Calendar, Coins, FileCode2,
   User, XCircle, Activity, Copy, Edit3, Save, AlertCircle,
   ChevronLeft, ChevronRight, Filter, Download, History, X,
@@ -422,6 +422,70 @@ function usePulseSourceCardStats() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  return byId;
+}
+
+// ── 24h Apify cost per source hook (DS06) ────────────────────────────────────
+//
+// Reads `pulse_sync_log_payloads.result_summary->>apify_billed_cost_usd`
+// (and, when present, `value_producing_cost_usd`) summed over the last
+// 24h, grouped by the matching sync_log's source_id. Powers the "$X.XX ·
+// Nr/24h" chip on each SourceCard.
+//
+// Blocks gracefully: if result_summary doesn't carry billing fields (e.g.
+// Fixer 3 hasn't shipped the writer yet), a row contributes 0 to billed_usd
+// but still increments the run counter — so cards don't show a fake $0.00
+// until at least one run writes a non-null cost.
+function usePulseSourceCosts24h() {
+  const [byId, setById] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    const fetch = async () => {
+      try {
+        const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+        // Join sync_logs → sync_log_payloads on id. result_summary lives on the
+        // payload side-table; source_id lives on the log header.
+        const { data, error } = await api._supabase
+          .from("pulse_sync_logs")
+          .select("source_id, pulse_sync_log_payloads(result_summary)")
+          .gte("started_at", since)
+          .not("source_id", "is", null)
+          .limit(5000);
+        if (error) throw error;
+        if (cancelled) return;
+        const map = {};
+        for (const row of data || []) {
+          const sid = row.source_id;
+          if (!sid) continue;
+          // The join returns either an object or an array depending on postgrest
+          // normalisation — handle both.
+          const payloadRaw = row.pulse_sync_log_payloads;
+          const payload = Array.isArray(payloadRaw) ? payloadRaw[0] : payloadRaw;
+          const summary = payload?.result_summary || {};
+          const billed = Number(summary.apify_billed_cost_usd) || 0;
+          const value  = Number(summary.value_producing_cost_usd) || null;
+          if (!map[sid]) map[sid] = { source_id: sid, billed_usd: 0, value_usd: 0, runs: 0, has_value_breakdown: false };
+          map[sid].billed_usd += billed;
+          if (value != null && !isNaN(value)) {
+            map[sid].value_usd += value;
+            map[sid].has_value_breakdown = true;
+          }
+          map[sid].runs += 1;
+        }
+        // Null-out value_usd when no run had a breakdown so the tooltip falls back cleanly.
+        for (const sid of Object.keys(map)) {
+          if (!map[sid].has_value_breakdown) map[sid].value_usd = null;
+        }
+        setById(map);
+      } catch (err) {
+        // Non-fatal — chip just won't render.
+        console.warn("pulse source cost hook failed:", err.message);
+      }
+    };
+    fetch();
+    const id = setInterval(fetch, 60000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
   return byId;
 }
 
@@ -1359,12 +1423,41 @@ function DlqDrillDialog({ sourceId, onClose }) {
 //   - Circuit breaker state (red chip when open/half_open)
 //   - Coverage % (from pulse_source_coverage view)
 
-function QueuePipelineBlock({ queueStats, circuit, coverage, onOpenDlq }) {
+function QueuePipelineBlock({ queueStats, circuit, coverage, onOpenDlq, sourceId, isAdmin, onBreakerReset }) {
   const { pending = 0, running = 0, completed_24h = 0, failed_24h = 0 } = queueStats || {};
   const hasActive = pending > 0 || running > 0;
   const hasFailed = failed_24h > 0;
   const breakerOpen = circuit?.state === "open" || circuit?.state === "half_open";
   const cov = coverage?.coverage_pct_24h;
+  const [resetting, setResetting] = useState(false);
+
+  // DS05: admin-only button to force-close the circuit breaker. The backup
+  // path is the automatic `reopen_at` timer, but when a human wants to
+  // retry a source sooner (after fixing the underlying cause), they need
+  // a one-click reset. Writes directly to pulse_source_circuit_breakers
+  // because the table has an authenticated_full_access RLS policy.
+  const handleForceReset = useCallback(async () => {
+    if (!sourceId) return;
+    setResetting(true);
+    try {
+      const { error } = await api._supabase
+        .from("pulse_source_circuit_breakers")
+        .update({
+          state: "closed",
+          consecutive_failures: 0,
+          opened_at: null,
+          reopen_at: null,
+        })
+        .eq("source_id", sourceId);
+      if (error) throw error;
+      toast.success(`Circuit breaker reset for ${sourceId}`);
+      if (onBreakerReset) onBreakerReset();
+    } catch (err) {
+      toast.error(`Failed to reset breaker: ${err.message || err}`);
+    } finally {
+      setResetting(false);
+    }
+  }, [sourceId, onBreakerReset]);
 
   // Color the block based on most-alarming signal
   let tone = "border-border bg-muted/20";
@@ -1441,13 +1534,26 @@ function QueuePipelineBlock({ queueStats, circuit, coverage, onOpenDlq }) {
         )}
       </div>
       {breakerOpen && circuit && (
-        <div className="flex items-center gap-1.5 text-[9px] text-red-700 dark:text-red-400 font-medium pt-0.5 border-t border-red-500/20">
+        <div className="flex items-center gap-1.5 text-[9px] text-red-700 dark:text-red-400 font-medium pt-0.5 border-t border-red-500/20 flex-wrap">
           <AlertCircle className="h-2.5 w-2.5" />
           Circuit breaker {circuit.state.toUpperCase()} ({circuit.consecutive_failures} consecutive failures)
           {circuit.reopen_at && (
             <span className="text-muted-foreground font-normal">
               · reopens {fmtRelativeTs(circuit.reopen_at)}
             </span>
+          )}
+          {/* DS05: force reset — admin only */}
+          {isAdmin && circuit.state === "open" && (
+            <button
+              type="button"
+              onClick={handleForceReset}
+              disabled={resetting}
+              className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-red-500/60 text-red-700 dark:text-red-300 bg-red-100/60 dark:bg-red-900/40 hover:bg-red-200/60 transition-colors disabled:opacity-60 cursor-pointer font-semibold uppercase tracking-wide"
+              title="Force-close the breaker (clears consecutive_failures, opened_at, reopen_at). Admin only."
+            >
+              {resetting ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <X className="h-2.5 w-2.5" />}
+              Force reset
+            </button>
           )}
         </div>
       )}
@@ -1463,7 +1569,7 @@ function QueuePipelineBlock({ queueStats, circuit, coverage, onOpenDlq }) {
 // (never truncated), has a Copy button, and an Edit button that opens the
 // editor dialog.
 
-function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, cardStats, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch, onViewHistory }) {
+function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, cardStats, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch, onViewHistory, isAdmin, sourceCost }) {
   const meta = getSourceMeta(sourceConfig.source_id);
   const [dlqOpen, setDlqOpen] = useState(false);
   const Icon = meta.icon;
@@ -1634,6 +1740,25 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
               {meta.costNote}
             </Badge>
           )}
+          {/* DS06: real 24h Apify billing chip.
+              Pulled from sync_log_payloads.result_summary.apify_billed_cost_usd
+              summed over the last 24h by the parent hook. Renders nothing until
+              the parent has a number for this source (keeps cards clean for
+              sources that haven't run yet). */}
+          {sourceCost && (sourceCost.billed_usd > 0 || sourceCost.runs > 0) && (
+            <Badge
+              variant="outline"
+              className="text-[9px] px-1.5 py-0 font-mono tabular-nums border-amber-400/50 text-amber-800 dark:text-amber-300 bg-amber-50/60 dark:bg-amber-950/30"
+              title={
+                sourceCost.value_usd != null
+                  ? `billed $${sourceCost.billed_usd.toFixed(2)} / value-producing $${sourceCost.value_usd.toFixed(2)} across ${sourceCost.runs} run${sourceCost.runs === 1 ? "" : "s"} in last 24h`
+                  : `$${sourceCost.billed_usd.toFixed(2)} across ${sourceCost.runs} run${sourceCost.runs === 1 ? "" : "s"} in last 24h`
+              }
+            >
+              <Coins className="h-2.5 w-2.5 mr-1" />
+              ${sourceCost.billed_usd.toFixed(2)} · {sourceCost.runs}r/24h
+            </Badge>
+          )}
         </div>
 
         {/* Input (FULL, expanded by default). Shows the exact actor_input that
@@ -1696,6 +1821,8 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
             circuit={circuit}
             coverage={coverage}
             onOpenDlq={() => setDlqOpen(true)}
+            sourceId={sourceConfig.source_id}
+            isAdmin={isAdmin}
           />
         )}
 
@@ -1954,20 +2081,60 @@ function EditConfigDialog({ config, onClose, onSaved, anyInflight = false, infli
     }
     setSaving(true);
     try {
-      const updates = {
-        actor_input: parsed,
-        max_results_per_suburb: form.max_results_per_suburb === "" ? null : Number(form.max_results_per_suburb),
-        max_suburbs: form.max_suburbs === "" ? null : Number(form.max_suburbs),
-        min_priority: form.min_priority === "" ? 0 : Number(form.min_priority),
-        schedule_cron: form.schedule_cron.trim() || null,
-        is_enabled: !!form.is_enabled,
-        label: form.label,
-        description: form.description,
-        notes: form.notes || null,
-      };
-      await api.entities.PulseSourceConfig.update(config.id, updates);
+      const newCron = form.schedule_cron.trim() || null;
+      const cronChanged = (config?.schedule_cron || null) !== newCron;
+
+      // DS02: when the cron string changes, call the RPC so both the config
+      // row AND the actual cron.job entry get updated in one transaction.
+      // Fall back to a plain config update when the cron is unchanged
+      // (saves a superfluous RPC round-trip).
+      if (cronChanged) {
+        const { data: rpcData, error: rpcErr } = await api._supabase.rpc(
+          "pulse_update_source_cron",
+          {
+            p_source_id: config.source_id,
+            p_schedule_cron: newCron,
+          }
+        );
+        if (rpcErr) throw rpcErr;
+        // The RPC only updates schedule_cron. Push the remaining fields next.
+        const rest = {
+          actor_input: parsed,
+          max_results_per_suburb: form.max_results_per_suburb === "" ? null : Number(form.max_results_per_suburb),
+          max_suburbs: form.max_suburbs === "" ? null : Number(form.max_suburbs),
+          min_priority: form.min_priority === "" ? 0 : Number(form.min_priority),
+          is_enabled: !!form.is_enabled,
+          label: form.label,
+          description: form.description,
+          notes: form.notes || null,
+        };
+        await api.entities.PulseSourceConfig.update(config.id, rest);
+        // Tell the user whether the cron.job actually got altered so a missing
+        // jobname mapping doesn't silently leave the schedule stale.
+        if (rpcData?.cron_updated) {
+          toast.success(`Saved: ${form.label} · cron.job "${rpcData.cron_job_name}" updated`);
+        } else if (rpcData?.cron_job_name) {
+          toast.warning(`Saved: ${form.label} · cron.job "${rpcData.cron_job_name}" not found — DB row only`);
+        } else {
+          toast.warning(`Saved: ${form.label} · no cron_job_name mapped — DB row only`);
+        }
+      } else {
+        const updates = {
+          actor_input: parsed,
+          max_results_per_suburb: form.max_results_per_suburb === "" ? null : Number(form.max_results_per_suburb),
+          max_suburbs: form.max_suburbs === "" ? null : Number(form.max_suburbs),
+          min_priority: form.min_priority === "" ? 0 : Number(form.min_priority),
+          schedule_cron: newCron,
+          is_enabled: !!form.is_enabled,
+          label: form.label,
+          description: form.description,
+          notes: form.notes || null,
+        };
+        await api.entities.PulseSourceConfig.update(config.id, updates);
+        toast.success(`Saved: ${form.label}`);
+      }
+
       await refetchEntityList("PulseSourceConfig");
-      toast.success(`Saved: ${form.label}`);
       if (onSaved) onSaved();
       onClose();
     } catch (err) {
@@ -1975,7 +2142,7 @@ function EditConfigDialog({ config, onClose, onSaved, anyInflight = false, infli
     } finally {
       setSaving(false);
     }
-  }, [form, config?.id, jsonError, onClose, onSaved]);
+  }, [form, config?.id, config?.source_id, config?.schedule_cron, jsonError, onClose, onSaved]);
 
   if (!config) return null;
 
@@ -2215,7 +2382,10 @@ function EditConfigDialog({ config, onClose, onSaved, anyInflight = false, infli
               )}
             </div>
             <p className="text-[9px] text-muted-foreground mt-1 italic">
-              Note: editing this field updates the DB row only. The actual pg_cron job schedule lives in cron.job and must be updated separately if you change the schedule.
+              Saving also calls <code className="font-mono">pulse_update_source_cron</code>,
+              which runs <code className="font-mono">cron.alter_job</code> on the linked pg_cron
+              row (from <code className="font-mono">pulse_source_configs.cron_job_name</code>).
+              If no jobname is mapped, only the DB row updates and a toast warns you.
             </p>
           </div>
 
@@ -2763,47 +2933,50 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
   );
 }
 
-// --- Suburb Pool ---
+// --- Suburb Pool (read-only summary) ---
+//
+// DS01: The canonical write surface for pulse_target_suburbs is the
+// dedicated "Suburbs" tab (PulseSuburbs.jsx) — it enforces postcode /
+// state / comma-in-name validation that the old inline editor skipped.
+// We keep only a read-only summary here + a CTA to jump to that tab.
 
-function SuburbPool({ targetSuburbs }) {
-  const [newSuburb, setNewSuburb] = useState("");
-
-  const handleAdd = useCallback(async () => {
-    const name = newSuburb.trim();
-    if (!name) return;
-    try {
-      await api.entities.PulseTargetSuburb.create({ name, is_active: true, region: "Greater Sydney", priority: 5 });
-      await refetchEntityList("PulseTargetSuburb");
-      setNewSuburb("");
-      toast.success(`Added suburb: ${name}`);
-    } catch (err) {
-      toast.error(`Failed to add suburb: ${err.message}`);
-    }
-  }, [newSuburb]);
-
-  const handleToggle = useCallback(async (suburb) => {
-    try {
-      await api.entities.PulseTargetSuburb.update(suburb.id, { is_active: !suburb.is_active });
-      await refetchEntityList("PulseTargetSuburb");
-    } catch (err) {
-      toast.error(`Failed to update: ${err.message}`);
-    }
-  }, []);
-
-  const handleDelete = useCallback(async (suburb) => {
-    try {
-      await api.entities.PulseTargetSuburb.delete(suburb.id);
-      await refetchEntityList("PulseTargetSuburb");
-      toast.success(`Removed ${suburb.name}`);
-    } catch (err) {
-      toast.error(`Failed to remove: ${err.message}`);
-    }
-  }, []);
-
-  const sorted = useMemo(
-    () => [...targetSuburbs].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)),
+function SuburbPoolSummary({ targetSuburbs }) {
+  const activeCount = useMemo(
+    () => targetSuburbs.filter((s) => s.is_active).length,
     [targetSuburbs]
   );
+  const total = targetSuburbs.length;
+
+  // Priority histogram (just counts per priority bucket, highest first)
+  const byPriority = useMemo(() => {
+    const buckets = {};
+    for (const s of targetSuburbs) {
+      if (!s.is_active) continue;
+      const p = s.priority ?? 0;
+      buckets[p] = (buckets[p] || 0) + 1;
+    }
+    return Object.entries(buckets)
+      .map(([p, n]) => ({ priority: Number(p), count: n }))
+      .sort((a, b) => b.priority - a.priority);
+  }, [targetSuburbs]);
+
+  // Top 5 active suburbs by priority for a quick visual check
+  const topActive = useMemo(() => {
+    return [...targetSuburbs]
+      .filter((s) => s.is_active)
+      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
+      .slice(0, 5);
+  }, [targetSuburbs]);
+
+  const goToSuburbsTab = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "suburbs");
+    // Preserve existing params; use pushState so back-button returns here.
+    window.history.pushState({}, "", url.toString());
+    // Dispatch popstate so IndustryPulse picks up the new `?tab=` param
+    // (its useEffect watches searchParams and retargets the tab state).
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, []);
 
   return (
     <Card className="rounded-xl border shadow-sm">
@@ -2812,73 +2985,81 @@ function SuburbPool({ targetSuburbs }) {
           <MapPin className="h-4 w-4 text-muted-foreground" />
           Suburb Pool
           <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-            {targetSuburbs.filter((s) => s.is_active).length} active
+            {activeCount} active
           </Badge>
+          {total > activeCount && (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
+              {total - activeCount} disabled
+            </Badge>
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="px-4 pb-4 space-y-3">
-        {/* Add row */}
-        <div className="flex items-center gap-2">
-          <Input
-            placeholder="Add suburb..."
-            value={newSuburb}
-            onChange={(e) => setNewSuburb(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            className="h-7 text-xs flex-1"
-          />
-          <Button size="sm" variant="outline" className="h-7 px-2" onClick={handleAdd}>
-            <Plus className="h-3 w-3" />
-          </Button>
-        </div>
+        <p className="text-[11px] text-muted-foreground leading-snug">
+          Read-only summary. Add, edit, or deactivate suburbs on the
+          dedicated <strong>Suburbs</strong> tab — that form validates
+          postcode (4 digits), state (AU code), and rejects names with
+          commas (REA URL builders break on them).
+        </p>
 
-        {/* Suburb list */}
-        {sorted.length === 0 ? (
-          <p className="text-xs text-muted-foreground text-center py-2">No suburbs configured.</p>
-        ) : (
-          <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
-            {sorted.map((s) => (
-              <div
-                key={s.id}
-                className={cn(
-                  "flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs transition-colors",
-                  s.is_active ? "bg-muted/40" : "bg-muted/10 opacity-60"
-                )}
+        {/* Priority histogram */}
+        {byPriority.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {byPriority.map(({ priority, count }) => (
+              <Badge
+                key={priority}
+                variant="outline"
+                className="text-[10px] px-1.5 py-0 font-mono tabular-nums"
+                title={`${count} active suburb${count === 1 ? "" : "s"} at priority ${priority}`}
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-medium truncate">{s.name}</span>
-                  {s.region && (
-                    <span className="text-[10px] text-muted-foreground shrink-0">{s.region}</span>
-                  )}
-                  {s.priority != null && (
-                    <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">
-                      P{s.priority}
-                    </Badge>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => handleToggle(s)}
-                    title={s.is_active ? "Deactivate" : "Activate"}
-                  >
-                    {s.is_active ? (
-                      <ToggleRight className="h-4 w-4 text-emerald-500" />
-                    ) : (
-                      <ToggleLeft className="h-4 w-4" />
-                    )}
-                  </button>
-                  <button
-                    className="text-muted-foreground hover:text-red-500 transition-colors"
-                    onClick={() => handleDelete(s)}
-                    title="Remove suburb"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
+                P{priority}: {count}
+              </Badge>
             ))}
           </div>
         )}
+
+        {/* Top 5 active peek */}
+        {topActive.length > 0 && (
+          <div className="space-y-1">
+            <Label className="text-[9px] uppercase tracking-wide text-muted-foreground">
+              Top priorities
+            </Label>
+            <div className="flex flex-wrap gap-1">
+              {topActive.map((s) => (
+                <Badge
+                  key={s.id}
+                  variant="outline"
+                  className="text-[10px] px-1.5 py-0"
+                >
+                  {s.name}
+                  <span className="ml-1 text-muted-foreground">P{s.priority ?? 0}</span>
+                </Badge>
+              ))}
+              {activeCount > 5 && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
+                  +{activeCount - 5} more
+                </Badge>
+              )}
+            </div>
+          </div>
+        )}
+
+        {total === 0 && (
+          <p className="text-xs text-muted-foreground text-center py-2">
+            No suburbs configured yet.
+          </p>
+        )}
+
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full h-8 text-xs gap-1.5"
+          onClick={goToSuburbsTab}
+        >
+          <MapPin className="h-3 w-3" />
+          Manage suburbs in Suburbs tab
+          <ChevronRight className="h-3 w-3" />
+        </Button>
       </CardContent>
     </Card>
   );
@@ -3002,10 +3183,57 @@ function DrillDialog({ log, onClose }) {
   const payload = log?.raw_payload ?? sidePayload?.raw_payload ?? {};
   const agents   = useMemo(() => Array.isArray(payload?.rea_agents) ? payload.rea_agents : Array.isArray(payload?.agents) ? payload.agents : [], [payload]);
   const listings = useMemo(() => Array.isArray(payload?.listings) ? payload.listings : [], [payload]);
+
+  // DS03: pulseDetailEnrich has a different shape — no top-level agents/listings
+  // arrays. It writes either:
+  //   - payload.items = [...]           (if a simplified shape is used)
+  //   - payload.batches[].items_sample  (the canonical memo23 batch format)
+  //   - OR the top-level value IS itself an array
+  // Normalise all of these into a single enrichments array of per-listing rows
+  // so we can render them in a tab with the useful fields (listing id, URL,
+  // fields_set, has_floorplan, has_video).
+  const [enrichPage, setEnrichPage] = useState(0);
+  const enrichments = useMemo(() => {
+    let items = [];
+    if (Array.isArray(payload?.items)) {
+      items = payload.items;
+    } else if (Array.isArray(payload)) {
+      items = payload;
+    } else if (Array.isArray(payload?.batches)) {
+      // Flatten batch items_sample (each batch entry has a sample of memo23 output)
+      items = payload.batches.flatMap((b) => Array.isArray(b?.items_sample) ? b.items_sample : []);
+    }
+    // Normalise each memo23 item to a compact row the UI can render.
+    return items.map((item) => {
+      const listing = item?.listing || item || {};
+      const floorplans = Array.isArray(listing?.floorplans) ? listing.floorplans : [];
+      const videoUrl = listing?.videoLink || listing?.video || listing?.videoUrl || null;
+      const listingId =
+        item?.listingId || listing?.listingId || listing?.id || item?.id || null;
+      const url = listing?.url || item?.url || null;
+      // Best-effort `fields_set`: show keys that actually have non-empty values.
+      const fieldsSet = Object.entries(listing).filter(([, v]) => {
+        if (v == null) return false;
+        if (Array.isArray(v)) return v.length > 0;
+        if (typeof v === "string") return v.length > 0;
+        return true;
+      }).map(([k]) => k);
+      return {
+        _raw: item,
+        listing_id: listingId,
+        url,
+        fields_set: fieldsSet,
+        has_floorplan: floorplans.length > 0,
+        has_video: !!videoUrl,
+      };
+    });
+  }, [payload]);
+
   const hasAgents   = agents.length > 0;
   const hasListings = listings.length > 0;
+  const hasEnrichments = enrichments.length > 0;
 
-  const defaultTab = hasAgents ? "agents" : hasListings ? "listings" : "raw";
+  const defaultTab = hasAgents ? "agents" : hasListings ? "listings" : hasEnrichments ? "enrichments" : "raw";
 
   return (
     <Dialog open={!!log} onOpenChange={(open) => !open && onClose()}>
@@ -3020,6 +3248,7 @@ function DrillDialog({ log, onClose }) {
           <TabsList className="shrink-0 h-8 text-xs">
             {hasAgents   && <TabsTrigger value="agents"   className="text-xs h-7">{`Agents (${agents.length})`}</TabsTrigger>}
             {hasListings && <TabsTrigger value="listings" className="text-xs h-7">{`Listings (${listings.length})`}</TabsTrigger>}
+            {hasEnrichments && <TabsTrigger value="enrichments" className="text-xs h-7">{`Enrichments (${enrichments.length})`}</TabsTrigger>}
             <TabsTrigger value="raw" className="text-xs h-7">Raw JSON</TabsTrigger>
           </TabsList>
 
@@ -3033,6 +3262,15 @@ function DrillDialog({ log, onClose }) {
               <DrillPaginatedList items={listings} page={listingsPage} setPage={setListingsPage} />
             </TabsContent>
           )}
+          {hasEnrichments && (
+            <TabsContent value="enrichments" className="flex-1 overflow-y-auto mt-2">
+              <DrillEnrichmentsList
+                items={enrichments}
+                page={enrichPage}
+                setPage={setEnrichPage}
+              />
+            </TabsContent>
+          )}
           <TabsContent value="raw" className="flex-1 overflow-y-auto mt-2">
             <pre className="text-[10px] bg-muted/30 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap break-all">
               {JSON.stringify(payload, null, 2)}
@@ -3041,6 +3279,98 @@ function DrillDialog({ log, onClose }) {
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// --- DrillEnrichmentsList (DS03) ---
+// Renders pulseDetailEnrich items with the most-useful per-row fields
+// (listing id, URL, fields_set count, floorplan/video presence) and a
+// click-to-expand JSON view for the raw memo23 item.
+function DrillEnrichmentsList({ items, page, setPage }) {
+  const totalPages = Math.ceil(items.length / DRILL_PAGE_SIZE);
+  const slice = items.slice(page * DRILL_PAGE_SIZE, (page + 1) * DRILL_PAGE_SIZE);
+  return (
+    <div className="space-y-0 border rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-muted/40 border-b text-[10px] text-muted-foreground">
+        <span>{items.length} enrichment{items.length === 1 ? "" : "s"}</span>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost" size="sm" className="h-5 w-5 p-0"
+            disabled={page === 0}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+          >&lsaquo;</Button>
+          <span>Page {page + 1} / {totalPages || 1}</span>
+          <Button
+            variant="ghost" size="sm" className="h-5 w-5 p-0"
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+          >&rsaquo;</Button>
+        </div>
+      </div>
+      {slice.map((row, i) => (
+        <DrillEnrichmentRow
+          key={page * DRILL_PAGE_SIZE + i}
+          row={row}
+          index={page * DRILL_PAGE_SIZE + i}
+        />
+      ))}
+    </div>
+  );
+}
+
+function DrillEnrichmentRow({ row, index }) {
+  const [expanded, setExpanded] = useState(false);
+  const fieldsCount = row.fields_set?.length || 0;
+  return (
+    <div className="border-b last:border-0">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-muted/30 transition-colors gap-2"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <span className="font-mono text-[10px] text-muted-foreground shrink-0">
+            {row.listing_id || `#${index + 1}`}
+          </span>
+          {row.url ? (
+            <a
+              href={row.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-primary hover:underline truncate text-[11px] inline-flex items-center gap-1"
+              title={row.url}
+            >
+              <span className="truncate">{row.url.replace(/^https?:\/\//, "")}</span>
+              <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+            </a>
+          ) : (
+            <span className="text-muted-foreground/60 text-[11px]">(no url)</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <Badge variant="outline" className="text-[9px] px-1 py-0 tabular-nums" title="fields_set count">
+            {fieldsCount} fields
+          </Badge>
+          {row.has_floorplan && (
+            <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-400/50 text-emerald-700 dark:text-emerald-400" title="Floorplan captured">
+              FP
+            </Badge>
+          )}
+          {row.has_video && (
+            <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-400/50 text-emerald-700 dark:text-emerald-400" title="Video captured">
+              Video
+            </Badge>
+          )}
+          {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        </div>
+      </button>
+      {expanded && (
+        <pre className="bg-muted/30 text-[10px] px-3 py-2 overflow-x-auto rounded-b-md whitespace-pre-wrap break-all">
+          {JSON.stringify(row._raw, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }
 
@@ -3115,6 +3445,13 @@ export default function PulseDataSources({
   // Last-cron-dispatch coverage stats per source_id (one RPC call, refreshes 60s).
   // Powers the "X / Y suburbs covered" line on each Source Card.
   const cardStatsById = usePulseSourceCardStats();
+
+  // DS06: 24h Apify billing per source_id. Drives the "$X.XX · Nr/24h" chip.
+  const costBySourceId = usePulseSourceCosts24h();
+
+  // DS05: admin gate for the force-reset-breaker button. Matches the role
+  // check used elsewhere in the app (SettingsNotifications, AIAuditLog).
+  const isAdmin = user?.role === "master_admin";
 
   // Open the drill dialog for a given sync_log id.
   // ── Migration 095 ────────────────────────────────────────────────────
@@ -3535,6 +3872,8 @@ export default function PulseDataSources({
               pulseTimeline={pulseTimeline}
               activeSuburbCount={activeSuburbCount}
               cardStats={cardStatsById[config.source_id]}
+              sourceCost={costBySourceId[config.source_id]}
+              isAdmin={isAdmin}
               isRunning={runningSources.has(config.source_id)}
               onRun={runSource}
               onOpenPayload={setDrillLog}
@@ -3561,7 +3900,7 @@ export default function PulseDataSources({
           lastLogBySource={lastLogBySource}
           sourceConfigs={visibleSources}
         />
-        <SuburbPool targetSuburbs={targetSuburbs} />
+        <SuburbPoolSummary targetSuburbs={targetSuburbs} />
       </div>
 
       {/* ── Sync history ── */}
