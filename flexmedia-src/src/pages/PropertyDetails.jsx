@@ -132,8 +132,30 @@ export default function PropertyDetails() {
 
   // Tabs: default = timeline. Arrow keys navigate between tabs (A11y).
   const TAB_ORDER = ["timeline", "media", "listings", "projects", "agents", "market"];
-  const [tab, setTab] = useState("timeline");
+  const [tab, setTabInner] = useState("timeline");
   const tabsRef = useRef(null);
+
+  // QoL #42: remember scrollTop per tab. On tab change we snapshot the current
+  // scrollTop against the outgoing tab, then on the next frame restore the
+  // incoming tab's saved value (or 0 if we've never visited it). Using
+  // document.scrollingElement so this works regardless of which element is
+  // actually the viewport (html vs body on some browsers). requestAnimation-
+  // Frame ensures restore runs AFTER React has committed the tab swap.
+  const tabScrollMap = useRef({});
+  const setTab = useCallback((nextTab) => {
+    setTabInner((prevTab) => {
+      if (prevTab === nextTab) return prevTab;
+      const el = document.scrollingElement || document.documentElement;
+      if (el) tabScrollMap.current[prevTab] = el.scrollTop;
+      requestAnimationFrame(() => {
+        const restoreEl = document.scrollingElement || document.documentElement;
+        if (!restoreEl) return;
+        const target = tabScrollMap.current[nextTab] ?? 0;
+        restoreEl.scrollTop = target;
+      });
+      return nextTab;
+    });
+  }, []);
 
   // Shortcut-help overlay (triggered by `?`)
   const [helpOpen, setHelpOpen] = useState(false);
@@ -426,16 +448,61 @@ export default function PropertyDetails() {
   })();
 
   return (
-    <div className="pb-4 lg:pb-6">
+    <div className="pb-4 lg:pb-6 property-details-root">
+      {/* QoL #44: print-friendly rules. Scoped to this page via
+          .property-details-root so they can't leak into other pages in the
+          same print bundle. Strategy:
+            • hide sticky header, share/favorite/help, tab rail
+            • show ALL TabsContent inline (override Radix `hidden` attribute)
+            • break-inside: avoid on cards so they don't split mid-photo
+            • img max-width 100% so photos fit the page */}
+      <style>{`
+        @media print {
+          .property-details-root [data-print-hide="true"],
+          .property-details-root [role="tablist"] {
+            display: none !important;
+          }
+          .property-details-root [role="tabpanel"] {
+            display: block !important;
+            visibility: visible !important;
+            margin-top: 1rem !important;
+          }
+          .property-details-root .overflow-auto,
+          .property-details-root .overflow-y-auto,
+          .property-details-root .overflow-x-auto {
+            overflow: visible !important;
+            max-height: none !important;
+          }
+          .property-details-root aside.sticky,
+          .property-details-root .sticky {
+            position: static !important;
+          }
+          .property-details-root .rounded-xl,
+          .property-details-root .rounded-lg,
+          .property-details-root .card,
+          .property-details-root [class*="Card"] {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .property-details-root img {
+            max-width: 100% !important;
+            height: auto !important;
+            break-inside: avoid;
+          }
+        }
+      `}</style>
+
       {/* ── STICKY HEADER ── */}
-      <StickyHeader
-        property={property}
-        isFavorite={isFavorite}
-        favoriteCount={favoriteCount}
-        onToggleFavorite={toggleFavorite}
-        onShare={shareLink}
-        onShowHelp={() => setHelpOpen(true)}
-      />
+      <div data-print-hide="true">
+        <StickyHeader
+          property={property}
+          isFavorite={isFavorite}
+          favoriteCount={favoriteCount}
+          onToggleFavorite={toggleFavorite}
+          onShare={shareLink}
+          onShowHelp={() => setHelpOpen(true)}
+        />
+      </div>
 
       <div className="px-3 pt-2 space-y-3 lg:px-6">
         {/* ── Right-rail layout wrapper ── */}
@@ -461,6 +528,7 @@ export default function PropertyDetails() {
                   relistCandidate={relistCandidate}
                   property={property}
                   currentListing={currentListing}
+                  propertyKey={propertyKey}
                 />
               </ErrorBoundary>
             )}
@@ -602,6 +670,8 @@ export default function PropertyDetails() {
                       comparables={comparables}
                       neighbours={dossier?.neighbour_clients || []}
                       suburb={property?.suburb || null}
+                      propertyKey={propertyKey}
+                      displayAddress={property?.display_address || null}
                     />
                   </ErrorBoundary>
                 </TabsContent>
@@ -797,12 +867,15 @@ function StickyHeader({ property, isFavorite, favoriteCount = 0, onToggleFavorit
             <Share2 className="h-4 w-4" />
           </Button>
           {onShowHelp && (
+            // QoL #45: always visible (was `hidden sm:inline-flex`). Rendered
+            // as a small circle on mobile so the tap target is obvious.
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 w-8 p-0 text-muted-foreground hidden sm:inline-flex"
+              className="h-8 w-8 p-0 text-muted-foreground rounded-full border border-border/50 sm:border-0 sm:rounded-md"
               onClick={onShowHelp}
               title="Keyboard shortcuts (?)"
+              aria-label="Keyboard shortcuts"
             >
               <span className="text-xs font-semibold">?</span>
             </Button>
@@ -1115,7 +1188,14 @@ function AgentCardInline({ agent, fallbackName, fallbackAgency }) {
 
 // ── Signal ribbon — stacks banners ───────────────────────────────────────
 
-function SignalRibbon({ signals, relistCandidate, property, currentListing }) {
+// QoL #41: persist dismissals across reloads using a per-signal+property
+// localStorage key. Format: `pulse_signal_dismissed:${signal.id}:${propertyKey}`
+// → "1". Read on mount to seed state so already-dismissed banners stay hidden.
+function signalDismissKey(signalId, propertyKey) {
+  return `pulse_signal_dismissed:${signalId}:${propertyKey || ""}`;
+}
+
+function SignalRibbon({ signals, relistCandidate, property, currentListing, propertyKey }) {
   // Convert relist_candidate into a synthetic signal at the top when present.
   const all = [];
   if (relistCandidate?.is_candidate) {
@@ -1129,8 +1209,25 @@ function SignalRibbon({ signals, relistCandidate, property, currentListing }) {
   }
   for (const s of signals || []) all.push(s);
 
-  // Session-scoped dismissal — hides a banner until the user reloads the tab.
-  const [dismissed, setDismissed] = useState(() => new Set());
+  // QoL #41: dismissals persisted to localStorage keyed by signal id + property
+  // key. Seed the Set from storage on mount so previously dismissed banners
+  // stay hidden across reloads. Synthetic signals (no id) fall back to a
+  // stable-ish composite key so their "Dismiss" still sticks per property.
+  const [dismissed, setDismissed] = useState(() => {
+    if (typeof window === "undefined") return new Set();
+    const initial = new Set();
+    try {
+      for (let i = 0; i < all.length; i++) {
+        const s = all[i];
+        const id = s.id || `synth-${i}-${s.signal_type || ""}`;
+        if (window.localStorage.getItem(signalDismissKey(id, propertyKey)) === "1") {
+          initial.add(id);
+        }
+      }
+    } catch { /* quota / SSR */ }
+    return initial;
+  });
+
   const visible = all.filter((s, i) => {
     const key = s.id || `synth-${i}-${s.signal_type || ""}`;
     return !dismissed.has(key);
@@ -1148,11 +1245,18 @@ function SignalRibbon({ signals, relistCandidate, property, currentListing }) {
             signal={s}
             property={property}
             currentListing={currentListing}
-            onDismiss={() => setDismissed((prev) => {
-              const next = new Set(prev);
-              next.add(key);
-              return next;
-            })}
+            onDismiss={() => {
+              // Persist first, then update state — so a fast reload still
+              // remembers the dismissal even if React hasn't flushed yet.
+              try {
+                window.localStorage.setItem(signalDismissKey(key, propertyKey), "1");
+              } catch { /* quota / SSR */ }
+              setDismissed((prev) => {
+                const next = new Set(prev);
+                next.add(key);
+                return next;
+              });
+            }}
           />
         );
       })}
@@ -3022,8 +3126,47 @@ function OurHistoryCard({ projects }) {
 //
 // Mobile layout: comparables go 1-up, neighbours stack, median tile is
 // full-width. All three sections stack vertically on every breakpoint.
-function MarketTab({ comparables, neighbours, suburb }) {
+function MarketTab({ comparables, neighbours, suburb, propertyKey, displayAddress }) {
   const suburbLabel = suburb || "this suburb";
+
+  // QoL #43: "Same street" suggestions. Parse the street part from the
+  // display_address (everything after the leading number), then query
+  // pulse_listings for matching addresses in the same suburb — excluding the
+  // current property. We cap at 5 rows and sort by listed_date desc.
+  const streetPart = useMemo(() => {
+    if (!displayAddress) return null;
+    // Strip a leading number like "12/3" or "123A " and whitespace so the
+    // LIKE matches "Smith Street" rather than "12 Smith Street".
+    const trimmed = String(displayAddress).trim();
+    const m = trimmed.match(/^\s*[\d/\-A-Za-z]+\s+(.+)$/);
+    const candidate = m ? m[1] : trimmed;
+    // Only take the first ~3 words of the street name to avoid matching on
+    // suburb/state tails when display_address includes them.
+    const head = candidate.split(/[,]/)[0].trim();
+    return head.length >= 3 ? head : null;
+  }, [displayAddress]);
+
+  const { data: sameStreetRows } = useQuery({
+    queryKey: ["same-street", streetPart, suburb, propertyKey],
+    enabled: !!streetPart && !!suburb && !!propertyKey,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      // PostgREST escape % _ so a street name with a literal underscore doesn't
+      // match everything.
+      const s = streetPart.toLowerCase().replace(/[%_]/g, "\\$&");
+      const { data, error } = await api._supabase
+        .from("pulse_listings")
+        .select("id, address, suburb, listing_type, asking_price, sold_price, hero_image, listed_date, sold_date, property_key")
+        .ilike("address", `%${s}%`)
+        .eq("suburb", suburb)
+        .neq("property_key", propertyKey)
+        .order("listed_date", { ascending: false, nullsFirst: false })
+        .limit(5);
+      if (error) throw error;
+      return data || [];
+    },
+  });
 
   // Live suburb median (last 90 days) — independent of the dossier so it's
   // always fresh even if the RPC is cached.
@@ -3156,6 +3299,89 @@ function MarketTab({ comparables, neighbours, suburb }) {
           )}
         </CardContent>
       </Card>
+
+      {/* ── Section 1b: Same street (QoL #43) ─────────────────────────
+          Suggestions based on street-name match within the same suburb.
+          Only renders when we actually have results so it doesn't add a
+          dead card to every property dossier. */}
+      {sameStreetRows && sameStreetRows.length > 0 && (
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-indigo-600" />
+              Same street
+              <Badge variant="outline" className="text-[10px]">{sameStreetRows.length}</Badge>
+              {streetPart && (
+                <span className="text-[10px] text-muted-foreground font-normal">
+                  · {streetPart}
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {sameStreetRows.map((s, i) => {
+                const isSold = s.listing_type === "sold";
+                const price = isSold ? s.sold_price : s.asking_price;
+                const priceLabel = price
+                  ? `$${(Number(price) / 1_000_000).toFixed(2)}M`
+                  : (LISTING_TYPE_LABEL[s.listing_type] || "—");
+                const href = s.property_key
+                  ? createPageUrl("PropertyDetails") + `?key=${s.property_key}`
+                  : null;
+                const card = (
+                  <div className="rounded-xl border border-border overflow-hidden bg-card hover:shadow-md hover:border-indigo-300 transition-all h-full flex flex-col">
+                    <div className="aspect-[16/10] bg-muted overflow-hidden">
+                      {s.hero_image ? (
+                        <img
+                          src={s.hero_image}
+                          alt={s.address || "Same street listing"}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+                          <Home className="h-8 w-8 opacity-40" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-3 flex-1 flex flex-col">
+                      <p className="text-lg font-bold tabular-nums text-indigo-700 leading-none">
+                        {priceLabel}
+                      </p>
+                      <p className="text-xs font-medium mt-1.5 line-clamp-2">
+                        {s.address || "—"}
+                      </p>
+                      {s.suburb && (
+                        <p className="text-[11px] text-muted-foreground">{s.suburb}</p>
+                      )}
+                      <div className="flex items-center justify-between mt-2 text-[10px] text-muted-foreground">
+                        {isSold && s.sold_date && (
+                          <span>Sold {fmtRelative(s.sold_date)}</span>
+                        )}
+                        {!isSold && s.listed_date && (
+                          <span>Listed {fmtRelative(s.listed_date)}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+                return href ? (
+                  <Link
+                    key={s.property_key || s.id || i}
+                    to={href}
+                    className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-xl"
+                  >
+                    {card}
+                  </Link>
+                ) : (
+                  <div key={s.id || i}>{card}</div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ── Section 2: Nearby FlexMedia clients ─────────────────────── */}
       <Card className="rounded-xl">

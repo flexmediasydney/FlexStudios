@@ -29,12 +29,27 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  HoverCard,
+  HoverCardTrigger,
+  HoverCardContent,
+} from "@/components/ui/hover-card";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+} from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
 import {
   ChevronLeft,
   ChevronRight,
@@ -57,6 +72,11 @@ import {
   History,
   FileImage,
   Video,
+  Copy,
+  Star,
+  Camera,
+  Columns3,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
@@ -219,13 +239,31 @@ function Thumb({ src }) {
       </div>
     );
   }
+  // #34: hover preview — 300x200 popover of the same image.
   return (
-    <img
-      src={src}
-      alt=""
-      className="w-12 h-8 rounded object-cover flex-shrink-0"
-      onError={() => setErr(true)}
-    />
+    <HoverCard openDelay={250} closeDelay={50}>
+      <HoverCardTrigger asChild>
+        <img
+          src={src}
+          alt=""
+          className="w-12 h-8 rounded object-cover flex-shrink-0 cursor-zoom-in"
+          onError={() => setErr(true)}
+        />
+      </HoverCardTrigger>
+      <HoverCardContent
+        side="right"
+        align="start"
+        className="p-0 w-auto border-0 shadow-xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <img
+          src={src}
+          alt=""
+          style={{ width: 300, height: 200 }}
+          className="object-cover rounded-md"
+        />
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -809,6 +847,59 @@ const LS_EXCLUDE_WITHDRAWN_KEY = "pulse_listings_exclude_withdrawn";
 const LS_PRICE_MIN_KEY = "pulse_listings_price_min";
 const LS_PRICE_MAX_KEY = "pulse_listings_price_max";
 const LS_DOM_MIN_KEY = "pulse_listings_dom_min";
+// QoL #38: column visibility persistence.
+const LS_VISIBLE_COLS_KEY = "pulse_listings_visible_cols";
+// QoL #35: favorited listings (localStorage-only, no server column yet).
+const LS_FAVORITE_LISTINGS_KEY = "flex_favorite_listings";
+
+// QoL #38: all toggleable columns in the listings table. `key` matches the
+// switch in the table body; `required` columns (address) aren't toggleable.
+const COLUMN_DEFS = [
+  { key: "photo", label: "Photo" },
+  { key: "address", label: "Address", required: true },
+  { key: "price", label: "Price" },
+  { key: "type", label: "Type" },
+  { key: "property_type", label: "Property" },
+  { key: "bbc", label: "Beds/Bath/Car" },
+  { key: "dom", label: "Days on market" },
+  { key: "agent", label: "Agent" },
+  { key: "agency", label: "Agency" },
+  { key: "listed_date", label: "Listed" },
+  { key: "sold_date", label: "Sold date" },
+  { key: "synced", label: "Synced" },
+  { key: "status", label: "Status" },
+];
+const DEFAULT_VISIBLE_COLS = COLUMN_DEFS.reduce((acc, c) => ({ ...acc, [c.key]: true }), {});
+
+function readStoredVisibleCols() {
+  if (typeof window === "undefined") return DEFAULT_VISIBLE_COLS;
+  try {
+    const raw = window.localStorage.getItem(LS_VISIBLE_COLS_KEY);
+    if (!raw) return DEFAULT_VISIBLE_COLS;
+    const parsed = JSON.parse(raw);
+    // Merge with defaults so a stored partial set still includes any new columns.
+    return { ...DEFAULT_VISIBLE_COLS, ...parsed };
+  } catch { return DEFAULT_VISIBLE_COLS; }
+}
+
+function readFavoriteListings() {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(LS_FAVORITE_LISTINGS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? new Set(arr) : new Set();
+  } catch { return new Set(); }
+}
+
+// QoL #36: filter preset defs — each toggles a server-side combo at query time.
+const FILTER_PRESETS = [
+  { id: "auction_this_week", label: "Auction this week", title: "Auctions scheduled within the next 7 days" },
+  { id: "stale_for_sale", label: "DoM > 30 (for sale)", title: "For-sale listings with days_on_market > 30" },
+  { id: "sold_over_2m", label: "Sold > $2M", title: "Sold listings above $2,000,000" },
+  { id: "new_this_week", label: "New this week", title: "Listings first seen in the last 7 days" },
+  { id: "with_floorplan", label: "With floorplan", title: "Listings that have floorplan URLs" },
+];
 // Listings are "less urgent than Sources/inbox" per spec — default OFF.
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
 
@@ -854,15 +945,30 @@ export default function PulseListingsTab({
 }) {
   // Tier 3 drill-through: pre-fill the column filter from ?suburb= when the
   // Command Center's Suburb Distribution card deep-links into this tab.
+  // #24 — also honour ?agency_rea_id= so the agency slideout can deep-link
+  // to "all this agency's listings". A chip in the filter bar advertises the
+  // active agency filter and lets the user clear with one click.
   const [searchParams, setSearchParams] = useSearchParams();
   const suburbParam = searchParams.get("suburb");
+  const agencyReaIdParam = searchParams.get("agency_rea_id");
 
   const [listingFilter, setListingFilter] = useState("all");
   const [listingSort, setListingSort] = useState({ col: "listed_date", dir: "desc" });
   const [listingColFilter, setListingColFilter] = useState(suburbParam || "");
+  // #24 — kept until the user clears the chip; seeded once from the URL.
+  const [agencyReaFilter, setAgencyReaFilter] = useState(agencyReaIdParam || "");
   // Region filter (Auditor-11 F1) — expands to suburb IN (...) at query time.
   const [regionFilter, setRegionFilter] = useState("all");
   const [listingPage, setListingPage] = useState(0);
+
+  // QoL #36: currently-active preset (null = none).
+  const [activePreset, setActivePreset] = useState(null);
+  // QoL #37: bulk-select state — set of listing ids selected on the current page.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // QoL #38: column visibility (persisted).
+  const [visibleCols, setVisibleCols] = useState(readStoredVisibleCols);
+  // QoL #35: favorite listings (localStorage).
+  const [favorites, setFavorites] = useState(readFavoriteListings);
 
   // Consume the URL param once we've seeded state so back/forward doesn't
   // re-fire and the URL stays tidy.
@@ -875,6 +981,17 @@ export default function PulseListingsTab({
     }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suburbParam]);
+  // #24 — strip the agency_rea_id param after seeding so refresh/back doesn't
+  // re-apply it and the URL stays clean. State drives the actual filtering.
+  useEffect(() => {
+    if (!agencyReaIdParam) return;
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("agency_rea_id");
+      return np;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agencyReaIdParam]);
   // Page size persists in localStorage so the user's choice survives reloads
   // and tab switches. Default 50 matches the previous hardcoded value.
   const [pageSize, setPageSize] = useState(readStoredPageSize);
@@ -908,6 +1025,16 @@ export default function PulseListingsTab({
   useEffect(() => {
     try { window.localStorage.setItem(LS_EXCLUDE_WITHDRAWN_KEY, excludeWithdrawn ? "1" : "0"); } catch { /* quota / SSR */ }
   }, [excludeWithdrawn]);
+
+  // Persist column visibility.
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_VISIBLE_COLS_KEY, JSON.stringify(visibleCols)); } catch { /* quota / SSR */ }
+  }, [visibleCols]);
+
+  // Persist favorite listings.
+  useEffect(() => {
+    try { window.localStorage.setItem(LS_FAVORITE_LISTINGS_KEY, JSON.stringify(Array.from(favorites))); } catch { /* quota / SSR */ }
+  }, [favorites]);
 
   // Persist LS04 numeric filters (empty string clears the key).
   useEffect(() => {
@@ -947,7 +1074,39 @@ export default function PulseListingsTab({
   // Reset to page 0 when filters/sort/search change so we never page past the
   // new result window. Must happen AFTER a filter change and BEFORE the
   // useQuery fires (React runs state updates before committing).
-  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, regionFilter, pageSize, search, listingSort.col, listingSort.dir, excludeWithdrawn, priceMin, priceMax, domMin]);
+  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, agencyReaFilter, regionFilter, pageSize, search, listingSort.col, listingSort.dir, excludeWithdrawn, priceMin, priceMax, domMin, activePreset]);
+
+  // QoL #37: clear selections whenever the result window shifts.
+  useEffect(() => { setSelectedIds(new Set()); }, [listingFilter, listingColFilter, agencyReaFilter, regionFilter, pageSize, search, listingSort.col, listingSort.dir, excludeWithdrawn, priceMin, priceMax, domMin, activePreset, listingPage]);
+
+  // QoL #35: toggle favorite for a listing id.
+  const toggleFavorite = useCallback((id) => {
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        toast.success("Removed from favorites");
+      } else {
+        next.add(id);
+        toast.success("Added to favorites");
+      }
+      return next;
+    });
+  }, []);
+
+  // QoL #36: toggling a preset. Clicking an active preset clears it.
+  const togglePreset = useCallback((presetId) => {
+    setActivePreset((prev) => (prev === presetId ? null : presetId));
+  }, []);
+
+  // QoL #33/35: copy helper for row quick-actions.
+  const copyText = useCallback((text, label) => {
+    if (!text) return;
+    try {
+      navigator.clipboard.writeText(text);
+      toast.success(`${label} copied`);
+    } catch { toast.error("Copy failed"); }
+  }, []);
 
   // ── Sorting helper ──────────────────────────────────────────────────────────
   const handleSort = useCallback(
@@ -971,6 +1130,13 @@ export default function PulseListingsTab({
     // Type filter (server-side equality)
     if (listingFilter !== "all") {
       q = q.eq("listing_type", listingFilter);
+    }
+
+    // #24 — agency filter from the Agency slideout's "View all N listings" link.
+    // agency_rea_id is a stable REA-side identifier (not our UUID), so direct
+    // equality works across syncs.
+    if (agencyReaFilter) {
+      q = q.eq("agency_rea_id", agencyReaFilter);
     }
 
     // LS06: exclude withdrawn campaigns when the toggle is on, but only for
@@ -1041,23 +1207,39 @@ export default function PulseListingsTab({
       q = q.gte("days_on_market", minDom);
     }
 
+    // QoL #36: filter presets — layered on top of the other filters.
+    if (activePreset === "auction_this_week") {
+      const now = new Date().toISOString();
+      const in7 = new Date(Date.now() + 7 * 86400000).toISOString();
+      q = q.not("auction_date", "is", null).gte("auction_date", now).lte("auction_date", in7);
+    } else if (activePreset === "stale_for_sale") {
+      q = q.eq("listing_type", "for_sale").gt("days_on_market", 30);
+    } else if (activePreset === "sold_over_2m") {
+      q = q.eq("listing_type", "sold").gt("sold_price", 2_000_000);
+    } else if (activePreset === "new_this_week") {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+      q = q.gt("first_seen_at", sevenDaysAgo);
+    } else if (activePreset === "with_floorplan") {
+      q = q.not("floorplan_urls", "is", null);
+    }
+
     // Server-side sort — falls back to created_at desc for columns PostgREST
     // can't sort on (derived/display-only fields like getListingDisplayDate).
     const sortCol = SERVER_SORTABLE.has(listingSort.col) ? listingSort.col : "created_at";
     q = q.order(sortCol, { ascending: listingSort.dir === "asc", nullsFirst: false });
 
     return q;
-  }, [listingFilter, listingColFilter, search, listingSort, excludeWithdrawn, suburbsInRegion, priceMin, priceMax, domMin]);
+  }, [listingFilter, listingColFilter, agencyReaFilter, search, listingSort, excludeWithdrawn, suburbsInRegion, priceMin, priceMax, domMin, activePreset]);
 
   // ── Page fetch via react-query ─────────────────────────────────────────────
   const queryKey = useMemo(
     () => ["pulse-listings-page", {
-      listingFilter, listingColFilter, regionFilter, search,
+      listingFilter, listingColFilter, agencyReaFilter, regionFilter, search,
       sortCol: listingSort.col, sortDir: listingSort.dir,
       page: listingPage, pageSize, excludeWithdrawn,
-      priceMin, priceMax, domMin,
+      priceMin, priceMax, domMin, activePreset,
     }],
-    [listingFilter, listingColFilter, regionFilter, search, listingSort, listingPage, pageSize, excludeWithdrawn, priceMin, priceMax, domMin],
+    [listingFilter, listingColFilter, agencyReaFilter, regionFilter, search, listingSort, listingPage, pageSize, excludeWithdrawn, priceMin, priceMax, domMin, activePreset],
   );
 
   const { data, isLoading, isFetching, refetch } = useQuery({
@@ -1134,6 +1316,54 @@ export default function PulseListingsTab({
     }
   }, [buildQuery]);
 
+  // QoL #37: export just the selected rows (by id). Uses the current `rows`
+  // snapshot from react-query since selection is bounded to the page.
+  const handleExportSelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const picked = (rows || []).filter((r) => selectedIds.has(r.id));
+    if (picked.length === 0) return;
+    const header = [
+      "address", "suburb", "postcode", "listing_type", "asking_price", "sold_price",
+      "bedrooms", "bathrooms", "parking", "land_size", "days_on_market",
+      "agent_name", "agency_name", "listed_date", "sold_date",
+      "auction_date", "auction_time_known", "listing_withdrawn_at", "first_seen_at",
+      "floorplan_urls", "video_url",
+      "property_key", "source_url", "last_synced_at",
+    ];
+    const flat = picked.map((r) => ({
+      ...r,
+      floorplan_urls: Array.isArray(r.floorplan_urls)
+        ? r.floorplan_urls.join(" | ")
+        : (r.floorplan_urls ?? ""),
+    }));
+    exportCsv(`pulse_listings_selected_${new Date().toISOString().slice(0, 10)}.csv`, header, flat);
+  }, [selectedIds, rows]);
+
+  // QoL #37: toggle select-all for the current page.
+  const pageIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const someSelected = selectedIds.size > 0 && !allSelected;
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
+  }, [allSelected, pageIds]);
+
+  const toggleSelectOne = useCallback((id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   // ── Column header helper ────────────────────────────────────────────────────
   const Th = ({ col, children, className }) => (
     <th
@@ -1153,6 +1383,38 @@ export default function PulseListingsTab({
 
   return (
     <div className="space-y-3">
+      {/* QoL #36: filter presets — one-click combos above the filter row. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mr-1 flex items-center gap-1">
+          <Sparkles className="h-3 w-3" />
+          Presets
+        </span>
+        {FILTER_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => togglePreset(p.id)}
+            title={p.title}
+            className={cn(
+              "text-[11px] px-2 py-0.5 rounded-full border font-medium transition-colors",
+              activePreset === p.id
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
+            )}
+          >
+            {p.label}
+          </button>
+        ))}
+        {activePreset && (
+          <button
+            onClick={() => setActivePreset(null)}
+            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+            title="Clear preset"
+          >
+            <X className="h-3 w-3" /> clear
+          </button>
+        )}
+      </div>
+
       {/* ── Filter bar ── */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
         {/* Type buttons */}
@@ -1234,6 +1496,30 @@ export default function PulseListingsTab({
             />
           </div>
 
+          {/* #24 — dismissable chip advertising the active agency filter.
+              Looks up the agency name from pulseAgencies so the user sees
+              "Agency: Ray White Mosman" rather than a raw REA ID. */}
+          {agencyReaFilter && (() => {
+            const ag = (pulseAgencies || []).find((a) => String(a.rea_agency_id) === String(agencyReaFilter));
+            const label = ag?.name || `REA ${agencyReaFilter}`;
+            return (
+              <div
+                className="inline-flex items-center gap-1 h-7 px-2 rounded-full bg-primary/10 text-primary text-xs font-medium border border-primary/30"
+                title={`Showing listings for agency: ${label}`}
+              >
+                <Building2 className="h-3 w-3" />
+                <span className="max-w-[140px] truncate">{label}</span>
+                <button
+                  onClick={() => setAgencyReaFilter("")}
+                  className="-mr-1 ml-0.5 hover:opacity-70"
+                  title="Clear agency filter"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            );
+          })()}
+
           <div className="relative">
             <Input
               placeholder="Filter by suburb, agent, agency…"
@@ -1250,6 +1536,19 @@ export default function PulseListingsTab({
               </button>
             )}
           </div>
+          {/* QoL #37: export selected rows (only when ≥1 selected). */}
+          {selectedIds.size > 0 && (
+            <Button
+              variant="default"
+              size="sm"
+              className="h-7 px-2 text-xs gap-1"
+              onClick={handleExportSelected}
+              title="Export only the rows you've selected"
+            >
+              <Download className="h-3 w-3" />
+              Export {selectedIds.size} selected
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -1261,6 +1560,38 @@ export default function PulseListingsTab({
             {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
             CSV
           </Button>
+          {/* QoL #38: column visibility toggle. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs gap-1"
+                title="Show / hide columns"
+              >
+                <Columns3 className="h-3 w-3" />
+                Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuLabel className="text-xs">Toggle columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {COLUMN_DEFS.map((c) => (
+                <DropdownMenuCheckboxItem
+                  key={c.key}
+                  checked={c.required ? true : !!visibleCols[c.key]}
+                  disabled={c.required}
+                  onSelect={(e) => e.preventDefault()}
+                  onCheckedChange={(val) => {
+                    if (c.required) return;
+                    setVisibleCols((prev) => ({ ...prev, [c.key]: !!val }));
+                  }}
+                >
+                  {c.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* Auto-refresh toggle — opt-in, default off. Listings change slowly
               so we don't want to hammer the DB by default. */}
           <label
@@ -1330,22 +1661,32 @@ export default function PulseListingsTab({
             <table className="w-full text-xs">
               <thead className="bg-muted/40 border-b border-border/60">
                 <tr>
-                  <Th className="w-14">Photo</Th>
+                  {/* QoL #37: bulk-select checkbox */}
+                  <th className="px-2 py-2 w-8">
+                    <Checkbox
+                      checked={allSelected || (someSelected ? "indeterminate" : false)}
+                      onCheckedChange={toggleSelectAll}
+                      aria-label="Select all on this page"
+                    />
+                  </th>
+                  {visibleCols.photo && <Th className="w-14">Photo</Th>}
                   <Th col="address">Address</Th>
-                  <Th col="asking_price">Price</Th>
-                  <Th col="listing_type">Type</Th>
-                  <Th col="property_type" className="hidden lg:table-cell">Property</Th>
-                  <Th col="bedrooms" className="hidden md:table-cell">B/B/C</Th>
-                  <Th col="days_on_market" className="hidden sm:table-cell">DOM</Th>
-                  <Th col="agent_name" className="hidden lg:table-cell">Agent</Th>
-                  <Th col="agency_name">Agency</Th>
-                  <Th col="listed_date">Listed</Th>
-                  <Th col="sold_date" className="hidden sm:table-cell">Sold Date</Th>
-                  <Th className="hidden xl:table-cell">Synced</Th>
-                  <Th col="price_text">Status</Th>
+                  {visibleCols.price && <Th col="asking_price">Price</Th>}
+                  {visibleCols.type && <Th col="listing_type">Type</Th>}
+                  {visibleCols.property_type && <Th col="property_type" className="hidden lg:table-cell">Property</Th>}
+                  {visibleCols.bbc && <Th col="bedrooms" className="hidden md:table-cell">B/B/C</Th>}
+                  {visibleCols.dom && <Th col="days_on_market" className="hidden sm:table-cell">DOM</Th>}
+                  {visibleCols.agent && <Th col="agent_name" className="hidden lg:table-cell">Agent</Th>}
+                  {visibleCols.agency && <Th col="agency_name">Agency</Th>}
+                  {visibleCols.listed_date && <Th col="listed_date">Listed</Th>}
+                  {visibleCols.sold_date && <Th col="sold_date" className="hidden sm:table-cell">Sold Date</Th>}
+                  {visibleCols.synced && <Th className="hidden xl:table-cell">Synced</Th>}
+                  {visibleCols.status && <Th col="price_text">Status</Th>}
                   {/* Tier 3: Property drill-through icon column (only populated
                       when property_key is set on the listing). */}
                   <Th className="w-8" />
+                  {/* QoL #33/35/39: trailing Actions column */}
+                  <Th className="w-36 text-right">Actions</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
@@ -1358,26 +1699,55 @@ export default function PulseListingsTab({
                     .filter(Boolean)
                     .join(", ");
                   const status = l.price_text || TYPE_LABEL[l.listing_type] || l.listing_type;
+                  const isFav = favorites.has(l.id);
+
+                  // QoL #39: "Book shoot here" URL — carries address + crm agent
+                  // id (if pulse agent is in CRM) + property_key for pre-fill.
+                  const crmAgent = l.agent_rea_id
+                    ? crmAgents.find((a) => String(a.rea_agent_id) === String(l.agent_rea_id))
+                    : null;
+                  const bookUrl = (() => {
+                    const params = new URLSearchParams();
+                    params.set("id", "new");
+                    if (addr) params.set("address", addr);
+                    if (crmAgent?.id) params.set("agent_id", crmAgent.id);
+                    if (l.property_key) params.set("property_key", l.property_key);
+                    return `/ProjectDetails?${params.toString()}`;
+                  })();
 
                   return (
                     <tr
                       key={l.id}
-                      className="hover:bg-muted/30 cursor-pointer transition-colors"
+                      className="group relative hover:bg-muted/30 cursor-pointer transition-colors"
                       onClick={() =>
                         onOpenEntity
                           ? onOpenEntity({ type: "listing", id: l.id })
                           : setSelectedListing(l)
                       }
                     >
-                      {/* Thumbnail */}
-                      <td className="px-2 py-1.5">
-                        <Thumb src={thumb} />
+                      {/* QoL #37: row checkbox */}
+                      <td className="px-2 py-1.5 w-8" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={selectedIds.has(l.id)}
+                          onCheckedChange={() => toggleSelectOne(l.id)}
+                          aria-label={`Select ${addr || "listing"}`}
+                        />
                       </td>
+
+                      {/* Thumbnail */}
+                      {visibleCols.photo && (
+                        <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                          <Thumb src={thumb} />
+                        </td>
+                      )}
 
                       {/* Address — with floorplan/video/withdrawn indicators (migration 108+) */}
                       <td className="px-2 py-1.5 max-w-[180px]">
                         <div className="flex items-center gap-1">
                           <p className="truncate font-medium flex-1 min-w-0">{addr || "—"}</p>
+                          {isFav && (
+                            <Star className="h-3 w-3 fill-amber-400 text-amber-500 shrink-0" />
+                          )}
                           {(() => {
                             const fpArr = Array.isArray(l.floorplan_urls) ? l.floorplan_urls : [];
                             const hasFloorplan = fpArr.length > 0;
@@ -1408,110 +1778,132 @@ export default function PulseListingsTab({
                       </td>
 
                       {/* Price */}
-                      <td className="px-2 py-1.5 tabular-nums font-semibold whitespace-nowrap">
-                        {price}
-                      </td>
+                      {visibleCols.price && (
+                        <td className="px-2 py-1.5 tabular-nums font-semibold whitespace-nowrap">
+                          {price}
+                        </td>
+                      )}
 
                       {/* Type badge */}
-                      <td className="px-2 py-1.5">
-                        {l.listing_type ? (
-                          <span
-                            className={cn(
-                              "text-[10px] font-medium px-1.5 py-0.5 rounded-full whitespace-nowrap",
-                              TYPE_BADGE[l.listing_type] || "bg-muted text-muted-foreground"
-                            )}
-                          >
-                            {TYPE_LABEL[l.listing_type] || l.listing_type}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </td>
+                      {visibleCols.type && (
+                        <td className="px-2 py-1.5">
+                          {l.listing_type ? (
+                            <span
+                              className={cn(
+                                "text-[10px] font-medium px-1.5 py-0.5 rounded-full whitespace-nowrap",
+                                TYPE_BADGE[l.listing_type] || "bg-muted text-muted-foreground"
+                              )}
+                            >
+                              {TYPE_LABEL[l.listing_type] || l.listing_type}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      )}
 
                       {/* Property type */}
-                      <td className="px-2 py-1.5 text-muted-foreground capitalize hidden lg:table-cell">
-                        {l.property_type || "—"}
-                      </td>
+                      {visibleCols.property_type && (
+                        <td className="px-2 py-1.5 text-muted-foreground capitalize hidden lg:table-cell">
+                          {l.property_type || "—"}
+                        </td>
+                      )}
 
                       {/* Beds / Bath / Car */}
-                      <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap hidden md:table-cell">
-                        {[l.bedrooms, l.bathrooms, l.parking].every((x) => !x)
-                          ? "—"
-                          : [l.bedrooms || "–", l.bathrooms || "–", l.parking || "–"].join(" / ")}
-                      </td>
+                      {visibleCols.bbc && (
+                        <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap hidden md:table-cell">
+                          {[l.bedrooms, l.bathrooms, l.parking].every((x) => !x)
+                            ? "—"
+                            : [l.bedrooms || "–", l.bathrooms || "–", l.parking || "–"].join(" / ")}
+                        </td>
+                      )}
 
                       {/* Days on Market */}
-                      <td className="px-2 py-1.5 text-muted-foreground tabular-nums whitespace-nowrap hidden sm:table-cell">
-                        {l.days_on_market > 0 ? `${l.days_on_market}d` : "—"}
-                      </td>
+                      {visibleCols.dom && (
+                        <td className="px-2 py-1.5 text-muted-foreground tabular-nums whitespace-nowrap hidden sm:table-cell">
+                          {l.days_on_market > 0 ? `${l.days_on_market}d` : "—"}
+                        </td>
+                      )}
 
                       {/* Agent */}
-                      <td className="px-2 py-1.5 max-w-[120px] hidden lg:table-cell">
-                        <p className="truncate">{l.agent_name || "—"}</p>
-                      </td>
+                      {visibleCols.agent && (
+                        <td className="px-2 py-1.5 max-w-[120px] hidden lg:table-cell">
+                          <p className="truncate">{l.agent_name || "—"}</p>
+                        </td>
+                      )}
 
                       {/* Agency */}
-                      <td className="px-2 py-1.5 max-w-[120px]">
-                        <p className="truncate text-muted-foreground">{l.agency_name || "—"}</p>
-                      </td>
+                      {visibleCols.agency && (
+                        <td className="px-2 py-1.5 max-w-[120px]">
+                          <p className="truncate text-muted-foreground">{l.agency_name || "—"}</p>
+                        </td>
+                      )}
 
                       {/* Listed date — with fallback chain */}
-                      <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
-                        {(() => {
-                          const { date, source } = getListingDisplayDate(l);
-                          if (!date) return "—";
-                          const isApprox = source === "derived" || source === "first_seen";
-                          return (
-                            <span
-                              className={cn(isApprox && "text-muted-foreground/60 italic")}
-                              title={DATE_SOURCE_LABEL[source] || ""}
-                            >
-                              {fmtDate(date)}
-                              {isApprox && <span className="ml-1 text-[9px] text-amber-500">≈</span>}
-                            </span>
-                          );
-                        })()}
-                      </td>
+                      {visibleCols.listed_date && (
+                        <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground">
+                          {(() => {
+                            const { date, source } = getListingDisplayDate(l);
+                            if (!date) return "—";
+                            const isApprox = source === "derived" || source === "first_seen";
+                            return (
+                              <span
+                                className={cn(isApprox && "text-muted-foreground/60 italic")}
+                                title={DATE_SOURCE_LABEL[source] || ""}
+                              >
+                                {fmtDate(date)}
+                                {isApprox && <span className="ml-1 text-[9px] text-amber-500">≈</span>}
+                              </span>
+                            );
+                          })()}
+                        </td>
+                      )}
 
                       {/* Sold date */}
-                      <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground hidden sm:table-cell">
-                        {l.listing_type === "sold"
-                          ? (l.sold_date ? fmtDate(l.sold_date)
-                            : l.first_seen_at ? (
-                              <span
-                                className="text-muted-foreground/60 italic"
-                                title={DATE_SOURCE_LABEL.first_seen}
-                              >
-                                {fmtDate(l.first_seen_at)}
-                                <span className="ml-1 text-[9px] text-amber-500">≈</span>
-                              </span>
-                            ) : "—")
-                          : "—"}
-                      </td>
+                      {visibleCols.sold_date && (
+                        <td className="px-2 py-1.5 whitespace-nowrap text-muted-foreground hidden sm:table-cell">
+                          {l.listing_type === "sold"
+                            ? (l.sold_date ? fmtDate(l.sold_date)
+                              : l.first_seen_at ? (
+                                <span
+                                  className="text-muted-foreground/60 italic"
+                                  title={DATE_SOURCE_LABEL.first_seen}
+                                >
+                                  {fmtDate(l.first_seen_at)}
+                                  <span className="ml-1 text-[9px] text-amber-500">≈</span>
+                                </span>
+                              ) : "—")
+                            : "—"}
+                        </td>
+                      )}
 
                       {/* Last synced — with stale badge when last_synced_at is >7d old */}
-                      <td
-                        className="px-2 py-1.5 whitespace-nowrap text-[10px] text-muted-foreground hidden xl:table-cell"
-                        title={l.last_synced_at ? new Date(l.last_synced_at).toLocaleString() : "Never synced"}
-                      >
-                        <span className="inline-flex items-center gap-0.5">
-                          <Clock className="h-2.5 w-2.5" />
-                          {fmtAgo(l.last_synced_at)}
-                        </span>
-                        {(() => {
-                          const s = stalenessInfo(l.last_synced_at);
-                          return s.isStale ? (
-                            <Badge variant="outline" className="text-[8px] px-1 ml-1 text-amber-700 border-amber-400/60">
-                              {s.label}
-                            </Badge>
-                          ) : null;
-                        })()}
-                      </td>
+                      {visibleCols.synced && (
+                        <td
+                          className="px-2 py-1.5 whitespace-nowrap text-[10px] text-muted-foreground hidden xl:table-cell"
+                          title={l.last_synced_at ? new Date(l.last_synced_at).toLocaleString() : "Never synced"}
+                        >
+                          <span className="inline-flex items-center gap-0.5">
+                            <Clock className="h-2.5 w-2.5" />
+                            {fmtAgo(l.last_synced_at)}
+                          </span>
+                          {(() => {
+                            const s = stalenessInfo(l.last_synced_at);
+                            return s.isStale ? (
+                              <Badge variant="outline" className="text-[8px] px-1 ml-1 text-amber-700 border-amber-400/60">
+                                {s.label}
+                              </Badge>
+                            ) : null;
+                          })()}
+                        </td>
+                      )}
 
                       {/* Status */}
-                      <td className="px-2 py-1.5 max-w-[120px]">
-                        <p className="truncate text-muted-foreground">{status}</p>
-                      </td>
+                      {visibleCols.status && (
+                        <td className="px-2 py-1.5 max-w-[120px]">
+                          <p className="truncate text-muted-foreground">{status}</p>
+                        </td>
+                      )}
 
                       {/* Tier 3: property drill-through — only when
                           property_key is set. Stops row-click propagation so
@@ -1527,6 +1919,60 @@ export default function PulseListingsTab({
                             <Home className="h-3.5 w-3.5" />
                           </a>
                         ) : null}
+                      </td>
+
+                      {/* QoL #33/35/39: Actions — reveal on row hover. */}
+                      <td className="px-2 py-1.5 w-36" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); copyText(addr, "Address"); }}
+                            title="Copy address"
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); copyText(l.source_url, "Listing URL"); }}
+                            disabled={!l.source_url}
+                            title="Copy listing URL"
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); toggleFavorite(l.id); }}
+                            title={isFav ? "Unfavorite" : "Favorite"}
+                            className={cn(
+                              "p-1 rounded hover:bg-muted transition-colors",
+                              isFav ? "text-amber-500" : "text-muted-foreground hover:text-amber-500"
+                            )}
+                          >
+                            <Star className={cn("h-3 w-3", isFav && "fill-amber-400")} />
+                          </button>
+                          {l.source_url && (
+                            <a
+                              href={l.source_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              title="Open on realestate.com.au"
+                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          )}
+                          <a
+                            href={bookUrl}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Book a shoot at this address"
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-emerald-600 transition-colors"
+                          >
+                            <Camera className="h-3 w-3" />
+                          </a>
+                        </div>
                       </td>
                     </tr>
                   );
