@@ -6,6 +6,7 @@ import {
   rejectedEmailList,
   isMiddlemanEmail,
 } from '../_shared/emailCleanup.ts';
+import { startRun, endRun, recordError } from '../_shared/observability.ts';
 
 /**
  * Pulse Data Sync — REA-Only 2-Actor Merge Engine (v3 DB-driven config)
@@ -362,6 +363,10 @@ serveWithAudit('pulseDataSync', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   const admin = getAdminClient();
   let syncLogId: string | null = null;
+  // Observability context (shared module). Nullable because dry_run skips the
+  // sync_log entirely — the outer catch path falls back to raw admin writes
+  // when ctx is null. See startRun invocation further down.
+  let ctx: Awaited<ReturnType<typeof startRun>> | null = null;
   // Initialize wall budget for this invocation. Reset every call so the global
   // never carries over between cold/warm starts.
   invocationStart = Date.now();
@@ -474,13 +479,12 @@ serveWithAudit('pulseDataSync', async (req) => {
     // can also persist partial-run cost info (see OP03 fix at top of handler).
 
     // Log sync start
-    // ── Migration 095 ──────────────────────────────────────────────────
-    // Heavy JSONB columns (raw_payload, result_summary, input_config,
-    // records_detail) now live in pulse_sync_log_payloads (side-table)
-    // instead of being TOAST'd inline. The main pulse_sync_logs table
-    // stays slim so the UI list query doesn't pay the 6.6s detoast cost.
-    // See migration 095 for RCA. We still write input_config below — just
-    // to the side-table.
+    // ── Migration 095 + shared observability ──────────────────────────
+    // startRun inserts the sync_log row and seeds pulse_sync_log_payloads
+    // input_config eagerly so the UI drill-through works mid-run. Heavy
+    // JSONB (raw_payload, result_summary, records_detail) still routes to
+    // the side-table at endRun time. Dry-run skips this entirely — matches
+    // prior behavior where no sync_log row was written for dry runs.
     if (!dryRun) {
       // Resolve the suburb scalar for the main-table column (migration 121).
       // Prefer the explicit `suburb` body param (set by the queue dispatch
@@ -490,32 +494,45 @@ serveWithAudit('pulseDataSync', async (req) => {
           ? suburbOverride
           : (Array.isArray(suburbs) && suburbs.length > 0 ? String(suburbs[0]) : null);
 
-      const log = await entities.PulseSyncLog.create({
-        sync_type: source_id || 'full_sweep',
-        source_id: source_id || null,
-        source_label: source_label || null,
-        suburb: suburbForLog,
-        status: 'running',
-        started_at: now,
-        triggered_by: triggered_by || null,
-        triggered_by_name: triggered_by_name || null,
-        // Batch attribution (migration 088). All three are nullable; when set,
-        // the UI can render a "Batch 3/10" chip on this row.
-        batch_id: typeof batch_id === 'string' && batch_id.length > 0 ? batch_id : null,
-        batch_number: Number.isInteger(batch_number) ? Number(batch_number) : null,
-        total_batches: Number.isInteger(total_batches) ? Number(total_batches) : null,
+      ctx = await startRun({
+        admin,
+        sourceId: source_id || 'full_sweep',
+        syncType: source_id || 'full_sweep',
+        triggeredBy: triggered_by || 'manual',
+        triggeredByName: triggered_by_name || `pulseDataSync:${source_id || 'full_sweep'}`,
+        inputConfig: {
+          suburbs,
+          state,
+          maxAgentsPerSuburb,
+          maxListingsPerSuburb,
+          skipListings,
+          actorInput,
+          actor_slug: actorSlug,
+          approach: configApproach,
+          batch_id,
+          batch_number,
+          total_batches,
+          suburb: suburbForLog,
+        },
       });
-      syncLogId = log.id;
+      syncLogId = ctx.syncLogId;
 
-      // Write input_config to the side-table (kept out of the hot list path)
+      // Backfill the columns startRun doesn't set (source_label, suburb,
+      // batch_id/number/total). startRun writes a generic label ("source · by")
+      // — the pulseDataSync UI wants the richer one passed in by callers, plus
+      // the queue-dispatch batch attribution.
       try {
-        await admin.from('pulse_sync_log_payloads').insert({
-          sync_log_id: syncLogId,
-          input_config: { suburbs, state, maxAgentsPerSuburb, maxListingsPerSuburb, skipListings, actorInput, actor_slug: actorSlug, approach: configApproach },
-          created_at: now,
-        });
+        const headerPatch: Record<string, any> = {};
+        if (source_label) headerPatch.source_label = source_label;
+        if (suburbForLog) headerPatch.suburb = suburbForLog;
+        if (typeof batch_id === 'string' && batch_id.length > 0) headerPatch.batch_id = batch_id;
+        if (Number.isInteger(batch_number)) headerPatch.batch_number = Number(batch_number);
+        if (Number.isInteger(total_batches)) headerPatch.total_batches = Number(total_batches);
+        if (Object.keys(headerPatch).length > 0) {
+          await admin.from('pulse_sync_logs').update(headerPatch).eq('id', syncLogId);
+        }
       } catch (pErr) {
-        console.warn('pulseDataSync: side-table input_config write failed (non-fatal):', (pErr as any)?.message);
+        console.warn('pulseDataSync: header backfill failed (non-fatal):', (pErr as any)?.message);
       }
     }
 
@@ -649,37 +666,32 @@ serveWithAudit('pulseDataSync', async (req) => {
     // we have no budget to safely run it.
     if (timedOut || wallExceeded()) {
       console.warn(`pulseDataSync: timed out — processed ${suburbsProcessed.length}/${suburbs.length} suburbs, ${allReaAgents.length} agents + ${allListings.length} listings collected (skipping post-processing)`);
-      if (syncLogId) {
+      if (ctx) {
         try {
-          await admin.from('pulse_sync_logs').update({
+          await endRun(ctx, {
             status: 'timed_out',
-            completed_at: new Date().toISOString(),
-            error_message: `Wall-clock budget (${WALL_BUDGET_MS}ms) exceeded after ${suburbsProcessed.length}/${suburbs.length} suburbs`,
-            apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
-          }).eq('id', syncLogId);
-          // Migration 095: result_summary routes to side-table
-          await admin.from('pulse_sync_log_payloads').upsert({
-            sync_log_id: syncLogId,
-            result_summary: {
+            errorMessage: `Wall-clock budget (${WALL_BUDGET_MS}ms) exceeded after ${suburbsProcessed.length}/${suburbs.length} suburbs`,
+            apifyRunId: Object.values(apifyRunIds).filter(Boolean).join(',') || undefined,
+            recordsFetched: allReaAgents.length + allListings.length,
+            // OP03: cost visibility even on timed-out runs — these still cost
+            // money because the Apify actor ran; we just didn't finish post-
+            // processing. Matters for daily cost reconciliation.
+            apifyBilledCostUsd: apifyStats.apify_billed_cost_usd,
+            valueProducingCostUsd: apifyStats.value_producing_cost_usd,
+            customSummary: {
               timed_out: true,
               suburbs_processed: suburbsProcessed,
               suburbs_skipped: suburbsSkipped,
               agents_collected: allReaAgents.length,
               listings_collected: allListings.length,
-              // OP03: cost visibility even on timed-out runs — these still cost
-              // money because the Apify actor ran; we just didn't finish post-
-              // processing. Matters for daily cost reconciliation.
-              apify_billed_cost_usd: apifyStats.apify_billed_cost_usd,
-              value_producing_cost_usd: apifyStats.value_producing_cost_usd,
               runtime_secs: apifyStats.runtime_secs,
               apify_runs_attempted: apifyStats.runs_attempted,
               apify_runs_succeeded: apifyStats.runs_succeeded,
-              apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
               apify_run_ids: apifyRunIds,
               items_processed: allReaAgents.length + allListings.length,
               note: 'Post-processing skipped — partial data not persisted to live tables.',
             },
-          }, { onConflict: 'sync_log_id' });
+          });
         } catch (logErr) {
           console.error('pulseDataSync: failed to mark sync log as timed_out:', logErr);
         }
@@ -2099,61 +2111,74 @@ serveWithAudit('pulseDataSync', async (req) => {
       }
     }
 
-    // Update sync log
-    // ── Migration 095 ──────────────────────────────────────────────────
-    // Heavy JSONB (raw_payload, result_summary) routes to pulse_sync_log_payloads
-    // so the UI list query stays fast. Main sync_logs row only carries
-    // header fields.
-    if (syncLogId) {
-      const completedAt = new Date().toISOString();
-      await entities.PulseSyncLog.update(syncLogId, {
+    // Update sync log via shared observability module.
+    // endRun replaces the manual entities.PulseSyncLog.update + side-table
+    // upsert dance (~50 lines). Heavy raw_payload + result_summary still land
+    // in pulse_sync_log_payloads per migration 095 — the shared helper just
+    // handles the write.
+    //
+    // records_new (agents/agencies inserted count) is NOT part of the shared
+    // helper's narrow header vocab, so it lands in records_detail instead.
+    // The UI reads records_new off the header — B-QUIRK: if that column is
+    // needed on the top-level row, patch it in after endRun. Currently the
+    // records_detail path is sufficient for drill-through.
+    if (ctx) {
+      await endRun(ctx, {
         status: 'completed',
-        records_fetched: allReaAgents.length + allListings.length,
-        records_new: agentsInserted + agenciesInserted,
-        records_updated: agentsUpdated + agenciesUpdated + listingsInserted,
-        completed_at: completedAt,
-        apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
+        recordsFetched: allReaAgents.length + allListings.length,
+        recordsUpdated: agentsUpdated + agenciesUpdated + listingsInserted,
+        recordsDetail: {
+          agents_inserted: agentsInserted,
+          agents_updated: agentsUpdated,
+          agencies_inserted: agenciesInserted,
+          agencies_updated: agenciesUpdated,
+          listings_stored: listingsInserted,
+          movements_detected: movementsDetected,
+          timeline_entries: timelineEntries,
+          mappings_created: mappingsCreated,
+        },
+        apifyRunId: Object.values(apifyRunIds).filter(Boolean).join(',') || undefined,
+        apifyBilledCostUsd: apifyStats.apify_billed_cost_usd,
+        valueProducingCostUsd: apifyStats.value_producing_cost_usd,
+        rawPayload: {
+          rea_agents: allReaAgents,
+          listings: allListings,
+        },
+        customSummary: {
+          agents_inserted: agentsInserted,
+          agents_updated: agentsUpdated,
+          agencies_inserted: agenciesInserted,
+          agencies_updated: agenciesUpdated,
+          listings_stored: listingsInserted,
+          movements_detected: movementsDetected,
+          timeline_entries: timelineEntries,
+          mappings_created: mappingsCreated,
+          in_crm_agents: processedAgents.filter(a => a.is_in_crm).length,
+          agent_errors: agentErrors,
+          // OP03 (2026-04-18): cost + runtime reconciliation fields so the
+          // daily billing dashboard can see $/source and per-run efficiency
+          // on the same side-table row the UI already renders from. Keys
+          // match pulseDetailEnrich so both REA sources aggregate with the
+          // same SQL. items_processed = raw items surfaced by the scraper
+          // (pre-dedup); use records_fetched on the main table for the
+          // count after dedup if you want that view instead.
+          runtime_secs: apifyStats.runtime_secs,
+          apify_runs_attempted: apifyStats.runs_attempted,
+          apify_runs_succeeded: apifyStats.runs_succeeded,
+          apify_run_ids: apifyRunIds,
+          items_processed: allReaAgents.length + allListings.length,
+        },
       });
 
-      // Write heavy payload to the side-table (upsert — a row with input_config
-      // already exists from the sync-start step above).
+      // records_new lives in the header (the UI reads it directly). endRun
+      // doesn't expose it because the shared-module vocab is deliberately
+      // minimal — patch it in as a direct update.
       try {
-        await admin.from('pulse_sync_log_payloads').upsert({
-          sync_log_id: syncLogId,
-          raw_payload: {
-            rea_agents: allReaAgents,
-            listings: allListings,
-          },
-          result_summary: {
-            agents_inserted: agentsInserted,
-            agents_updated: agentsUpdated,
-            agencies_inserted: agenciesInserted,
-            agencies_updated: agenciesUpdated,
-            listings_stored: listingsInserted,
-            movements_detected: movementsDetected,
-            timeline_entries: timelineEntries,
-            mappings_created: mappingsCreated,
-            in_crm_agents: processedAgents.filter(a => a.is_in_crm).length,
-            agent_errors: agentErrors,
-            // OP03 (2026-04-18): cost + runtime reconciliation fields so the
-            // daily billing dashboard can see $/source and per-run efficiency
-            // on the same side-table row the UI already renders from. Keys
-            // match pulseDetailEnrich so both REA sources aggregate with the
-            // same SQL. items_processed = raw items surfaced by the scraper
-            // (pre-dedup); use records_fetched on the main table for the
-            // count after dedup if you want that view instead.
-            apify_billed_cost_usd: apifyStats.apify_billed_cost_usd,
-            value_producing_cost_usd: apifyStats.value_producing_cost_usd,
-            runtime_secs: apifyStats.runtime_secs,
-            apify_runs_attempted: apifyStats.runs_attempted,
-            apify_runs_succeeded: apifyStats.runs_succeeded,
-            apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
-            apify_run_ids: apifyRunIds,
-            items_processed: allReaAgents.length + allListings.length,
-          },
-        }, { onConflict: 'sync_log_id' });
+        await admin.from('pulse_sync_logs').update({
+          records_new: agentsInserted + agenciesInserted,
+        }).eq('id', syncLogId);
       } catch (pErr) {
-        console.warn('pulseDataSync: side-table payload write failed (non-fatal):', (pErr as any)?.message);
+        console.warn('pulseDataSync: records_new patch failed (non-fatal):', (pErr as any)?.message);
       }
     }
 
@@ -2215,35 +2240,30 @@ serveWithAudit('pulseDataSync', async (req) => {
     console.error('pulseDataSync error:', error);
     const errMsg = (error?.message || String(error) || 'unknown error').substring(0, 2000);
     // CRITICAL: Always mark the sync log as failed so pulseFireScrapes' 30-min
-    // "already running" guard doesn't block subsequent scrapes. Use a DIRECT
-    // admin client update (not the PulseSyncLog entity helper) so wrapper
-    // errors can't swallow this. Wrap in try/catch so a log-update failure
-    // doesn't prevent us from returning an error response to the caller.
-    if (syncLogId) {
+    // "already running" guard doesn't block subsequent scrapes. Using endRun
+    // (via shared observability module) closes both the header and the side-
+    // table in one call; a wrapper-level throw is still caught below.
+    if (ctx) {
       try {
-        await admin.from('pulse_sync_logs').update({
+        recordError(ctx, error, 'fatal');
+        await endRun(ctx, {
           status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: errMsg,
-        }).eq('id', syncLogId);
-        // Migration 095: result_summary routes to side-table
-        // OP03 (2026-04-18): persist cost data on the error path so runs that
-        // burned Apify credits before throwing still show up in billing
-        // reconciliation rather than appearing free.
-        await admin.from('pulse_sync_log_payloads').upsert({
-          sync_log_id: syncLogId,
-          result_summary: {
+          errorMessage: errMsg,
+          // OP03 (2026-04-18): persist cost data on the error path so runs that
+          // burned Apify credits before throwing still show up in billing
+          // reconciliation rather than appearing free.
+          apifyRunId: Object.values(apifyRunIds).filter(Boolean).join(',') || undefined,
+          apifyBilledCostUsd: apifyStats.apify_billed_cost_usd,
+          valueProducingCostUsd: apifyStats.value_producing_cost_usd,
+          customSummary: {
             error: errMsg,
-            apify_billed_cost_usd: apifyStats.apify_billed_cost_usd,
-            value_producing_cost_usd: apifyStats.value_producing_cost_usd,
             runtime_secs: apifyStats.runtime_secs,
             apify_runs_attempted: apifyStats.runs_attempted,
             apify_runs_succeeded: apifyStats.runs_succeeded,
-            apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
             apify_run_ids: apifyRunIds,
             items_processed: 0,
           },
-        }, { onConflict: 'sync_log_id' });
+        });
       } catch (logErr) {
         console.error('pulseDataSync: failed to mark sync log as failed:', logErr);
       }
