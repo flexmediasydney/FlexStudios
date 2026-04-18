@@ -83,6 +83,22 @@ function WeeklyTrendCard({ pulseListings }) {
 
   const hasData = data.some((d) => d.count > 0);
 
+  // #9: Δ vs prior period — compare last 7d (most recent bucket) to prior 7d
+  // (second-most-recent bucket). Both already computed in `data`.
+  const delta = useMemo(() => {
+    if (data.length < 2) return null;
+    const last = data[data.length - 1].count;
+    const prior = data[data.length - 2].count;
+    if (prior === 0) {
+      if (last === 0) return null;
+      return { direction: "up", label: "new activity", pct: null };
+    }
+    const change = (last - prior) / prior;
+    const pct = Math.round(Math.abs(change) * 100);
+    const direction = change >= 0 ? "up" : "down";
+    return { direction, pct, label: `${pct}% vs prior 7d` };
+  }, [data]);
+
   return (
     <Card className="rounded-xl border-0 shadow-sm">
       <CardHeader className="pb-2 pt-4 px-4">
@@ -92,7 +108,23 @@ function WeeklyTrendCard({ pulseListings }) {
               <TrendingUp className="h-4 w-4 text-blue-500" />
               Market Pulse — Weekly Listings Trend
             </CardTitle>
-            <p className="text-[10px] text-muted-foreground">Last {weeks} weeks</p>
+            <p className="text-[10px] text-muted-foreground">
+              Last {weeks} weeks
+              {delta && (
+                <>
+                  {" · "}
+                  <span
+                    className={
+                      delta.direction === "up"
+                        ? "text-emerald-600 dark:text-emerald-400 font-medium"
+                        : "text-rose-600 dark:text-rose-400 font-medium"
+                    }
+                  >
+                    {delta.direction === "up" ? "↑" : "↓"} {delta.label}
+                  </span>
+                </>
+              )}
+            </p>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
             {TREND_WINDOWS.map((w) => (
@@ -220,7 +252,8 @@ function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm, onOpenEntity }) {
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-6 px-2 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/30 shrink-0"
+                    // #10: always semi-visible on touch (no hover), hover-reveal on desktop
+                    className="h-6 px-2 text-[10px] opacity-60 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/30 shrink-0"
                     onClick={(e) => {
                       e.stopPropagation();
                       if (onAddToCrm) onAddToCrm(agent);
@@ -541,6 +574,13 @@ function ConversionFunnelCard({ pulseAgents, crmAgents, projects, stats }) {
             <p className="text-[10px] text-muted-foreground">Territory → booked · labels show stage-over-stage %</p>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
+            {/* Bonus: help "?" explaining Log vs Linear */}
+            <span
+              className="inline-flex items-center justify-center h-5 w-5 rounded-full text-[10px] text-muted-foreground/70 border border-border/60 mr-1 cursor-help select-none"
+              title="Linear: absolute bar heights (Territory dwarfs the rest). Log: compresses each stage so all 4 bars stay visible even across orders of magnitude — better for spotting drop-offs at the narrow end."
+            >
+              ?
+            </span>
             <Button
               variant={scale === "linear" ? "secondary" : "ghost"}
               size="sm"
@@ -816,7 +856,14 @@ function SoldLast7DaysCard({ pulseListings, pulseAgencies, onOpenEntity }) {
         {rows.length === 0 ? (
           <p className="text-xs text-muted-foreground/50 py-6 text-center">No sales recorded in the last 7 days</p>
         ) : (
-          <div className="space-y-1.5 max-h-[320px] overflow-y-auto">
+          <div className="max-h-[320px] overflow-y-auto">
+            {/* #8: Sticky header row — visible while body scrolls */}
+            <div className="sticky top-0 bg-background z-10 flex items-center gap-2 py-1 border-b border-border/40 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <span className="flex-1 min-w-0">Agency</span>
+              <span className="shrink-0 w-[72px] text-center">In-CRM</span>
+              <span className="shrink-0 w-8 text-right tabular-nums">Count</span>
+            </div>
+            <div className="space-y-1.5 pt-1.5">
             {rows.map((r) => {
               const canOpen = onOpenEntity && r.pulse_agency_id;
               const body = (
@@ -866,6 +913,7 @@ function SoldLast7DaysCard({ pulseListings, pulseAgencies, onOpenEntity }) {
                 </div>
               );
             })}
+            </div>
           </div>
         )}
       </CardContent>
@@ -928,15 +976,17 @@ function MoneyOnTheTableBanner({ pulseListings, pulseAgencies }) {
 
   return (
     <div className="flex items-center justify-end">
-      <div
-        className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 dark:bg-amber-950/30 dark:border-amber-800/40"
-        title={`${listingCount.toLocaleString()} territory listing${listingCount === 1 ? "" : "s"} whose agency is not in CRM yet`}
+      {/* #7: Clickable — jumps to Agencies tab filtered to not-in-CRM, sorted by listing count */}
+      <a
+        href="?tab=agencies&in_crm=false&sort=listings.desc"
+        className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 dark:bg-amber-950/30 dark:border-amber-800/40 hover:bg-amber-100 dark:hover:bg-amber-950/50 hover:border-amber-300 dark:hover:border-amber-700/60 transition-colors cursor-pointer"
+        title={`${listingCount.toLocaleString()} territory listing${listingCount === 1 ? "" : "s"} whose agency is not in CRM yet — click to view agencies`}
       >
         <Zap className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
         <span className="text-xs font-semibold tabular-nums text-amber-900 dark:text-amber-200">
           {formatted} in territory listings not in CRM
         </span>
-      </div>
+      </a>
     </div>
   );
 }
