@@ -19,9 +19,12 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   SelectGroup, SelectLabel,
 } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 import PulseTimeline, { EVENT_CONFIG } from "@/components/pulse/PulseTimeline";
 import {
   Activity, Clock, ChevronLeft, ChevronRight, Filter, Loader2, X, AlertCircle,
+  HelpCircle, RefreshCw,
 } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
@@ -43,8 +46,8 @@ const EVENT_TYPE_OPTIONS = Object.keys(EVENT_CONFIG).map(key => ({
 }));
 
 // Category display order and labels — mirrors pulse_timeline_event_types.category
-// (migration 116). Unknown categories fall through to "Other".
-const CATEGORY_ORDER = ["agent", "contact", "mapping", "market", "media", "movement", "system"];
+// (migration 116 + signal category added later). Unknown categories fall through to "Other".
+const CATEGORY_ORDER = ["agent", "contact", "mapping", "market", "media", "movement", "signal", "system"];
 const CATEGORY_LABELS = {
   agent:    "Agent",
   contact:  "Contact",
@@ -52,8 +55,27 @@ const CATEGORY_LABELS = {
   market:   "Market",
   media:    "Media",
   movement: "Movement",
+  signal:   "Signal",
   system:   "System",
   other:    "Other",
+};
+
+// Category order for the Legend modal — what the user scans top-to-bottom. Most
+// actionable / business-relevant categories first; housekeeping ("system") last.
+const LEGEND_CATEGORY_ORDER = ["movement", "market", "contact", "media", "mapping", "signal", "agent", "system"];
+
+// Muted color chips per category — used on the Legend modal badges so a glance
+// tells you which bucket a row belongs to. Kept intentionally low-saturation.
+const CATEGORY_BADGE_COLORS = {
+  movement: "bg-blue-100    text-blue-700    dark:bg-blue-900/30    dark:text-blue-400",
+  market:   "bg-amber-100   text-amber-700   dark:bg-amber-900/30   dark:text-amber-400",
+  contact:  "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  media:    "bg-sky-100     text-sky-700     dark:bg-sky-900/30     dark:text-sky-400",
+  mapping:  "bg-indigo-100  text-indigo-700  dark:bg-indigo-900/30  dark:text-indigo-400",
+  signal:   "bg-yellow-100  text-yellow-800  dark:bg-yellow-900/30  dark:text-yellow-400",
+  agent:    "bg-purple-100  text-purple-700  dark:bg-purple-900/30  dark:text-purple-400",
+  system:   "bg-gray-100    text-gray-600    dark:bg-gray-800       dark:text-gray-400",
+  other:    "bg-gray-100    text-gray-600    dark:bg-gray-800       dark:text-gray-400",
 };
 
 const ENTITY_TYPE_OPTIONS = [
@@ -63,6 +85,167 @@ const ENTITY_TYPE_OPTIONS = [
   { value: "listing", label: "Listing" },
   { value: "system", label: "System" },
 ];
+
+// ── Timeline Legend dialog ────────────────────────────────────────────────
+// Explains every event type the system can emit, grouped by category, with
+// the icon + color from EVENT_CONFIG, the description from the DB registry
+// (pulse_timeline_event_types), and a live emission count from pulse_timeline.
+// Mirrors the Signals Legend pattern in PulseSignals.jsx.
+function TimelineLegendDialog({ open, onClose }) {
+  const [registry, setRegistry] = useState([]);
+  const [counts, setCounts] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        // Parallel: registry + a bounded slice of pulse_timeline to derive counts client-side.
+        // Bounded at 10k rows — legend counts are "roughly how often you see this", not
+        // authoritative totals. Keeps the query cheap and RLS-safe.
+        const [regRes, cntRes] = await Promise.all([
+          api._supabase
+            .from("pulse_timeline_event_types")
+            .select("event_type, category, description")
+            .order("category", { ascending: true })
+            .order("event_type", { ascending: true }),
+          api._supabase
+            .from("pulse_timeline")
+            .select("event_type")
+            .limit(10000),
+        ]);
+        if (cancelled) return;
+        if (Array.isArray(regRes.data)) setRegistry(regRes.data);
+        if (Array.isArray(cntRes.data)) {
+          const map = {};
+          for (const r of cntRes.data) {
+            if (!r.event_type) continue;
+            map[r.event_type] = (map[r.event_type] || 0) + 1;
+          }
+          setCounts(map);
+        }
+      } catch { /* non-fatal — legend renders without counts */ }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [open]);
+
+  // Group registry by category + merge in EVENT_CONFIG entries that the registry
+  // might not know about yet (forward-compat — a code emitter gets added before
+  // its migration row lands). Each orphan EVENT_CONFIG key bucketed as "other".
+  const grouped = React.useMemo(() => {
+    const byCat = new Map();
+    const seen = new Set();
+    for (const row of registry) {
+      const cat = row.category || "other";
+      if (!byCat.has(cat)) byCat.set(cat, []);
+      byCat.get(cat).push({
+        event_type:  row.event_type,
+        description: row.description,
+        config:      EVENT_CONFIG[row.event_type] || null,
+      });
+      seen.add(row.event_type);
+    }
+    // Orphans — EVENT_CONFIG keys the registry doesn't list.
+    for (const key of Object.keys(EVENT_CONFIG)) {
+      if (seen.has(key)) continue;
+      if (!byCat.has("other")) byCat.set("other", []);
+      byCat.get("other").push({
+        event_type:  key,
+        description: null,
+        config:      EVENT_CONFIG[key],
+      });
+    }
+    const ordered = [];
+    for (const cat of LEGEND_CATEGORY_ORDER) {
+      if (byCat.has(cat)) {
+        ordered.push({ category: cat, label: CATEGORY_LABELS[cat] || cat, items: byCat.get(cat) });
+        byCat.delete(cat);
+      }
+    }
+    // Append anything we didn't pre-order (forward compat).
+    for (const [cat, items] of byCat.entries()) {
+      ordered.push({ category: cat, label: CATEGORY_LABELS[cat] || cat, items });
+    }
+    return ordered;
+  }, [registry]);
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <HelpCircle className="h-4 w-4" />
+            Timeline Legend
+          </DialogTitle>
+          <DialogDescription>
+            Every event type the Industry Pulse system can emit, grouped by category.
+            Counts show recent emission volume (last ~10k events).
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-5 pt-2">
+          {loading && registry.length === 0 && (
+            <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              Loading event registry…
+            </div>
+          )}
+          {grouped.map((group) => (
+            <div key={group.category}>
+              <h3 className="text-xs uppercase tracking-wide font-semibold text-muted-foreground mb-2">
+                {group.label}
+              </h3>
+              <div className="space-y-2">
+                {group.items.map((item) => {
+                  const cfg = item.config;
+                  const Icon = cfg?.icon || RefreshCw;
+                  const dotColor = cfg?.color || "bg-gray-400";
+                  const n = counts[item.event_type];
+                  return (
+                    <div key={item.event_type} className="rounded-md border p-3 space-y-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className={cn("rounded-full flex items-center justify-center h-5 w-5 shrink-0", dotColor)}>
+                          <Icon className="h-3 w-3 text-white" />
+                        </div>
+                        <span className="font-medium text-sm">{cfg?.label || item.event_type}</span>
+                        <code className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{item.event_type}</code>
+                        <Badge
+                          variant="secondary"
+                          className={cn("text-[10px] px-1.5 py-0", CATEGORY_BADGE_COLORS[group.category] || "")}
+                        >
+                          {group.label}
+                        </Badge>
+                        {typeof n === "number" && (
+                          <span className="text-[10px] text-muted-foreground ml-auto tabular-nums">
+                            {n.toLocaleString()} {n === 1 ? "event" : "events"} seen
+                          </span>
+                        )}
+                      </div>
+                      {item.description && (
+                        <p className="text-xs text-muted-foreground">{item.description}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <div className="rounded-md bg-muted/40 border p-3 text-xs text-muted-foreground">
+            <p className="font-semibold mb-1">Where do these come from?</p>
+            <p>
+              Most timeline events are emitted by scheduled scrapes (REA diffs),
+              the detail-enricher (memo23), cron dispatchers, and the signal
+              generator. System events are housekeeping; movement / market /
+              contact / media events are the high-signal rows you usually care about.
+            </p>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export default function PulseTimelineTab({ onOpenEntity }) {
   const [eventTypeFilter, setEventTypeFilter] = useState("all");
@@ -81,6 +264,8 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   const [eventTypeRegistry, setEventTypeRegistry] = useState([]);
   // TL08: distinct source values fetched from DB at mount
   const [sourceOptions, setSourceOptions] = useState([]);
+  // Legend modal — explains every event type; opened from header or empty state.
+  const [legendOpen, setLegendOpen] = useState(false);
 
   // Reset page when filters change
   useEffect(() => { setPage(0); }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, pageSize]);
@@ -222,6 +407,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   }, []);
 
   return (
+    <>
     <Card className="rounded-xl border shadow-sm">
       <CardHeader className="pb-3 px-4 pt-4">
         <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -237,6 +423,16 @@ export default function PulseTimelineTab({ onOpenEntity }) {
                 {filterCount} filter{filterCount === 1 ? "" : "s"}
               </Badge>
             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground gap-1"
+              onClick={() => setLegendOpen(true)}
+              title="What are all these event types?"
+            >
+              <HelpCircle className="h-3 w-3" />
+              Legend
+            </Button>
           </CardTitle>
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
             {lastFetched && (
@@ -385,16 +581,35 @@ export default function PulseTimelineTab({ onOpenEntity }) {
           </div>
         )}
 
-        <PulseTimeline
-          entries={rows}
-          maxHeight="max-h-[640px]"
-          emptyMessage={
-            filterCount > 0
-              ? "No events match the current filters."
-              : "No timeline events yet."
-          }
-          onOpenEntity={onOpenEntity}
-        />
+        {rows.length === 0 && !loading ? (
+          <div className="py-12 text-center">
+            <Clock className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">
+              {filterCount > 0 ? "No events match the current filters." : "No timeline events yet."}
+            </p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              Not sure what you&apos;re looking at?{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground transition-colors"
+                onClick={() => setLegendOpen(true)}
+              >
+                See the Legend
+              </button>.
+            </p>
+          </div>
+        ) : (
+          <PulseTimeline
+            entries={rows}
+            maxHeight="max-h-[640px]"
+            emptyMessage={
+              filterCount > 0
+                ? "No events match the current filters."
+                : "No timeline events yet."
+            }
+            onOpenEntity={onOpenEntity}
+          />
+        )}
 
         {/* Pagination footer */}
         {total > 0 && (
@@ -431,5 +646,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
         )}
       </CardContent>
     </Card>
+    <TimelineLegendDialog open={legendOpen} onClose={() => setLegendOpen(false)} />
+    </>
   );
 }
