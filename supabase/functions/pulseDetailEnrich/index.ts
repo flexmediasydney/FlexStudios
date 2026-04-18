@@ -622,7 +622,17 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
         if (floorplans.length > 0) listingUpdates.floorplan_urls = floorplans;
         if (videoUrl) listingUpdates.video_url = videoUrl;
         if (videoThumb) listingUpdates.video_thumb_url = videoThumb;
-        if (mediaItems.length > 0) listingUpdates.media_items = mediaItems;
+        if (mediaItems.length > 0) {
+          listingUpdates.media_items = mediaItems;
+          // Keep legacy `images[]` in sync with the detail-scrape photo set so
+          // older code paths (slideouts that haven't migrated to media_items)
+          // see the same full gallery. Photos only — floorplans/video live in
+          // their own columns.
+          const photoUrls = mediaItems
+            .filter((m) => m.type === 'photo')
+            .map((m) => m.url);
+          if (photoUrls.length > 0) listingUpdates.images = photoUrls;
+        }
 
         // DO NOT overwrite address/suburb/postcode/source_url (property_key is generated from address).
         await admin.from('pulse_listings').update(listingUpdates).eq('id', cand.id);

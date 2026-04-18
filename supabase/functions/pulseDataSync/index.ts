@@ -1178,7 +1178,10 @@ serveWithAudit('pulseDataSync', async (req) => {
         description: l.description ? String(l.description).substring(0, 2000) : null,
         image_url: l.mainImage || (Array.isArray(l.images) && l.images[0]) || null,
         hero_image: l.mainImage || (Array.isArray(l.images) && l.images[0]) || null,
-        images: Array.isArray(l.images) ? l.images.slice(0, 20) : null,
+        // Cap at 50 for pathological data; REA listings typically cap at 30-40 photos.
+        // The richer `media_items` jsonb column (populated by pulseDetailEnrich) stores
+        // the full set with no slice.
+        images: Array.isArray(l.images) ? l.images.slice(0, 50) : null,
         has_video: l.hasVideo || false,
         latitude: l.latitude || null,
         longitude: l.longitude || null,

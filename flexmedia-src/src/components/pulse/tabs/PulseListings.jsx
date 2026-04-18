@@ -258,15 +258,21 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
   // Display date with fallback + source indicator
   const { date: displayDate, source: dateSource } = getListingDisplayDate(listing);
 
-  // Parse images array safely
+  // Prefer detail-enriched `media_items` (full set, photos only) with fallback
+  // to legacy `images[]`. No slice — gallery shows every photo the scraper
+  // returned (memo23 typically caps at ~16-40 per listing). Flex: grid wraps.
   let images = [];
-  try {
-    if (Array.isArray(listing.images)) images = listing.images;
-    else if (typeof listing.images === "string") images = JSON.parse(listing.images);
-  } catch {
-    images = [];
+  const mediaParsed = parseMediaItems(listing);
+  if (mediaParsed.photos.length > 0) {
+    images = mediaParsed.photos.map((p) => p.url);
+  } else {
+    try {
+      if (Array.isArray(listing.images)) images = listing.images;
+      else if (typeof listing.images === "string") images = JSON.parse(listing.images);
+    } catch {
+      images = [];
+    }
   }
-  images = images.slice(0, 8);
 
   const address = [listing.address, listing.suburb, listing.postcode]
     .filter(Boolean)
