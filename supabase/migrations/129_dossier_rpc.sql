@@ -1,5 +1,5 @@
--- 123_dossier_rpc.sql
--- Migration 123 — pulse_get_dossier RPC for PulseIntelligencePanel
+-- 129_dossier_rpc.sql
+-- Migration 129 — pulse_get_dossier RPC for PulseIntelligencePanel
 --
 -- ── Problem ───────────────────────────────────────────────────────────────
 -- PulseIntelligencePanel currently loads:
@@ -143,7 +143,7 @@ BEGIN
   --     agent → agent_rea_id match
   --     agency → agency_rea_id match (OR agents-in-that-agency's listings)
   IF p_entity_type = 'agent' AND v_rea_agent_id IS NOT NULL THEN
-    SELECT COALESCE(jsonb_agg(row_to_jsonb(l.*) ORDER BY l.first_seen_at DESC NULLS LAST), '[]'::jsonb)
+    SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY l.first_seen_at DESC NULLS LAST), '[]'::jsonb)
       INTO v_listings
     FROM (
       SELECT *
@@ -153,7 +153,7 @@ BEGIN
       LIMIT 100
     ) l;
   ELSIF p_entity_type = 'agency' AND v_rea_agency_id IS NOT NULL THEN
-    SELECT COALESCE(jsonb_agg(row_to_jsonb(l.*) ORDER BY l.first_seen_at DESC NULLS LAST), '[]'::jsonb)
+    SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY l.first_seen_at DESC NULLS LAST), '[]'::jsonb)
       INTO v_listings
     FROM (
       -- Direct agency match + agents-in-this-agency match (union)
@@ -175,7 +175,7 @@ BEGIN
 
   -- ── 4. Timeline (up to 50 events) scoped to this entity ─────────────────
   --     Match on crm_entity_id OR pulse_entity_id OR rea_id (as text).
-  SELECT COALESCE(jsonb_agg(row_to_jsonb(t.*) ORDER BY t.created_at DESC), '[]'::jsonb)
+  SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.created_at DESC), '[]'::jsonb)
     INTO v_timeline
   FROM (
     SELECT *
@@ -190,13 +190,13 @@ BEGIN
 
   -- ── 5. Agency roster (up to 100 pulse_agents) — agency-only ─────────────
   IF p_entity_type = 'agency' AND v_rea_agency_id IS NOT NULL THEN
-    SELECT COALESCE(jsonb_agg(row_to_jsonb(r.*) ORDER BY r.sales_as_lead DESC NULLS LAST), '[]'::jsonb)
+    SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.sales_as_lead DESC NULLS LAST), '[]'::jsonb)
       INTO v_agency_roster
     FROM (
       SELECT pa.*, (
         -- Attach the CRM mapping row (if any) so the UI can show the green
         -- "CRM" chip + link through without a second query.
-        SELECT row_to_jsonb(m.*)
+        SELECT to_jsonb(m)
         FROM pulse_crm_mappings m
         WHERE m.entity_type = 'agent'
           AND (m.pulse_entity_id = pa.id
@@ -214,7 +214,7 @@ BEGIN
 
   -- ── 6. Cross-linked projects ────────────────────────────────────────────
   IF p_entity_type = 'agent' THEN
-    SELECT COALESCE(jsonb_agg(row_to_jsonb(p.*) ORDER BY p.shoot_date DESC NULLS LAST), '[]'::jsonb)
+    SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.shoot_date DESC NULLS LAST), '[]'::jsonb)
       INTO v_projects
     FROM (
       SELECT *
@@ -225,7 +225,7 @@ BEGIN
       LIMIT 100
     ) p;
   ELSE
-    SELECT COALESCE(jsonb_agg(row_to_jsonb(p.*) ORDER BY p.shoot_date DESC NULLS LAST), '[]'::jsonb)
+    SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.shoot_date DESC NULLS LAST), '[]'::jsonb)
       INTO v_projects
     FROM (
       SELECT *
@@ -249,7 +249,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.pulse_get_dossier(text, uuid) IS
-  'Single-roundtrip dossier fetch for PulseIntelligencePanel. Returns JSONB with pulse_record, mapping, listings (≤100), timeline (≤50), agency_roster (≤100, agency only), and cross_linked_projects (≤100). Replaces 6 client-side useEntityList calls that were downloading >10k rows. Added migration 123.';
+  'Single-roundtrip dossier fetch for PulseIntelligencePanel. Returns JSONB with pulse_record, mapping, listings (≤100), timeline (≤50), agency_roster (≤100, agency only), and cross_linked_projects (≤100). Replaces 6 client-side useEntityList calls that were downloading >10k rows. Added migration 129.';
 
 GRANT EXECUTE ON FUNCTION public.pulse_get_dossier(text, uuid) TO authenticated, anon, service_role;
 

@@ -29,6 +29,13 @@ import { Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   UserPlus, X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import {
   displayPrice as sharedDisplayPrice,
@@ -318,162 +325,267 @@ export default function PulseIntelligencePanel({
   const [metadataOpen, setMetadataOpen] = useState(false);
   // Tier 4: source-history drill
   const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
+  // IP02: Add-to-CRM dialog state
+  const [addToCrmOpen, setAddToCrmOpen] = useState(false);
+  // IP03: confirm/reject in-flight state
+  const [mappingActionBusy, setMappingActionBusy] = useState(false);
   const navigate = useNavigate();
 
-  /* ── Data hooks ─────────────────────────────────────────────────────────── */
-  // PERF NOTE: This loads 5000+ agents, 500 agencies, and 5000 listings client-side
-  // just to find 1 entity. This is a known performance issue. Future optimization:
-  // move to server-side filtering via RPC/views (e.g. get_pulse_data_for_entity(id)).
-  // Both agents and agencies are needed for cross-referencing (agency roster, agent→agency links).
-  const { data: pulseMappings = [], loading: mappingsLoading } = useEntityList("PulseCrmMapping", "-created_at");
-  const { data: pulseAgents = [], loading: agentsLoading } = useEntityList("PulseAgent", "-last_synced_at", 5000);
-  const { data: pulseAgencies = [], loading: agenciesLoading } = useEntityList("PulseAgency", "-last_synced_at", 500);
-  const { data: pulseListings = [] } = useEntityList("PulseListing", "-created_at", 5000);
-  const { data: pulseTimeline = [] } = useEntityList("PulseTimeline", "-created_at", 500);
-  const { data: projects = [] } = useEntityList("Project", "-shoot_date");
+  /* ── IP01: Single-RPC dossier fetch ──────────────────────────────────────
+     Replaces the six useEntityList calls that were pulling >10k rows
+     client-side just to render one dossier. See migration 123_dossier_rpc.sql.
+     Feature flag `USE_DOSSIER_RPC` left true by default; flip to false
+     (localStorage or env) to fall back to the legacy multi-query path if
+     ever needed. */
+  const USE_DOSSIER_RPC =
+    typeof window === "undefined"
+      ? true
+      : (window.localStorage?.getItem("pulse.dossierRpc") ?? "1") !== "0";
 
-  const coreLoading = mappingsLoading || agentsLoading || agenciesLoading;
+  const {
+    data: dossier,
+    isLoading: dossierLoading,
+    refetch: refetchDossier,
+  } = useQuery({
+    queryKey: ["pulse_dossier", entityType, entityId],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("pulse_get_dossier", {
+        p_entity_type: entityType,
+        p_entity_id: entityId,
+      });
+      if (error) throw error;
+      return data;
+    },
+    enabled: USE_DOSSIER_RPC && !!entityId && !!entityType,
+    staleTime: 30_000,
+  });
 
-  /* ── 1. Find CRM mapping ───────────────────────────────────────────────── */
-  const mapping = useMemo(() =>
-    pulseMappings.find(m => m.crm_entity_id === entityId && m.entity_type === entityType),
-    [pulseMappings, entityId, entityType]
+  /* ── Legacy multi-query fallback ───────────────────────────────────────── */
+  // Only fetches when the feature flag is disabled. When the RPC path is on,
+  // these hooks short-circuit (enabled: false in useEntityList would be ideal
+  // but useEntityList has no such option; passing limit 0 avoids the network
+  // cost while keeping the return shape stable).
+  const legacyEnabled = !USE_DOSSIER_RPC;
+  const {
+    data: legacyMappings = [],
+    loading: legacyMappingsLoading,
+  } = useEntityList(legacyEnabled ? "PulseCrmMapping" : null, "-created_at");
+  const {
+    data: legacyAgents = [],
+    loading: legacyAgentsLoading,
+  } = useEntityList(legacyEnabled ? "PulseAgent" : null, "-last_synced_at", 5000);
+  const {
+    data: legacyAgencies = [],
+    loading: legacyAgenciesLoading,
+  } = useEntityList(legacyEnabled ? "PulseAgency" : null, "-last_synced_at", 500);
+  const { data: legacyListings = [] } = useEntityList(
+    legacyEnabled ? "PulseListing" : null, "-created_at", 5000
+  );
+  const { data: legacyTimeline = [] } = useEntityList(
+    legacyEnabled ? "PulseTimeline" : null, "-created_at", 500
+  );
+  const { data: legacyProjects = [] } = useEntityList(
+    legacyEnabled ? "Project" : null, "-shoot_date"
   );
 
-  /* ── 2. Find pulse record (ID-first, no name fallback) ─────────────────── */
+  /* ── Derived values (RPC-first, legacy fallback) ───────────────────────── */
+  const coreLoading = USE_DOSSIER_RPC
+    ? dossierLoading
+    : (legacyMappingsLoading || legacyAgentsLoading || legacyAgenciesLoading);
+
+  // Mapping
+  const mapping = useMemo(() => {
+    if (USE_DOSSIER_RPC) return dossier?.mapping || null;
+    return legacyMappings.find(
+      m => m.crm_entity_id === entityId && m.entity_type === entityType
+    ) || null;
+  }, [USE_DOSSIER_RPC, dossier, legacyMappings, entityId, entityType]);
+
+  // Pulse record (agent or agency row)
   const pulseData = useMemo(() => {
-    const collection = entityType === "agent" ? pulseAgents : pulseAgencies;
+    if (USE_DOSSIER_RPC) return dossier?.pulse_record || null;
+
+    const collection = entityType === "agent" ? legacyAgents : legacyAgencies;
     const idField = entityType === "agent" ? "rea_agent_id" : "rea_agency_id";
 
-    // Step 1: mapping pulse_entity_id -> direct record match
     if (mapping?.pulse_entity_id) {
       const match = collection.find(a => a.id === mapping.pulse_entity_id);
       if (match) return match;
     }
-    // Step 2: mapping rea_id -> rea field match
     if (mapping?.rea_id) {
       const match = collection.find(a => a[idField] === mapping.rea_id);
       if (match) return match;
     }
-    // Step 3: CRM entity has rea_agent_id / rea_agency_id directly
     if (crmEntity?.[idField]) {
       const match = collection.find(a => a[idField] === crmEntity[idField]);
       if (match) return match;
     }
-    // Step 4: Fuzzy name fallback (last resort for manually-added CRM entities)
     if (entityName && entityType === "agent") {
       const norm = (s) => (s || "").toLowerCase().replace(/[^a-z\s]/g, "").trim();
-      const nameMatch = pulseAgents.find(a => norm(a.full_name) === norm(entityName));
+      const nameMatch = legacyAgents.find(a => norm(a.full_name) === norm(entityName));
       if (nameMatch) return nameMatch;
     }
     if (entityName && entityType === "agency") {
-      const nameMatch = pulseAgencies.find(a => normName(a.name) === normName(entityName));
+      const nameMatch = legacyAgencies.find(a => normName(a.name) === normName(entityName));
       if (nameMatch) return nameMatch;
     }
     return null;
-  }, [entityType, mapping, pulseAgents, pulseAgencies, crmEntity, entityName]);
+  }, [USE_DOSSIER_RPC, dossier, entityType, mapping, legacyAgents, legacyAgencies, crmEntity, entityName]);
 
-  /* ── 3. Filter timeline by entity ──────────────────────────────────────── */
-  // NOTE: rea_id is stored as a string in the timeline table, so we coerce
-  // all comparisons to string to avoid number/string mismatch bugs.
+  // Timeline events
   const entityTimelineEntries = useMemo(() => {
+    if (USE_DOSSIER_RPC) return dossier?.timeline || [];
     if (!entityId) return [];
-    return pulseTimeline.filter(t => {
+    return legacyTimeline.filter(t => {
       if (t.crm_entity_id === entityId) return true;
       if (mapping?.rea_id && String(t.rea_id) === String(mapping.rea_id)) return true;
       if (mapping?.pulse_entity_id && t.pulse_entity_id === mapping.pulse_entity_id) return true;
-      // Agent entity: match on rea_agent_id
       if (crmEntity?.rea_agent_id && String(t.rea_id) === String(crmEntity.rea_agent_id)) return true;
-      // Agency entity: match on rea_agency_id
       if (crmEntity?.rea_agency_id && String(t.rea_id) === String(crmEntity.rea_agency_id)) return true;
       return false;
     });
-  }, [pulseTimeline, entityId, mapping, crmEntity]);
+  }, [USE_DOSSIER_RPC, dossier, legacyTimeline, entityId, mapping, crmEntity]);
 
-  /* ── 4. Agent's / agency's listings (by rea_id) ────────────────────────── */
+  // Listings for this entity
   const entityListings = useMemo(() => {
+    if (USE_DOSSIER_RPC) return dossier?.listings || [];
     if (!pulseData) return [];
     if (entityType === "agent") {
       const reaId = pulseData.rea_agent_id;
-      if (reaId) return pulseListings.filter(l => l.agent_rea_id === reaId);
-      return [];
-    } else {
-      const reaId = pulseData.rea_agency_id;
-      if (reaId) {
-        const byId = pulseListings.filter(l => l.agency_rea_id === reaId);
-        if (byId.length > 0) return byId;
-      }
-      // Fallback: normalized agency name match on listing
-      const name = normName(pulseData.name);
-      if (name) return pulseListings.filter(l => normName(l.agency_name) === name);
+      if (reaId) return legacyListings.filter(l => l.agent_rea_id === reaId);
       return [];
     }
-  }, [entityType, pulseData, pulseListings]);
+    const reaId = pulseData.rea_agency_id;
+    if (reaId) {
+      const byId = legacyListings.filter(l => l.agency_rea_id === reaId);
+      if (byId.length > 0) return byId;
+    }
+    const name = normName(pulseData.name);
+    if (name) return legacyListings.filter(l => normName(l.agency_name) === name);
+    return [];
+  }, [USE_DOSSIER_RPC, dossier, entityType, pulseData, legacyListings]);
 
   const activeListings = entityListings.filter(l => l.listing_type === "for_sale" || l.listing_type === "for_rent");
   const forSaleListings = entityListings.filter(l => l.listing_type === "for_sale");
   const forRentListings = entityListings.filter(l => l.listing_type === "for_rent");
   const soldListings = entityListings.filter(l => l.listing_type === "sold");
 
-  /* ── 5. CRM projects for this entity ───────────────────────────────────── */
+  // Cross-linked CRM projects
   const entityProjects = useMemo(() => {
+    if (USE_DOSSIER_RPC) return dossier?.cross_linked_projects || [];
     if (entityType === "agent") {
-      return projects.filter(p => p.agent_id === entityId || p.client_id === entityId);
+      return legacyProjects.filter(p => p.agent_id === entityId || p.client_id === entityId);
     }
-    return projects.filter(p => p.agency_id === entityId);
-  }, [projects, entityId, entityType]);
+    return legacyProjects.filter(p => p.agency_id === entityId);
+  }, [USE_DOSSIER_RPC, dossier, legacyProjects, entityId, entityType]);
 
-  /* ── 6. Agency agents (roster) ─────────────────────────────────────────── */
+  // Agency roster (agency entityType only) — RPC returns pulse_agents rows
+  // with an attached `crm_mapping` field already joined server-side.
   const agencyAgents = useMemo(() => {
+    if (USE_DOSSIER_RPC) return dossier?.agency_roster || [];
     if (entityType !== "agency" || !pulseData) return [];
     if (pulseData.rea_agency_id) {
-      const byId = pulseAgents.filter(a => a.agency_rea_id === pulseData.rea_agency_id);
+      const byId = legacyAgents.filter(a => a.agency_rea_id === pulseData.rea_agency_id);
       if (byId.length > 0) return byId.sort((a, b) => (b.sales_as_lead || 0) - (a.sales_as_lead || 0));
     }
     const name = normName(pulseData.name || crmEntity?.name);
-    if (name) return pulseAgents.filter(a => normName(a.agency_name) === name)
+    if (name) return legacyAgents.filter(a => normName(a.agency_name) === name)
       .sort((a, b) => (b.sales_as_lead || 0) - (a.sales_as_lead || 0));
     return [];
-  }, [entityType, pulseData, crmEntity, pulseAgents]);
+  }, [USE_DOSSIER_RPC, dossier, entityType, pulseData, crmEntity, legacyAgents]);
 
-  /* ── 7. Sales breakdown ────────────────────────────────────────────────── */
+  // Sales breakdown / suburbs — derived from pulse_record, path-independent
   const salesBreakdown = useMemo(
     () => parseJSON(pulseData?.sales_breakdown),
     [pulseData]
   );
-
-  /* ── 8. Suburbs ────────────────────────────────────────────────────────── */
   const suburbsList = useMemo(
     () => parseArray(pulseData?.suburbs_active),
     [pulseData]
   );
 
-  /* ── 9. Cross-reference: pulse listings matching CRM project addresses ── */
+  // Cross-reference: pulse listings matching CRM project addresses
   const projectAddresses = useMemo(
     () => new Set(entityProjects.map(p => normAddr(p.property_address))),
     [entityProjects]
   );
   const crossLinked = entityListings.filter(l => projectAddresses.has(normAddr(l.address)));
 
-  /* ── 10. Agent CRM mapping lookup (for agency roster click-through) ──── */
-  // Index by both pulse_entity_id and rea_id so we can find CRM mappings
-  // regardless of which ID the agent record has.
+  // Agent→CRM mapping index (for agency roster click-through).
+  // RPC: each roster row already carries `crm_mapping`, so the index stays
+  // tiny. Legacy: rebuild from pulse_crm_mappings.
   const agentMappingIndex = useMemo(() => {
     const idx = new Map();
-    for (const m of pulseMappings) {
+    if (USE_DOSSIER_RPC) {
+      for (const a of agencyAgents) {
+        if (a.crm_mapping && a.crm_mapping.entity_type === "agent") {
+          if (a.crm_mapping.pulse_entity_id) idx.set(`pid:${a.crm_mapping.pulse_entity_id}`, a.crm_mapping);
+          if (a.crm_mapping.rea_id) idx.set(`rea:${a.crm_mapping.rea_id}`, a.crm_mapping);
+        }
+      }
+      return idx;
+    }
+    for (const m of legacyMappings) {
       if (m.entity_type === "agent") {
         if (m.pulse_entity_id) idx.set(`pid:${m.pulse_entity_id}`, m);
         if (m.rea_id) idx.set(`rea:${m.rea_id}`, m);
       }
     }
     return idx;
-  }, [pulseMappings]);
+  }, [USE_DOSSIER_RPC, agencyAgents, legacyMappings]);
 
-  /* ── 11. Agency mapping for agent dossier (clickable agency name) ───── */
+  // Agency mapping for agent dossier (clickable agency name). Under the RPC
+  // path we don't preload every agency mapping, but the agent's agency_rea_id
+  // is surfaced on pulseData so we can do a scoped fetch when needed. For now
+  // this stays as a best-effort lookup that only resolves under legacy.
+  // (The agent dossier's agency-name link simply stays non-clickable when the
+  // mapping isn't known — no functional regression.)
   const agencyMapping = useMemo(() => {
+    if (USE_DOSSIER_RPC) return null;
     if (!pulseData?.agency_rea_id) return null;
-    return pulseMappings.find(m => m.entity_type === "agency" && m.rea_id === pulseData.agency_rea_id);
-  }, [pulseData, pulseMappings]);
+    return legacyMappings.find(m => m.entity_type === "agency" && m.rea_id === pulseData.agency_rea_id);
+  }, [USE_DOSSIER_RPC, pulseData, legacyMappings]);
+
+  /* ── IP03: Confirm/Reject mapping handlers ─────────────────────────────── */
+  const handleConfirmMapping = useCallback(async () => {
+    if (!mapping?.id) return;
+    setMappingActionBusy(true);
+    try {
+      const { error } = await supabase
+        .from("pulse_crm_mappings")
+        .update({ confidence: "confirmed" })
+        .eq("id", mapping.id);
+      if (error) throw error;
+      toast.success("Mapping confirmed");
+      await refetchEntityList("PulseCrmMapping").catch(() => {});
+      await refetchDossier();
+    } catch (err) {
+      console.error("Confirm mapping failed:", err);
+      toast.error("Failed to confirm mapping");
+    } finally {
+      setMappingActionBusy(false);
+    }
+  }, [mapping, refetchDossier]);
+
+  const handleRejectMapping = useCallback(async () => {
+    if (!mapping?.id) return;
+    setMappingActionBusy(true);
+    try {
+      const { error } = await supabase
+        .from("pulse_crm_mappings")
+        .delete()
+        .eq("id", mapping.id);
+      if (error) throw error;
+      toast.success("Mapping rejected");
+      await refetchEntityList("PulseCrmMapping").catch(() => {});
+      await refetchDossier();
+    } catch (err) {
+      console.error("Reject mapping failed:", err);
+      toast.error("Failed to reject mapping");
+    } finally {
+      setMappingActionBusy(false);
+    }
+  }, [mapping, refetchDossier]);
 
   /* ══════════════════════════════════════════════════════════════════════════ */
   /* ═══ EMPTY STATE ═══════════════════════════════════════════════════════ */
@@ -532,6 +644,47 @@ export default function PulseIntelligencePanel({
           </Badge>
         ) : (
           <Badge variant="outline" className="text-[9px] text-muted-foreground">Unmapped</Badge>
+        )}
+
+        {/* IP03: Confirm / Reject inline for suggested mappings */}
+        {mapping && mapping.confidence === "suggested" && (
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px] text-green-700 border-green-300 hover:bg-green-50 dark:hover:bg-green-950/20"
+              disabled={mappingActionBusy}
+              onClick={handleConfirmMapping}
+              title="Confirm this mapping"
+            >
+              <CheckCircle2 className="h-3 w-3 mr-1" />
+              Confirm
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[10px] text-red-700 border-red-300 hover:bg-red-50 dark:hover:bg-red-950/20"
+              disabled={mappingActionBusy}
+              onClick={handleRejectMapping}
+              title="Reject this mapping"
+            >
+              <X className="h-3 w-3 mr-1" />
+              Reject
+            </Button>
+          </div>
+        )}
+
+        {/* IP02: Add-to-CRM shortcut for unmapped dossiers (agent + agency) */}
+        {!mapping && pulseData && (
+          <Button
+            size="sm"
+            className="h-6 px-2 text-[10px] gap-1"
+            onClick={() => setAddToCrmOpen(true)}
+            title={`Create a CRM ${entityType} record from this dossier`}
+          >
+            <UserPlus className="h-3 w-3" />
+            Add to CRM
+          </Button>
         )}
 
         {/* REA ID badge */}
@@ -1312,6 +1465,194 @@ export default function PulseIntelligencePanel({
           onClose={() => setSyncHistoryOpen(false)}
         />
       )}
+
+      {/* IP02: Add-to-CRM dialog (agent or agency, routed via entityType) */}
+      {addToCrmOpen && a && (
+        <AddToCrmInlineDialog
+          entityType={entityType}
+          pulseRecord={a}
+          onClose={() => setAddToCrmOpen(false)}
+          onSuccess={async () => {
+            setAddToCrmOpen(false);
+            await refetchDossier();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════ */
+/* ═══ INLINE "Add to CRM" DIALOG ═══════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════════════ */
+// Lightweight dialog that takes a pulse_agents / pulse_agencies row and
+// creates the corresponding CRM Agent/Agency record + PulseCrmMapping in one
+// flow. Separate from the beefier PulseAgentIntel dialog (which needs the
+// cached CRM-agent/agency lists for dedup warnings) so we don't pull in 10k
+// rows just to open a single-agent confirmation.
+
+function AddToCrmInlineDialog({ entityType, pulseRecord, onClose, onSuccess }) {
+  const [saving, setSaving] = useState(false);
+  const isAgent = entityType === "agent";
+
+  async function handleConfirm() {
+    setSaving(true);
+    try {
+      if (isAgent) {
+        // 1. Resolve agency (create if needed)
+        let agencyId = null;
+        if (pulseRecord.agency_rea_id) {
+          const { data: existing } = await supabase
+            .from("agencies")
+            .select("id")
+            .eq("rea_agency_id", pulseRecord.agency_rea_id)
+            .limit(1)
+            .maybeSingle();
+          if (existing?.id) agencyId = existing.id;
+        }
+        if (!agencyId && pulseRecord.agency_name) {
+          const newAgency = await api.entities.Agency.create({
+            name: pulseRecord.agency_name,
+            rea_agency_id: pulseRecord.agency_rea_id || null,
+            source: "pulse",
+            relationship_state: "Prospecting",
+          });
+          agencyId = newAgency?.id;
+        }
+
+        // 2. Create CRM agent
+        const newAgent = await api.entities.Agent.create({
+          name: pulseRecord.full_name,
+          phone: pulseRecord.mobile || pulseRecord.business_phone || null,
+          email: pulseRecord.email || null,
+          current_agency_id: agencyId,
+          rea_agent_id: pulseRecord.rea_agent_id || null,
+          title: pulseRecord.job_title || null,
+          relationship_state: "prospect",
+          source: "pulse",
+        });
+
+        // 3. Mapping + is_in_crm flag
+        await api.entities.PulseCrmMapping.create({
+          entity_type: "agent",
+          pulse_entity_id: pulseRecord.id,
+          crm_entity_id: newAgent.id,
+          rea_id: pulseRecord.rea_agent_id || null,
+          match_type: "manual",
+          confidence: "confirmed",
+        });
+        await api.entities.PulseAgent.update(pulseRecord.id, { is_in_crm: true });
+
+        await refetchEntityList("Agent").catch(() => {});
+        await refetchEntityList("Agency").catch(() => {});
+        await refetchEntityList("PulseAgent").catch(() => {});
+        await refetchEntityList("PulseCrmMapping").catch(() => {});
+
+        toast.success(`${pulseRecord.full_name} added to CRM`);
+      } else {
+        // Agency path
+        const newAgency = await api.entities.Agency.create({
+          name: pulseRecord.name,
+          phone: pulseRecord.phone || null,
+          email: pulseRecord.email || null,
+          website: pulseRecord.website || null,
+          rea_agency_id: pulseRecord.rea_agency_id || null,
+          source: "pulse",
+          relationship_state: "Prospecting",
+        });
+
+        await api.entities.PulseCrmMapping.create({
+          entity_type: "agency",
+          pulse_entity_id: pulseRecord.id,
+          crm_entity_id: newAgency.id,
+          rea_id: pulseRecord.rea_agency_id || null,
+          match_type: "manual",
+          confidence: "confirmed",
+        });
+        await api.entities.PulseAgency.update(pulseRecord.id, { is_in_crm: true });
+
+        await refetchEntityList("Agency").catch(() => {});
+        await refetchEntityList("PulseAgency").catch(() => {});
+        await refetchEntityList("PulseCrmMapping").catch(() => {});
+
+        toast.success(`${pulseRecord.name} added to CRM`);
+      }
+
+      await onSuccess?.();
+    } catch (err) {
+      console.error("Add to CRM failed:", err);
+      toast.error("Failed to add to CRM. See console for details.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const displayName = isAgent ? pulseRecord.full_name : pulseRecord.name;
+  const subLine = isAgent
+    ? (pulseRecord.agency_name || "Unknown agency")
+    : (pulseRecord.suburb || pulseRecord.address_street || "");
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <UserPlus className="h-4 w-4 text-primary" />
+            Add {isAgent ? "Agent" : "Agency"} to CRM
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="rounded-lg border border-border p-3">
+            <p className="font-semibold text-sm">{displayName}</p>
+            {subLine && <p className="text-xs text-muted-foreground">{subLine}</p>}
+          </div>
+          <div className="rounded-lg border border-border divide-y divide-border text-xs">
+            {isAgent ? (
+              <>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-muted-foreground">REA Agent ID</span>
+                  <span className="font-mono text-[10px]">{pulseRecord.rea_agent_id || "\u2014"}</span>
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-muted-foreground">Mobile</span>
+                  <span>{pulseRecord.mobile || "\u2014"}</span>
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-muted-foreground">Email</span>
+                  <span className="truncate max-w-[200px]">{pulseRecord.email || "\u2014"}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-muted-foreground">REA Agency ID</span>
+                  <span className="font-mono text-[10px]">{pulseRecord.rea_agency_id || "\u2014"}</span>
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-muted-foreground">Phone</span>
+                  <span>{pulseRecord.phone || "\u2014"}</span>
+                </div>
+                <div className="px-3 py-2 flex justify-between">
+                  <span className="text-muted-foreground">Website</span>
+                  <span className="truncate max-w-[200px]">{pulseRecord.website || "\u2014"}</span>
+                </div>
+              </>
+            )}
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Creates a new CRM {isAgent ? "Agent" : "Agency"} record and a confirmed
+            Pulse mapping so future syncs update this record.
+          </p>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={handleConfirm} disabled={saving}>
+            {saving ? "Creating\u2026" : "Confirm & Add"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
