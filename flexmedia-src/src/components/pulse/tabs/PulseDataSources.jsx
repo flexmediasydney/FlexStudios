@@ -1109,6 +1109,117 @@ function SuburbCoverageBlock({ stats, isBoundingBox }) {
   );
 }
 
+// --- Dead-letter drill dialog (migration 093) ---
+//
+// Click the DLQ chip → see the last N failed queue items for this source with
+// last_error, attempts, and a "Requeue" button that resets status='pending'
+// and zeros attempts so the worker picks them up again on the next tick.
+
+function DlqDrillDialog({ sourceId, onClose }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [actingId, setActingId] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await api._supabase
+      .from("pulse_fire_queue")
+      .select("id, suburb_name, attempts, max_attempts, last_error, last_error_category, completed_at, updated_at")
+      .eq("source_id", sourceId)
+      .eq("status", "failed")
+      .order("updated_at", { ascending: false })
+      .limit(100);
+    setItems(data || []);
+    setLoading(false);
+  }, [sourceId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const requeue = useCallback(async (id) => {
+    setActingId(id);
+    try {
+      const { error } = await api._supabase
+        .from("pulse_fire_queue")
+        .update({
+          status: "pending",
+          attempts: 0,
+          next_attempt_at: new Date().toISOString(),
+          dispatched_at: null,
+          completed_at: null,
+          last_error: null,
+          last_error_category: null,
+        })
+        .eq("id", id);
+      if (error) throw error;
+      toast.success("Requeued — worker will pick it up on the next tick");
+      await load();
+    } catch (err) {
+      toast.error(`Requeue failed: ${err.message}`);
+    } finally {
+      setActingId(null);
+    }
+  }, [load]);
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            Dead-lettered items · {sourceId}
+          </DialogTitle>
+        </DialogHeader>
+        {loading ? (
+          <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+        ) : items.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-6">No dead-lettered items for this source.</p>
+        ) : (
+          <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+            {items.map(it => (
+              <div key={it.id} className="rounded border border-amber-300/50 bg-amber-50/30 dark:bg-amber-950/20 p-2.5 space-y-1">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-xs">{it.suburb_name}</span>
+                    <Badge variant="outline" className="text-[9px] py-0 px-1 font-mono">
+                      {it.attempts}/{it.max_attempts} attempts
+                    </Badge>
+                    {it.last_error_category && (
+                      <Badge variant="outline" className={cn("text-[9px] py-0 px-1",
+                        it.last_error_category === 'permanent' ? "border-red-400/50 text-red-700 dark:text-red-400" :
+                        it.last_error_category === 'rate_limit' ? "border-orange-400/50 text-orange-700 dark:text-orange-400" :
+                        "border-amber-400/50 text-amber-700 dark:text-amber-400"
+                      )}>
+                        {it.last_error_category}
+                      </Badge>
+                    )}
+                    <span className="text-[9px] text-muted-foreground">
+                      {fmtRelativeTs(it.updated_at || it.completed_at)}
+                    </span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={() => requeue(it.id)}
+                    disabled={actingId === it.id}
+                  >
+                    {actingId === it.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Requeue"}
+                  </Button>
+                </div>
+                {it.last_error && (
+                  <pre className="text-[10px] font-mono text-red-700 dark:text-red-400 bg-red-50/50 dark:bg-red-950/20 border border-red-200/40 rounded px-2 py-1 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                    {it.last_error}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // --- Queue pipeline block (migration 093) ---
 //
 // Replaces the silent-dispatch fragility of the old chained self-invocation
@@ -1118,7 +1229,7 @@ function SuburbCoverageBlock({ stats, isBoundingBox }) {
 //   - Circuit breaker state (red chip when open/half_open)
 //   - Coverage % (from pulse_source_coverage view)
 
-function QueuePipelineBlock({ queueStats, circuit, coverage }) {
+function QueuePipelineBlock({ queueStats, circuit, coverage, onOpenDlq }) {
   const { pending = 0, running = 0, completed_24h = 0, failed_24h = 0 } = queueStats || {};
   const hasActive = pending > 0 || running > 0;
   const hasFailed = failed_24h > 0;
@@ -1187,14 +1298,16 @@ function QueuePipelineBlock({ queueStats, circuit, coverage }) {
           <span className="text-[9px] uppercase">synced 24h</span>
         </span>
         {failed_24h > 0 && (
-          <span
-            className="inline-flex items-center gap-1 px-1.5 py-0 rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 bg-amber-100/40 dark:bg-amber-900/30"
-            title="Items that hit max_attempts and were dead-lettered"
+          <button
+            type="button"
+            onClick={onOpenDlq}
+            className="inline-flex items-center gap-1 px-1.5 py-0 rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 bg-amber-100/40 dark:bg-amber-900/30 hover:bg-amber-200/50 transition-colors cursor-pointer"
+            title="Click to drill into dead-lettered items + requeue"
           >
             <AlertTriangle className="h-2.5 w-2.5" />
             <span className="font-semibold">{failed_24h}</span>
             <span className="text-[9px] uppercase">DLQ</span>
-          </span>
+          </button>
         )}
       </div>
       {breakerOpen && circuit && (
@@ -1222,6 +1335,7 @@ function QueuePipelineBlock({ queueStats, circuit, coverage }) {
 
 function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, cardStats, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch, onViewHistory }) {
   const meta = getSourceMeta(sourceConfig.source_id);
+  const [dlqOpen, setDlqOpen] = useState(false);
   const Icon = meta.icon;
   const lastStatus = lastLog?.status;
   const [showInput, setShowInput] = useState(false);
@@ -1451,6 +1565,7 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
             queueStats={queueStats}
             circuit={circuit}
             coverage={coverage}
+            onOpenDlq={() => setDlqOpen(true)}
           />
         )}
 
@@ -1563,6 +1678,9 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
           </Button>
         </div>
       </CardContent>
+      {dlqOpen && (
+        <DlqDrillDialog sourceId={sourceConfig.source_id} onClose={() => setDlqOpen(false)} />
+      )}
     </Card>
   );
 }
