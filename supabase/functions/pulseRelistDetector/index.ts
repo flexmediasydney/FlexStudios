@@ -35,8 +35,10 @@ import {
   jsonResponse,
   serveWithAudit,
 } from '../_shared/supabase.ts';
+import { startRun, endRun, recordError } from '../_shared/observability.ts';
 
 const GENERATOR = 'pulseRelistDetector';
+const SOURCE_ID = 'pulse_relist_detector';
 const DEFAULT_LOOKBACK_DAYS = 30;
 const CANDIDATE_LIMIT = 200;
 
@@ -107,14 +109,35 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const since = new Date(Date.now() - lookbackDays * 86400 * 1000).toISOString();
   const admin = getAdminClient();
 
+  // ── Open observability run ─────────────────────────────────────────────
+  // Uses the shared module so every pulseRelistDetector invocation shows up
+  // in the Run History UI the same way pulseDataSync / pulseDetailEnrich do.
+  // We still emit the legacy pulse_timeline 'data_sync' row below for backward
+  // compatibility — operators who were filtering the timeline feed on that
+  // event type shouldn't regress.
+  const ctx = await startRun({
+    admin,
+    sourceId: SOURCE_ID,
+    syncType: 'pulse_relist_detect',
+    triggeredBy: 'manual',
+    triggeredByName: `pulseRelistDetector:${runId.slice(0, 8)}`,
+    inputConfig: { lookback_days: lookbackDays, limit, since, run_id: runId },
+  });
+
   // ── 1. Fetch relist candidates via RPC ─────────────────────────────────
   const { data: candRows, error: rpcErr } = await admin.rpc('pulse_relist_candidates', {
     p_since: since,
     p_limit: limit,
   });
   if (rpcErr) {
-    console.error('[pulseRelistDetector] RPC failed:', rpcErr.message);
-    return jsonResponse({ ok: false, error: `rpc failed: ${rpcErr.message}` }, 500, req);
+    recordError(ctx, rpcErr, 'fatal');
+    await endRun(ctx, {
+      status: 'failed',
+      errorMessage: `rpc failed: ${rpcErr.message}`,
+      sourceLabel: `${SOURCE_ID} · rpc failed`,
+      suburb: 'relist detect',
+    });
+    return jsonResponse({ ok: false, error: `rpc failed: ${rpcErr.message}`, sync_log_id: ctx.syncLogId }, 500, req);
   }
   const candidates: Candidate[] = (candRows || []) as Candidate[];
 
@@ -136,12 +159,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       event_category: 'system',
       title: `Relist detector: 0 candidates`,
       description: `Lookback ${lookbackDays}d. No relist candidates in window.`,
-      new_value: { lookback_days: lookbackDays, since },
+      new_value: { lookback_days: lookbackDays, since, sync_log_id: ctx.syncLogId },
       source: GENERATOR,
       idempotency_key: `${GENERATOR}:run:${runId}`,
     }).then(() => {}, () => {});
+    await endRun(ctx, {
+      status: 'completed',
+      recordsFetched: 0,
+      recordsUpdated: 0,
+      sourceLabel: `${SOURCE_ID} · 0 candidates · ${lookbackDays}d`,
+      suburb: 'relist detect',
+      customSummary: { lookback_days: lookbackDays, since, candidates: 0 },
+    });
     return jsonResponse({
-      ok: true, run_id: runId, lookback_days: lookbackDays,
+      ok: true, run_id: runId, sync_log_id: ctx.syncLogId, lookback_days: lookbackDays,
       duration_ms: Date.now() - startedAt, ...result,
     }, 200, req);
   }
@@ -288,9 +319,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (timelineToInsert.length) result.timeline_inserted = await chunkInsert('pulse_timeline', timelineToInsert);
   } catch (err: any) {
     result.errors.push(err?.message || String(err));
+    recordError(ctx, err, 'error');
   }
+  // Mirror row-level insert errors into the shared context so they land in
+  // result_summary.errors for drill-through debugging.
+  for (const e of result.errors) recordError(ctx, e, 'warn');
 
   // ── 5. Emit a run-summary timeline row so ops can see each run ─────────
+  // Kept for backward compatibility with the PulseTimeline UI filter.
   try {
     await admin.from('pulse_timeline').insert({
       entity_type: 'system',
@@ -311,15 +347,45 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         signals_skipped_dup: result.signals_skipped_dup,
         timeline_skipped_dup: result.timeline_skipped_dup,
         errors: result.errors,
+        sync_log_id: ctx.syncLogId,
       },
       source: GENERATOR,
       idempotency_key: `${GENERATOR}:run:${runId}`,
     });
   } catch { /* non-fatal */ }
 
+  // ── 6. Close observability run ─────────────────────────────────────────
+  const finalStatus = result.errors.length > 0 ? 'failed' : 'completed';
+  await endRun(ctx, {
+    status: finalStatus,
+    recordsFetched: result.candidates,
+    recordsUpdated: result.signals_inserted + result.timeline_inserted,
+    recordsDetail: {
+      candidates: result.candidates,
+      signals_inserted: result.signals_inserted,
+      timeline_inserted: result.timeline_inserted,
+      signals_skipped_dup: result.signals_skipped_dup,
+      timeline_skipped_dup: result.timeline_skipped_dup,
+    },
+    sourceLabel: `${SOURCE_ID} · ${result.signals_inserted} new · ${lookbackDays}d`,
+    suburb: 'relist detect',
+    customSummary: {
+      lookback_days: lookbackDays,
+      since,
+      candidates: result.candidates,
+      signals_inserted: result.signals_inserted,
+      timeline_inserted: result.timeline_inserted,
+      signals_skipped_dup: result.signals_skipped_dup,
+      timeline_skipped_dup: result.timeline_skipped_dup,
+      sample_titles: result.sample_titles,
+      run_id: runId,
+    },
+  });
+
   return jsonResponse({
     ok: true,
     run_id: runId,
+    sync_log_id: ctx.syncLogId,
     lookback_days: lookbackDays,
     duration_ms: Date.now() - startedAt,
     ...result,
