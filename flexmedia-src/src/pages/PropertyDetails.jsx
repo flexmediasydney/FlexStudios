@@ -1,41 +1,73 @@
 /**
- * PropertyDetails — full property page
+ * PropertyDetails — full property dossier (Phase 1 of the dossier vision)
  *
  * URL: /PropertyDetails?key=<property_key>
  *
- * Unified timeline of every event ever attached to this physical property:
- *   - REA listing campaigns (for_sale, for_rent, sold, under_contract)
- *   - Sale completion events
- *   - FlexStudios projects/shoots
+ * Page layout:
+ *   STICKY HEADER (40-48px) — back / address / status / Favorite / Share
+ *   HERO               — 60/40 image + price/facts/agent card (stacks on mobile)
+ *   SIGNAL RIBBON      — stacked banners per unresolved signal
+ *   INTELLIGENCE STRIP — 7 tiles (2x4 on mobile)
+ *   TABS               — Timeline | Media | Projects | Agents
+ *   RIGHT-RAIL         — Currently listed by / Next event / Our history (≥1280px)
  *
- * Header: address + facts + agent/agency cross-references
- * Body: chronological timeline with grouped year buckets
+ * Data: single RPC call `property_get_full_dossier(p_property_key)` returning
+ * `{ property, listings, projects, agents, agencies, timeline_events,
+ *    signals, upcoming_events, relist_candidate, comparables, neighbour_clients }`.
+ *
+ * Shared helpers (parseMediaItems, displayPrice, formatAuctionDateTime) come
+ * from `@/components/pulse/utils/listingHelpers` so every pulse-facing page
+ * renders prices / media / dates identically. Do NOT roll inline fallbacks.
  */
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
-import {
-  Home, MapPin, Tag, DollarSign, Calendar, Users, Building2,
-  ExternalLink, ArrowLeft, Loader2, Camera, History, TrendingUp, RefreshCw,
-  Bed, Bath, Car, Plus, Eye, Images,
-} from "lucide-react";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 import AttachmentLightbox from "@/components/common/AttachmentLightbox";
+import { toast } from "sonner";
+import {
+  Home, MapPin, ArrowLeft, Share2, Star, Images, Video, Camera, Calendar,
+  Clock, TrendingUp, TrendingDown, DollarSign, Building2, Tag, AlertTriangle,
+  Bed, Bath, Car, ExternalLink, Phone, Mail, Users, History,
+  ChevronDown, ChevronRight, Play, FileText, CheckCircle2,
+} from "lucide-react";
 import {
   formatAuctionDateTime,
   parseMediaItems,
+  displayPrice,
+  LISTING_TYPE_LABEL,
+  listingTypeBadgeClasses,
 } from "@/components/pulse/utils/listingHelpers";
 
-function fmtPrice(v) {
-  if (!v || v <= 0) return "—";
-  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
-  if (v >= 1_000) return `$${Math.round(v / 1_000)}K`;
-  return `$${v}`;
+// ── Colour / format helpers ──────────────────────────────────────────────
+
+/**
+ * Convert a hex color to rgba(…). Copied verbatim from the helper pattern in
+ * PulseAgencyIntel.jsx:172 so agency brand accents render identically across
+ * the app. Returns null when the hex is unparseable.
+ */
+function hexToRgba(hex, alpha) {
+  if (!hex || typeof hex !== "string") return null;
+  const m = hex.trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const a = Math.max(0, Math.min(1, alpha));
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
+
 function fmtDate(d) {
   if (!d) return "—";
   try {
@@ -44,6 +76,7 @@ function fmtDate(d) {
     return dt.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
   } catch { return "—"; }
 }
+
 function fmtMonthYear(d) {
   if (!d) return "—";
   try {
@@ -53,28 +86,35 @@ function fmtMonthYear(d) {
   } catch { return "—"; }
 }
 
-const TYPE_BADGE = {
-  for_sale: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-300",
-  for_rent: "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/30 dark:text-purple-300",
-  sold: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300",
-  under_contract: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300",
-};
-const TYPE_LABEL = {
-  for_sale: "For Sale",
-  for_rent: "For Rent",
-  sold: "Sold",
-  under_contract: "Under Contract",
-  other: "Other",
-};
+function fmtRelative(d) {
+  if (!d) return "—";
+  const ms = Date.now() - new Date(d).getTime();
+  if (!isFinite(ms)) return "—";
+  const days = Math.floor(ms / 86400000);
+  if (days < 1) return "today";
+  if (days === 1) return "1d ago";
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(months / 12);
+  return `${years}y ago`;
+}
 
-const STATUS_BADGE = {
-  booked: "bg-blue-50 text-blue-700 border-blue-200",
-  scheduled: "bg-amber-50 text-amber-700 border-amber-200",
-  uploaded: "bg-purple-50 text-purple-700 border-purple-200",
-  delivered: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  cancelled: "bg-red-50 text-red-700 border-red-200",
-  pending_review: "bg-orange-50 text-orange-700 border-orange-200",
-};
+function fmtLand(sqm) {
+  if (!sqm || sqm <= 0) return null;
+  if (sqm >= 10000) return `${(sqm / 10000).toFixed(2)} ha`;
+  return `${Math.round(sqm).toLocaleString()} m²`;
+}
+
+function initials(name) {
+  if (!name) return "??";
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "??";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// ── Root page component ──────────────────────────────────────────────────
 
 export default function PropertyDetails() {
   const location = useLocation();
@@ -83,224 +123,111 @@ export default function PropertyDetails() {
     return params.get("key");
   }, [location.search]);
 
-  const [property, setProperty] = useState(null);
-  const [listings, setListings] = useState([]);
-  const [projects, setProjects] = useState([]);
-  // Tier 3 drill-through: resolve per-agent / per-agency pulse records +
-  // CRM mappings so "Agents Detected" and "Agencies" link to the right place.
-  const [pulseAgents, setPulseAgents] = useState([]);
-  const [pulseAgencies, setPulseAgencies] = useState([]);
-  const [pulseMappings, setPulseMappings] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [lightboxIndex, setLightboxIndex] = useState(null); // null = closed
-
-  const load = useCallback(async () => {
-    if (!propertyKey) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const [pRes, lRes, prRes] = await Promise.all([
-        api._supabase.from("property_full_v").select("*").eq("property_key", propertyKey).maybeSingle(),
-        api._supabase.from("pulse_listings")
-          .select("id, source_listing_id, address, suburb, postcode, listing_type, asking_price, sold_price, listed_date, sold_date, auction_date, auction_time_known, price_text, agent_name, agent_rea_id, agency_name, agency_rea_id, source_url, image_url, hero_image, images, last_synced_at, first_seen_at, days_on_market, bedrooms, bathrooms, parking, land_size, property_type, detail_enriched_at, date_available, land_size_sqm, floorplan_urls, video_url, video_thumb_url, media_items, listing_withdrawn_at")
-          .eq("property_key", propertyKey)
-          .order("listed_date", { ascending: false, nullsFirst: false }),
-        api._supabase.from("projects")
-          .select("id, property_address, status, shoot_date, created_at, project_owner_name, agent_name, agency_id, tonomo_package, photographer_name")
-          .eq("property_key", propertyKey)
-          .order("shoot_date", { ascending: false, nullsFirst: false }),
-      ]);
-      if (pRes.error) throw pRes.error;
-      if (lRes.error) throw lRes.error;
-      if (prRes.error) throw prRes.error;
-      setProperty(pRes.data);
-      setListings(lRes.data || []);
-      setProjects(prRes.data || []);
-
-      // Second-pass lookups: for every agent/agency rea_id appearing in the
-      // listings here, fetch the pulse record + CRM mapping in a single RT.
-      const agentReaIds = Array.from(new Set((lRes.data || [])
-        .map((l) => l.agent_rea_id).filter(Boolean)));
-      const agencyReaIds = Array.from(new Set((lRes.data || [])
-        .map((l) => l.agency_rea_id).filter(Boolean)));
-      if (agentReaIds.length > 0 || agencyReaIds.length > 0) {
-        // LS02: scope pulse_crm_mappings to the rea_ids we actually care about.
-        // The previous unscoped `.in("entity_type", ["agent","agency"])` pulled
-        // every single agent/agency mapping on every property page load
-        // (potentially thousands of rows). Filter to this property's agents +
-        // agencies only.
-        const relevantReaIds = [...agentReaIds, ...agencyReaIds];
-        const [paRes, pagRes, mapRes] = await Promise.all([
-          agentReaIds.length > 0
-            ? api._supabase.from("pulse_agents")
-                .select("id, rea_agent_id, full_name, is_in_crm")
-                .in("rea_agent_id", agentReaIds)
-            : Promise.resolve({ data: [] }),
-          agencyReaIds.length > 0
-            ? api._supabase.from("pulse_agencies")
-                .select("id, rea_agency_id, name, is_in_crm")
-                .in("rea_agency_id", agencyReaIds)
-            : Promise.resolve({ data: [] }),
-          api._supabase.from("pulse_crm_mappings")
-            .select("id, entity_type, pulse_entity_id, crm_entity_id, rea_id")
-            .in("entity_type", ["agent", "agency"])
-            .in("rea_id", relevantReaIds),
-        ]);
-        if (paRes.error) throw paRes.error;
-        if (pagRes.error) throw pagRes.error;
-        if (mapRes.error) throw mapRes.error;
-        setPulseAgents(paRes.data || []);
-        setPulseAgencies(pagRes.data || []);
-        setPulseMappings(mapRes.data || []);
-      } else {
-        setPulseAgents([]);
-        setPulseAgencies([]);
-        setPulseMappings([]);
+  // Tabs: default = timeline. Arrow keys navigate between tabs (A11y).
+  const TAB_ORDER = ["timeline", "media", "projects", "agents"];
+  const [tab, setTab] = useState("timeline");
+  const tabsRef = useRef(null);
+  useEffect(() => {
+    const onKey = (e) => {
+      // Only intercept when focus isn't inside an input/textarea/button
+      const t = document.activeElement;
+      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const idx = TAB_ORDER.indexOf(tab);
+        if (idx < 0) return;
+        const next = e.key === "ArrowLeft"
+          ? TAB_ORDER[(idx - 1 + TAB_ORDER.length) % TAB_ORDER.length]
+          : TAB_ORDER[(idx + 1) % TAB_ORDER.length];
+        setTab(next);
       }
-    } catch (err) {
-      console.error("PropertyDetails load failed:", err);
-      setError(err.message || "Failed to load");
-    } finally {
-      setLoading(false);
-    }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tab]);
+
+  // ── Data fetch — single RPC via react-query ────────────────────────────
+  const {
+    data: dossier,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ["property-dossier", propertyKey],
+    queryFn: async () => {
+      if (!propertyKey) return null;
+      const { data, error: rpcErr } = await api._supabase.rpc(
+        "property_get_full_dossier",
+        { p_property_key: propertyKey }
+      );
+      if (rpcErr) throw rpcErr;
+      return data || {};
+    },
+    enabled: !!propertyKey,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  // ── Favorite (LocalStorage) ────────────────────────────────────────────
+  const [isFavorite, setIsFavorite] = useState(false);
+  useEffect(() => {
+    if (!propertyKey) return;
+    try {
+      const favs = JSON.parse(localStorage.getItem("flex_favorite_properties") || "[]");
+      setIsFavorite(favs.includes(propertyKey));
+    } catch { /* noop */ }
+  }, [propertyKey]);
+  const toggleFavorite = useCallback(() => {
+    if (!propertyKey) return;
+    try {
+      const favs = JSON.parse(localStorage.getItem("flex_favorite_properties") || "[]");
+      let next;
+      if (favs.includes(propertyKey)) {
+        next = favs.filter((k) => k !== propertyKey);
+        toast.success("Removed from favorites");
+      } else {
+        next = [...favs, propertyKey];
+        toast.success("Added to favorites");
+      }
+      localStorage.setItem("flex_favorite_properties", JSON.stringify(next));
+      setIsFavorite(next.includes(propertyKey));
+    } catch { /* noop */ }
   }, [propertyKey]);
 
-  useEffect(() => { load(); }, [load]);
+  const shareLink = useCallback(() => {
+    try {
+      const url = window.location.href;
+      navigator.clipboard.writeText(url);
+      toast.success("Link copied to clipboard");
+    } catch {
+      toast.error("Failed to copy link");
+    }
+  }, []);
 
-  // Build the unified timeline
-  const timeline = useMemo(() => {
-    const events = [];
-    for (const l of listings) {
-      const listedDate = l.listed_date || l.first_seen_at;
-      if (listedDate) {
-        events.push({ kind: "listing", date: listedDate, listing: l });
-      }
-      if (l.sold_date && l.sold_price) {
-        events.push({ kind: "sale", date: l.sold_date, listing: l });
-      }
-    }
-    for (const p of projects) {
-      const date = p.shoot_date || p.created_at;
-      if (date) {
-        events.push({ kind: "project", date, project: p });
-      }
-    }
-    return events.sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [listings, projects]);
+  // ── Derived values from dossier ────────────────────────────────────────
+  const property = dossier?.property || null;
+  const listings = dossier?.listings || [];
+  const projects = dossier?.projects || [];
+  const agents = dossier?.agents || [];
+  const agencies = dossier?.agencies || [];
+  const timelineEvents = dossier?.timeline_events || [];
+  const signals = dossier?.signals || [];
+  const upcomingEvents = dossier?.upcoming_events || [];
+  const relistCandidate = dossier?.relist_candidate || null;
+  const comparables = dossier?.comparables || [];
 
-  // Group timeline by year
-  const groupedTimeline = useMemo(() => {
-    const groups = new Map();
-    for (const ev of timeline) {
-      const year = new Date(ev.date).getFullYear();
-      if (!groups.has(year)) groups.set(year, []);
-      groups.get(year).push(ev);
-    }
-    return Array.from(groups.entries()).sort((a, b) => b[0] - a[0]);
-  }, [timeline]);
+  const currentListing = listings[0] || null;
+  const currentAgency = useMemo(() => {
+    if (!currentListing?.agency_rea_id) return null;
+    return agencies.find((a) => String(a.rea_agency_id) === String(currentListing.agency_rea_id))
+      || null;
+  }, [currentListing, agencies]);
+  const currentAgent = useMemo(() => {
+    if (!currentListing?.agent_rea_id) return null;
+    return agents.find((a) => String(a.rea_agent_id) === String(currentListing.agent_rea_id))
+      || null;
+  }, [currentListing, agents]);
 
-  // Aggregate all PHOTOS across all listings → lightbox gallery.
-  // Uses parseMediaItems() so detail-enriched listings (migration 108+) only
-  // contribute their photo-type items here; floorplans + video are rendered
-  // separately below.
-  const allImages = useMemo(() => {
-    const out = [];
-    for (const l of listings) {
-      const media = parseMediaItems(l);
-      const photos = media.photos.length > 0
-        ? media.photos.map((p) => p.url)
-        : (l.hero_image || l.image_url ? [l.hero_image || l.image_url] : []);
-      photos.forEach((url, i) => {
-        if (!url) return;
-        out.push({
-          file_name: `${l.agency_name || "Listing"} — ${fmtDate(l.listed_date || l.first_seen_at)} (${i + 1})`,
-          file_url: url,
-          file_type: "image/jpeg",
-          _listing_id: l.id,
-          _agent: l.agent_name,
-          _agency: l.agency_name,
-        });
-      });
-    }
-    return out;
-  }, [listings]);
-
-  // Floorplans + video aggregated across listings (detail-enriched only).
-  const allFloorplans = useMemo(() => {
-    const out = [];
-    for (const l of listings) {
-      const media = parseMediaItems(l);
-      for (const fp of media.floorplans) {
-        out.push({ ...fp, listingId: l.id, agencyName: l.agency_name });
-      }
-    }
-    return out;
-  }, [listings]);
-
-  const latestVideo = useMemo(() => {
-    for (const l of listings) {
-      const media = parseMediaItems(l);
-      if (media.video) return { ...media.video, listing: l };
-    }
-    return null;
-  }, [listings]);
-
-  // Unique agents/agencies — decorated with resolved link targets (CRM if
-  // mapped, else Industry Pulse slideout, else plain text).
-  const uniqueAgents = useMemo(() => {
-    const map = new Map();
-    for (const l of listings) {
-      if (!l.agent_rea_id || !l.agent_name) continue;
-      if (!map.has(l.agent_rea_id)) map.set(l.agent_rea_id, { reaId: l.agent_rea_id, name: l.agent_name, count: 0, latest: null });
-      const e = map.get(l.agent_rea_id);
-      e.count++;
-      if (!e.latest || new Date(l.listed_date || 0) > new Date(e.latest)) e.latest = l.listed_date;
-    }
-    const agents = Array.from(map.values());
-    // Resolve link target for each: CRM (mapping) > Pulse slideout (pulse agent) > text.
-    for (const a of agents) {
-      const pa = pulseAgents.find((p) => p.rea_agent_id === a.reaId);
-      a.pulseId = pa?.id || null;
-      if (pa) {
-        const m = pulseMappings.find((mm) =>
-          mm.entity_type === "agent" &&
-          (mm.pulse_entity_id === pa.id || String(mm.rea_id) === String(a.reaId))
-        );
-        a.crmEntityId = m?.crm_entity_id || null;
-      } else {
-        a.crmEntityId = null;
-      }
-    }
-    return agents.sort((a, b) => b.count - a.count);
-  }, [listings, pulseAgents, pulseMappings]);
-
-  const uniqueAgencies = useMemo(() => {
-    const map = new Map();
-    for (const l of listings) {
-      if (!l.agency_name && !l.agency_rea_id) continue;
-      const key = l.agency_rea_id || l.agency_name;
-      if (!map.has(key)) map.set(key, { reaId: l.agency_rea_id, name: l.agency_name, count: 0 });
-      map.get(key).count++;
-    }
-    const agencies = Array.from(map.values());
-    for (const ag of agencies) {
-      if (!ag.reaId) { ag.pulseId = null; ag.crmEntityId = null; continue; }
-      const pa = pulseAgencies.find((p) => p.rea_agency_id === ag.reaId);
-      ag.pulseId = pa?.id || null;
-      if (pa) {
-        const m = pulseMappings.find((mm) =>
-          mm.entity_type === "agency" &&
-          (mm.pulse_entity_id === pa.id || String(mm.rea_id) === String(ag.reaId))
-        );
-        ag.crmEntityId = m?.crm_entity_id || null;
-      } else {
-        ag.crmEntityId = null;
-      }
-    }
-    return agencies.sort((a, b) => b.count - a.count);
-  }, [listings, pulseAgencies, pulseMappings]);
-
+  // ── Early returns ──────────────────────────────────────────────────────
   if (!propertyKey) {
     return (
       <div className="px-4 pt-3 pb-4 lg:px-6">
@@ -312,570 +239,969 @@ export default function PropertyDetails() {
     );
   }
 
-  if (loading) {
+  if (error) {
     return (
       <div className="px-4 pt-3 pb-4 lg:px-6">
-        <Card><CardContent className="py-12 flex items-center justify-center text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading property…
+        <Card><CardContent className="py-12 text-center">
+          <AlertTriangle className="h-10 w-10 mx-auto mb-2 opacity-60 text-red-500" />
+          <p className="text-sm text-foreground mb-1">Failed to load property</p>
+          <p className="text-xs text-muted-foreground mb-3">{error.message || "Unknown error"}</p>
+          <div className="flex items-center gap-2 justify-center">
+            <Button variant="outline" size="sm" onClick={() => refetch()}>Retry</Button>
+            <Link to="/Properties"><Button variant="outline" size="sm">Back</Button></Link>
+          </div>
         </CardContent></Card>
       </div>
     );
   }
 
-  if (error || !property) {
+  if (isLoading || !dossier) {
+    return <PropertyDetailsSkeleton />;
+  }
+
+  if (!property) {
     return (
       <div className="px-4 pt-3 pb-4 lg:px-6">
         <Card><CardContent className="py-12 text-center">
           <Home className="h-10 w-10 mx-auto mb-2 opacity-30 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
-            {error || "Property not found."}
-          </p>
+          <p className="text-sm text-muted-foreground">Property not found.</p>
           <Link to="/Properties"><Button variant="outline" size="sm" className="mt-2">Back to Properties</Button></Link>
         </CardContent></Card>
       </div>
     );
   }
 
-  // Smart current-state label
-  const currentState = (() => {
-    const now = Date.now();
-    const dayMs = 86400000;
-    const listedDate = property.current_listed_date ? new Date(property.current_listed_date).getTime() : null;
-    const soldDate = property.last_sold_at ? new Date(property.last_sold_at).getTime() : null;
-
-    if (property.current_listing_type && listedDate && (now - listedDate) < 90 * dayMs) {
-      return { label: TYPE_LABEL[property.current_listing_type] || property.current_listing_type, fresh: true, cls: TYPE_BADGE[property.current_listing_type] };
+  // Combined upcoming events: RPC-provided + current listing's auction_date.
+  const combinedUpcoming = (() => {
+    const out = [...(upcomingEvents || [])];
+    if (currentListing?.auction_date) {
+      const whenMs = new Date(currentListing.auction_date).getTime();
+      if (isFinite(whenMs) && whenMs > Date.now()) {
+        out.push({
+          kind: "auction",
+          event_date: currentListing.auction_date,
+          title: "Auction",
+          listing_id: currentListing.id,
+          time_known: currentListing.auction_time_known,
+        });
+      }
     }
-    if (soldDate && (now - soldDate) < 180 * dayMs) {
-      return { label: "Recently Sold", fresh: true, cls: TYPE_BADGE.sold };
-    }
-    if (property.current_listing_type) {
-      return { label: `Was ${TYPE_LABEL[property.current_listing_type]}`, fresh: false, cls: "bg-muted/60 text-muted-foreground border-transparent" };
-    }
-    return null;
+    return out
+      .filter((e) => e?.event_date)
+      .sort((a, b) => new Date(a.event_date) - new Date(b.event_date))
+      .slice(0, 3);
   })();
 
-  const facts = [];
-  if (property.bedrooms) facts.push({ icon: Bed, val: property.bedrooms });
-  if (property.bathrooms) facts.push({ icon: Bath, val: property.bathrooms });
-  if (property.parking) facts.push({ icon: Car, val: property.parking });
-
-  // LS14: Land size — pulled from the most recent listing (listings[0]),
-  // preferring the numeric `land_size_sqm` column, falling back to the
-  // free-text `land_size` field if numeric is null. Values >10,000 m² are
-  // displayed in hectares for readability (e.g. 0.84 ha) like REA does.
-  const currentListing = listings[0];
-  const landSqm = Number(currentListing?.land_size_sqm) || null;
-  const landText = !landSqm && currentListing?.land_size ? String(currentListing.land_size) : null;
-  const formatLand = (sqm) => {
-    if (!sqm || sqm <= 0) return null;
-    if (sqm >= 10000) return `${(sqm / 10000).toFixed(2)} ha`;
-    return `${Math.round(sqm).toLocaleString()} m²`;
-  };
-  const landLabel = landSqm ? formatLand(landSqm) : landText;
-
-  // LS18: "Last shot for" label falls back to the most recent listing's
-  // agent when no FlexMedia project exists at this address. Dynamic label
-  // distinguishes the two sources so the user can tell what's CRM vs Pulse.
-  const projectAgentName = projects.find((p) => p.agent_name)?.agent_name || null;
-  const listingAgentName = currentListing?.agent_name || null;
-  const linkedAgentName = projectAgentName ?? listingAgentName;
-  const linkedAgentSource = projectAgentName ? "project" : (listingAgentName ? "listing" : null);
-
   return (
-    <div className="px-4 pt-3 pb-4 lg:px-6 space-y-3">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <Link to="/Properties">
-            <Button variant="ghost" size="sm" className="h-8">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          </Link>
-          <Home className="h-5 w-5 text-primary" />
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">{property.display_address}</h1>
-            <p className="text-[11px] text-muted-foreground">
-              {property.suburb}{property.postcode ? ` · ${property.postcode}` : ""} · {property.state || "NSW"}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link to={`/ProjectDetails?id=new&address=${encodeURIComponent(property.display_address)}`}>
-            <Button variant="default" size="sm" className="h-8 text-xs">
-              <Plus className="h-3.5 w-3.5 mr-1" /> Create project here
-            </Button>
-          </Link>
-          <Button variant="ghost" size="sm" onClick={load}>
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
+    <div className="pb-4 lg:pb-6">
+      {/* ── STICKY HEADER ── */}
+      <StickyHeader
+        property={property}
+        isFavorite={isFavorite}
+        onToggleFavorite={toggleFavorite}
+        onShare={shareLink}
+      />
 
-      {/* Hero image + facts strip (only if hero image exists) */}
-      {property.hero_image && (
-        <Card className="rounded-xl overflow-hidden">
-          <div className="grid grid-cols-1 sm:grid-cols-3">
-            <button
-              type="button"
-              onClick={() => allImages.length > 0 && setLightboxIndex(0)}
-              className="sm:col-span-1 bg-muted h-48 sm:h-auto overflow-hidden group relative cursor-pointer block"
-              disabled={allImages.length === 0}
-            >
-              <img
-                src={property.hero_image}
-                alt=""
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
+      <div className="px-3 pt-2 space-y-3 lg:px-6">
+        {/* ── Right-rail layout wrapper ── */}
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr,320px] gap-4">
+          {/* MAIN COLUMN */}
+          <div className="space-y-3 min-w-0">
+            {/* ── HERO ── */}
+            <ErrorBoundary compact fallbackLabel="Hero">
+              <PropertyHero
+                property={property}
+                listings={listings}
+                currentListing={currentListing}
+                currentAgent={currentAgent}
+                currentAgency={currentAgency}
               />
-              {allImages.length > 0 && (
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs font-medium flex items-center gap-1.5 bg-black/60 rounded-full px-3 py-1.5">
-                    <Images className="h-3.5 w-3.5" />
-                    View {allImages.length} photo{allImages.length !== 1 ? 's' : ''}
-                  </span>
-                </div>
+            </ErrorBoundary>
+
+            {/* ── SIGNAL RIBBON (stack all) ── */}
+            {(signals.length > 0 || relistCandidate?.is_candidate) && (
+              <ErrorBoundary compact fallbackLabel="Signal ribbon">
+                <SignalRibbon
+                  signals={signals}
+                  relistCandidate={relistCandidate}
+                />
+              </ErrorBoundary>
+            )}
+
+            {/* ── MOBILE-ONLY inline right-rail cards (above tabs) ── */}
+            <div className="xl:hidden space-y-3">
+              {currentAgency && (
+                <CurrentlyListedByCard
+                  agency={currentAgency}
+                  agent={currentAgent}
+                  listing={currentListing}
+                />
               )}
-            </button>
-            <div className="sm:col-span-2 p-4 flex flex-col justify-center gap-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                {currentState && (
-                  <Badge variant="outline" className={cn("text-[10px]", currentState.cls)}>
-                    {currentState.label}
-                  </Badge>
-                )}
-                {property.property_type && (
-                  <Badge variant="outline" className="text-[10px] capitalize">{property.property_type}</Badge>
-                )}
-                {allImages.length > 0 && (
-                  <Badge variant="outline" className="text-[10px]">
-                    <Images className="h-2.5 w-2.5 mr-1" /> {allImages.length} photos
-                  </Badge>
-                )}
-              </div>
-              {(property.current_asking_price || property.last_sold_price) && (
-                <p className="text-2xl font-bold tabular-nums">
-                  {fmtPrice(property.current_asking_price || property.last_sold_price)}
-                  {!currentState?.fresh && <span className="text-xs font-normal text-muted-foreground ml-2">historical</span>}
-                </p>
+              {combinedUpcoming.length > 0 && (
+                <NextEventCard upcoming={combinedUpcoming} />
               )}
-              {(facts.length > 0 || landLabel) && (
-                <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
-                  {facts.map((f, i) => (
-                    <span key={i} className="flex items-center gap-1">
-                      <f.icon className="h-3.5 w-3.5" /> {f.val}
-                    </span>
-                  ))}
-                  {/* LS14: Land size — shown inline with beds/baths/parking.
-                      Short format (612 m² / 0.84 ha) for readability. */}
-                  {landLabel && (
-                    <span className="flex items-center gap-1" title="Land size">
-                      <MapPin className="h-3.5 w-3.5" /> {landLabel}
-                    </span>
-                  )}
-                </div>
-              )}
-              {linkedAgentName && (
-                // LS18: label + color-tag change based on the source. Project
-                // (CRM-backed FlexStudios shoot) uses violet to echo project
-                // chrome; listing-sourced (falls back from Pulse data) uses
-                // blue so the user can tell at a glance.
-                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                  {linkedAgentSource === "project" ? (
-                    <Camera className="h-3 w-3 text-violet-600 shrink-0" />
-                  ) : (
-                    <Building2 className="h-3 w-3 text-blue-600 shrink-0" />
-                  )}
-                  <span>
-                    {linkedAgentSource === "project" ? "Last shot for: " : "Currently listed by: "}
-                    <span className="font-medium text-foreground">{linkedAgentName}</span>
-                  </span>
-                </p>
+              {projects.length > 0 && (
+                <OurHistoryCard projects={projects.slice(0, 3)} />
               )}
             </div>
+
+            {/* ── INTELLIGENCE STRIP ── */}
+            <ErrorBoundary compact fallbackLabel="Intelligence strip">
+              <IntelligenceStrip
+                property={property}
+                listings={listings}
+                projects={projects}
+                onTileClick={(target) => setTab(target)}
+              />
+            </ErrorBoundary>
+
+            {/* ── TABS ── */}
+            <div ref={tabsRef}>
+              <Tabs value={tab} onValueChange={setTab}>
+                <TabsList className="flex flex-wrap h-auto gap-0.5 w-full rounded-lg bg-muted p-1">
+                  <TabsTrigger value="timeline" className="flex-1 text-xs sm:text-sm">
+                    <History className="h-3.5 w-3.5 mr-1.5" />
+                    Timeline
+                    {timelineEvents.length > 0 && (
+                      <Badge variant="secondary" className="ml-1.5 h-4 px-1 text-[9px] tabular-nums">
+                        {timelineEvents.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
+                  <TabsTrigger value="media" className="flex-1 text-xs sm:text-sm">
+                    <Images className="h-3.5 w-3.5 mr-1.5" />
+                    Media
+                  </TabsTrigger>
+                  <TabsTrigger value="projects" className="flex-1 text-xs sm:text-sm">
+                    <Camera className="h-3.5 w-3.5 mr-1.5" />
+                    Projects
+                    {projects.length > 0 && (
+                      <Badge variant="secondary" className="ml-1.5 h-4 px-1 text-[9px] tabular-nums">
+                        {projects.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
+                  <TabsTrigger value="agents" className="flex-1 text-xs sm:text-sm">
+                    <Users className="h-3.5 w-3.5 mr-1.5" />
+                    Agents
+                    {agents.length > 0 && (
+                      <Badge variant="secondary" className="ml-1.5 h-4 px-1 text-[9px] tabular-nums">
+                        {agents.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="timeline" className="mt-3">
+                  <ErrorBoundary compact fallbackLabel="Timeline">
+                    <TimelineTab events={timelineEvents} listings={listings} projects={projects} />
+                  </ErrorBoundary>
+                </TabsContent>
+
+                <TabsContent value="media" className="mt-3">
+                  <ErrorBoundary compact fallbackLabel="Media">
+                    <MediaTab listings={listings} />
+                  </ErrorBoundary>
+                </TabsContent>
+
+                <TabsContent value="projects" className="mt-3">
+                  <ErrorBoundary compact fallbackLabel="Projects">
+                    <ProjectsTab projects={projects} property={property} />
+                  </ErrorBoundary>
+                </TabsContent>
+
+                <TabsContent value="agents" className="mt-3">
+                  <ErrorBoundary compact fallbackLabel="Agents">
+                    <AgentsTab agents={agents} agencies={agencies} />
+                  </ErrorBoundary>
+                </TabsContent>
+              </Tabs>
+            </div>
           </div>
-        </Card>
-      )}
 
-      {/* Lightbox — uses existing AttachmentLightbox component */}
-      {lightboxIndex !== null && allImages.length > 0 && (
-        <AttachmentLightbox
-          files={allImages}
-          initialIndex={lightboxIndex}
-          onClose={() => setLightboxIndex(null)}
-        />
-      )}
-
-      {/* Floorplans + Video (detail-enriched, migration 108+) */}
-      {(allFloorplans.length > 0 || latestVideo) && (
-        <Card className="rounded-xl">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <Images className="h-4 w-4 text-indigo-600" />
-              Detail Media
-              {allFloorplans.length > 0 && (
-                <Badge variant="outline" className="text-[10px]">
-                  {allFloorplans.length} floorplan{allFloorplans.length !== 1 ? "s" : ""}
-                </Badge>
+          {/* RIGHT RAIL — desktop ≥1280px only */}
+          <aside className="hidden xl:block">
+            <div className="sticky top-[64px] space-y-3">
+              {currentAgency && (
+                <ErrorBoundary compact fallbackLabel="Currently listed by">
+                  <CurrentlyListedByCard
+                    agency={currentAgency}
+                    agent={currentAgent}
+                    listing={currentListing}
+                  />
+                </ErrorBoundary>
               )}
-              {latestVideo && <Badge variant="outline" className="text-[10px]">Video</Badge>}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {allFloorplans.length > 0 && (
-              <div>
-                <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1.5">
-                  Floorplans
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {allFloorplans.map((fp, i) => (
-                    <a
-                      key={i}
-                      href={fp.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block"
-                      title={fp.agencyName || "Floorplan"}
-                    >
-                      <img
-                        src={fp.thumb || fp.url}
-                        alt={`Floorplan ${i + 1}`}
-                        className="h-24 w-32 object-contain rounded border border-border bg-white hover:shadow-md transition-shadow"
-                      />
-                    </a>
-                  ))}
-                </div>
-              </div>
-            )}
-            {latestVideo && (() => {
-              const yt = latestVideo.url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/))([A-Za-z0-9_-]{11})/);
-              return (
-                <div>
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1.5">
-                    Video
-                  </p>
-                  {yt ? (
-                    <iframe
-                      src={`https://www.youtube.com/embed/${yt[1]}`}
-                      title="Listing video"
-                      className="w-full max-w-lg aspect-video rounded border border-border"
-                      frameBorder="0"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    />
-                  ) : (
-                    <a
-                      href={latestVideo.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
-                    >
-                      Watch video
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  )}
-                </div>
-              );
-            })()}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Auction info (detail-enriched, migration 108+) — only when the
-          current listing state is for_sale and price_text mentions auction. */}
-      {(() => {
-        const currentListing = listings[0];
-        if (!currentListing?.auction_date) return null;
-        const priceText = (currentListing.price_text || "").toLowerCase();
-        if (!priceText.includes("auction")) return null;
-        return (
-          <Card className="rounded-xl border-amber-200/60 bg-amber-50/30 dark:bg-amber-950/10">
-            <CardContent className="p-3 flex items-center gap-2">
-              <Tag className="h-4 w-4 text-amber-600 shrink-0" />
-              <div className="text-xs">
-                <p className="font-semibold text-amber-800 dark:text-amber-300">Auction</p>
-                {/* B15: pass auction_time_known so legitimate 10am AEST (00:00 UTC) renders with time */}
-                <p className="text-foreground">{formatAuctionDateTime(currentListing.auction_date, currentListing.auction_time_known)}</p>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })()}
-
-      {/* Stats strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-        <StatCard label="Listings" value={property.listing_count || 0} icon={Building2} color="text-blue-600" subtitle="REA campaigns" />
-        <StatCard label="Projects" value={property.project_count || 0} icon={Camera} color="text-violet-600" subtitle="Our shoots" />
-        <StatCard label="Sales" value={property.sold_listing_count || 0} icon={DollarSign} color="text-emerald-600" subtitle="Completed sales" />
-        <StatCard label="Last Sold" value={fmtPrice(property.last_sold_price)} icon={TrendingUp} subtitle={fmtDate(property.last_sold_at)} />
-        <StatCard label="Now" value={property.current_listing_type ? TYPE_LABEL[property.current_listing_type] || "Active" : "—"} icon={Tag} subtitle={fmtPrice(property.current_asking_price)} />
-      </div>
-
-      {/* Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        {/* Left: Timeline (2/3) */}
-        <Card className="lg:col-span-2 rounded-xl">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <History className="h-4 w-4" /> Property Timeline
-              <Badge variant="outline" className="text-[10px] ml-auto">
-                {timeline.length} events
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {groupedTimeline.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-6">No events yet</p>
-            ) : (
-              groupedTimeline.map(([year, events]) => (
-                <div key={year}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{year}</p>
-                    <div className="flex-1 border-t border-border/60"></div>
-                    <span className="text-[10px] text-muted-foreground/70">{events.length} event{events.length !== 1 ? "s" : ""}</span>
-                  </div>
-                  <div className="space-y-2 ml-2 border-l-2 border-border/40 pl-4">
-                    {events.map((ev, i) => (
-                      <TimelineCard key={i} event={ev} />
-                    ))}
-                  </div>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Right: Cross-references (1/3) */}
-        <div className="space-y-3">
-          {/* Linked Projects */}
-          <Card className="rounded-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Camera className="h-4 w-4 text-violet-600" />
-                FlexStudios Projects ({projects.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1.5">
-              {projects.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No shoots at this property yet.</p>
-              ) : projects.map((p) => (
-                <Link key={p.id} to={`/ProjectDetails?id=${p.id}`} className="block hover:bg-muted/40 rounded p-1.5 -mx-1.5 transition-colors">
-                  <div className="flex items-start gap-2">
-                    <Tag className="h-3 w-3 text-violet-600 mt-1 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">{p.tonomo_package || "Project"}</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {p.agent_name && <>{p.agent_name} · </>}
-                        {fmtDate(p.shoot_date || p.created_at)}
-                      </p>
-                    </div>
-                    <Badge variant="outline" className={cn("text-[9px] shrink-0", STATUS_BADGE[p.status] || "")}>
-                      {p.status}
-                    </Badge>
-                  </div>
-                </Link>
-              ))}
-            </CardContent>
-          </Card>
-
-          {/* Agents detected — Tier 3: each row resolves to CRM, Pulse, or
-              static text based on what mapping data is available. */}
-          <Card className="rounded-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Users className="h-4 w-4 text-blue-600" />
-                Agents Detected ({uniqueAgents.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              {uniqueAgents.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No agents detected yet.</p>
-              ) : uniqueAgents.map((a) => {
-                const label = (
-                  <>
-                    <span className="truncate">{a.name}</span>
-                    <Badge variant="outline" className="text-[9px] shrink-0">
-                      {a.count} campaign{a.count !== 1 ? "s" : ""}
-                    </Badge>
-                  </>
-                );
-                if (a.crmEntityId) {
-                  return (
-                    <Link
-                      key={a.reaId}
-                      to={createPageUrl("PersonDetails") + `?id=${a.crmEntityId}`}
-                      className="flex items-center justify-between text-xs text-primary hover:underline"
-                      title="Open CRM record"
-                    >
-                      {label}
-                    </Link>
-                  );
-                }
-                if (a.pulseId) {
-                  return (
-                    <Link
-                      key={a.reaId}
-                      to={`/IndustryPulse?tab=agents&pulse_id=${a.pulseId}`}
-                      className="flex items-center justify-between text-xs hover:underline"
-                      title="Open Industry Pulse record"
-                    >
-                      {label}
-                    </Link>
-                  );
-                }
-                return (
-                  <div
-                    key={a.reaId}
-                    className="flex items-center justify-between text-xs"
-                    title="No Industry Pulse record yet"
-                  >
-                    {label}
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-
-          {/* Agencies detected */}
-          <Card className="rounded-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-amber-600" />
-                Agencies ({uniqueAgencies.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              {uniqueAgencies.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No agencies detected yet.</p>
-              ) : uniqueAgencies.map((a, i) => {
-                const label = (
-                  <>
-                    <span className="truncate">{a.name}</span>
-                    <Badge variant="outline" className="text-[9px] shrink-0">
-                      {a.count}
-                    </Badge>
-                  </>
-                );
-                if (a.crmEntityId) {
-                  return (
-                    <Link
-                      key={a.reaId || a.name || i}
-                      to={createPageUrl("OrgDetails") + `?id=${a.crmEntityId}`}
-                      className="flex items-center justify-between text-xs text-primary hover:underline"
-                      title="Open CRM record"
-                    >
-                      {label}
-                    </Link>
-                  );
-                }
-                if (a.pulseId) {
-                  return (
-                    <Link
-                      key={a.reaId || a.name || i}
-                      to={`/IndustryPulse?tab=agencies&pulse_id=${a.pulseId}`}
-                      className="flex items-center justify-between text-xs hover:underline"
-                      title="Open Industry Pulse record"
-                    >
-                      {label}
-                    </Link>
-                  );
-                }
-                return (
-                  <div
-                    key={a.reaId || a.name || i}
-                    className="flex items-center justify-between text-xs"
-                    title="No Industry Pulse record yet"
-                  >
-                    {label}
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-
-          {/* Identity */}
-          <Card className="rounded-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                Identity
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="text-[10px] text-muted-foreground space-y-0.5 font-mono">
-              <p><span className="opacity-60">key:</span> {property.property_key}</p>
-              <p><span className="opacity-60">first seen:</span> {fmtDate(property.first_seen_at)}</p>
-              <p><span className="opacity-60">last seen:</span> {fmtDate(property.last_seen_at)}</p>
-              {property.latitude && (
-                <p><span className="opacity-60">geo:</span> {Number(property.latitude).toFixed(5)}, {Number(property.longitude).toFixed(5)}</p>
+              {combinedUpcoming.length > 0 && (
+                <ErrorBoundary compact fallbackLabel="Next event">
+                  <NextEventCard upcoming={combinedUpcoming} />
+                </ErrorBoundary>
               )}
-            </CardContent>
-          </Card>
+              {projects.length > 0 && (
+                <ErrorBoundary compact fallbackLabel="Our history">
+                  <OurHistoryCard projects={projects.slice(0, 5)} />
+                </ErrorBoundary>
+              )}
+              {comparables.length > 0 && (
+                <ErrorBoundary compact fallbackLabel="Comparables">
+                  <ComparablesCard comparables={comparables} />
+                </ErrorBoundary>
+              )}
+            </div>
+          </aside>
         </div>
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value, icon: Icon, color, subtitle }) {
+// ── Sticky header ────────────────────────────────────────────────────────
+
+function StickyHeader({ property, isFavorite, onToggleFavorite, onShare }) {
+  const statusInfo = useMemo(() => {
+    if (!property?.current_listing_type) {
+      if (property?.latest_sold_date) {
+        const ms = Date.now() - new Date(property.latest_sold_date).getTime();
+        if (ms < 180 * 86400000) {
+          return { label: "Recently Sold", cls: listingTypeBadgeClasses("sold") };
+        }
+      }
+      return null;
+    }
+    const type = property.current_listing_type;
+    return {
+      label: LISTING_TYPE_LABEL[type] || type,
+      cls: listingTypeBadgeClasses(type),
+    };
+  }, [property]);
+
   return (
-    <Card className="rounded-xl border-0 shadow-sm">
-      <CardContent className="p-3 flex items-center gap-3">
-        <div className="p-1.5 rounded-lg bg-muted/60">
-          <Icon className={cn("h-4 w-4", color || "text-muted-foreground")} />
+    <div className="sticky top-0 z-30 bg-background/95 backdrop-blur-sm border-b border-border">
+      <div className="h-10 sm:h-12 px-3 lg:px-6 flex items-center gap-2">
+        <Link to="/Properties">
+          <Button variant="ghost" size="sm" className="h-8 px-2 shrink-0">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        </Link>
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <Home className="h-4 w-4 text-primary shrink-0 hidden sm:inline" />
+          <div className="min-w-0">
+            <p className="text-xs sm:text-sm font-semibold truncate leading-tight">
+              {property?.display_address || "—"}
+            </p>
+            <p className="text-[10px] text-muted-foreground truncate leading-tight">
+              {property?.suburb}{property?.postcode ? ` · ${property.postcode}` : ""}
+              {property?.state ? ` · ${property.state}` : ""}
+            </p>
+          </div>
+          {statusInfo && (
+            <Badge
+              variant="outline"
+              className={cn(
+                "text-[10px] shrink-0 hidden sm:inline-flex",
+                statusInfo.cls.bg,
+                statusInfo.cls.text,
+                statusInfo.cls.border,
+              )}
+            >
+              {statusInfo.label}
+            </Badge>
+          )}
         </div>
-        <div className="min-w-0">
-          <p className={cn("text-base font-bold tabular-nums leading-none", color || "text-foreground")}>
-            {typeof value === "number" ? value.toLocaleString() : value}
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={onToggleFavorite}
+            title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+          >
+            <Star className={cn(
+              "h-4 w-4",
+              isFavorite ? "fill-amber-400 text-amber-500" : "text-muted-foreground"
+            )} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={onShare}
+            title="Copy shareable link"
+          >
+            <Share2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Hero section ─────────────────────────────────────────────────────────
+
+function PropertyHero({ property, listings, currentListing, currentAgent, currentAgency }) {
+  const [lightboxIndex, setLightboxIndex] = useState(null);
+
+  // Flatten all photos across all listings into a lightbox gallery.
+  const allPhotos = useMemo(() => {
+    const out = [];
+    for (const l of listings) {
+      const media = parseMediaItems(l);
+      const photos = media.photos.length > 0
+        ? media.photos.map((p) => p.url)
+        : (l.hero_image ? [l.hero_image] : []);
+      photos.forEach((url, i) => {
+        if (!url) return;
+        out.push({
+          file_name: `${l.agency_name || "Listing"} — ${fmtDate(l.listed_date)} (${i + 1})`,
+          file_url: url,
+          file_type: "image/jpeg",
+        });
+      });
+    }
+    return out;
+  }, [listings]);
+
+  const latestVideo = useMemo(() => {
+    for (const l of listings) {
+      const media = parseMediaItems(l);
+      if (media.video) return media.video;
+    }
+    return null;
+  }, [listings]);
+
+  const heroImage = property?.hero_image
+    || currentListing?.hero_image
+    || (allPhotos[0]?.file_url);
+
+  // Price rendering via canonical helper
+  const priceLabel = useMemo(() => {
+    if (currentListing) {
+      const dp = displayPrice(currentListing);
+      return dp.label;
+    }
+    if (property?.latest_sold_price) {
+      const n = Number(property.latest_sold_price);
+      if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+      if (n >= 1_000) return `$${Math.round(n / 1_000)}K`;
+      return `$${n}`;
+    }
+    return "Price on request";
+  }, [currentListing, property]);
+
+  const dateMessage = useMemo(() => {
+    if (currentListing?.listing_type === "sold" && (currentListing.sold_date || property?.latest_sold_date)) {
+      return `Sold ${fmtRelative(currentListing.sold_date || property.latest_sold_date)}`;
+    }
+    if (property?.latest_listed_date) {
+      const days = property.days_on_market
+        || Math.floor((Date.now() - new Date(property.latest_listed_date).getTime()) / 86400000);
+      return `Listed ${days}d ago`;
+    }
+    if (property?.latest_sold_date) {
+      return `Sold ${fmtRelative(property.latest_sold_date)}`;
+    }
+    return null;
+  }, [currentListing, property]);
+
+  const facts = [];
+  if (property?.bedrooms) facts.push({ icon: Bed, val: property.bedrooms, key: "bed" });
+  if (property?.bathrooms) facts.push({ icon: Bath, val: property.bathrooms, key: "bath" });
+  if (property?.parking) facts.push({ icon: Car, val: property.parking, key: "car" });
+  const landLabel = fmtLand(Number(property?.land_size_sqm) || null);
+
+  const typeInfo = property?.current_listing_type
+    ? {
+      label: LISTING_TYPE_LABEL[property.current_listing_type] || property.current_listing_type,
+      cls: listingTypeBadgeClasses(property.current_listing_type),
+    }
+    : null;
+
+  return (
+    <>
+      <Card className="rounded-xl overflow-hidden">
+        <div className="grid grid-cols-1 md:grid-cols-5">
+          {/* LEFT: cinematic image — 60% on desktop, full width on mobile */}
+          <button
+            type="button"
+            onClick={() => allPhotos.length > 0 && setLightboxIndex(0)}
+            disabled={allPhotos.length === 0}
+            className={cn(
+              "md:col-span-3 bg-muted overflow-hidden group relative block",
+              "h-[40vh] md:h-[420px]",
+              allPhotos.length > 0 && "cursor-pointer"
+            )}
+          >
+            {heroImage ? (
+              <img
+                src={heroImage}
+                alt={property?.display_address || ""}
+                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                  e.currentTarget.parentElement.classList.add("flex", "items-center", "justify-center");
+                }}
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+                <Home className="h-16 w-16 opacity-30" />
+              </div>
+            )}
+            {/* Chips — bottom-left */}
+            <div className="absolute bottom-2 left-2 flex items-center gap-1.5">
+              {allPhotos.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-black/70 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur">
+                  <Images className="h-3 w-3" />
+                  {allPhotos.length} photo{allPhotos.length !== 1 ? "s" : ""}
+                </span>
+              )}
+              {latestVideo && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-black/70 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur">
+                  <Video className="h-3 w-3" />
+                  Video
+                </span>
+              )}
+            </div>
+          </button>
+
+          {/* RIGHT: facts + price + agent — 40% */}
+          <div className="md:col-span-2 p-4 sm:p-5 flex flex-col gap-3 bg-background">
+            <div className="flex items-center gap-2 flex-wrap">
+              {typeInfo && (
+                <Badge
+                  variant="outline"
+                  className={cn("text-[10px]", typeInfo.cls.bg, typeInfo.cls.text, typeInfo.cls.border)}
+                >
+                  {typeInfo.label}
+                </Badge>
+              )}
+              {property?.property_type && (
+                <Badge variant="outline" className="text-[10px] capitalize">
+                  {property.property_type}
+                </Badge>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-0.5">
+                {currentListing?.listing_type === "sold" ? "Sold Price" : "Price"}
+              </p>
+              <p className="text-[40px] leading-none font-bold tabular-nums text-foreground">
+                {priceLabel}
+              </p>
+              {dateMessage && (
+                <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  {dateMessage}
+                </p>
+              )}
+            </div>
+
+            {(facts.length > 0 || landLabel) && (
+              <div className="flex items-center gap-3 text-sm text-foreground flex-wrap">
+                {facts.map((f) => (
+                  <span key={f.key} className="flex items-center gap-1">
+                    <f.icon className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">{f.val}</span>
+                  </span>
+                ))}
+                {landLabel && (
+                  <span className="flex items-center gap-1" title="Land size">
+                    <MapPin className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">{landLabel}</span>
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Agent card — avatar, name, agency, rating, In CRM badge, call/email */}
+            {(currentAgent || currentListing?.agent_name) && (
+              <AgentCardInline
+                agent={currentAgent}
+                fallbackName={currentListing?.agent_name}
+                fallbackAgency={currentListing?.agency_name}
+              />
+            )}
+          </div>
+        </div>
+      </Card>
+
+      {lightboxIndex !== null && allPhotos.length > 0 && (
+        <AttachmentLightbox
+          files={allPhotos}
+          initialIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function AgentCardInline({ agent, fallbackName, fallbackAgency }) {
+  const name = agent?.full_name || fallbackName || "Unknown agent";
+  const agency = agent?.agency_name || fallbackAgency;
+  const rating = agent?.rea_rating;
+  const isInCrm = !!agent?.is_in_crm;
+  const crmId = agent?.crm_agent_id;
+  const pulseId = agent?.pulse_agent_id;
+
+  const avatarContent = agent?.profile_image
+    ? <AvatarImage src={agent.profile_image} alt={name} />
+    : null;
+
+  const nameLabel = (
+    <>
+      <p className="text-sm font-semibold truncate">{name}</p>
+      {agency && (
+        <p className="text-[11px] text-muted-foreground truncate">{agency}</p>
+      )}
+    </>
+  );
+
+  const wrappedName = (() => {
+    if (crmId) {
+      return (
+        <Link
+          to={createPageUrl("PersonDetails") + `?id=${crmId}`}
+          className="min-w-0 hover:underline"
+          title="Open in CRM"
+        >
+          {nameLabel}
+        </Link>
+      );
+    }
+    if (pulseId) {
+      return (
+        <Link
+          to={`/IndustryPulse?tab=agents&pulse_id=${pulseId}`}
+          className="min-w-0 hover:underline"
+          title="Open in Industry Pulse"
+        >
+          {nameLabel}
+        </Link>
+      );
+    }
+    return <div className="min-w-0">{nameLabel}</div>;
+  })();
+
+  return (
+    <div className="mt-auto border-t border-border pt-3">
+      <div className="flex items-start gap-3">
+        <Avatar className="h-10 w-10 shrink-0">
+          {avatarContent}
+          <AvatarFallback className="text-xs">{initials(name)}</AvatarFallback>
+        </Avatar>
+        <div className="flex-1 min-w-0">
+          {wrappedName}
+          <div className="flex items-center gap-2 mt-1">
+            {rating && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600">
+                <Star className="h-2.5 w-2.5 fill-amber-400" />
+                <span className="tabular-nums">{Number(rating).toFixed(1)}</span>
+                {agent?.reviews_count ? (
+                  <span className="text-muted-foreground">
+                    ({agent.reviews_count})
+                  </span>
+                ) : null}
+              </span>
+            )}
+            {isInCrm && (
+              <Badge variant="outline" className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300">
+                <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" /> In CRM
+              </Badge>
+            )}
+          </div>
+        </div>
+      </div>
+      {(agent?.mobile || agent?.email) && (
+        <div className="flex items-center gap-2 mt-3">
+          {agent?.mobile && (
+            <a
+              href={`tel:${agent.mobile}`}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-muted hover:bg-muted/80 transition-colors"
+            >
+              <Phone className="h-3 w-3" /> Call
+            </a>
+          )}
+          {agent?.email && (
+            <a
+              href={`mailto:${agent.email}`}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-muted hover:bg-muted/80 transition-colors"
+            >
+              <Mail className="h-3 w-3" /> Email
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Signal ribbon — stacks banners ───────────────────────────────────────
+
+function SignalRibbon({ signals, relistCandidate }) {
+  // Convert relist_candidate into a synthetic signal at the top when present.
+  const all = [];
+  if (relistCandidate?.is_candidate) {
+    all.push({
+      _synthetic: true,
+      signal_type: "relist_candidate",
+      severity: "high",
+      title: "Relist candidate",
+      message: "Property was recently withdrawn and is active again — likely relist opportunity",
+    });
+  }
+  for (const s of signals || []) all.push(s);
+  if (all.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      {all.map((s, i) => (
+        <SignalBanner key={s.id || `synth-${i}`} signal={s} />
+      ))}
+    </div>
+  );
+}
+
+function SignalBanner({ signal }) {
+  // Map signal_type → colour. Falls back to amber.
+  const type = signal.signal_type || "";
+  let cls = "border-amber-300 bg-amber-50/70 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200";
+  let Icon = AlertTriangle;
+  if (type.includes("relist") || type.includes("withdrawal") || signal.severity === "high") {
+    cls = "border-red-300 bg-red-50/70 text-red-900 dark:bg-red-950/20 dark:text-red-200";
+    Icon = AlertTriangle;
+  } else if (type.includes("auction")) {
+    cls = "border-amber-300 bg-amber-50/70 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200";
+    Icon = Clock;
+  } else if (type.includes("price_drop") || type.includes("price")) {
+    cls = "border-blue-300 bg-blue-50/70 text-blue-900 dark:bg-blue-950/20 dark:text-blue-200";
+    Icon = TrendingDown;
+  }
+
+  // Trim message to ~80 chars as spec'd
+  const rawMsg = signal.message || signal.title || signal.signal_type || "Signal";
+  const msg = rawMsg.length > 80 ? rawMsg.slice(0, 77) + "…" : rawMsg;
+
+  return (
+    <div className={cn("rounded-lg border px-3 py-2 flex items-center gap-2.5", cls)}>
+      <Icon className="h-4 w-4 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs sm:text-sm font-medium truncate">{msg}</p>
+      </div>
+      {/* Action button — deferred to Phase 2 per spec */}
+      <Button variant="outline" size="sm" className="h-7 text-xs shrink-0" disabled title="Action coming in Phase 2">
+        Action
+      </Button>
+    </div>
+  );
+}
+
+// ── Intelligence strip — 7 tiles ─────────────────────────────────────────
+
+function IntelligenceStrip({ property, listings, projects, onTileClick }) {
+  // Compute tiles
+  const listingsCount = listings.length;
+
+  const avgDom = useMemo(() => {
+    const doms = listings
+      .map((l) => Number(l.days_on_market) || 0)
+      .filter((n) => n > 0);
+    if (doms.length === 0) return null;
+    return Math.round(doms.reduce((a, b) => a + b, 0) / doms.length);
+  }, [listings]);
+
+  const withdrawalCount = useMemo(
+    () => listings.filter((l) => !!l.listing_withdrawn_at).length,
+    [listings],
+  );
+
+  // Price Δ: latest non-null asking_price vs previous
+  const priceDelta = useMemo(() => {
+    const priced = listings
+      .filter((l) => l.asking_price && l.listed_date)
+      .sort((a, b) => new Date(b.listed_date) - new Date(a.listed_date));
+    if (priced.length < 2) return null;
+    const a = Number(priced[0].asking_price);
+    const b = Number(priced[1].asking_price);
+    if (!a || !b) return null;
+    const pct = ((a - b) / b) * 100;
+    return { pct, direction: pct > 0 ? "up" : pct < 0 ? "down" : "flat" };
+  }, [listings]);
+
+  const lastSoldLabel = useMemo(() => {
+    if (property?.latest_sold_price) {
+      const n = Number(property.latest_sold_price);
+      if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+      if (n >= 1_000) return `$${Math.round(n / 1_000)}K`;
+      return `$${n}`;
+    }
+    return "—";
+  }, [property]);
+
+  const projectsCount = projects.length;
+
+  // Heat: quick composite — freshness + withdrawals + signals density (proxy)
+  const heat = useMemo(() => {
+    let score = 0;
+    if (property?.current_listing_type) score += 40;
+    if (withdrawalCount > 0) score += 15 * withdrawalCount;
+    if (property?.days_on_market && property.days_on_market < 14) score += 20;
+    if (projectsCount > 0) score += 10 * Math.min(projectsCount, 3);
+    return Math.min(score, 100);
+  }, [property, withdrawalCount, projectsCount]);
+
+  const tiles = [
+    {
+      key: "listings", label: "Listings", value: listingsCount,
+      Icon: Building2, color: "text-blue-600", tab: "timeline",
+    },
+    {
+      key: "dom", label: "Avg DoM", value: avgDom == null ? "—" : `${avgDom}d`,
+      Icon: Clock, color: "text-indigo-600", tab: "timeline",
+    },
+    {
+      key: "withdrawals", label: "Withdrawals",
+      value: withdrawalCount, color: withdrawalCount > 0 ? "text-red-600" : "text-muted-foreground",
+      Icon: TrendingDown, tab: "timeline",
+    },
+    {
+      key: "delta", label: "Price Δ",
+      value: priceDelta == null ? "—" : `${priceDelta.pct > 0 ? "+" : ""}${priceDelta.pct.toFixed(1)}%`,
+      Icon: priceDelta?.direction === "down" ? TrendingDown : TrendingUp,
+      color: priceDelta?.direction === "down" ? "text-red-600"
+        : priceDelta?.direction === "up" ? "text-emerald-600" : "text-muted-foreground",
+      tab: "timeline",
+    },
+    {
+      key: "sold", label: "Last Sold",
+      value: lastSoldLabel,
+      Icon: DollarSign,
+      color: "text-emerald-600",
+      tab: "timeline",
+    },
+    {
+      key: "projects", label: "Projects", value: projectsCount,
+      Icon: Camera, color: "text-violet-600", tab: "projects",
+    },
+    {
+      key: "heat", label: "Heat",
+      value: heat === 0 ? "—" : `${heat}`,
+      Icon: TrendingUp,
+      color: heat >= 60 ? "text-red-500" : heat >= 30 ? "text-amber-500" : "text-muted-foreground",
+      tab: "timeline",
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+      {tiles.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          onClick={() => onTileClick(t.tab)}
+          className="text-left rounded-xl border border-border bg-card p-2.5 hover:bg-muted/40 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <t.Icon className={cn("h-3.5 w-3.5", t.color)} />
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+              {t.label}
+            </span>
+          </div>
+          <p className={cn("text-lg font-bold tabular-nums leading-none", t.color)}>
+            {typeof t.value === "number" ? t.value.toLocaleString() : t.value}
           </p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
-          {subtitle && <p className="text-[9px] text-muted-foreground/60 truncate">{subtitle}</p>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Timeline tab ─────────────────────────────────────────────────────────
+
+function TimelineTab({ events, listings, projects }) {
+  const [filter, setFilter] = useState("all"); // all | shoots | rea | sales
+
+  // Normalize events — rpc returns pulse_timeline rows, but fall back to
+  // synthesizing from listings + projects when the RPC shape is empty.
+  const allItems = useMemo(() => {
+    if (Array.isArray(events) && events.length > 0) {
+      return events.map((e) => ({
+        ...e,
+        _kind: classifyEventKind(e),
+        _date: e.event_date || e.occurred_at || e.created_at,
+      })).filter((e) => e._date);
+    }
+    // Fallback — synthesize from listings & projects
+    const synth = [];
+    for (const l of listings) {
+      if (l.listed_date) {
+        synth.push({
+          _kind: "rea", _date: l.listed_date,
+          title: `${LISTING_TYPE_LABEL[l.listing_type] || l.listing_type} — ${displayPrice(l).label}`,
+          subtitle: `${l.agent_name || "—"} · ${l.agency_name || "—"}`,
+          listing_id: l.id, source_url: l.source_url,
+        });
+      }
+      if (l.sold_date && l.sold_price) {
+        synth.push({
+          _kind: "sale", _date: l.sold_date,
+          title: `Sold ${displayPrice({ ...l, listing_type: "sold" }).label}`,
+          subtitle: `${l.agent_name || "—"} · ${l.agency_name || "—"}`,
+          listing_id: l.id, source_url: l.source_url,
+        });
+      }
+    }
+    for (const p of projects) {
+      const d = p.shoot_date || p.created_at || p.booking_date;
+      if (d) {
+        synth.push({
+          _kind: "shoot", _date: d,
+          title: `FlexStudios shoot — ${p.tonomo_package || p.package_name || "Project"}`,
+          subtitle: `${p.agent_name || p.project_owner_name || ""}`,
+          project_id: p.id,
+        });
+      }
+    }
+    return synth.sort((a, b) => new Date(b._date) - new Date(a._date));
+  }, [events, listings, projects]);
+
+  const filtered = useMemo(() => {
+    if (filter === "all") return allItems;
+    if (filter === "shoots") return allItems.filter((e) => e._kind === "shoot");
+    if (filter === "rea") return allItems.filter((e) => e._kind === "rea");
+    if (filter === "sales") return allItems.filter((e) => e._kind === "sale");
+    return allItems;
+  }, [allItems, filter]);
+
+  // Group by month
+  const grouped = useMemo(() => {
+    const map = new Map();
+    for (const e of filtered) {
+      const key = fmtMonthYear(e._date);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(e);
+    }
+    return Array.from(map.entries());
+  }, [filtered]);
+
+  return (
+    <Card className="rounded-xl">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <History className="h-4 w-4" />
+            Property Timeline
+            <Badge variant="outline" className="text-[10px]">
+              {filtered.length} event{filtered.length !== 1 ? "s" : ""}
+            </Badge>
+          </CardTitle>
+          <div className="flex items-center gap-1 flex-wrap">
+            {[
+              { value: "all", label: "All" },
+              { value: "shoots", label: "Our shoots" },
+              { value: "rea", label: "REA events" },
+              { value: "sales", label: "Sales" },
+            ].map((f) => (
+              <button
+                key={f.value}
+                type="button"
+                onClick={() => setFilter(f.value)}
+                className={cn(
+                  "text-[10px] px-2 py-1 rounded-md transition-colors",
+                  filter === f.value
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-muted/70"
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
         </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {grouped.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-6">
+            No events match the current filter.
+          </p>
+        ) : grouped.map(([month, items]) => (
+          <div key={month}>
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                {month}
+              </p>
+              <div className="flex-1 border-t border-border/60"></div>
+              <span className="text-[10px] text-muted-foreground/70">
+                {items.length} event{items.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+            <div className="space-y-2 ml-2 border-l-2 border-border/40 pl-4">
+              {items.map((e, i) => (
+                <TimelineCard key={e.id || `${month}-${i}`} event={e} />
+              ))}
+            </div>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
 }
 
+function classifyEventKind(e) {
+  const t = String(e.event_type || "").toLowerCase();
+  if (t.includes("shoot") || t.includes("project") || t.includes("booking") || t.includes("delivered")) return "shoot";
+  if (t.includes("sold") || t.includes("sale")) return "sale";
+  if (t.includes("list") || t.includes("withdraw") || t.includes("price") || t.includes("auction")) return "rea";
+  return "rea";
+}
+
 function TimelineCard({ event }) {
-  if (event.kind === "project") {
-    const p = event.project;
-    return (
-      <Link to={`/ProjectDetails?id=${p.id}`} className="block bg-violet-50/40 dark:bg-violet-950/20 border border-violet-200/60 rounded p-2 hover:bg-violet-50 dark:hover:bg-violet-950/40 transition-colors">
+  const kind = event._kind;
+
+  if (kind === "shoot") {
+    const content = (
+      <div className="bg-violet-50/40 dark:bg-violet-950/20 border border-violet-200/60 dark:border-violet-800/40 rounded p-2">
         <div className="flex items-start gap-2">
           <Camera className="h-3.5 w-3.5 text-violet-600 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium">
-              FlexStudios shoot — {p.tonomo_package || "Project"}
-            </p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {p.agent_name && <>Agent: {p.agent_name} · </>}
-              {p.photographer_name && <>📷 {p.photographer_name} · </>}
-              {fmtDate(event.date)}
-            </p>
+            <p className="text-xs font-medium">{event.title || "FlexStudios shoot"}</p>
+            {event.subtitle && (
+              <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{event.subtitle}</p>
+            )}
+            <p className="text-[10px] text-muted-foreground/80 mt-0.5">{fmtDate(event._date)}</p>
           </div>
-          <Badge variant="outline" className={cn("text-[9px] shrink-0", STATUS_BADGE[p.status] || "")}>
-            {p.status}
-          </Badge>
         </div>
-      </Link>
+      </div>
     );
+    if (event.project_id) {
+      return (
+        <Link to={createPageUrl(`ProjectDetails?id=${event.project_id}`)} className="block hover:opacity-90">
+          {content}
+        </Link>
+      );
+    }
+    return content;
   }
 
-  if (event.kind === "sale") {
-    const l = event.listing;
+  if (kind === "sale") {
     return (
-      <div className="bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200/60 rounded p-2">
+      <div className="bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 rounded p-2">
         <div className="flex items-start gap-2">
           <DollarSign className="h-3.5 w-3.5 text-emerald-600 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-bold">
-              SOLD <span className="tabular-nums">{fmtPrice(l.sold_price)}</span>
-            </p>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {l.agent_name && <>{l.agent_name} · </>}
-              {l.agency_name} · {fmtDate(event.date)}
-            </p>
+            <p className="text-xs font-bold">{event.title || "Sold"}</p>
+            {event.subtitle && (
+              <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{event.subtitle}</p>
+            )}
+            <p className="text-[10px] text-muted-foreground/80 mt-0.5">{fmtDate(event._date)}</p>
           </div>
-          {l.source_url && (
-            <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-700">
+          {event.source_url && (
+            <a
+              href={event.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-emerald-600 hover:text-emerald-700"
+              title="Open on REA"
+            >
               <ExternalLink className="h-3 w-3" />
             </a>
           )}
@@ -884,32 +1210,614 @@ function TimelineCard({ event }) {
     );
   }
 
-  // listing
-  const l = event.listing;
+  // Default REA event
   return (
     <div className="bg-muted/40 border border-border/60 rounded p-2">
       <div className="flex items-start gap-2">
         <Building2 className="h-3.5 w-3.5 text-blue-600 mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium flex items-center gap-1.5">
-            <Badge variant="outline" className={cn("text-[9px]", TYPE_BADGE[l.listing_type] || "")}>
-              {TYPE_LABEL[l.listing_type] || l.listing_type}
-            </Badge>
-            <span className="tabular-nums">{fmtPrice(l.asking_price)}</span>
-          </p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">
-            {l.agent_name && <>{l.agent_name} · </>}
-            {l.agency_name} · {fmtDate(event.date)}
-            {l.bedrooms && <> · {l.bedrooms}br</>}
-            {l.bathrooms && <>/{l.bathrooms}ba</>}
-            {l.parking && <>/{l.parking}car</>}
-          </p>
+          <p className="text-xs font-medium">{event.title || event.event_type || "Listing"}</p>
+          {event.subtitle && (
+            <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{event.subtitle}</p>
+          )}
+          <p className="text-[10px] text-muted-foreground/80 mt-0.5">{fmtDate(event._date)}</p>
         </div>
-        {l.source_url && (
-          <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-700">
+        {event.source_url && (
+          <a
+            href={event.source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-700"
+            title="Open on REA"
+          >
             <ExternalLink className="h-3 w-3" />
           </a>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Media tab ────────────────────────────────────────────────────────────
+
+function MediaTab({ listings }) {
+  const [lightboxIndex, setLightboxIndex] = useState(null);
+  const [visibleCount, setVisibleCount] = useState(40);
+
+  // Aggregate photos / floorplans / video across all listings
+  const { allPhotos, allFloorplans, allVideos } = useMemo(() => {
+    const photos = [];
+    const fps = [];
+    const vids = [];
+    for (const l of listings) {
+      const media = parseMediaItems(l);
+      const listPhotos = media.photos.length > 0
+        ? media.photos.map((p) => p.url)
+        : (l.hero_image ? [l.hero_image] : []);
+      listPhotos.forEach((url, i) => {
+        if (!url) return;
+        photos.push({
+          file_name: `${l.agency_name || "Listing"} — ${fmtDate(l.listed_date)} (${i + 1})`,
+          file_url: url,
+          file_type: "image/jpeg",
+          _agency: l.agency_name,
+          _date: l.listed_date,
+        });
+      });
+      for (const fp of media.floorplans) {
+        fps.push({ ...fp, _agency: l.agency_name, _date: l.listed_date });
+      }
+      if (media.video) {
+        vids.push({ ...media.video, _agency: l.agency_name, _date: l.listed_date });
+      }
+    }
+    return { allPhotos: photos, allFloorplans: fps, allVideos: vids };
+  }, [listings]);
+
+  const visiblePhotos = allPhotos.slice(0, visibleCount);
+
+  if (allPhotos.length === 0 && allFloorplans.length === 0 && allVideos.length === 0) {
+    return (
+      <Card className="rounded-xl">
+        <CardContent className="py-10 text-center">
+          <Images className="h-10 w-10 mx-auto mb-2 opacity-30 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No media yet for this property.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {allPhotos.length > 0 && (
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Images className="h-4 w-4 text-blue-600" />
+              Photos
+              <Badge variant="outline" className="text-[10px]">{allPhotos.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5">
+              {visiblePhotos.map((p, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setLightboxIndex(i)}
+                  className="aspect-square overflow-hidden rounded-md bg-muted group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
+                  <img
+                    src={p.file_url}
+                    alt={p.file_name}
+                    loading="lazy"
+                    className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
+                    onError={(e) => { e.currentTarget.style.opacity = 0.3; }}
+                  />
+                </button>
+              ))}
+            </div>
+            {allPhotos.length > visibleCount && (
+              <div className="text-center mt-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setVisibleCount((n) => n + 40)}
+                >
+                  Load more ({allPhotos.length - visibleCount} remaining)
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {allFloorplans.length > 0 && (
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <FileText className="h-4 w-4 text-indigo-600" />
+              Floorplans
+              <Badge variant="outline" className="text-[10px]">{allFloorplans.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {allFloorplans.map((fp, i) => (
+                <a
+                  key={i}
+                  href={fp.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block group"
+                  title={fp._agency || "Floorplan"}
+                >
+                  <img
+                    src={fp.thumb || fp.url}
+                    alt={`Floorplan ${i + 1}`}
+                    className="h-24 w-32 object-contain rounded border border-border bg-white group-hover:shadow-md transition-shadow"
+                    loading="lazy"
+                  />
+                </a>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {allVideos.length > 0 && (
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Video className="h-4 w-4 text-red-600" />
+              Videos
+              <Badge variant="outline" className="text-[10px]">{allVideos.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {allVideos.map((v, i) => {
+              const yt = v.url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/))([A-Za-z0-9_-]{11})/);
+              if (yt) {
+                return (
+                  <iframe
+                    key={i}
+                    src={`https://www.youtube.com/embed/${yt[1]}`}
+                    title="Listing video"
+                    className="w-full max-w-lg aspect-video rounded border border-border"
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                  />
+                );
+              }
+              return (
+                <a
+                  key={i}
+                  href={v.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  Watch video
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {lightboxIndex !== null && (
+        <AttachmentLightbox
+          files={allPhotos}
+          initialIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Projects tab ─────────────────────────────────────────────────────────
+
+function ProjectsTab({ projects, property }) {
+  return (
+    <Card className="rounded-xl">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Camera className="h-4 w-4 text-violet-600" />
+            FlexStudios Projects
+            <Badge variant="outline" className="text-[10px]">{projects.length}</Badge>
+          </CardTitle>
+          <Link to={`/ProjectDetails?id=new&address=${encodeURIComponent(property?.display_address || "")}`}>
+            <Button variant="outline" size="sm" className="h-7 text-xs">
+              + New project
+            </Button>
+          </Link>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {projects.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-6">
+            No shoots at this property yet.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {projects.map((p) => (
+              <Link
+                key={p.id}
+                to={createPageUrl(`ProjectDetails?id=${p.id}`)}
+                className="block p-2.5 rounded-lg border border-border bg-card hover:bg-muted/40 transition-colors"
+              >
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <p className="text-xs font-semibold truncate flex-1">
+                    {p.tonomo_package || p.package_name || "Project"}
+                  </p>
+                  {p.status && (
+                    <Badge variant="outline" className="text-[9px] shrink-0 capitalize">
+                      {String(p.status).replace(/_/g, " ")}
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground truncate">
+                  {p.agent_name || p.project_owner_name || "—"}
+                </p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {fmtDate(p.shoot_date || p.booking_date || p.created_at)}
+                  {p.photographer_name && <> · {p.photographer_name}</>}
+                </p>
+              </Link>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Agents tab ───────────────────────────────────────────────────────────
+
+function AgentsTab({ agents, agencies }) {
+  if (!agents || agents.length === 0) {
+    return (
+      <Card className="rounded-xl">
+        <CardContent className="py-10 text-center">
+          <Users className="h-10 w-10 mx-auto mb-2 opacity-30 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No agents detected at this property.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="rounded-xl overflow-hidden">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Users className="h-4 w-4 text-blue-600" />
+          Agents
+          <Badge variant="outline" className="text-[10px]">{agents.length}</Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/40 border-y border-border">
+              <tr className="text-left">
+                <th className="px-3 py-2 font-semibold">Agent</th>
+                <th className="px-3 py-2 font-semibold hidden sm:table-cell">Agency</th>
+                <th className="px-3 py-2 font-semibold text-right">Campaigns</th>
+                <th className="px-3 py-2 font-semibold hidden md:table-cell">Latest</th>
+                <th className="px-3 py-2 font-semibold text-right hidden lg:table-cell">Avg DoM</th>
+                <th className="px-3 py-2 font-semibold text-right hidden lg:table-cell">Sales (lead)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agents.map((a) => {
+                const nameLabel = (
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Avatar className="h-7 w-7 shrink-0">
+                      {a.profile_image && <AvatarImage src={a.profile_image} alt={a.full_name} />}
+                      <AvatarFallback className="text-[10px]">{initials(a.full_name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{a.full_name || "—"}</p>
+                      {a.job_title && (
+                        <p className="text-[10px] text-muted-foreground truncate">{a.job_title}</p>
+                      )}
+                    </div>
+                    {a.is_in_crm && (
+                      <Badge variant="outline" className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-200 shrink-0">
+                        CRM
+                      </Badge>
+                    )}
+                  </div>
+                );
+                const wrapped = a.crm_agent_id
+                  ? (
+                    <Link
+                      to={createPageUrl("PersonDetails") + `?id=${a.crm_agent_id}`}
+                      className="hover:underline"
+                      title="Open CRM record"
+                    >
+                      {nameLabel}
+                    </Link>
+                  )
+                  : a.pulse_agent_id
+                  ? (
+                    <Link
+                      to={`/IndustryPulse?tab=agents&pulse_id=${a.pulse_agent_id}`}
+                      className="hover:underline"
+                      title="Open Industry Pulse record"
+                    >
+                      {nameLabel}
+                    </Link>
+                  )
+                  : nameLabel;
+                return (
+                  <tr key={a.rea_agent_id || a.pulse_agent_id || a.full_name} className="border-t border-border/60 hover:bg-muted/30">
+                    <td className="px-3 py-2">{wrapped}</td>
+                    <td className="px-3 py-2 hidden sm:table-cell truncate max-w-[180px]">
+                      {a.agency_name || "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {a.campaigns_count != null ? a.campaigns_count : "—"}
+                    </td>
+                    <td className="px-3 py-2 hidden md:table-cell">
+                      {fmtDate(a.latest_campaign_date)}
+                    </td>
+                    <td className="px-3 py-2 text-right hidden lg:table-cell tabular-nums">
+                      {a.avg_days_on_market != null ? `${Math.round(a.avg_days_on_market)}d` : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right hidden lg:table-cell tabular-nums">
+                      {a.sales_as_lead != null ? a.sales_as_lead : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Right-rail cards ─────────────────────────────────────────────────────
+
+function CurrentlyListedByCard({ agency, agent, listing }) {
+  const brandAccent = hexToRgba(agency?.brand_color_primary, 1);
+  const brandTint = hexToRgba(agency?.brand_color_primary, 0.06);
+  const headerStyle = brandAccent
+    ? { borderTop: `3px solid ${brandAccent}`, backgroundColor: brandTint }
+    : undefined;
+
+  const agencyName = agency?.name || listing?.agency_name || "Unknown agency";
+  const crmAgencyId = agency?.crm_agency_id;
+  const pulseAgencyId = agency?.pulse_agency_id;
+
+  const title = (
+    <div className="flex items-center gap-2">
+      {agency?.logo_url ? (
+        <div className="h-9 w-9 rounded-full bg-white border border-border shrink-0 overflow-hidden flex items-center justify-center">
+          <img
+            src={agency.logo_url}
+            alt={agencyName}
+            className="max-w-full max-h-full object-contain"
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+          />
+        </div>
+      ) : (
+        <div className="h-9 w-9 rounded-full bg-muted shrink-0 flex items-center justify-center">
+          <Building2 className="h-4 w-4 text-muted-foreground" />
+        </div>
+      )}
+      <div className="min-w-0">
+        <p className="text-[10px] uppercase tracking-widest text-muted-foreground leading-tight">
+          Currently listed by
+        </p>
+        <p className="text-sm font-semibold truncate leading-tight">{agencyName}</p>
+      </div>
+    </div>
+  );
+
+  const wrappedTitle = crmAgencyId
+    ? <Link to={createPageUrl("OrgDetails") + `?id=${crmAgencyId}`} className="hover:underline">{title}</Link>
+    : pulseAgencyId
+    ? <Link to={`/IndustryPulse?tab=agencies&pulse_id=${pulseAgencyId}`} className="hover:underline">{title}</Link>
+    : title;
+
+  return (
+    <Card className="rounded-xl overflow-hidden">
+      <div className="p-3" style={headerStyle}>
+        {wrappedTitle}
+      </div>
+      <CardContent className="p-3 pt-2 space-y-2">
+        {agent?.full_name && (
+          <div className="flex items-center gap-2">
+            <Avatar className="h-8 w-8 shrink-0">
+              {agent.profile_image && <AvatarImage src={agent.profile_image} alt={agent.full_name} />}
+              <AvatarFallback className="text-[10px]">{initials(agent.full_name)}</AvatarFallback>
+            </Avatar>
+            <div className="min-w-0">
+              <p className="text-xs font-medium truncate">{agent.full_name}</p>
+              {agent.job_title && (
+                <p className="text-[10px] text-muted-foreground truncate">{agent.job_title}</p>
+              )}
+            </div>
+            {agent.is_in_crm && (
+              <Badge variant="outline" className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-200 shrink-0">
+                CRM
+              </Badge>
+            )}
+          </div>
+        )}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {agency?.phone && (
+            <a
+              href={`tel:${agency.phone}`}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-muted hover:bg-muted/80"
+            >
+              <Phone className="h-3 w-3" /> Phone
+            </a>
+          )}
+          {agency?.email && (
+            <a
+              href={`mailto:${agency.email}`}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-muted hover:bg-muted/80"
+            >
+              <Mail className="h-3 w-3" /> Email
+            </a>
+          )}
+          {agency?.website && (
+            <a
+              href={agency.website}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-muted hover:bg-muted/80"
+            >
+              <ExternalLink className="h-3 w-3" /> Site
+            </a>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function NextEventCard({ upcoming }) {
+  return (
+    <Card className="rounded-xl">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-[10px] uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+          <Calendar className="h-3.5 w-3.5" />
+          Next event
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {upcoming.map((e, i) => {
+          const isAuction = String(e.kind || e.event_type || "").toLowerCase().includes("auction");
+          const isOpenHouse = String(e.kind || e.event_type || "").toLowerCase().includes("inspect")
+            || String(e.kind || e.event_type || "").toLowerCase().includes("open");
+          const label = isAuction ? "Auction" : isOpenHouse ? "Open house" : (e.title || e.event_type || "Event");
+          const Icon = isAuction ? Tag : Calendar;
+          const when = e.event_date
+            ? (isAuction ? formatAuctionDateTime(e.event_date, e.time_known) : fmtDate(e.event_date))
+            : "—";
+          return (
+            <div key={i} className="flex items-start gap-2">
+              <Icon className={cn("h-4 w-4 mt-0.5 shrink-0", isAuction ? "text-amber-600" : "text-blue-600")} />
+              <div className="min-w-0">
+                <p className="text-xs font-medium">{label}</p>
+                <p className="text-[10px] text-muted-foreground">{when}</p>
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
+function OurHistoryCard({ projects }) {
+  return (
+    <Card className="rounded-xl">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-[10px] uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+          <Camera className="h-3.5 w-3.5 text-violet-600" />
+          Our history here
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        {projects.map((p) => (
+          <Link
+            key={p.id}
+            to={createPageUrl(`ProjectDetails?id=${p.id}`)}
+            className="block hover:bg-muted/40 rounded p-1.5 -mx-1.5 transition-colors"
+          >
+            <div className="flex items-start gap-2">
+              <Camera className="h-3 w-3 text-violet-600 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-medium truncate">
+                  {p.tonomo_package || p.package_name || "Project"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  {fmtDate(p.shoot_date || p.booking_date || p.created_at)}
+                </p>
+              </div>
+            </div>
+          </Link>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ComparablesCard({ comparables }) {
+  return (
+    <Card className="rounded-xl">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-[10px] uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+          <Building2 className="h-3.5 w-3.5 text-emerald-600" />
+          Nearby comparables
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        {comparables.slice(0, 5).map((c, i) => (
+          <div key={c.property_key || c.id || i} className="flex items-start gap-2">
+            <DollarSign className="h-3 w-3 text-emerald-600 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] font-medium truncate">{c.display_address || c.address || "—"}</p>
+              <p className="text-[10px] text-muted-foreground">
+                {c.sold_price ? `Sold $${(Number(c.sold_price) / 1_000_000).toFixed(2)}M` : "—"}
+                {c.sold_date && ` · ${fmtDate(c.sold_date)}`}
+              </p>
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Skeleton ─────────────────────────────────────────────────────────────
+
+function PropertyDetailsSkeleton() {
+  return (
+    <div className="pb-4 lg:pb-6">
+      <div className="sticky top-0 z-30 bg-background/95 backdrop-blur-sm border-b border-border h-10 sm:h-12 px-3 lg:px-6 flex items-center gap-2">
+        <Skeleton className="h-6 w-6 rounded-full" />
+        <Skeleton className="h-4 w-48" />
+      </div>
+      <div className="px-3 pt-2 space-y-3 lg:px-6">
+        <div className="grid grid-cols-1 xl:grid-cols-[1fr,320px] gap-4">
+          <div className="space-y-3 min-w-0">
+            <Card className="rounded-xl overflow-hidden">
+              <div className="grid grid-cols-1 md:grid-cols-5">
+                <Skeleton className="md:col-span-3 h-[40vh] md:h-[420px] rounded-none" />
+                <div className="md:col-span-2 p-5 space-y-3">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-10 w-36" />
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-12 w-full" />
+                </div>
+              </div>
+            </Card>
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+              {Array.from({ length: 7 }).map((_, i) => (
+                <Skeleton key={i} className="h-[70px] rounded-xl" />
+              ))}
+            </div>
+            <Skeleton className="h-9 w-full rounded-lg" />
+            <Skeleton className="h-48 w-full rounded-xl" />
+          </div>
+          <aside className="hidden xl:block space-y-3">
+            <Skeleton className="h-32 rounded-xl" />
+            <Skeleton className="h-24 rounded-xl" />
+            <Skeleton className="h-32 rounded-xl" />
+          </aside>
+        </div>
       </div>
     </div>
   );
