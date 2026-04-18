@@ -2,6 +2,46 @@ import { getAdminClient, createEntities, handleCors, jsonResponse, errorResponse
 
 const PROCESSOR_VERSION = "v3.0";
 
+// ─── HMAC signature verification ─────────────────────────────────────────────
+// Tonomo does not yet sign webhooks (verified via 30-day header audit on
+// tonomo_webhook_logs — no x-tonomo-signature / x-signature headers present).
+// We ship the verifier now so the endpoint is ready the moment Tonomo adds
+// a shared secret. Behaviour:
+//   • No TONOMO_WEBHOOK_SECRET set           → log warning, allow (today)
+//   • Secret set + TONOMO_WEBHOOK_VERIFY_STRICT ≠ 'true' (log-only)
+//       → log pass/fail but always allow (soft rollout)
+//   • Secret set + TONOMO_WEBHOOK_VERIFY_STRICT = 'true'
+//       → reject 401 on missing/invalid signature
+// Header probed (case-insensitive): x-tonomo-signature OR x-signature.
+// Accepts hex or base64 encodings of the HMAC-SHA256 digest of the raw body.
+async function verifyHmac(rawBody: string, req: Request): Promise<{ ok: boolean; reason: string }> {
+  const secret = Deno.env.get('TONOMO_WEBHOOK_SECRET');
+  if (!secret) {
+    console.warn('TONOMO_WEBHOOK_SECRET not set — skipping verification');
+    return { ok: true, reason: 'no_secret_configured' };
+  }
+  const sigHeader = req.headers.get('x-tonomo-signature') || req.headers.get('x-signature');
+  if (!sigHeader) return { ok: false, reason: 'missing_signature_header' };
+  try {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw', encoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']
+    );
+    const cleanSig = sigHeader.replace(/^sha256=/i, '').trim();
+    let sigBytes: Uint8Array;
+    if (/^[0-9a-f]+$/i.test(cleanSig) && cleanSig.length % 2 === 0) {
+      sigBytes = Uint8Array.from(cleanSig.match(/.{2}/g)!.map(b => parseInt(b, 16)));
+    } else {
+      sigBytes = Uint8Array.from(atob(cleanSig), c => c.charCodeAt(0));
+    }
+    const ok = await crypto.subtle.verify('HMAC', key, sigBytes, encoder.encode(rawBody));
+    return { ok, reason: ok ? 'valid' : 'signature_mismatch' };
+  } catch (e: any) {
+    return { ok: false, reason: `verify_error:${e.message}` };
+  }
+}
+
 Deno.serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   try {
@@ -16,6 +56,19 @@ Deno.serve(async (req) => {
     } catch { /* not JSON or not a health check */ }
 
     const rawBody = probeText || await req.text();
+
+    // ─── HMAC verification (log-only by default) ─────────────────────────
+    const hmacResult = await verifyHmac(rawBody, req);
+    const strictMode = Deno.env.get('TONOMO_WEBHOOK_VERIFY_STRICT') === 'true';
+    if (!hmacResult.ok) {
+      if (strictMode) {
+        console.warn(`Rejected webhook — invalid signature (${hmacResult.reason})`);
+        return new Response('Unauthorized', { status: 401 });
+      } else {
+        console.warn(`HMAC verification failed (log-only mode): ${hmacResult.reason}`);
+      }
+    }
+
     const receivedAt = new Date().toISOString();
 
     let payload: any = {};
