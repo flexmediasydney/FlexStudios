@@ -73,9 +73,17 @@ Deno.serve(async (req) => {
     return errorResponse('No pending Tonomo delta on this project', 400, req);
   }
 
-  const pendingObj = typeof pending === 'string'
-    ? (() => { try { return JSON.parse(pending); } catch { return null; } })()
-    : pending;
+  // jsonb storage of a JSON.stringify()'d object yields a JSON-encoded string,
+  // so we may need to parse twice (the PostgREST layer unwraps once; the
+  // backfill wrote a stringified string as the jsonb value).
+  function deepParsePending(raw: any): any {
+    let v: any = raw;
+    for (let i = 0; i < 3 && typeof v === 'string'; i++) {
+      try { v = JSON.parse(v); } catch { return null; }
+    }
+    return v;
+  }
+  const pendingObj = deepParsePending(pending);
   if (!pendingObj || !pendingObj.after) {
     return errorResponse('Pending delta is malformed — missing after state', 400, req);
   }
@@ -124,11 +132,11 @@ Deno.serve(async (req) => {
     packages: after.packages || [],
     products_auto_applied: true,
     products_needs_recalc: true,
-    tonomo_pending_delta: JSON.stringify({
+    tonomo_pending_delta: {
       ...pendingObj,
       auto_applied_at: new Date().toISOString(),
       safe_to_auto_apply: true,
-    }),
+    },
   };
 
   // Clear the tonomo_drift review type now that we applied it

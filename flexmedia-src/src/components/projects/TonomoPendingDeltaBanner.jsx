@@ -8,12 +8,17 @@ import { refetchEntityList } from "@/components/hooks/useEntityData";
 
 function parsePendingDelta(raw) {
   if (!raw) return null;
-  if (typeof raw !== "string") return raw;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
+  // jsonb storage of a JSON.stringify()'d object can yield nested string-in-string.
+  // Parse up to 3 times until we hit a real object.
+  let v = raw;
+  for (let i = 0; i < 3 && typeof v === "string"; i++) {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return null;
+    }
   }
+  return v && typeof v === "object" ? v : null;
 }
 
 function formatDateShort(iso) {

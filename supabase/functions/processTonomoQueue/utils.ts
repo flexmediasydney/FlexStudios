@@ -466,7 +466,10 @@ export function reconcileProductsPackagesAgainstLock(
     decision: 'stash_for_review',
     diff,
     updates: {
-      tonomo_pending_delta: JSON.stringify(stash),
+      // Pass the object directly — PostgREST encodes it as a proper jsonb
+      // object. Prior version used JSON.stringify() which produced a nested
+      // "string-in-jsonb" that needed double-parsing.
+      tonomo_pending_delta: stash,
     },
     reviewReason,
     activityDescription,
