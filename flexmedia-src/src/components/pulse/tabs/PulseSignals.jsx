@@ -2,17 +2,22 @@
  * PulseSignals — Industry Pulse "Signals" tab.
  * Filtered grid of PulseSignalCard components with Add Signal dialog.
  */
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import PulseSignalCard from "@/components/nurturing/PulseSignalCard";
 import PulseSignalQuickAdd from "@/components/nurturing/PulseSignalQuickAdd";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { toast } from "sonner";
+import { api } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { cn } from "@/lib/utils";
 import {
   Plus, Zap, ArrowDownUp, HelpCircle,
-  ArrowRight, Building2, DollarSign, Link2, RefreshCw,
+  ArrowRight, Building2, DollarSign, Link2, RefreshCw, Download,
 } from "lucide-react";
+import { exportFilteredCsv } from "@/components/pulse/utils/qolHelpers";
+import PresetControls from "@/components/pulse/utils/PresetControls";
 
 // ── Signal Legend ─────────────────────────────────────────────────────────────
 // Every kind pulseSignalGenerator / pulseRelistDetector can emit today. Keep in
@@ -206,6 +211,39 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
   const [addOpen, setAddOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
 
+  // #46: update signal status (acknowledge / action / dismiss) with toast+undo
+  // on dismiss. `restoreSignal` reverts back to the original status captured
+  // at dismiss time.
+  const updateStatus = useCallback(async (id, status) => {
+    try {
+      await api.entities.PulseSignal.update(id, { status });
+      await refetchEntityList("PulseSignal");
+    } catch (err) {
+      toast.error("Failed to update signal: " + (err?.message || "Unknown error"));
+    }
+  }, []);
+
+  const handleAcknowledge = useCallback((signal) => {
+    updateStatus(signal.id, "acknowledged");
+  }, [updateStatus]);
+
+  const handleAction = useCallback((signal) => {
+    updateStatus(signal.id, "actioned");
+  }, [updateStatus]);
+
+  const handleDismiss = useCallback((signal) => {
+    const prevStatus = signal.status || "new";
+    updateStatus(signal.id, "dismissed");
+    // #46: show toast with Undo action that restores the prior status.
+    toast("Signal dismissed", {
+      action: {
+        label: "Undo",
+        onClick: () => updateStatus(signal.id, prevStatus),
+      },
+      duration: 5000,
+    });
+  }, [updateStatus]);
+
   // Counts for badges
   const counts = useMemo(() => {
     const result = { level: {}, status: {} };
@@ -276,7 +314,7 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
             Legend
           </Button>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {/* Sort selector */}
           <div className="flex items-center gap-1">
             <ArrowDownUp className="h-3.5 w-3.5 text-muted-foreground" />
@@ -292,6 +330,43 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
               ))}
             </select>
           </div>
+          {/* #51: filter presets — persists levelFilter/statusFilter/sortBy per-tab */}
+          <PresetControls
+            namespace="signals"
+            currentPreset={{ levelFilter, statusFilter, sortBy }}
+            onLoad={(p) => {
+              if (p?.levelFilter)  setLevelFilter(p.levelFilter);
+              if (p?.statusFilter) setStatusFilter(p.statusFilter);
+              if (p?.sortBy)       setSortBy(p.sortBy);
+            }}
+          />
+          {/* #52: export filtered signals as CSV (UTF-8 BOM) */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px] gap-1"
+            onClick={() => {
+              const headers = [
+                { key: "id",                label: "id" },
+                { key: "created_at",        label: "created_at" },
+                { key: "level",             label: "level" },
+                { key: "status",            label: "status" },
+                { key: "category",          label: "category" },
+                { key: "title",             label: "title" },
+                { key: "description",       label: "description" },
+                { key: "suggested_action",  label: "suggested_action" },
+                { key: "source_type",       label: "source_type" },
+                { key: "is_actionable",     label: "is_actionable" },
+              ];
+              const stamp = new Date().toISOString().slice(0, 10);
+              exportFilteredCsv(`pulse_signals_${stamp}.csv`, headers, filtered);
+            }}
+            disabled={filtered.length === 0}
+            title="Download the currently filtered signals as CSV"
+          >
+            <Download className="h-3 w-3" />
+            Download CSV
+          </Button>
           <Button
             size="sm"
             className="h-8 text-xs gap-1.5"
@@ -359,7 +434,13 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
           {filtered.map((signal) => (
-            <PulseSignalCard key={signal.id} signal={signal} />
+            <PulseSignalCard
+              key={signal.id}
+              signal={signal}
+              onAcknowledge={handleAcknowledge}
+              onAction={handleAction}
+              onDismiss={handleDismiss}
+            />
           ))}
         </div>
       )}
