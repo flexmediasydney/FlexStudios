@@ -38,6 +38,14 @@
 
 import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 import { cleanEmailList, isMiddlemanEmail, pickPrimaryEmail } from '../_shared/emailCleanup.ts';
+import {
+  startRun,
+  endRun,
+  recordError,
+  breakerCheckOpen,
+  breakerRecordSuccess,
+  breakerRecordFailure,
+} from '../_shared/observability.ts';
 
 const APIFY_TOKEN = Deno.env.get('APIFY_TOKEN') || '';
 const APIFY_BASE = 'https://api.apify.com/v2';
@@ -257,53 +265,11 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
   return { ok: true, status, runId, datasetId, stats, items: Array.isArray(items) ? items : [], input };
 }
 
-// ── Circuit breaker helpers ─────────────────────────────────────────────
-
-async function breakerGetState(admin: any): Promise<{ state: string; consecutiveFailures: number; openedAt: string | null; reopenAt: string | null }> {
-  const { data } = await admin.from('pulse_source_circuit_breakers')
-    .select('state, consecutive_failures, opened_at, reopen_at')
-    .eq('source_id', SOURCE_ID)
-    .maybeSingle();
-  return {
-    state: data?.state || 'closed',
-    consecutiveFailures: data?.consecutive_failures || 0,
-    openedAt: data?.opened_at || null,
-    reopenAt: data?.reopen_at || null,
-  };
-}
-
-async function breakerRecordSuccess(admin: any) {
-  await admin.from('pulse_source_circuit_breakers').upsert({
-    source_id: SOURCE_ID,
-    state: 'closed',
-    consecutive_failures: 0,
-    opened_at: null,
-    reopen_at: null,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: 'source_id' });
-}
-
-async function breakerRecordFailure(admin: any) {
-  const { data: cur } = await admin.from('pulse_source_circuit_breakers')
-    .select('consecutive_failures, failure_threshold, cooldown_minutes, total_opens').eq('source_id', SOURCE_ID).maybeSingle();
-  const fails = (cur?.consecutive_failures || 0) + 1;
-  const threshold = cur?.failure_threshold || 3;
-  const cooldownMins = cur?.cooldown_minutes || 30;
-  const shouldOpen = fails >= threshold;
-  const now = new Date();
-  const reopenAt = shouldOpen ? new Date(now.getTime() + cooldownMins * 60 * 1000) : null;
-  await admin.from('pulse_source_circuit_breakers').upsert({
-    source_id: SOURCE_ID,
-    state: shouldOpen ? 'open' : 'closed',
-    consecutive_failures: fails,
-    ...(shouldOpen ? {
-      opened_at: now.toISOString(),
-      reopen_at: reopenAt!.toISOString(),
-      total_opens: (cur?.total_opens || 0) + 1,
-    } : {}),
-    updated_at: now.toISOString(),
-  }, { onConflict: 'source_id' });
-}
+// Circuit breaker helpers now come from _shared/observability.ts.
+// breakerCheckOpen / breakerRecordSuccess / breakerRecordFailure replace the
+// three local functions that used to live here and duplicated the pattern in
+// pulseDataSync/pulseCircuitReset. B12 semantics (null reopen_at = permanently
+// open) are preserved inside the shared module.
 
 // ── Timeline emission (idempotent via idempotency_key) ──────────────────
 
@@ -366,42 +332,42 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
   const forceIds = Array.isArray(body.force_ids) ? body.force_ids : [];
   const dryRun = body.dry_run === true;
 
-  // ── Circuit breaker check ─────────────────────────────────────────────
-  // B12: when state='open' but reopen_at is NULL (data corruption / manual
-  // flip), treat as permanently open rather than falling through. Only
-  // auto-reopen when reopen_at is in the past.
-  const breaker = await breakerGetState(admin);
-  if (breaker.state === 'open') {
-    const reopenAt = breaker.reopenAt ? new Date(breaker.reopenAt).getTime() : null;
-    if (reopenAt === null || reopenAt > Date.now()) {
-      return jsonResponse({
-        skipped: true,
-        reason: 'circuit_breaker_open',
-        consecutive_failures: breaker.consecutiveFailures,
-        reopen_at: breaker.reopenAt,
-      });
-    }
-    // Otherwise fall through in half-open state; success will close it
+  // ── Circuit breaker check (via shared module) ────────────────────────
+  // B12 semantics (null reopen_at = permanently open) preserved inside
+  // breakerCheckOpen.
+  const breaker = await breakerCheckOpen(admin, SOURCE_ID);
+  if (breaker.open) {
+    return jsonResponse({
+      skipped: true,
+      reason: 'circuit_breaker_open',
+      consecutive_failures: breaker.consecutiveFailures,
+      reopen_at: breaker.reopenAt,
+    });
   }
 
-  // ── Open a sync_log row ───────────────────────────────────────────────
-  // Migration 121: populate source_label + suburb so the run-history row on
-  // the source card has something to render. We don't know the final batch
-  // counts yet at this point — the finalising update below fills in
-  // batch_number / total_batches / exact `X listings` once we've decided how
-  // many candidates this invocation is processing.
-  const initialLabel = `${SOURCE_ID} · ${priorityMode} · ${trigger}`;
-  const { data: syncLog, error: syncLogErr } = await admin.from('pulse_sync_logs').insert({
-    sync_type: 'pulse_detail_enrich',   // NOT NULL
-    source_id: SOURCE_ID,
-    source_label: initialLabel,
-    status: 'running',
-    triggered_by: trigger,
-    triggered_by_name: `pulseDetailEnrich:${trigger}:${priorityMode}`,
-    started_at: new Date().toISOString(),
-  }).select('id').single();
-  if (syncLogErr) return errorResponse(`Failed to create sync_log: ${syncLogErr.message}`, 500);
-  const syncLogId = syncLog!.id;
+  // ── Open a sync_log row (via shared module) ──────────────────────────
+  // startRun seeds input_config eagerly so the drill-through UI works
+  // mid-run. We finalise batch_number / total_batches / exact suburb scope
+  // at the end via endRun.
+  const ctx = await startRun({
+    admin,
+    sourceId: SOURCE_ID,
+    syncType: 'pulse_detail_enrich',
+    triggeredBy: trigger,
+    triggeredByName: `pulseDetailEnrich:${trigger}:${priorityMode}`,
+    inputConfig: {
+      trigger,
+      priority_mode: priorityMode,
+      max_listings: maxListings,
+      force_ids: forceIds,
+      dry_run: dryRun,
+      actor_slug: ACTOR_SLUG,
+      apify_wait_secs: APIFY_WAIT_SECS,
+      batch_size: BATCH_SIZE,
+      max_batches_per_invocation: MAX_BATCHES_PER_INVOCATION,
+    },
+  });
+  const syncLogId = ctx.syncLogId;
 
   try {
     // ── Candidate selection ──────────────────────────────────────────────
@@ -461,42 +427,30 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
     candidates = candidates.filter(c => c.source_url && c.source_url.includes('realestate.com.au'));
 
     if (candidates.length === 0) {
-      // B46: schema-compliant final update. 'status' vocab on pulse_sync_logs
-      // is completed/failed/running/timed_out (NOT ok/partial/error). Heavy
-      // stats (message, cost, run ids) go to pulse_sync_log_payloads per
-      // migration 095.
-      // Migration 121: stamp suburb so the UI shows "no candidates" rather
-      // than a blank row.
-      await admin.from('pulse_sync_logs').update({
-        status: 'completed', completed_at: new Date().toISOString(),
+      await endRun(ctx, {
+        status: 'completed',
+        recordsFetched: 0,
+        recordsUpdated: 0,
+        sourceLabel: `rea_detail_enrich · no candidates · ${priorityMode}`,
         suburb: 'no candidates',
-        source_label: `rea_detail_enrich · no candidates · ${priorityMode}`,
-        records_fetched: 0, records_updated: 0,
-      }).eq('id', syncLogId);
-      await admin.from('pulse_sync_log_payloads').upsert({
-        sync_log_id: syncLogId,
-        result_summary: { message: 'No candidates needing enrichment', candidates: 0 },
-      }, { onConflict: 'sync_log_id' });
+        customSummary: { message: 'No candidates needing enrichment', candidates: 0 },
+      });
       return jsonResponse({ ok: true, syncLogId, candidates: 0, message: 'No candidates needing enrichment' });
     }
 
     if (dryRun) {
-      // B46: schema-compliant (see above)
-      await admin.from('pulse_sync_logs').update({
-        status: 'completed', completed_at: new Date().toISOString(),
+      await endRun(ctx, {
+        status: 'completed',
+        recordsFetched: candidates.length,
+        sourceLabel: `rea_detail_enrich · ${candidates.length} listings (dry run) · ${priorityMode}`,
         suburb: `${candidates.length} listing${candidates.length === 1 ? '' : 's'} (dry run)`,
-        source_label: `rea_detail_enrich · ${candidates.length} listings (dry run) · ${priorityMode}`,
-        records_fetched: candidates.length,
-      }).eq('id', syncLogId);
-      await admin.from('pulse_sync_log_payloads').upsert({
-        sync_log_id: syncLogId,
-        result_summary: {
+        customSummary: {
           message: `DRY RUN: would enrich ${candidates.length} listings`,
           dry_run: true,
           candidates: candidates.length,
         },
-      }, { onConflict: 'sync_log_id' });
-      return jsonResponse({ ok: true, dryRun: true, candidates: candidates.length, sample_ids: candidates.slice(0, 10).map(c => c.source_listing_id) });
+      });
+      return jsonResponse({ ok: true, dryRun: true, syncLogId, candidates: candidates.length, sample_ids: candidates.slice(0, 10).map(c => c.source_listing_id) });
     }
 
     // ── Process in batches ────────────────────────────────────────────────
@@ -1041,41 +995,37 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
 
     // ── Record success / failure on circuit breaker ──────────────────────
     if (stats.batches_succeeded > 0) {
-      await breakerRecordSuccess(admin);
+      await breakerRecordSuccess(admin, SOURCE_ID);
     } else if (stats.batches_attempted > 0) {
-      await breakerRecordFailure(admin);
+      await breakerRecordFailure(admin, SOURCE_ID);
     }
 
-    // ── Final sync_log update ────────────────────────────────────────────
-    // B46: schema-compliant writes. `pulse_sync_logs` only accepts a narrow
-    // header (records_fetched, records_updated, records_detail jsonb,
-    // apify_run_id scalar text, error_message, status ∈
-    // completed|failed|running|timed_out). Heavy/arbitrary stats go to the
-    // side-table `pulse_sync_log_payloads.result_summary` per migration 095.
-    // Previously the code wrote non-existent columns (records_processed,
-    // message, apify_run_ids, cost_estimate_usd) — PostgREST silently
-    // dropped the UPDATE and rows stayed status='running' forever.
+    // ── Mirror stats.errors into shared context ───────────────────────────
+    // recordError already handles the 80-char grouping so we don't duplicate
+    // that logic here. We push each accumulated error so endRun's coerced
+    // error_message matches the old joined format.
+    for (const e of stats.errors) recordError(ctx, e, 'warn');
+
+    // ── Final sync_log update (via shared module) ─────────────────────────
+    // endRun writes both the narrow header (completed/failed/timed_out,
+    // records_fetched, records_updated, records_detail jsonb, apify_run_id
+    // scalar, error_message) AND the heavy side-table payload per migration
+    // 095 — replaces what used to be ~90 lines of manual pulse_sync_logs
+    // update + pulse_sync_log_payloads upsert.
     const summaryMessage = `Enriched ${stats.items_processed} / ${stats.candidates} candidates in ${stats.batches_succeeded} batches. ${stats.items_withdrawn} withdrawn. Apify billed: $${stats.apify_billed_cost_usd.toFixed(3)} (value-producing: $${stats.value_producing_cost_usd.toFixed(3)})`;
     const finalStatus = stats.errors.length > 0 ? 'failed' : 'completed';
-    const joinedRunId = stats.apify_run_ids.filter(Boolean).join(',') || null;
-
-    // Migration 121: stamp suburb (used as the "scope" column on the run-
-    // history row) + batch_number/total_batches so the card shows e.g.
-    // "15 listings · Batch 3/3". For pulseDetailEnrich there's no geographic
-    // suburb — we use the candidate count as the suburb-equivalent tag.
     const scopeTag = `${stats.candidates} listing${stats.candidates === 1 ? '' : 's'}`;
     const detailLabel = `rea_detail_enrich · ${scopeTag} · ${priorityMode}`;
 
-    await admin.from('pulse_sync_logs').update({
+    await endRun(ctx, {
       status: finalStatus,
-      completed_at: new Date().toISOString(),
-      source_label: detailLabel,
+      sourceLabel: detailLabel,
       suburb: scopeTag,
-      batch_number: stats.batches_succeeded > 0 ? stats.batches_succeeded : null,
-      total_batches: stats.batches_attempted > 0 ? stats.batches_attempted : null,
-      records_fetched: stats.items_returned,
-      records_updated: stats.items_processed,
-      records_detail: {
+      batchNumber: stats.batches_succeeded > 0 ? stats.batches_succeeded : undefined,
+      totalBatches: stats.batches_attempted > 0 ? stats.batches_attempted : undefined,
+      recordsFetched: stats.items_returned,
+      recordsUpdated: stats.items_processed,
+      recordsDetail: {
         withdrawn: stats.items_withdrawn,
         agent_primary_promoted: stats.agent_primary_promoted,
         agent_alt_added: stats.agent_alt_added,
@@ -1083,64 +1033,38 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
         agency_alt_added: stats.agency_alt_added,
         integrity_scores_bumped: stats.integrity_scores_bumped,
       },
-      apify_run_id: joinedRunId,
-      error_message: stats.errors.length > 0 ? stats.errors.join(' | ').substring(0, 500) : null,
-    }).eq('id', syncLogId);
-
-    // Heavy/arbitrary stats → side-table
-    // B47: also write raw_payload (memo23 items, truncated) + input_config
-    // (what we sent to memo23 + listing ids targeted) so the run-detail drill-
-    // through UI can show them. Mirrors pulseDataSync's side-table writes.
-    try {
-      await admin.from('pulse_sync_log_payloads').upsert({
-        sync_log_id: syncLogId,
-        raw_payload: {
-          source: SOURCE_ID,
-          actor_slug: ACTOR_SLUG,
-          batch_count: batchPayloads.length,
-          items_returned_total: stats.items_returned,
-          // Truncation applied in-loop: first batch keeps up to 10 items,
-          // later batches keep up to 2. Counts in each entry tell you how many
-          // were actually returned before the sample was cut.
-          batches: batchPayloads,
-        },
-        input_config: {
-          trigger,
-          priority_mode: priorityMode,
-          max_listings: maxListings,
-          force_ids: forceIds,
-          dry_run: dryRun,
-          actor_slug: ACTOR_SLUG,
-          apify_wait_secs: APIFY_WAIT_SECS,
-          batch_size: BATCH_SIZE,
-          max_batches_per_invocation: MAX_BATCHES_PER_INVOCATION,
-          targeted_listing_ids: targetedListingIds,
-          batch_inputs: allBatchInputs,  // each = {startUrls, maxItems, flattenOutput}
-        },
-        result_summary: {
-          message: summaryMessage,
-          apify_run_ids: stats.apify_run_ids,
-          apify_billed_cost_usd: stats.apify_billed_cost_usd,
-          value_producing_cost_usd: stats.value_producing_cost_usd,
-          candidates: stats.candidates,
-          items_returned: stats.items_returned,
-          items_processed: stats.items_processed,
-          items_withdrawn: stats.items_withdrawn,
-          batches_attempted: stats.batches_attempted,
-          batches_succeeded: stats.batches_succeeded,
-          batches_skipped_wall: stats.batches_skipped_wall,
-          agent_primary_promoted: stats.agent_primary_promoted,
-          agent_alt_added: stats.agent_alt_added,
-          agency_primary_promoted: stats.agency_primary_promoted,
-          agency_alt_added: stats.agency_alt_added,
-          integrity_scores_bumped: stats.integrity_scores_bumped,
-          already_enriched_within_14d: stats.already_enriched_within_14d,
-          errors: stats.errors,
-        },
-      }, { onConflict: 'sync_log_id' });
-    } catch (pErr: any) {
-      console.warn('pulseDetailEnrich: side-table payload write failed (non-fatal):', pErr?.message);
-    }
+      apifyRunIds: stats.apify_run_ids,
+      apifyBilledCostUsd: stats.apify_billed_cost_usd,
+      valueProducingCostUsd: stats.value_producing_cost_usd,
+      rawPayload: {
+        source: SOURCE_ID,
+        actor_slug: ACTOR_SLUG,
+        batch_count: batchPayloads.length,
+        items_returned_total: stats.items_returned,
+        // Truncation applied in-loop: first batch keeps up to 10 items,
+        // later batches keep up to 2. Counts in each entry tell you how many
+        // were actually returned before the sample was cut.
+        batches: batchPayloads,
+      },
+      customSummary: {
+        message: summaryMessage,
+        candidates: stats.candidates,
+        items_returned: stats.items_returned,
+        items_processed: stats.items_processed,
+        items_withdrawn: stats.items_withdrawn,
+        batches_attempted: stats.batches_attempted,
+        batches_succeeded: stats.batches_succeeded,
+        batches_skipped_wall: stats.batches_skipped_wall,
+        agent_primary_promoted: stats.agent_primary_promoted,
+        agent_alt_added: stats.agent_alt_added,
+        agency_primary_promoted: stats.agency_primary_promoted,
+        agency_alt_added: stats.agency_alt_added,
+        integrity_scores_bumped: stats.integrity_scores_bumped,
+        already_enriched_within_14d: stats.already_enriched_within_14d,
+        targeted_listing_ids: targetedListingIds,
+        batch_inputs: allBatchInputs,
+      },
+    });
 
     return jsonResponse({
       ok: true,
@@ -1149,31 +1073,22 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       ...stats,
     });
   } catch (err: any) {
-    // B46: use the canonical 'failed' status (not 'error') to match the
-    // existing status vocab on pulse_sync_logs. Stash the raw error detail
-    // in the side-table for debugging.
-    const errMsg = (err?.message || 'unknown').substring(0, 500);
-    await admin.from('pulse_sync_logs').update({
-      status: 'failed', completed_at: new Date().toISOString(),
-      error_message: errMsg,
-    }).eq('id', syncLogId);
-    try {
-      await admin.from('pulse_sync_log_payloads').upsert({
-        sync_log_id: syncLogId,
-        result_summary: {
-          error_message: errMsg,
-          error_stack: err?.stack ? String(err.stack).substring(0, 2000) : null,
-          fatal: true,
-        },
-      }, { onConflict: 'sync_log_id' });
-    } catch { /* best-effort */ }
+    recordError(ctx, err, 'fatal');
+    await endRun(ctx, {
+      status: 'failed',
+      errorMessage: (err?.message || 'unknown').substring(0, 500),
+      customSummary: {
+        error_stack: err?.stack ? String(err.stack).substring(0, 2000) : null,
+        fatal: true,
+      },
+    });
     // B41: only trip the circuit breaker on errors that implicate upstream
     // (Apify / memo23). A supabase RPC failure, JSON parse error, or similar
     // internal hiccup should NOT mark the external source unhealthy.
     const msg = String(err?.message || '');
     const isUpstream = ['Apify', 'memo23', 'HTTP_', 'TIMED-OUT', 'READY'].some(tag => msg.includes(tag));
     if (isUpstream) {
-      await breakerRecordFailure(admin);
+      await breakerRecordFailure(admin, SOURCE_ID);
     } else {
       console.warn('[pulseDetailEnrich] non-upstream fatal; circuit breaker NOT tripped:', msg.substring(0, 200));
     }
