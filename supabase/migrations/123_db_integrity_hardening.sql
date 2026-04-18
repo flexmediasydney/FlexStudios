@@ -237,6 +237,54 @@ CREATE TRIGGER trg_pulse_listings_sync_denorm_ids
   FOR EACH ROW
   EXECUTE FUNCTION pulse_listings_sync_denorm_ids();
 
+-- C.1b — AFTER INSERT fallback to close the race with trg_pulse_bridge_from_listing
+-- When a listing arrives with a never-before-seen agent_rea_id, the BEFORE
+-- sync trigger finds no matching pulse_agents row and sets agent_pulse_id=NULL.
+-- The AFTER bridge trigger (migration 122) then creates the minimal
+-- pulse_agents row. This AFTER-INSERT sweep runs last and backfills the
+-- NULL. Guarded by pg_trigger_depth() to prevent recursion.
+CREATE OR REPLACE FUNCTION public.pulse_listings_resolve_denorm_ids_after()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $$
+DECLARE
+  v_agent_id uuid;
+  v_agency_id uuid;
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.agent_pulse_id IS NULL AND NEW.agent_rea_id IS NOT NULL THEN
+    SELECT id INTO v_agent_id FROM pulse_agents WHERE rea_agent_id = NEW.agent_rea_id LIMIT 1;
+  END IF;
+  IF NEW.agency_pulse_id IS NULL AND NEW.agency_rea_id IS NOT NULL THEN
+    SELECT id INTO v_agency_id FROM pulse_agencies WHERE rea_agency_id = NEW.agency_rea_id LIMIT 1;
+  END IF;
+
+  IF v_agent_id IS NOT NULL OR v_agency_id IS NOT NULL THEN
+    UPDATE pulse_listings
+       SET agent_pulse_id  = COALESCE(v_agent_id,  agent_pulse_id),
+           agency_pulse_id = COALESCE(v_agency_id, agency_pulse_id)
+     WHERE id = NEW.id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.pulse_listings_resolve_denorm_ids_after() IS
+  'AFTER INSERT trigger on pulse_listings. Closes the race where the BEFORE sync trigger runs before the AFTER bridge trigger has created the pulse_agents/pulse_agencies row. pg_trigger_depth guard prevents recursion. Added migration 123.';
+
+DROP TRIGGER IF EXISTS trg_pulse_listings_resolve_denorm_ids_after ON pulse_listings;
+CREATE TRIGGER trg_pulse_listings_resolve_denorm_ids_after
+  AFTER INSERT ON pulse_listings
+  FOR EACH ROW
+  WHEN (NEW.agent_pulse_id IS NULL OR NEW.agency_pulse_id IS NULL)
+  EXECUTE FUNCTION pulse_listings_resolve_denorm_ids_after();
+
 -- C.2 — Trigger function: maintain linked_agency_pulse_id on pulse_agents
 CREATE OR REPLACE FUNCTION public.pulse_agents_sync_denorm_ids()
 RETURNS TRIGGER
