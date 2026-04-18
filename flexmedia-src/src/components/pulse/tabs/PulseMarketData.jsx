@@ -3,17 +3,18 @@
  * Sections: Summary stats, Top listing agents, Price distribution,
  *           Suburb heatmap table.
  */
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
-  LineChart, Line, Legend, PieChart, Pie,
+  LineChart, Line, Legend, PieChart, Pie, Brush,
 } from "recharts";
-import { Home, DollarSign, Clock, TrendingUp, MapPin, Users, ArrowUpDown, ChevronUp, ChevronDown, Activity, PieChart as PieChartIcon } from "lucide-react";
+import { Home, DollarSign, Clock, TrendingUp, MapPin, Users, ArrowUpDown, ChevronUp, ChevronDown, Activity, PieChart as PieChartIcon, X, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isActiveListing, parsePriceText } from "@/components/pulse/utils/listingHelpers";
+import { exportFilteredCsv } from "@/components/pulse/utils/qolHelpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -329,7 +330,7 @@ function TopListingAgentsTable({ pulseListings, crmAgents, pulseAgents, onOpenEn
 
 // ── Section 3: Price Distribution ────────────────────────────────────────────
 
-function PriceDistributionChart({ pulseListings }) {
+function PriceDistributionChart({ pulseListings, onFilterBracket, hiddenBrackets = new Set(), onToggleBracket }) {
   const { data, sampleSize, sampleTotal } = useMemo(() => {
     // On-market listings (for_sale + under_contract) with a price. Rentals
     // excluded — weekly rent is not a property value. Previously limited to
@@ -389,7 +390,21 @@ function PriceDistributionChart({ pulseListings }) {
                 cursor={{ fill: "hsl(var(--muted)/0.25)" }}
                 formatter={(v) => [v, "Listings"]}
               />
-              <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={56}>
+              {/* #55: legend click toggles visibility */}
+              <Legend
+                wrapperStyle={{ fontSize: 11 }}
+                iconSize={10}
+                onClick={onToggleBracket ? (p) => onToggleBracket(p?.value) : undefined}
+              />
+              <Bar
+                dataKey="count"
+                name="Listings"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={56}
+                hide={hiddenBrackets.has("Listings")}
+                onClick={onFilterBracket ? (p) => onFilterBracket(p?.label) : undefined}
+                style={onFilterBracket ? { cursor: "pointer" } : undefined}
+              >
                 {data.map((entry, i) => (
                   <Cell key={entry.label} fill={BRACKET_COLORS[i % BRACKET_COLORS.length]} />
                 ))}
@@ -404,6 +419,40 @@ function PriceDistributionChart({ pulseListings }) {
 
 // ── Section 4: Suburb Heatmap Table ───────────────────────────────────────────
 
+// #50: 60×20 SVG sparkline — used inline per row to show the 13-week trend of
+// listed volume. Self-contained so we can avoid an extra recharts container
+// inside every table row (20 ResponsiveContainers in one table kills FPS).
+function Sparkline({ data, width = 60, height = 20, stroke = "hsl(var(--primary))" }) {
+  if (!Array.isArray(data) || data.length === 0) {
+    return <span className="text-muted-foreground/40 text-[9px]">—</span>;
+  }
+  const max = Math.max(...data, 1);
+  const dx = data.length > 1 ? width / (data.length - 1) : 0;
+  const pts = data.map((v, i) => {
+    const x = i * dx;
+    const y = height - (v / max) * height;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <polyline
+        points={pts.join(" ")}
+        fill="none"
+        stroke={stroke}
+        strokeWidth={1.25}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function HeatmapSortIcon({ col, sort }) {
   if (sort.col !== col)
     return <ArrowUpDown className="h-3 w-3 text-muted-foreground/40 ml-0.5 inline" />;
@@ -414,7 +463,7 @@ function HeatmapSortIcon({ col, sort }) {
   );
 }
 
-function SuburbHeatmapTable({ pulseListings }) {
+function SuburbHeatmapTable({ pulseListings, extraFilterLabel, onClearExtraFilter }) {
   const [sort, setSort] = useState({ col: "count", dir: "desc" });
 
   function toggleSort(col) {
@@ -428,10 +477,34 @@ function SuburbHeatmapTable({ pulseListings }) {
   const rows = useMemo(() => {
     const suburbMap = {};
 
+    // #50: 13-week sparkline window. ISO week (Monday-start, local time).
+    const now = new Date();
+    const day = now.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    const curWeekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset);
+    const weekStarts = [];
+    for (let i = 12; i >= 0; i--) {
+      const d = new Date(curWeekStart);
+      d.setDate(curWeekStart.getDate() - i * 7);
+      weekStarts.push(d.getTime());
+    }
+    function weekBucket(ts) {
+      if (ts < weekStarts[0]) return -1;
+      const last = weekStarts[weekStarts.length - 1] + 7 * 86400000;
+      if (ts >= last) return -1;
+      for (let i = weekStarts.length - 1; i >= 0; i--) {
+        if (ts >= weekStarts[i]) return i;
+      }
+      return -1;
+    }
+
     pulseListings.forEach((l) => {
       if (!l.suburb) return;
       if (!suburbMap[l.suburb]) {
-        suburbMap[l.suburb] = { count: 0, priceSum: 0, priceCount: 0, domSum: 0, domCount: 0 };
+        suburbMap[l.suburb] = {
+          count: 0, priceSum: 0, priceCount: 0, domSum: 0, domCount: 0,
+          spark: new Array(13).fill(0),
+        };
       }
       const s = suburbMap[l.suburb];
       s.count++;
@@ -446,6 +519,15 @@ function SuburbHeatmapTable({ pulseListings }) {
         if (effectivePrice > 0) { s.priceSum += effectivePrice; s.priceCount++; }
       }
       if (l.days_on_market > 0) { s.domSum += l.days_on_market; s.domCount++; }
+      // Sparkline bump by listed_date / created_at into its week bucket.
+      const when = l.listed_date || l.created_at;
+      if (when) {
+        const t = new Date(when).getTime();
+        if (!isNaN(t)) {
+          const b = weekBucket(t);
+          if (b >= 0) s.spark[b] += 1;
+        }
+      }
     });
 
     const mapped = Object.entries(suburbMap)
@@ -454,6 +536,7 @@ function SuburbHeatmapTable({ pulseListings }) {
         count: s.count,
         avgPrice: s.priceCount > 0 ? Math.round(s.priceSum / s.priceCount) : 0,
         avgDom: s.domCount > 0 ? Math.round(s.domSum / s.domCount) : 0,
+        spark: s.spark,
       }));
 
     // Sort
@@ -487,6 +570,25 @@ function SuburbHeatmapTable({ pulseListings }) {
           Suburb Market Heatmap
         </CardTitle>
         <p className="text-[10px] text-muted-foreground">Top 20 suburbs by listing count — all types</p>
+        {/* #49: upstream chart-click filter indicator */}
+        {extraFilterLabel && (
+          <div className="mt-1.5 flex items-center gap-2 text-[10px]">
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+              Chart filter: {extraFilterLabel}
+            </Badge>
+            {onClearExtraFilter && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 text-[10px] px-1.5 gap-0.5"
+                onClick={onClearExtraFilter}
+              >
+                <X className="h-3 w-3" />
+                Clear
+              </Button>
+            )}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="px-4 pb-4">
         {rows.length === 0 ? (
@@ -507,6 +609,10 @@ function SuburbHeatmapTable({ pulseListings }) {
                     onClick={() => toggleSort("count")}
                   >
                     Listings <HeatmapSortIcon col="count" sort={sort} />
+                  </th>
+                  {/* #50: 13-week trend sparkline — not sortable */}
+                  <th className="text-center py-2 pr-3 text-[10px] font-medium text-muted-foreground w-[70px] hidden md:table-cell">
+                    13-wk Trend
                   </th>
                   <th
                     className="text-right py-2 pr-3 text-[10px] font-medium text-muted-foreground w-20 hidden sm:table-cell cursor-pointer select-none hover:text-foreground"
@@ -533,6 +639,12 @@ function SuburbHeatmapTable({ pulseListings }) {
                   >
                     <td className="py-1.5 pr-3 font-medium">{row.suburb}</td>
                     <td className="py-1.5 pr-3 text-right tabular-nums font-semibold">{row.count}</td>
+                    <td
+                      className="py-1.5 pr-3 text-center hidden md:table-cell"
+                      title={`Weekly new listings, last 13 weeks: ${row.spark.join(", ")}`}
+                    >
+                      <Sparkline data={row.spark} />
+                    </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums text-muted-foreground hidden sm:table-cell">
                       {fmtPrice(row.avgPrice)}
                     </td>
@@ -553,6 +665,18 @@ function SuburbHeatmapTable({ pulseListings }) {
 // ── Section 5: Weekly Trend Chart ────────────────────────────────────────────
 
 function WeeklyTrendChart({ pulseListings }) {
+  // #55: hidden series (toggled via legend click)
+  const [hiddenSeries, setHiddenSeries] = useState(() => new Set());
+  const toggleSeries = useCallback((key) => {
+    if (!key) return;
+    setHiddenSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   const data = useMemo(() => {
     // Build last 13 ISO weeks, ending with the current week. Listings are
     // bucketed separately by listed_date (new) and sold_date (sold).
@@ -618,7 +742,12 @@ function WeeklyTrendChart({ pulseListings }) {
                 }}
                 formatter={(v, name) => [v, name]}
               />
-              <Legend wrapperStyle={{ fontSize: 11 }} iconSize={10} />
+              {/* #55: legend click toggles the corresponding series */}
+              <Legend
+                wrapperStyle={{ fontSize: 11 }}
+                iconSize={10}
+                onClick={(p) => toggleSeries(p?.value)}
+              />
               <Line
                 type="monotone"
                 dataKey="new"
@@ -627,6 +756,7 @@ function WeeklyTrendChart({ pulseListings }) {
                 strokeWidth={2}
                 dot={{ r: 2 }}
                 activeDot={{ r: 4 }}
+                hide={hiddenSeries.has("New Listings")}
               />
               <Line
                 type="monotone"
@@ -636,6 +766,15 @@ function WeeklyTrendChart({ pulseListings }) {
                 strokeWidth={2}
                 dot={{ r: 2 }}
                 activeDot={{ r: 4 }}
+                hide={hiddenSeries.has("Sold")}
+              />
+              {/* #56: recharts Brush for zoom/pan over the 13-week window */}
+              <Brush
+                dataKey="label"
+                height={20}
+                stroke="hsl(var(--primary))"
+                travellerWidth={6}
+                tickFormatter={(v) => v}
               />
             </LineChart>
           </ResponsiveContainer>
@@ -655,7 +794,7 @@ const BREAKDOWN_SLICES = [
   { key: "sold", label: "Sold", color: "#ef4444" },                // red-500
 ];
 
-function MarketBreakdownDonut({ pulseListings }) {
+function MarketBreakdownDonut({ pulseListings, onFilterType, hiddenTypes = new Set(), onToggleType }) {
   const { data, total } = useMemo(() => {
     const cutoff = new Date(Date.now() - 90 * 86400000);
     const recent = pulseListings.filter((l) => {
@@ -714,9 +853,15 @@ function MarketBreakdownDonut({ pulseListings }) {
                   return [`${v} (${pct}%)`, name];
                 }}
               />
-              <Legend wrapperStyle={{ fontSize: 11 }} iconSize={10} />
+              {/* #55: legend click toggles slice visibility */}
+              <Legend
+                wrapperStyle={{ fontSize: 11 }}
+                iconSize={10}
+                onClick={onToggleType ? (p) => onToggleType(p?.value) : undefined}
+              />
+              {/* #49: click a slice to filter the suburb table by listing_type */}
               <Pie
-                data={data}
+                data={data.filter((d) => !hiddenTypes.has(d.name))}
                 dataKey="value"
                 nameKey="name"
                 cx="50%"
@@ -726,8 +871,10 @@ function MarketBreakdownDonut({ pulseListings }) {
                 paddingAngle={2}
                 stroke="hsl(var(--card))"
                 strokeWidth={2}
+                onClick={onFilterType ? (p) => onFilterType(p?.key) : undefined}
+                style={onFilterType ? { cursor: "pointer" } : undefined}
               >
-                {data.map((entry) => (
+                {data.filter((d) => !hiddenTypes.has(d.name)).map((entry) => (
                   <Cell key={entry.key} fill={entry.color} />
                 ))}
               </Pie>
@@ -836,6 +983,32 @@ export default function PulseMarketData({
 }) {
   const [timeRange, setTimeRange] = useState("30");
   const [propertyType, setPropertyType] = useState("all");
+  // #49: chart-driven filter layered on top of the suburb heatmap. Either
+  // { kind: "bracket", label, min, max } from the price bar chart, or
+  // { kind: "type", value: "for_sale" | ... } from the donut.
+  const [chartFilter, setChartFilter] = useState(null);
+  // #55: hidden series sets per chart (name-keyed).
+  const [hiddenBrackets, setHiddenBrackets] = useState(() => new Set());
+  const [hiddenTypes, setHiddenTypes]       = useState(() => new Set());
+
+  const toggleBracket = useCallback((name) => {
+    if (!name) return;
+    setHiddenBrackets((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+  const toggleType = useCallback((name) => {
+    if (!name) return;
+    setHiddenTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
 
   // MK06: dynamic options based on real prod data. Groups fallback kicks in
   // automatically if distinct count ≥ 12 (caps dropdown width + clutter).
@@ -875,6 +1048,38 @@ export default function PulseMarketData({
 
     return list;
   }, [pulseListings, timeRange, propertyType]);
+
+  // #49: apply chart-click filter on top of the already-filtered listings
+  // when feeding the suburb heatmap. This keeps the chart-click an ephemeral
+  // refinement rather than a sticky global filter.
+  const heatmapListings = useMemo(() => {
+    if (!chartFilter) return filteredListings;
+    if (chartFilter.kind === "bracket") {
+      return filteredListings.filter((l) => {
+        if (l.listing_type === "for_rent") return false;
+        const p = l.asking_price && l.asking_price > 0
+          ? l.asking_price
+          : parsePriceText(l.price_text);
+        return p > 0 && p >= chartFilter.min && p < chartFilter.max;
+      });
+    }
+    if (chartFilter.kind === "type") {
+      return filteredListings.filter((l) => l.listing_type === chartFilter.value);
+    }
+    return filteredListings;
+  }, [filteredListings, chartFilter]);
+
+  const handleBracketClick = useCallback((label) => {
+    const bracket = PRICE_BRACKETS.find((b) => b.label === label);
+    if (!bracket) return;
+    setChartFilter({ kind: "bracket", label, min: bracket.min, max: bracket.max });
+  }, []);
+
+  const handleTypeClick = useCallback((typeKey) => {
+    if (!typeKey) return;
+    const slice = BREAKDOWN_SLICES.find((s) => s.key === typeKey);
+    setChartFilter({ kind: "type", value: typeKey, label: slice?.label || typeKey });
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -922,6 +1127,41 @@ export default function PulseMarketData({
         <span className="text-[10px] text-muted-foreground ml-auto tabular-nums">
           {filteredListings.length.toLocaleString()} listings
         </span>
+        {/* #52: export the currently-filtered listings as CSV */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-[11px] gap-1"
+          onClick={() => {
+            const headers = [
+              { key: "id",              label: "id" },
+              { key: "listing_type",    label: "listing_type" },
+              { key: "property_type",   label: "property_type" },
+              { key: "suburb",          label: "suburb" },
+              { key: "address",         label: "address" },
+              { key: "asking_price",    label: "asking_price" },
+              { key: "price_text",      label: "price_text" },
+              { key: "sold_price",      label: "sold_price" },
+              { key: "listed_date",     label: "listed_date" },
+              { key: "sold_date",       label: "sold_date" },
+              { key: "days_on_market",  label: "days_on_market" },
+              { key: "agent_name",      label: "agent_name" },
+              { key: "agency_name",     label: "agency_name" },
+              { key: "agent_rea_id",    label: "agent_rea_id" },
+              { key: "agency_rea_id",   label: "agency_rea_id" },
+              { key: "bedrooms",        label: "bedrooms" },
+              { key: "bathrooms",       label: "bathrooms" },
+              { key: "car_spaces",      label: "car_spaces" },
+            ];
+            const stamp = new Date().toISOString().slice(0, 10);
+            exportFilteredCsv(`pulse_market_listings_${stamp}.csv`, headers, heatmapListings);
+          }}
+          disabled={heatmapListings.length === 0}
+          title="Download currently filtered listings as CSV"
+        >
+          <Download className="h-3 w-3" />
+          Download CSV
+        </Button>
       </div>
 
       {/* Section 1: Summary stats */}
@@ -930,7 +1170,12 @@ export default function PulseMarketData({
       {/* Section 5 + 6: Weekly trend + Market breakdown donut */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <WeeklyTrendChart pulseListings={filteredListings} />
-        <MarketBreakdownDonut pulseListings={filteredListings} />
+        <MarketBreakdownDonut
+          pulseListings={filteredListings}
+          onFilterType={handleTypeClick}
+          hiddenTypes={hiddenTypes}
+          onToggleType={toggleType}
+        />
       </div>
 
       {/* Section 2 + 3: Agents table + Price distribution side-by-side on large screens */}
@@ -941,11 +1186,20 @@ export default function PulseMarketData({
           pulseAgents={pulseAgents}
           onOpenEntity={onOpenEntity}
         />
-        <PriceDistributionChart pulseListings={filteredListings} />
+        <PriceDistributionChart
+          pulseListings={filteredListings}
+          onFilterBracket={handleBracketClick}
+          hiddenBrackets={hiddenBrackets}
+          onToggleBracket={toggleBracket}
+        />
       </div>
 
-      {/* Section 4: Suburb heatmap */}
-      <SuburbHeatmapTable pulseListings={filteredListings} />
+      {/* Section 4: Suburb heatmap — chart-click filter layered on top */}
+      <SuburbHeatmapTable
+        pulseListings={heatmapListings}
+        extraFilterLabel={chartFilter?.label || null}
+        onClearExtraFilter={chartFilter ? () => setChartFilter(null) : null}
+      />
     </div>
   );
 }
