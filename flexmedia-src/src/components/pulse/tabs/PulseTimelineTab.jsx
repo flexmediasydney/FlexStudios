@@ -9,11 +9,13 @@
  * Why server-side: client-side `slice(0, 20)` was hiding 90%+ of events on
  * busy weeks. PulseTimeline can run thousands of rows after a big sync.
  */
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -24,8 +26,10 @@ import { cn } from "@/lib/utils";
 import PulseTimeline, { EVENT_CONFIG } from "@/components/pulse/PulseTimeline";
 import {
   Activity, Clock, ChevronLeft, ChevronRight, Filter, Loader2, X, AlertCircle,
-  HelpCircle, RefreshCw,
+  HelpCircle, RefreshCw, Search, Download,
 } from "lucide-react";
+import { exportFilteredCsv } from "@/components/pulse/utils/qolHelpers";
+import PresetControls from "@/components/pulse/utils/PresetControls";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
@@ -95,6 +99,13 @@ function TimelineLegendDialog({ open, onClose }) {
   const [registry, setRegistry] = useState([]);
   const [counts, setCounts] = useState({});
   const [loading, setLoading] = useState(false);
+  // #54: filter legend rows by event_type OR description (case-insensitive).
+  const [legendSearch, setLegendSearch] = useState("");
+
+  // Reset search when dialog closes so reopening doesn't show stale filter.
+  useEffect(() => {
+    if (!open) setLegendSearch("");
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -172,6 +183,25 @@ function TimelineLegendDialog({ open, onClose }) {
     return ordered;
   }, [registry]);
 
+  // #54: apply search filter. Keeps category groups but filters their items —
+  // hides category entirely if no items match. Matches event_type OR description
+  // OR the pretty label from EVENT_CONFIG.
+  const filteredGrouped = useMemo(() => {
+    const q = legendSearch.trim().toLowerCase();
+    if (!q) return grouped;
+    return grouped
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          const label = (item.config?.label || "").toLowerCase();
+          const evType = (item.event_type || "").toLowerCase();
+          const desc = (item.description || "").toLowerCase();
+          return evType.includes(q) || desc.includes(q) || label.includes(q);
+        }),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [grouped, legendSearch]);
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
@@ -185,6 +215,16 @@ function TimelineLegendDialog({ open, onClose }) {
             Counts show recent emission volume (last ~10k events).
           </DialogDescription>
         </DialogHeader>
+        {/* #54: search box for filtering legend rows */}
+        <div className="relative pt-1">
+          <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/60 pointer-events-none" />
+          <Input
+            value={legendSearch}
+            onChange={(e) => setLegendSearch(e.target.value)}
+            placeholder="Search event type or description…"
+            className="h-8 text-xs pl-7"
+          />
+        </div>
         <div className="space-y-5 pt-2">
           {loading && registry.length === 0 && (
             <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
@@ -192,7 +232,12 @@ function TimelineLegendDialog({ open, onClose }) {
               Loading event registry…
             </div>
           )}
-          {grouped.map((group) => (
+          {!loading && filteredGrouped.length === 0 && (
+            <div className="py-6 text-center text-xs text-muted-foreground">
+              No event types match &quot;{legendSearch}&quot;.
+            </div>
+          )}
+          {filteredGrouped.map((group) => (
             <div key={group.category}>
               <h3 className="text-xs uppercase tracking-wide font-semibold text-muted-foreground mb-2">
                 {group.label}
@@ -248,10 +293,14 @@ function TimelineLegendDialog({ open, onClose }) {
 }
 
 export default function PulseTimelineTab({ onOpenEntity }) {
-  const [eventTypeFilter, setEventTypeFilter] = useState("all");
-  const [entityTypeFilter, setEntityTypeFilter] = useState("all");
-  const [sourceFilter, setSourceFilter] = useState("all");
-  const [timeWindow, setTimeWindow] = useState("7d");
+  // #57: URL-driven filter state. Hydrate once on mount from ?event_type=&source=&...
+  // and re-serialise on every change. We use a local state mirror to keep the
+  // existing logic simple — the effect below syncs URL → state and state → URL.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [eventTypeFilter, setEventTypeFilter] = useState(() => searchParams.get("event_type") || "all");
+  const [entityTypeFilter, setEntityTypeFilter] = useState(() => searchParams.get("category") || "all"); // "category" per spec
+  const [sourceFilter, setSourceFilter] = useState(() => searchParams.get("source") || "all");
+  const [timeWindow, setTimeWindow] = useState(() => searchParams.get("time_window") || "7d");
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -267,8 +316,36 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   // Legend modal — explains every event type; opened from header or empty state.
   const [legendOpen, setLegendOpen] = useState(false);
 
+  // #47: last-visit tracking for "N new events since last visit".
+  // On mount we snapshot the stored ts and count events created after it; a
+  // sticky pill above the list lets the user "load" (sets the marker to now).
+  const LAST_VIEWED_KEY = "pulse_timeline_last_viewed_at";
+  const initialLastViewedRef = useRef(null);
+  if (initialLastViewedRef.current === null) {
+    initialLastViewedRef.current = localStorage.getItem(LAST_VIEWED_KEY) || null;
+  }
+  const [newEventsSinceLastVisit, setNewEventsSinceLastVisit] = useState(0);
+
   // Reset page when filters change
   useEffect(() => { setPage(0); }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, pageSize]);
+
+  // #57: write filter state back to the URL whenever it changes.
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const setOrDrop = (k, v, def) => {
+      if (v == null || v === "" || v === def) next.delete(k);
+      else next.set(k, v);
+    };
+    setOrDrop("event_type",  eventTypeFilter, "all");
+    setOrDrop("category",    entityTypeFilter, "all");
+    setOrDrop("source",      sourceFilter, "all");
+    setOrDrop("time_window", timeWindow, "7d");
+    // Only replace if something actually changed — avoids churn on every render.
+    const before = searchParams.toString();
+    const after = next.toString();
+    if (before !== after) setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow]);
 
   // Fetch event-type registry + distinct sources once at mount. These are small
   // (~30 rows, ~5 sources) and rarely change — no need to refresh on every page.
@@ -383,6 +460,53 @@ export default function PulseTimelineTab({ onOpenEntity }) {
     return () => clearInterval(id);
   }, [autoRefresh, fetchPage]);
 
+  // #47: on mount, count how many pulse_timeline rows exist with created_at
+  // > stored last-viewed timestamp. We do a separate head-count query so the
+  // filter dropdowns can't hide the "new since" badge.
+  useEffect(() => {
+    const lastViewed = initialLastViewedRef.current;
+    if (!lastViewed) {
+      setNewEventsSinceLastVisit(0);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { count } = await api._supabase
+          .from("pulse_timeline")
+          .select("id", { count: "exact", head: true })
+          .gt("created_at", lastViewed);
+        if (!cancelled) setNewEventsSinceLastVisit(count || 0);
+      } catch {
+        if (!cancelled) setNewEventsSinceLastVisit(0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // #47: mark this moment as "last viewed" and clear the pill. Does NOT
+  // re-trigger a server fetch — the list already shows the newest rows at
+  // the top; clicking Load simply reveals them by scrolling to page 0 and
+  // resetting any active filter that might hide them.
+  const markTimelineViewed = useCallback(() => {
+    const now = new Date().toISOString();
+    localStorage.setItem(LAST_VIEWED_KEY, now);
+    initialLastViewedRef.current = now;
+    setNewEventsSinceLastVisit(0);
+    setPage(0);
+    fetchPage();
+  }, [fetchPage]);
+
+  // Quiet "mark viewed on unmount" so that next visit's counter baseline is
+  // fresh even if the user didn't explicitly click the "Load" pill.
+  useEffect(() => {
+    return () => {
+      try { localStorage.setItem(LAST_VIEWED_KEY, new Date().toISOString()); } catch {
+        /* storage disabled — just swallow */
+      }
+    };
+  }, []);
+
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const showingFrom = total === 0 ? 0 : page * pageSize + 1;
   const showingTo = Math.min(total, (page + 1) * pageSize);
@@ -459,6 +583,46 @@ export default function PulseTimelineTab({ onOpenEntity }) {
             >
               <Loader2 className={loading ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
               Refresh
+            </Button>
+            {/* #51: filter preset save/load (Timeline namespace) */}
+            <PresetControls
+              namespace="timeline"
+              currentPreset={{
+                eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow,
+              }}
+              onLoad={(p) => {
+                if (p?.eventTypeFilter)  setEventTypeFilter(p.eventTypeFilter);
+                if (p?.entityTypeFilter) setEntityTypeFilter(p.entityTypeFilter);
+                if (p?.sourceFilter)     setSourceFilter(p.sourceFilter);
+                if (p?.timeWindow)       setTimeWindow(p.timeWindow);
+              }}
+            />
+            {/* #52: export the current page of filtered rows as CSV */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[10px] gap-1"
+              disabled={rows.length === 0}
+              onClick={() => {
+                const headers = [
+                  { key: "id",               label: "id" },
+                  { key: "created_at",       label: "created_at" },
+                  { key: "event_type",       label: "event_type" },
+                  { key: "entity_type",      label: "entity_type" },
+                  { key: "pulse_entity_id",  label: "pulse_entity_id" },
+                  { key: "source",           label: "source" },
+                  { key: "title",            label: "title" },
+                  { key: "description",      label: "description" },
+                  { key: "rea_id",           label: "rea_id" },
+                  { key: "sync_log_id",      label: "sync_log_id" },
+                ];
+                const stamp = new Date().toISOString().slice(0, 10);
+                exportFilteredCsv(`pulse_timeline_${stamp}.csv`, headers, rows);
+              }}
+              title="Download the currently visible timeline page as CSV"
+            >
+              <Download className="h-3 w-3" />
+              CSV
             </Button>
           </div>
         </div>
@@ -571,6 +735,23 @@ export default function PulseTimelineTab({ onOpenEntity }) {
         )}
       </CardHeader>
       <CardContent className="px-4 pb-4">
+        {/* #47: sticky "N new events since last visit" pill */}
+        {newEventsSinceLastVisit > 0 && (
+          <div className="sticky top-0 z-10 mb-3">
+            <button
+              type="button"
+              onClick={markTimelineViewed}
+              className="w-full flex items-center justify-center gap-2 text-[11px] font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 border border-blue-200 dark:border-blue-800 rounded-md px-3 py-1.5 transition-colors"
+            >
+              <Activity className="h-3 w-3" />
+              <span>
+                {newEventsSinceLastVisit.toLocaleString()} new event{newEventsSinceLastVisit === 1 ? "" : "s"} since last visit
+              </span>
+              <span className="underline">Load</span>
+            </button>
+          </div>
+        )}
+
         {error && (
           <div className="rounded-md border border-red-300 bg-red-50/60 dark:bg-red-950/20 p-3 mb-3 text-xs flex items-start gap-2">
             <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
