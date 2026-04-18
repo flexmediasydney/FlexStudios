@@ -27,7 +27,7 @@ import {
   ExternalLink, Repeat, Globe, Calendar, Coins, FileCode2,
   User, XCircle, Activity, Copy, Edit3, Save, AlertCircle,
   ChevronLeft, ChevronRight, Filter, Download, History, X,
-  Sparkles,
+  Sparkles, Search,
 } from "lucide-react";
 
 // ── Source UI metadata ────────────────────────────────────────────────────────
@@ -239,6 +239,206 @@ function StatusBadge({ status }) {
   if (status === "failed")
     return <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px] px-1.5 py-0">Failed</Badge>;
   return <Badge variant="outline" className="text-[10px] px-1.5 py-0">{status || "—"}</Badge>;
+}
+
+// ── JsonViewer (#59) ──────────────────────────────────────────────────────────
+// Dependency-free collapsible JSON viewer with syntax highlighting, search,
+// and copy/download buttons. Used by DrillDialog's "Raw JSON" tab so large
+// payloads don't render as an unreadable <pre> blob.
+
+function JsonNode({ k, value, depth = 0, query = "" }) {
+  const [open, setOpen] = useState(depth < 2); // auto-expand first 2 levels
+  const q = query.trim().toLowerCase();
+  const keyMatch = k != null && q && String(k).toLowerCase().includes(q);
+  const isObj = value !== null && typeof value === "object";
+  const isArr = Array.isArray(value);
+
+  // Hide nodes whose key AND subtree don't match the query. Prevents the
+  // viewer from drowning the user in irrelevant keys when they're searching
+  // for a specific field.
+  const subMatch = useMemo(() => {
+    if (!q) return true;
+    if (keyMatch) return true;
+    try { return JSON.stringify(value ?? "").toLowerCase().includes(q); }
+    catch { return false; }
+  }, [value, q, keyMatch]);
+  if (q && !subMatch) return null;
+
+  if (!isObj) {
+    // Leaf value — render with type-colored tone.
+    let cls = "text-slate-700 dark:text-slate-300";
+    let display;
+    if (typeof value === "string")  { cls = "text-emerald-700 dark:text-emerald-400"; display = `"${value}"`; }
+    else if (typeof value === "number")  { cls = "text-sky-700 dark:text-sky-400"; display = String(value); }
+    else if (typeof value === "boolean") { cls = "text-violet-700 dark:text-violet-400"; display = String(value); }
+    else if (value === null)             { cls = "text-muted-foreground"; display = "null"; }
+    else display = String(value);
+    return (
+      <div className="font-mono text-[10px] flex gap-1" style={{ paddingLeft: depth * 10 }}>
+        {k != null && <span className="text-foreground">{JSON.stringify(k)}:</span>}
+        <span className={cn(cls, "break-all")}>{display}</span>
+      </div>
+    );
+  }
+
+  const entries = isArr ? value.map((v, i) => [i, v]) : Object.entries(value);
+  const summary = isArr ? `Array(${entries.length})` : `Object · ${entries.length}`;
+
+  return (
+    <div className="font-mono text-[10px]" style={{ paddingLeft: depth * 10 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-0.5 hover:bg-muted/40 rounded px-0.5"
+      >
+        <span className="text-muted-foreground">{open ? "▾" : "▸"}</span>
+        {k != null && <span className="text-foreground">{JSON.stringify(k)}:</span>}
+        <span className="text-muted-foreground">{isArr ? "[" : "{"}</span>
+        {!open && <span className="text-muted-foreground/70 italic"> {summary} </span>}
+        {!open && <span className="text-muted-foreground">{isArr ? "]" : "}"}</span>}
+      </button>
+      {open && (
+        <div>
+          {entries.map(([ck, cv]) => (
+            <JsonNode key={String(ck)} k={ck} value={cv} depth={depth + 1} query={query} />
+          ))}
+          <div className="text-muted-foreground" style={{ paddingLeft: depth * 10 }}>
+            {isArr ? "]" : "}"}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JsonViewer({ value, label = "payload" }) {
+  const [query, setQuery] = useState("");
+  const jsonStr = useMemo(() => {
+    try { return JSON.stringify(value ?? null, null, 2); } catch { return "null"; }
+  }, [value]);
+
+  const copyJson = useCallback(() => {
+    try {
+      navigator.clipboard.writeText(jsonStr);
+      toast.success("JSON copied to clipboard");
+    } catch { toast.error("Clipboard unavailable"); }
+  }, [jsonStr]);
+
+  const downloadJson = useCallback(() => {
+    try {
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${label}-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch { toast.error("Download failed"); }
+  }, [jsonStr, label]);
+
+  return (
+    <div className="border rounded-lg bg-muted/10 flex flex-col min-h-0">
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b bg-muted/30 shrink-0">
+        <div className="relative flex-1">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter by key or value…"
+            className="w-full h-6 pl-6 pr-2 text-[10px] rounded border bg-background"
+          />
+        </div>
+        <button onClick={copyJson} className="h-6 px-1.5 text-[10px] border rounded hover:bg-muted inline-flex items-center gap-1" title="Copy JSON">
+          <Copy className="h-3 w-3" />
+          Copy JSON
+        </button>
+        <button onClick={downloadJson} className="h-6 px-1.5 text-[10px] border rounded hover:bg-muted inline-flex items-center gap-1" title="Download .json file">
+          <Download className="h-3 w-3" />
+          Download .json
+        </button>
+      </div>
+      <div className="p-2 overflow-auto text-[10px] max-h-[55vh]">
+        {value === null || value === undefined ? (
+          <span className="text-muted-foreground italic">no payload</span>
+        ) : (
+          <JsonNode value={value} query={query} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Sparkline (#67) ───────────────────────────────────────────────────────────
+// Tiny 7-day success/failure stacked sparkline. Rendered as a 40×20 SVG in the
+// SourceCard header. Data via usePulseSparkline hook below.
+function SparklineBars({ days = [] }) {
+  if (!days.length) return null;
+  const max = Math.max(1, ...days.map((d) => d.total));
+  const W = 40, H = 20, barW = W / days.length;
+  return (
+    <svg width={W} height={H} className="inline-block" aria-label="7-day sync success/failure">
+      {days.map((d, i) => {
+        const totalH = (d.total / max) * H;
+        const failH  = (d.failed / max) * H;
+        const succH  = totalH - failH;
+        const x = i * barW;
+        return (
+          <g key={i}>
+            <title>{`${d.date}: ${d.succeeded} ok · ${d.failed} fail`}</title>
+            <rect x={x + 0.5} y={H - succH}  width={barW - 1} height={succH} className="fill-emerald-500/80" />
+            <rect x={x + 0.5} y={H - totalH} width={barW - 1} height={failH} className="fill-red-500/80" />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// Hook: fetch + bucket the last 7 days of pulse_sync_logs for a given source.
+// Polled every 3 min (cron-driven work so sub-minute polling is overkill).
+function usePulseSparkline(sourceId) {
+  const [days, setDays] = useState([]);
+  useEffect(() => {
+    if (!sourceId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+        const { data, error } = await api._supabase
+          .from("pulse_sync_logs")
+          .select("status, started_at")
+          .eq("source_id", sourceId)
+          .gte("started_at", since)
+          .limit(2000);
+        if (error) throw error;
+        if (cancelled) return;
+        const buckets = new Map();
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          d.setDate(d.getDate() - i);
+          const key = d.toISOString().slice(0, 10);
+          buckets.set(key, { date: key, succeeded: 0, failed: 0, total: 0 });
+        }
+        for (const row of data || []) {
+          const key = new Date(row.started_at).toISOString().slice(0, 10);
+          const b = buckets.get(key);
+          if (!b) continue;
+          if (row.status === "failed") b.failed += 1;
+          else if (row.status === "completed") b.succeeded += 1;
+          b.total = b.succeeded + b.failed;
+        }
+        setDays([...buckets.values()]);
+      } catch { /* non-fatal — the sparkline simply won't render */ }
+    };
+    load();
+    const id = setInterval(load, 180_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [sourceId]);
+  return days;
 }
 
 // ── pulse_sync_runs data hook ─────────────────────────────────────────────────
@@ -1310,41 +1510,74 @@ function RunConfirmDialog({ payload, onClose }) {
 }
 
 function DlqDrillDialog({ sourceId, onClose }) {
+  const DLQ_PAGE_SIZE = 100;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [actingId, setActingId] = useState(null);
+  // QoL #61: `hasMore` = last page was full → more rows available via offset.
+  const [hasMore, setHasMore] = useState(false);
+  // QoL #62: checkbox selection + bulk requeue by id / by error category.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setSelectedIds(new Set());
     const { data } = await api._supabase
       .from("pulse_fire_queue")
       .select("id, suburb_name, attempts, max_attempts, last_error, last_error_category, completed_at, updated_at")
       .eq("source_id", sourceId)
       .eq("status", "failed")
       .order("updated_at", { ascending: false })
-      .limit(100);
-    setItems(data || []);
+      .range(0, DLQ_PAGE_SIZE - 1);
+    const rows = data || [];
+    setItems(rows);
+    setHasMore(rows.length === DLQ_PAGE_SIZE);
     setLoading(false);
   }, [sourceId]);
 
   useEffect(() => { load(); }, [load]);
 
+  // QoL #61: offset-paginated "Load older" — next 100.
+  const loadMore = useCallback(async () => {
+    setLoadingMore(true);
+    const from = items.length;
+    const { data } = await api._supabase
+      .from("pulse_fire_queue")
+      .select("id, suburb_name, attempts, max_attempts, last_error, last_error_category, completed_at, updated_at")
+      .eq("source_id", sourceId)
+      .eq("status", "failed")
+      .order("updated_at", { ascending: false })
+      .range(from, from + DLQ_PAGE_SIZE - 1);
+    const rows = data || [];
+    setItems((prev) => [...prev, ...rows]);
+    setHasMore(rows.length === DLQ_PAGE_SIZE);
+    setLoadingMore(false);
+  }, [items.length, sourceId]);
+
+  const requeueByIds = useCallback(async (ids) => {
+    if (!ids.length) return 0;
+    const { error, count } = await api._supabase
+      .from("pulse_fire_queue")
+      .update({
+        status: "pending",
+        attempts: 0,
+        next_attempt_at: new Date().toISOString(),
+        dispatched_at: null,
+        completed_at: null,
+        last_error: null,
+        last_error_category: null,
+      }, { count: "exact" })
+      .in("id", ids);
+    if (error) throw error;
+    return count ?? ids.length;
+  }, []);
+
   const requeue = useCallback(async (id) => {
     setActingId(id);
     try {
-      const { error } = await api._supabase
-        .from("pulse_fire_queue")
-        .update({
-          status: "pending",
-          attempts: 0,
-          next_attempt_at: new Date().toISOString(),
-          dispatched_at: null,
-          completed_at: null,
-          last_error: null,
-          last_error_category: null,
-        })
-        .eq("id", id);
-      if (error) throw error;
+      await requeueByIds([id]);
       toast.success("Requeued — worker will pick it up on the next tick");
       await load();
     } catch (err) {
@@ -1352,7 +1585,67 @@ function DlqDrillDialog({ sourceId, onClose }) {
     } finally {
       setActingId(null);
     }
-  }, [load]);
+  }, [load, requeueByIds]);
+
+  // QoL #62: bulk requeue currently-ticked rows.
+  const requeueSelected = useCallback(async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const n = await requeueByIds(ids);
+      toast.success(`Requeued ${n} item${n === 1 ? "" : "s"}`);
+      await load();
+    } catch (err) {
+      toast.error(`Bulk requeue failed: ${err.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [selectedIds, requeueByIds, load]);
+
+  // QoL #62: one-click triage — requeue every failed item in a given error
+  // category (e.g. all rate_limit items after the upstream recovers).
+  const requeueByCategory = useCallback(async (category) => {
+    if (!category) return;
+    setBulkBusy(true);
+    try {
+      const { data: candidates, error: selErr } = await api._supabase
+        .from("pulse_fire_queue")
+        .select("id")
+        .eq("source_id", sourceId)
+        .eq("status", "failed")
+        .eq("last_error_category", category)
+        .limit(1000);
+      if (selErr) throw selErr;
+      const ids = (candidates || []).map((r) => r.id);
+      if (!ids.length) { toast.info(`No failed items with category "${category}"`); return; }
+      const n = await requeueByIds(ids);
+      toast.success(`Requeued ${n} ${category} item${n === 1 ? "" : "s"}`);
+      await load();
+    } catch (err) {
+      toast.error(`Category requeue failed: ${err.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [sourceId, requeueByIds, load]);
+
+  const categoriesAvailable = useMemo(() => {
+    const s = new Set();
+    for (const it of items) if (it.last_error_category) s.add(it.last_error_category);
+    return [...s];
+  }, [items]);
+
+  const allSelected = items.length > 0 && selectedIds.size === items.length;
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+  const toggleSelectAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(items.map((i) => i.id)));
+  };
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -1368,46 +1661,106 @@ function DlqDrillDialog({ sourceId, onClose }) {
         ) : items.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-6">No dead-lettered items for this source.</p>
         ) : (
-          <div className="space-y-2 max-h-[60vh] overflow-y-auto">
-            {items.map(it => (
-              <div key={it.id} className="rounded border border-amber-300/50 bg-amber-50/30 dark:bg-amber-950/20 p-2.5 space-y-1">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-xs">{it.suburb_name}</span>
-                    <Badge variant="outline" className="text-[9px] py-0 px-1 font-mono">
-                      {it.attempts}/{it.max_attempts} attempts
-                    </Badge>
-                    {it.last_error_category && (
-                      <Badge variant="outline" className={cn("text-[9px] py-0 px-1",
-                        it.last_error_category === 'permanent' ? "border-red-400/50 text-red-700 dark:text-red-400" :
-                        it.last_error_category === 'rate_limit' ? "border-orange-400/50 text-orange-700 dark:text-orange-400" :
-                        "border-amber-400/50 text-amber-700 dark:text-amber-400"
-                      )}>
-                        {it.last_error_category}
-                      </Badge>
-                    )}
-                    <span className="text-[9px] text-muted-foreground">
-                      {fmtRelativeTs(it.updated_at || it.completed_at)}
-                    </span>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-6 px-2 text-[10px]"
-                    onClick={() => requeue(it.id)}
-                    disabled={actingId === it.id}
-                  >
-                    {actingId === it.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Requeue"}
-                  </Button>
-                </div>
-                {it.last_error && (
-                  <pre className="text-[10px] font-mono text-red-700 dark:text-red-400 bg-red-50/50 dark:bg-red-950/20 border border-red-200/40 rounded px-2 py-1 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-                    {it.last_error}
-                  </pre>
+          <>
+            {/* QoL #62: bulk action bar */}
+            <div className="flex items-center justify-between gap-2 px-1 pb-2 border-b">
+              <label className="flex items-center gap-1.5 text-[11px] cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleSelectAll}
+                  className="h-3.5 w-3.5"
+                />
+                <span>
+                  {selectedIds.size > 0
+                    ? `${selectedIds.size} of ${items.length} selected`
+                    : `Select all (${items.length})`}
+                </span>
+              </label>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm" variant="outline" className="h-6 px-2 text-[10px]"
+                  disabled={selectedIds.size === 0 || bulkBusy}
+                  onClick={requeueSelected}
+                >
+                  {bulkBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : `Requeue selected (${selectedIds.size})`}
+                </Button>
+                {categoriesAvailable.length > 0 && (
+                  <Select onValueChange={(v) => requeueByCategory(v)} disabled={bulkBusy}>
+                    <SelectTrigger className="h-6 text-[10px] w-[170px]">
+                      <SelectValue placeholder="Requeue all by error…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {categoriesAvailable.map((c) => (
+                        <SelectItem key={c} value={c} className="text-[11px]">
+                          Requeue all: {c}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 )}
               </div>
-            ))}
-          </div>
+            </div>
+            <div className="space-y-2 max-h-[55vh] overflow-y-auto">
+              {items.map(it => (
+                <div key={it.id} className="rounded border border-amber-300/50 bg-amber-50/30 dark:bg-amber-950/20 p-2.5 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(it.id)}
+                        onChange={() => toggleSelect(it.id)}
+                        className="h-3.5 w-3.5"
+                        aria-label={`Select ${it.suburb_name}`}
+                      />
+                      <span className="font-semibold text-xs">{it.suburb_name}</span>
+                      <Badge variant="outline" className="text-[9px] py-0 px-1 font-mono">
+                        {it.attempts}/{it.max_attempts} attempts
+                      </Badge>
+                      {it.last_error_category && (
+                        <Badge variant="outline" className={cn("text-[9px] py-0 px-1",
+                          it.last_error_category === 'permanent' ? "border-red-400/50 text-red-700 dark:text-red-400" :
+                          it.last_error_category === 'rate_limit' ? "border-orange-400/50 text-orange-700 dark:text-orange-400" :
+                          "border-amber-400/50 text-amber-700 dark:text-amber-400"
+                        )}>
+                          {it.last_error_category}
+                        </Badge>
+                      )}
+                      <span className="text-[9px] text-muted-foreground">
+                        {fmtRelativeTs(it.updated_at || it.completed_at)}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[10px]"
+                      onClick={() => requeue(it.id)}
+                      disabled={actingId === it.id || bulkBusy}
+                    >
+                      {actingId === it.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Requeue"}
+                    </Button>
+                  </div>
+                  {it.last_error && (
+                    <pre className="text-[10px] font-mono text-red-700 dark:text-red-400 bg-red-50/50 dark:bg-red-950/20 border border-red-200/40 rounded px-2 py-1 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                      {it.last_error}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+            {/* QoL #61: Load older — next 100 via offset pagination */}
+            {hasMore && (
+              <div className="pt-2 flex justify-center">
+                <Button
+                  size="sm" variant="outline" className="h-7 text-[11px] gap-1"
+                  onClick={loadMore} disabled={loadingMore}
+                >
+                  {loadingMore ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronDown className="h-3 w-3" />}
+                  Load older (next 100)
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </DialogContent>
     </Dialog>
@@ -1576,13 +1929,18 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
   const lastStatus = lastLog?.status;
   const [showInput, setShowInput] = useState(false);
   const [runExpanded, setRunExpanded] = useState(false);
+  // QoL #60: incremental "Load more" for the run-history list (5 → +20 per click, cap 100).
+  const [historyVisible, setHistoryVisible] = useState(5);
 
   // Pull aggregated runs from the view + active chunked batch (for cross-batch
   // "in progress" continuity that sync_logs alone can't tell us about).
   // `latestBatch` is the authoritative "last cron dispatch" counter (spans all
   // 15-min buckets of a chunked run); `latestRun` is only the latest 15-min
   // slice from pulse_sync_runs and can under-count.
-  const { runs: syncRuns, activeBatch, latestBatch, queueStats, circuit, coverage } = usePulseSyncRuns(sourceConfig.source_id, 10);
+  // QoL #60: bump limit to 101 (1 latest + 100 history) so Load more reaches 100.
+  const { runs: syncRuns, activeBatch, latestBatch, queueStats, circuit, coverage } = usePulseSyncRuns(sourceConfig.source_id, 101);
+  // QoL #67: 7-day success/failure sparkline per source card.
+  const sparklineDays = usePulseSparkline(sourceConfig.source_id);
   const latestRun = syncRuns[0] || null;
   const historyRuns = syncRuns.slice(1);
   const isBoundingBox = sourceConfig.approach === "bounding_box";
@@ -1671,6 +2029,12 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
               <div className="flex items-center gap-1.5 flex-wrap">
                 <p className="text-sm font-semibold leading-tight truncate">{sourceConfig.label}</p>
                 <span className={cn("inline-block h-1.5 w-1.5 rounded-full shrink-0", statusDot)} title={lastStatus || "never run"} />
+                {/* QoL #67: 7-day success/failure sparkline */}
+                {sparklineDays.length > 0 && sparklineDays.some((d) => d.total > 0) && (
+                  <span className="shrink-0" title="Last 7 days: green=succeeded, red=failed (hover bars for per-day counts)">
+                    <SparklineBars days={sparklineDays} />
+                  </span>
+                )}
                 {activeBatch && (
                   <Badge variant="outline" className="text-[9px] px-1.5 py-0 uppercase border-blue-400/60 text-blue-700 dark:text-blue-400 bg-blue-50/60 dark:bg-blue-950/30 tabular-nums">
                     {activeBatch.dispatched_count}/{activeBatch.total_count} dispatched
@@ -1866,13 +2230,38 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
           </div>
         )}
 
-        {/* Multi-run history (collapsed list) */}
+        {/* Multi-run history (collapsed list) — QoL #60: Load more + See full history. */}
         {historyRuns.length > 0 && (
-          <RunHistoryList
-            runs={historyRuns.slice(0, 5)}
-            isBoundingBox={isBoundingBox}
-            onDrillDispatch={onDrillDispatch}
-          />
+          <div className="space-y-1.5">
+            <RunHistoryList
+              runs={historyRuns.slice(0, historyVisible)}
+              isBoundingBox={isBoundingBox}
+              onDrillDispatch={onDrillDispatch}
+            />
+            <div className="flex items-center justify-between text-[10px] px-1">
+              {historyVisible < Math.min(100, historyRuns.length) ? (
+                <button
+                  type="button"
+                  onClick={() => setHistoryVisible((v) => Math.min(100, v + 20))}
+                  className="text-primary hover:underline inline-flex items-center gap-1"
+                >
+                  <ChevronDown className="h-3 w-3" />
+                  Load more ({Math.min(100, historyRuns.length) - historyVisible} remaining)
+                </button>
+              ) : <span />}
+              {onViewHistory && (
+                <button
+                  type="button"
+                  onClick={() => onViewHistory(sourceConfig.source_id)}
+                  className="text-muted-foreground hover:text-primary inline-flex items-center gap-1"
+                  title="Jump to the Sync History table prefiltered to this source"
+                >
+                  See full history
+                  <ChevronRight className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </div>
         )}
 
         {/* Actions */}
@@ -3271,10 +3660,13 @@ function DrillDialog({ log, onClose }) {
               />
             </TabsContent>
           )}
-          <TabsContent value="raw" className="flex-1 overflow-y-auto mt-2">
-            <pre className="text-[10px] bg-muted/30 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap break-all">
-              {JSON.stringify(payload, null, 2)}
-            </pre>
+          <TabsContent value="raw" className="flex-1 overflow-y-auto mt-2 min-h-0">
+            {/* QoL #59: collapsible JSON viewer with search + copy/download. */}
+            {loadingPayload ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
+            ) : (
+              <JsonViewer value={payload} label={`payload-${log?.id || "drill"}`} />
+            )}
           </TabsContent>
         </Tabs>
       </DialogContent>
