@@ -686,6 +686,7 @@ serveWithAudit('pulseDataSync', async (req) => {
         agency_validated: false,
         suburbs_active: JSON.stringify([rea._suburb]),
         last_synced_at: now,
+        last_sync_log_id: syncLogId,  // Migration 100: drill-back reference
         is_in_crm: false,
         is_prospect: false,
       });
@@ -1051,9 +1052,29 @@ serveWithAudit('pulseDataSync', async (req) => {
       // Override with status from price text (catches "Under Contract" in buy results)
       const listingType = parseListingStatus(l.price, rawType);
 
+      // ── Migration 100 fix: sold_price mapping ────────────────────────
+      // Azzouzana returns `price` as the headline price for ALL states:
+      //   for_sale/for_rent → asking/rent price
+      //   sold             → actual sold price (not asking)
+      // Previously we always wrote `price` to asking_price regardless of
+      // state, and `sold_price` was left NULL (actor doesn't return that
+      // field). Fix: when sold, route `price` to sold_price.
+      const parsedPrice = parsePrice(l.price);
+      const isSoldListing = listingType === 'sold';
+
       // Extract dates with robust multi-field fallback
-      const extractedListedDate = extractListingDate(l, listingType);
-      const extractedSoldDate = extractSoldDate(l);
+      let extractedListedDate = extractListingDate(l, listingType);
+      let extractedSoldDate = extractSoldDate(l);
+      // ── Migration 100 fix: listed_date / sold_date fallback ─────────
+      // Azzouzana doesn't return any date fields. For new rows we set
+      // listed_date = first_seen_at (what we're about to write for this
+      // row). For sold listings, also use as sold_date proxy.
+      if (!extractedListedDate && isNew) {
+        extractedListedDate = now.slice(0, 10); // YYYY-MM-DD
+      }
+      if (!extractedSoldDate && isSoldListing && isNew) {
+        extractedSoldDate = now.slice(0, 10);
+      }
       // Days on Market: explicit field first, then parse from description (REA sold often has "Days on Market: N")
       const extractedDom = l.daysOnMarket
         || extractDaysOnMarketFromText(l.description)
@@ -1072,8 +1093,10 @@ serveWithAudit('pulseDataSync', async (req) => {
         parking: (l.parking || l.carSpaces) ? String(l.parking || l.carSpaces) : null,
         land_size: l.landSize ? String(l.landSize) : null,
         listing_type: listingType,
-        asking_price: parsePrice(l.price),
-        sold_price: parsePrice(l.soldPrice),
+        // Sold listings: price goes to sold_price, asking_price stays null
+        // (since azzouzana doesn't preserve the original asking price).
+        asking_price: isSoldListing ? null : parsedPrice,
+        sold_price: isSoldListing ? parsedPrice : parsePrice(l.soldPrice),
         listed_date: extractedListedDate,
         created_date: extractedListedDate,
         sold_date: extractedSoldDate,
@@ -1105,6 +1128,7 @@ serveWithAudit('pulseDataSync', async (req) => {
         source_listing_id: listingId || null,
         first_seen_at: isNew ? now : undefined,
         last_synced_at: now,
+        last_sync_log_id: syncLogId,  // Migration 100: drill-back reference
         // Change detection
         previous_asking_price: (() => {
           if (!listingId) return undefined;
@@ -1279,7 +1303,113 @@ serveWithAudit('pulseDataSync', async (req) => {
 
       console.log(`Cross-enrichment data: ${enrichByReaId.size} agents by REA ID, ${enrichByName.size} by name`);
 
+      // ── NEW: Collect agency info from listings for create-missing pass ──
+      // Listings carry agency_name + agency_rea_id + metadata (logo, phone,
+      // address). If we have an agency_rea_id in the listings but not in
+      // pulse_agencies, we should INSERT a minimal row — otherwise the
+      // listing's agency_rea_id becomes an orphan FK.
+      const agencyByReaId = new Map<string, {
+        name?: string; phone?: string; email?: string; website?: string;
+        address?: string; suburb?: string; state?: string; postcode?: string;
+        logo_url?: string; profile_url?: string; listingCount: number;
+      }>();
+      for (const lr of listingRecords) {
+        const aId = lr.agency_rea_id;
+        if (!aId) continue;
+        const existing = agencyByReaId.get(aId) || { listingCount: 0 };
+        if (lr.agency_name && !existing.name) existing.name = lr.agency_name;
+        if (lr.agency_logo && !existing.logo_url) existing.logo_url = lr.agency_logo;
+        existing.listingCount++;
+        agencyByReaId.set(aId, existing);
+      }
+
       if (enrichByReaId.size > 0 || enrichByName.size > 0) {
+        // ── NEW: Create missing pulse_agents from listing data ──────────
+        // Previously Step 7 only UPDATED existing pulse_agents. Agents
+        // discovered in listing payloads (who weren't scraped by websift)
+        // became orphan FKs on pulse_listings.agent_rea_id. Now we INSERT
+        // minimal rows for them — websift can enrich later.
+        const { data: preCheck = [] } = await admin.from('pulse_agents')
+          .select('rea_agent_id')
+          .not('rea_agent_id', 'is', null);
+        const preCheckIds = new Set(preCheck.map((r: any) => r.rea_agent_id));
+
+        const listingOnlyAgentRows: any[] = [];
+        for (const [reaId, enrichData] of enrichByReaId.entries()) {
+          if (preCheckIds.has(reaId)) continue; // already exists
+          // Best-effort name from enrichByName (we don't have it in enrichByReaId).
+          // Iterate to find the name-keyed entry that has this reaId.
+          let inferredName: string | null = null;
+          for (const [nameKey, byName] of enrichByName.entries()) {
+            if (byName.reaId === reaId) { inferredName = nameKey; break; }
+          }
+          if (!inferredName) continue; // can't create without a name
+
+          const emailList = cleanEmailList(enrichData.allEmails || []);
+          const primaryEmail = emailList[0] || null;
+          listingOnlyAgentRows.push({
+            rea_agent_id: reaId,
+            full_name: inferredName.replace(/\b\w/g, c => c.toUpperCase()), // title case
+            email: primaryEmail,
+            all_emails: emailList.length > 0 ? JSON.stringify(emailList) : null,
+            mobile: enrichData.phone || null,
+            profile_image: enrichData.photo || null,
+            job_title: enrichData.jobTitle || null,
+            total_listings_active: enrichData.listingCount,
+            source: 'rea_listings_bridge', // marker: came from listing data, not websift direct
+            data_sources: JSON.stringify(['rea_listings']),
+            data_integrity_score: 30, // baseline: listing-only agent (see integrity scoring rubric)
+            last_synced_at: now,
+            is_in_crm: false,
+            is_prospect: false,
+          });
+        }
+        if (listingOnlyAgentRows.length > 0) {
+          const { error } = await admin.from('pulse_agents').upsert(listingOnlyAgentRows, {
+            onConflict: 'rea_agent_id',
+            ignoreDuplicates: true,
+          });
+          if (error) {
+            console.warn(`Create-missing-agents upsert error: ${error.message?.substring(0, 300)}`);
+          } else {
+            console.log(`Created ${listingOnlyAgentRows.length} agents from listing data (previously orphan FKs)`);
+          }
+        }
+
+        // ── NEW: Create missing pulse_agencies from listing data ─────────
+        const { data: preCheckAg = [] } = await admin.from('pulse_agencies')
+          .select('rea_agency_id')
+          .not('rea_agency_id', 'is', null);
+        const preCheckAgIds = new Set(preCheckAg.map((r: any) => r.rea_agency_id));
+
+        const listingOnlyAgencyRows: any[] = [];
+        for (const [reaAgId, info] of agencyByReaId.entries()) {
+          if (preCheckAgIds.has(reaAgId)) continue;
+          if (!info.name) continue;
+          listingOnlyAgencyRows.push({
+            rea_agency_id: reaAgId,
+            name: info.name,
+            logo_url: info.logo_url || null,
+            active_listings: info.listingCount,
+            source: 'rea_listings_bridge',
+            data_sources: JSON.stringify(['rea_listings']),
+            last_synced_at: now,
+            is_in_crm: false,
+          });
+        }
+        if (listingOnlyAgencyRows.length > 0) {
+          const { error } = await admin.from('pulse_agencies').upsert(listingOnlyAgencyRows, {
+            onConflict: 'rea_agency_id',
+            ignoreDuplicates: true,
+          });
+          if (error) {
+            console.warn(`Create-missing-agencies upsert error: ${error.message?.substring(0, 300)}`);
+          } else {
+            console.log(`Created ${listingOnlyAgencyRows.length} agencies from listing data (previously orphan FKs)`);
+          }
+        }
+
+        // ── Existing update path: enrich agents we already had ──────────
         const { data: existingAgentsForEnrich = [] } = await admin.from('pulse_agents')
           .select('id, full_name, email, mobile, profile_image, rea_agent_id, agency_name, job_title, total_listings_active, data_integrity_score');
 
@@ -1627,6 +1757,68 @@ serveWithAudit('pulseDataSync', async (req) => {
     }
 
     console.log(`Post-sync: ${movementsDetected} movements, ${timelineEntries} timeline entries, ${mappingsCreated} mappings`);
+
+    // ── Migration 100: pulse_entity_sync_history bulk write ─────────────
+    // Every entity touched by this sync gets a history row so the UI can
+    // drill back to "which run produced this state". Query by last_sync_log_id
+    // (which we stamped on every upsert above) so we only record entities
+    // this run actually touched. Best-effort — non-fatal on failure.
+    if (syncLogId) {
+      try {
+        const sourceLabelForHistory = source_id || 'pulse_sync';
+        const [agentsTouched, listingsTouched, agenciesTouched] = await Promise.all([
+          admin.from('pulse_agents').select('id, rea_agent_id').eq('last_sync_log_id', syncLogId),
+          admin.from('pulse_listings').select('id, source_listing_id').eq('last_sync_log_id', syncLogId),
+          admin.from('pulse_agencies').select('id, rea_agency_id').eq('last_sync_log_id', syncLogId),
+        ]);
+        const historyRows: any[] = [];
+        for (const row of agentsTouched.data || []) {
+          historyRows.push({
+            entity_type: 'agent',
+            entity_id: (row as any).id,
+            entity_key: (row as any).rea_agent_id,
+            sync_log_id: syncLogId,
+            action: 'updated',
+            source: sourceLabelForHistory,
+            seen_at: new Date().toISOString(),
+          });
+        }
+        for (const row of listingsTouched.data || []) {
+          historyRows.push({
+            entity_type: 'listing',
+            entity_id: (row as any).id,
+            entity_key: (row as any).source_listing_id,
+            sync_log_id: syncLogId,
+            action: 'updated',
+            source: sourceLabelForHistory,
+            seen_at: new Date().toISOString(),
+          });
+        }
+        for (const row of agenciesTouched.data || []) {
+          historyRows.push({
+            entity_type: 'agency',
+            entity_id: (row as any).id,
+            entity_key: (row as any).rea_agency_id,
+            sync_log_id: syncLogId,
+            action: 'updated',
+            source: sourceLabelForHistory,
+            seen_at: new Date().toISOString(),
+          });
+        }
+        if (historyRows.length > 0) {
+          // Chunked insert to avoid hitting payload caps on very large runs
+          const HIST_BATCH = 500;
+          for (let i = 0; i < historyRows.length; i += HIST_BATCH) {
+            const chunk = historyRows.slice(i, i + HIST_BATCH);
+            const { error } = await admin.from('pulse_entity_sync_history').insert(chunk);
+            if (error) console.warn(`sync_history insert chunk ${i / HIST_BATCH}: ${error.message?.substring(0, 200)}`);
+          }
+          console.log(`Wrote ${historyRows.length} pulse_entity_sync_history rows`);
+        }
+      } catch (histErr: any) {
+        console.warn('pulse_entity_sync_history write failed (non-fatal):', histErr?.message);
+      }
+    }
 
     // Update sync log
     // ── Migration 095 ──────────────────────────────────────────────────
