@@ -3,7 +3,7 @@
  * REA-only. Tabular agency roster with live agent counts, full-detail slideout.
  */
 import React, { useState, useMemo, useCallback, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { createPageUrl } from "@/utils";
 import { api } from "@/api/supabaseClient";
@@ -44,6 +44,10 @@ import {
   Loader2,
   History,
   BarChart3,
+  Copy,
+  Check,
+  Map as MapIcon,
+  AlertTriangle,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
@@ -53,6 +57,7 @@ import {
   listingTypeBadgeClasses,
   reaIdEquals,
   alternateContacts,
+  primaryContact,
 } from "@/components/pulse/utils/listingHelpers";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
@@ -135,7 +140,7 @@ function fmtAgo(d) {
   return `${mo}mo ago`;
 }
 
-function exportCsv(filename, header, rows) {
+function exportCsv(filename, header, rows, { bom = false } = {}) {
   const escape = (v) => {
     if (v == null) return "";
     const s = String(v);
@@ -143,7 +148,9 @@ function exportCsv(filename, header, rows) {
   };
   const lines = [header.join(",")];
   for (const r of rows) lines.push(header.map((h) => escape(r[h])).join(","));
-  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  // #29: UTF-8 BOM so Excel autodetects encoding on non-ASCII agent names.
+  const body = (bom ? "\uFEFF" : "") + lines.join("\n");
+  const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -180,6 +187,39 @@ function hexToRgba(hex, alpha) {
   const b = parseInt(h.slice(4, 6), 16);
   const a = Math.max(0, Math.min(1, alpha));
   return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+/**
+ * #27: normalised name for duplicate detection. Strips common agency
+ * suffixes + punctuation/whitespace so "Ray White Bondi Pty Ltd" and
+ * "Ray White Bondi" collapse to the same key.
+ */
+function normAgencyNameForDupe(s) {
+  if (!s) return "";
+  return s
+    .toLowerCase()
+    .replace(/[.,&'"`]/g, " ")
+    .replace(/\b(pty ltd|pty|ltd|limited|llc|inc|group|agency|realty|real estate|co|company)\b/g, "")
+    .replace(/\s*-\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * #25: rank suburbs by listing count from an agency's listings. Returns
+ * [{ suburb, count }, ...] sorted desc.
+ */
+function computeSuburbRanking(listings) {
+  if (!Array.isArray(listings) || listings.length === 0) return [];
+  const counts = new Map();
+  for (const l of listings) {
+    const s = (l?.suburb || "").trim();
+    if (!s) continue;
+    counts.set(s, (counts.get(s) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([suburb, count]) => ({ suburb, count }))
+    .sort((a, b) => b.count - a.count);
 }
 
 /**
@@ -299,6 +339,62 @@ const REABadge = () => (
   </span>
 );
 
+/* AG11: compact contact provenance chip row. */
+function ContactProvBadges({ info }) {
+  if (!info || !info.value) return null;
+  const isDetail = typeof info.source === "string" && info.source.startsWith("detail_page_");
+  const parts = [];
+  if (info.verified) parts.push(
+    <span key="v" title={`Verified across ${info.sourcesCount || 2}+ sources`}
+      className="inline-flex items-center text-[8px] font-semibold uppercase px-1 py-0 rounded text-emerald-700 bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-800/40">v</span>
+  );
+  if (isDetail) parts.push(
+    <span key="d" title="From listing detail page"
+      className="inline-flex items-center text-[8px] font-semibold uppercase px-1 py-0 rounded text-indigo-700 bg-indigo-50 border border-indigo-200 dark:bg-indigo-950/20 dark:text-indigo-400 dark:border-indigo-800/40">d</span>
+  );
+  if (info.stale) parts.push(
+    <span key="s" title="Last seen > 90 days ago"
+      className="inline-flex items-center text-[8px] font-semibold uppercase px-1 py-0 rounded text-amber-700 bg-amber-50 border border-amber-200 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-800/40">stale</span>
+  );
+  if (parts.length === 0) return null;
+  return <span className="inline-flex items-center gap-0.5 ml-1">{parts}</span>;
+}
+
+/* #30: inline address cluster — text + Copy + "Open in Maps" icon. */
+function AddressCluster({ address, className }) {
+  const [copied, setCopied] = useState(false);
+  if (!address) return null;
+  const doCopy = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
+  const mapsHref = `https://www.google.com/maps?q=${encodeURIComponent(address)}`;
+  return (
+    <span className={cn("inline-flex items-center gap-1.5", className)}>
+      <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
+      <span className="truncate">{address}</span>
+      <button type="button" onClick={doCopy}
+        title={copied ? "Copied!" : "Copy address"}
+        className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
+        {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+      </button>
+      <a href={mapsHref} target="_blank" rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        title="Open in Google Maps"
+        className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
+        <MapIcon className="h-3 w-3" />
+      </a>
+    </span>
+  );
+}
+
 const SortIcon = ({ col, current, dir }) => {
   if (current !== col)
     return <ArrowUpDown className="h-3 w-3 text-muted-foreground/40 ml-0.5 inline" />;
@@ -333,8 +429,13 @@ const CrmBadge = ({ inCrm }) =>
     </Badge>
   );
 
-const StatBox = ({ label, value, sub }) => (
-  <div className="bg-muted/40 rounded-lg p-3 text-center">
+/* #31: StatBox now accepts an optional brand color for 3px left border. */
+const StatBox = ({ label, value, sub, brandColor, title }) => (
+  <div
+    className="bg-muted/40 rounded-lg p-3 text-center"
+    style={brandColor ? { borderLeft: `3px solid ${brandColor}` } : undefined}
+    title={title}
+  >
     <p className="text-lg font-bold tabular-nums leading-none">{value}</p>
     {sub && <p className="text-[9px] text-primary mt-0.5">{sub}</p>}
     <p className="text-[9px] text-muted-foreground mt-0.5">{label}</p>
@@ -473,7 +574,16 @@ const ListingRow = ({ l, onOpen }) => {
 
 /* ── Agent row (within slideout) ─────────────────────────────────────────── */
 
-const AgentRow = ({ agent, isInCrm, isSelected, onSelect, crmEntityId }) => {
+const AgentRow = ({
+  agent,
+  isInCrm,
+  isSelected,
+  onSelect,
+  crmEntityId,
+  selectable = false,
+  checked = false,
+  onToggleChecked,
+}) => {
   const pos = mapPosition(agent.job_title);
   return (
     <button
@@ -483,6 +593,27 @@ const AgentRow = ({ agent, isInCrm, isSelected, onSelect, crmEntityId }) => {
         isSelected && "bg-muted/60 ring-1 ring-primary/20"
       )}
     >
+      {/* #28: checkbox appears only when the row is selectable (uncrm'd) */}
+      {selectable && (
+        <span
+          role="checkbox"
+          aria-checked={checked}
+          tabIndex={-1}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleChecked?.(agent);
+          }}
+          className={cn(
+            "shrink-0 h-4 w-4 rounded border flex items-center justify-center cursor-pointer transition-colors",
+            checked
+              ? "bg-primary border-primary text-primary-foreground"
+              : "border-border hover:border-primary/60"
+          )}
+          title={checked ? "Deselect" : "Select for bulk add to CRM"}
+        >
+          {checked && <Check className="h-3 w-3" />}
+        </span>
+      )}
       {agent.profile_image ? (
         <img
           src={agent.profile_image}
@@ -655,6 +786,7 @@ export function AgencySlideout({
   pulseTimeline,
   crmAgencies,
   pulseMappings,
+  pulseAgencies,
   onClose,
   onOpenEntity,
   hasHistory = false,
@@ -665,8 +797,14 @@ export function AgencySlideout({
   const [addingToCrm, setAddingToCrm] = useState(false);
   // Tier 4: source-history drill
   const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
-  // AG05: roster sort — default = Active listings (photography pitch: "who's shooting a lot?")
+  // AG05: roster sort
   const [rosterSort, setRosterSort] = useState(ROSTER_SORT_DEFAULT);
+  // #25: "Show all" toggle for suburb concentration ranking
+  const [showAllSuburbs, setShowAllSuburbs] = useState(false);
+  // #28: bulk-select set of pulse_agent ids (uncrm'd only).
+  const [selectedAgentIds, setSelectedAgentIds] = useState(() => new Set());
+  const [bulkAddingToCrm, setBulkAddingToCrm] = useState(false);
+  const navigate = useNavigate();
 
   // Fetch per-agency timeline via the dossier RPC — the global `pulseTimeline`
   // prop is capped at 500 rows across the platform, so for most agencies it
@@ -826,7 +964,139 @@ export function AgencySlideout({
   /* suburbs */
   const suburbs = useMemo(() => parseArray(agency?.suburbs_active), [agency]);
 
+  /* #25: suburb concentration — ranked by listing count */
+  const suburbRanking = useMemo(() => computeSuburbRanking(agencyListings), [agencyListings]);
+
+  /* #27: duplicate agency detector — groups by normalised (suffix-stripped)
+     name. Only highlights rows that clash with the currently-open agency. */
+  const duplicates = useMemo(() => {
+    if (!agency?.name || !Array.isArray(pulseAgencies)) return [];
+    const myKey = normAgencyNameForDupe(agency.name);
+    if (!myKey) return [];
+    return pulseAgencies.filter(
+      (o) => o && o.id !== agency.id && normAgencyNameForDupe(o.name) === myKey
+    );
+  }, [agency, pulseAgencies]);
+
+  useEffect(() => {
+    if (duplicates.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[PulseAgencyIntel #27] Possible duplicate of "${agency.name}":`,
+        duplicates.map((d) => ({ id: d.rea_agency_id, name: d.name }))
+      );
+    }
+  }, [duplicates, agency]);
+
   const isInCrm = !!agency?.is_in_crm;
+
+  /* #28: toggle a single agent in the bulk-select set (uncrm'd only). */
+  const toggleAgentSelection = useCallback((ag) => {
+    if (!ag || ag.is_in_crm) return;
+    setSelectedAgentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(ag.id)) next.delete(ag.id);
+      else next.add(ag.id);
+      return next;
+    });
+  }, []);
+
+  /* #28: bulk add selected agents to CRM. Fails-soft per row. */
+  const handleBulkAddAgentsToCrm = useCallback(async () => {
+    if (selectedAgentIds.size === 0) return;
+    setBulkAddingToCrm(true);
+    let ok = 0, fail = 0;
+    try {
+      const agents = roster.filter((a) => !a.is_in_crm && selectedAgentIds.has(a.id));
+      for (const ag of agents) {
+        try {
+          let agencyId = null;
+          if (agency?.rea_agency_id) {
+            const { data: existing } = await api._supabase
+              .from("agencies")
+              .select("id")
+              .eq("rea_agency_id", agency.rea_agency_id)
+              .maybeSingle();
+            agencyId = existing?.id || null;
+          }
+          if (!agencyId && agency?.name) {
+            const newAgency = await api.entities.Agency.create({
+              name: agency.name,
+              rea_agency_id: agency.rea_agency_id || null,
+              source: "pulse",
+            });
+            agencyId = newAgency?.id;
+          }
+          const newAgent = await api.entities.Agent.create({
+            full_name: ag.full_name || "Unknown",
+            email: ag.email || null,
+            mobile: ag.mobile || null,
+            business_phone: ag.business_phone || null,
+            job_title: ag.job_title || null,
+            current_agency_id: agencyId,
+            rea_agent_id: ag.rea_agent_id || null,
+            source: "pulse",
+          });
+          await api.entities.PulseCrmMapping.create({
+            entity_type: "agent",
+            pulse_entity_id: ag.id,
+            crm_entity_id: newAgent.id,
+            rea_id: ag.rea_agent_id || null,
+            match_type: "manual",
+            confidence: "confirmed",
+          });
+          await api.entities.PulseAgent.update(ag.id, { is_in_crm: true });
+          ok += 1;
+        } catch (err) {
+          console.error(`[#28] Bulk add failed for agent ${ag.id}:`, err);
+          fail += 1;
+        }
+      }
+      await refetchEntityList("PulseAgent");
+      await refetchEntityList("Agent");
+      await refetchEntityList("PulseCrmMapping");
+      if (ok > 0) toast.success(`Added ${ok} agent${ok > 1 ? "s" : ""} to CRM${fail > 0 ? ` (${fail} failed)` : ""}`);
+      if (ok === 0 && fail > 0) toast.error(`All ${fail} adds failed. Check console.`);
+      setSelectedAgentIds(new Set());
+    } finally {
+      setBulkAddingToCrm(false);
+    }
+  }, [selectedAgentIds, roster, agency]);
+
+  /* #29: Roster CSV export (UTF-8 BOM). */
+  const handleExportRoster = useCallback(() => {
+    if (!roster || roster.length === 0) return;
+    const header = [
+      "full_name", "email", "mobile", "job_title",
+      "sales_as_lead", "reviews_avg", "is_in_crm",
+    ];
+    const rows = roster.map((a) => ({
+      full_name: a.full_name || "",
+      email: a.email || "",
+      mobile: a.mobile || a.business_phone || "",
+      job_title: a.job_title || "",
+      sales_as_lead: a.sales_as_lead ?? a.total_sold_12m ?? "",
+      reviews_avg: a.reviews_avg ?? a.rea_rating ?? "",
+      is_in_crm: a.is_in_crm ? "true" : "false",
+    }));
+    const slug = (agency?.name || "agency")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 40);
+    exportCsv(
+      `roster_${slug}_${new Date().toISOString().slice(0, 10)}.csv`,
+      header, rows, { bom: true }
+    );
+  }, [roster, agency]);
+
+  /* #24: "View all N listings" — deep-link into the Listings tab filtered
+     to this agency (clears other filters on arrival). */
+  const handleViewAllListings = useCallback(() => {
+    if (!agency?.rea_agency_id) return;
+    onClose?.();
+    navigate(`/IndustryPulse?tab=listings&agency_rea_id=${encodeURIComponent(agency.rea_agency_id)}`);
+  }, [agency, navigate, onClose]);
 
   if (!agency) return null;
 
@@ -866,19 +1136,13 @@ export function AgencySlideout({
                     <ChevronLeft className="h-4 w-4 text-muted-foreground" />
                   </button>
                 )}
-                {/* Logo — AG07: 40px circular when logo_url present (~90%
-                    coverage); fallback to building icon square. */}
-                <div
-                  className={cn(
-                    "h-10 w-10 overflow-hidden bg-white flex items-center justify-center shrink-0 border",
-                    agency.logo_url ? "rounded-full" : "rounded-xl"
-                  )}
-                >
+                {/* Logo — #32: always rounded-full 40px in slideout header */}
+                <div className="h-10 w-10 rounded-full overflow-hidden bg-white flex items-center justify-center shrink-0 border">
                   {agency.logo_url ? (
                     <img
                       src={agency.logo_url}
                       alt={agency.name}
-                      className="h-full w-full object-contain p-0.5"
+                      className="h-full w-full object-cover"
                     />
                   ) : (
                     <Building2 className="h-5 w-5 text-muted-foreground/40" />
@@ -887,7 +1151,15 @@ export function AgencySlideout({
                 {/* Name + meta */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <h2 className="text-base font-bold leading-tight truncate">
+                    {/* #31: agency name chip — 6% brand bg when populated. */}
+                    <h2
+                      className="text-base font-bold leading-tight truncate rounded px-1 -mx-1"
+                      style={
+                        brandAccent
+                          ? { backgroundColor: hexToRgba(agency.brand_color_primary, 0.06) }
+                          : undefined
+                      }
+                    >
                       {agency.name || "—"}
                     </h2>
                     <REABadge />
@@ -904,6 +1176,23 @@ export function AgencySlideout({
                       </Link>
                     ) : (
                       <CrmBadge inCrm={isInCrm} />
+                    )}
+                    {/* #27: duplicate warning chip — tooltip lists duplicates */}
+                    {duplicates.length > 0 && (
+                      <Badge
+                        variant="outline"
+                        className="text-[9px] px-1.5 py-0 text-amber-700 border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-800 gap-1"
+                        title={
+                          "Possible duplicate of:\n" +
+                          duplicates
+                            .map((d) => `\u2022 ${d.name} (${d.rea_agency_id || d.id})`)
+                            .join("\n")
+                        }
+                      >
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        Possible duplicate of {duplicates[0].name}
+                        {duplicates.length > 1 ? ` +${duplicates.length - 1}` : ""}
+                      </Badge>
                     )}
                   </div>
                   {agency.suburb && (
@@ -1013,10 +1302,10 @@ export function AgencySlideout({
                 </a>
               )}
               {(agency.address_street || agency.address) && (
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <MapPin className="h-3.5 w-3.5 text-primary" />
-                  {agency.address_street || agency.address}
-                </span>
+                <AddressCluster
+                  address={agency.address_street || agency.address}
+                  className="text-muted-foreground"
+                />
               )}
               {agency.rea_profile_url && (
                 <a
@@ -1044,6 +1333,7 @@ export function AgencySlideout({
               )}
             >
               <StatBox
+                brandColor={brandAccent || undefined}
                 label="Agents"
                 value={
                   agency.live_agent_count > 0
@@ -1052,15 +1342,18 @@ export function AgencySlideout({
                 }
               />
               <StatBox
+                brandColor={brandAccent || undefined}
                 label="Active Listings"
                 value={agency.active_listings > 0 ? agency.active_listings : "—"}
               />
               <StatBox
+                brandColor={brandAccent || undefined}
                 label="Sold (12m)"
                 value={agency.total_sold_12m > 0 ? agency.total_sold_12m : "—"}
               />
               {agency.avg_listing_price > 0 && (
                 <StatBox
+                  brandColor={brandAccent || undefined}
                   label="Avg Listing $"
                   value={fmtPrice(agency.avg_listing_price)}
                 />
@@ -1068,8 +1361,22 @@ export function AgencySlideout({
               {(() => {
                 const displayRating =
                   agency.avg_agent_rating ?? computeAgencyRating(roster) ?? null;
+                // AG12: show provenance in tooltip when we fell back to roster rating.
+                const isFallback =
+                  agency.avg_agent_rating == null &&
+                  displayRating != null &&
+                  roster.length > 0;
+                const ratedCount = roster.filter(
+                  (a) => (a?.reviews_avg || 0) > 0 && (a?.reviews_count || 0) > 0
+                ).length;
                 return (
                   <StatBox
+                    brandColor={brandAccent || undefined}
+                    title={
+                      isFallback
+                        ? `Computed from ${ratedCount} rostered agents' reviews`
+                        : undefined
+                    }
                     label="Avg Rating"
                     value={
                       displayRating > 0 ? (
@@ -1092,29 +1399,75 @@ export function AgencySlideout({
             </div>
           </section>
 
-          {/* ── Active Suburbs ── */}
-          {suburbs.length > 0 && (
+          {/* ── Active Suburbs — #25: concentration ranking ──
+              Prefer listing-based ranking. Falls back to the flat
+              suburbs_active chip cloud when no listings are loaded. */}
+          {(suburbRanking.length > 0 || suburbs.length > 0) && (
             <section>
-              <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide mb-2">
-                Active Suburbs
-              </h3>
-              <div className="flex flex-wrap gap-1.5">
-                {suburbs.map((sub, i) => (
-                  <Badge
-                    key={i}
-                    variant="secondary"
-                    className="text-[10px] py-0.5 px-2 bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800"
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide">
+                  {suburbRanking.length > 0 ? "Suburb Concentration" : "Active Suburbs"}
+                </h3>
+                {suburbRanking.length > 5 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllSuburbs((p) => !p)}
+                    className="text-[10px] text-primary hover:underline"
                   >
-                    {sub}
-                  </Badge>
-                ))}
+                    {showAllSuburbs ? "Show top 5" : `Show all ${suburbRanking.length}`}
+                  </button>
+                )}
               </div>
+              {suburbRanking.length > 0 ? (
+                <div className="space-y-1">
+                  {(showAllSuburbs ? suburbRanking : suburbRanking.slice(0, 5)).map((s) => {
+                    const max = suburbRanking[0]?.count || 1;
+                    const pct = Math.round((s.count / max) * 100);
+                    return (
+                      <div key={s.suburb} className="space-y-0.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium truncate">{s.suburb}</span>
+                          <span className="text-muted-foreground tabular-nums">
+                            {s.count} listing{s.count !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-400 dark:bg-blue-500 rounded-full transition-all"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {suburbs.map((sub, i) => (
+                    <Badge
+                      key={i}
+                      variant="secondary"
+                      className="text-[10px] py-0.5 px-2 bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800"
+                    >
+                      {sub}
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </section>
           )}
 
           {/* ── Agent Roster ── */}
           <section>
-            <div className="flex items-center justify-between gap-2 mb-2">
+            <div
+              className="flex items-center justify-between gap-2 mb-2 rounded px-1 py-0.5"
+              style={
+                // #31: roster header bg tinted with 4% alpha of brand color
+                brandAccent
+                  ? { backgroundColor: hexToRgba(agency.brand_color_primary, 0.04) }
+                  : undefined
+              }
+            >
               <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide flex items-center gap-1.5">
                 <Users className="h-3.5 w-3.5" />
                 Agent Roster
@@ -1127,24 +1480,71 @@ export function AgencySlideout({
                   </Badge>
                 )}
               </h3>
-              {/* AG05: sort options — default "Active listings" matches the
-                  photography pitch ("who's shooting a lot right now?"). */}
-              {roster.length > 1 && (
-                <label className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <span className="uppercase tracking-wide">Sort</span>
-                  <select
-                    value={rosterSort}
-                    onChange={(e) => setRosterSort(e.target.value)}
-                    className="h-6 text-[10px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
-                    aria-label="Sort roster by"
+              <div className="flex items-center gap-2">
+                {/* AG05: sort options */}
+                {roster.length > 1 && (
+                  <label className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                    <span className="uppercase tracking-wide">Sort</span>
+                    <select
+                      value={rosterSort}
+                      onChange={(e) => setRosterSort(e.target.value)}
+                      className="h-6 text-[10px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
+                      aria-label="Sort roster by"
+                    >
+                      {ROSTER_SORT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {/* #29: Export roster CSV */}
+                {roster.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[10px] gap-1"
+                    onClick={handleExportRoster}
+                    title="Export roster as CSV (UTF-8 with BOM)"
                   >
-                    {ROSTER_SORT_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
+                    <Download className="h-3 w-3" />
+                    Export roster
+                  </Button>
+                )}
+              </div>
             </div>
+            {/* #28: bulk add action bar — visible when ≥1 uncrm'd selected */}
+            {selectedAgentIds.size > 0 && (
+              <div className="flex items-center justify-between gap-2 mb-2 p-2 rounded-lg border border-primary/30 bg-primary/5">
+                <span className="text-xs">
+                  <strong className="tabular-nums">{selectedAgentIds.size}</strong>{" "}
+                  agent{selectedAgentIds.size > 1 ? "s" : ""} selected
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={() => setSelectedAgentIds(new Set())}
+                    disabled={bulkAddingToCrm}
+                  >
+                    Clear
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="h-6 px-2 text-[10px] gap-1"
+                    onClick={handleBulkAddAgentsToCrm}
+                    disabled={bulkAddingToCrm}
+                  >
+                    {bulkAddingToCrm ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <UserPlus className="h-3 w-3" />
+                    )}
+                    Add {selectedAgentIds.size} to CRM
+                  </Button>
+                </div>
+              </div>
+            )}
             {roster.length === 0 ? (
               <p className="text-xs text-muted-foreground py-2">No agents found.</p>
             ) : (
@@ -1155,12 +1555,19 @@ export function AgencySlideout({
                       agent={agent}
                       isInCrm={agent.is_in_crm}
                       isSelected={selectedAgent?.id === agent.id}
+                      // #23: always drill through on click. onOpenEntity is
+                      // provided by the panel-level drill stack; fallback
+                      // shows the inline mini-profile (legacy behavior).
                       onSelect={
                         onOpenEntity
                           ? (a) => a && onOpenEntity({ type: "agent", id: a.id })
                           : setSelectedAgent
                       }
                       crmEntityId={agent.is_in_crm ? getCrmEntityIdForAgent(agent) : null}
+                      // #28: checkbox only offered for uncrm'd agents
+                      selectable={!agent.is_in_crm}
+                      checked={selectedAgentIds.has(agent.id)}
+                      onToggleChecked={toggleAgentSelection}
                     />
                     {!onOpenEntity && selectedAgent?.id === agent.id && (
                       <AgentMiniProfile
@@ -1237,6 +1644,20 @@ export function AgencySlideout({
                   </div>
                 )}
               </div>
+              {/* #24: deep-link to the Listings tab filtered to this agency. */}
+              {agency.rea_agency_id && agencyListings.length > 0 && (
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleViewAllListings}
+                    className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline font-medium"
+                    title="Open the Listings tab filtered to this agency"
+                  >
+                    View all {agencyListings.length} listings
+                    <ChevronRight className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
             </section>
           )}
 
@@ -1567,6 +1988,37 @@ export default function PulseAgencyIntel({
     }));
   }, [pageData, agentCountMap]);
 
+  /* #27: duplicate index — groups by normalised name across loaded agencies.
+     Covers the current page + pulseAgencies prop for cross-page coverage. */
+  const duplicateIndex = useMemo(() => {
+    const map = new Map();
+    const collect = (rows) => {
+      for (const ag of rows || []) {
+        const key = normAgencyNameForDupe(ag?.name);
+        if (!key) continue;
+        if (!map.has(key)) map.set(key, []);
+        const list = map.get(key);
+        if (!list.some((x) => x.id === ag.id)) {
+          list.push({ id: ag.id, rea_agency_id: ag.rea_agency_id, name: ag.name });
+        }
+      }
+    };
+    collect(pulseAgencies);
+    collect(pageRows);
+    for (const [k, v] of map) if (v.length < 2) map.delete(k);
+    return map;
+  }, [pulseAgencies, pageRows]);
+
+  useEffect(() => {
+    if (duplicateIndex.size > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[PulseAgencyIntel #27] Duplicate agencies detected: ${duplicateIndex.size} group${duplicateIndex.size > 1 ? "s" : ""}`,
+        Array.from(duplicateIndex.values())
+      );
+    }
+  }, [duplicateIndex]);
+
   const totalCount = pageData?.count || 0;
   const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
   const safePage = Math.min(agencyPage, pageCount - 1);
@@ -1853,14 +2305,14 @@ export default function PulseAgencyIntel({
                     }
                     className="border-b last:border-b-0 hover:bg-muted/30 cursor-pointer transition-colors"
                   >
-                    {/* Logo */}
+                    {/* Logo — #32: rounded-full everywhere */}
                     <td className="pl-3 pr-2 py-2 w-10">
-                      <div className="h-8 w-8 rounded-lg overflow-hidden bg-muted flex items-center justify-center border">
+                      <div className="h-8 w-8 rounded-full overflow-hidden bg-muted flex items-center justify-center border">
                         {ag.logo_url ? (
                           <img
                             src={ag.logo_url}
                             alt={ag.name}
-                            className="h-full w-full object-contain p-0.5"
+                            className="h-full w-full object-cover"
                             onError={(e) => {
                               e.target.style.display = "none";
                             }}
@@ -1889,6 +2341,30 @@ export default function PulseAgencyIntel({
                           {ag.state && `, ${ag.state}`}
                         </p>
                       )}
+                      {/* #27: duplicate warning chip when a loaded row shares
+                          the normalised (suffix-stripped) name. */}
+                      {(() => {
+                        const key = normAgencyNameForDupe(ag.name);
+                        const grp = key ? duplicateIndex.get(key) : null;
+                        if (!grp || grp.length < 2) return null;
+                        const others = grp.filter((g) => g.id !== ag.id);
+                        if (others.length === 0) return null;
+                        const title =
+                          "Possible duplicate of:\n" +
+                          others
+                            .map((o) => `\u2022 ${o.name} (${o.rea_agency_id || o.id})`)
+                            .join("\n");
+                        return (
+                          <span
+                            title={title}
+                            className="inline-flex items-center gap-1 text-[9px] mt-1 px-1.5 py-0 rounded border border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-800"
+                          >
+                            <AlertTriangle className="h-2.5 w-2.5" />
+                            Possible duplicate
+                            {others.length > 1 ? ` (+${others.length - 1})` : ""}
+                          </span>
+                        );
+                      })()}
                     </td>
                     {/* Phone + AG10: +N alternates badge for parity with email */}
                     <td className="px-2 py-2 hidden md:table-cell text-muted-foreground">
@@ -2070,6 +2546,7 @@ export default function PulseAgencyIntel({
           pulseTimeline={pulseTimeline}
           crmAgencies={crmAgencies}
           pulseMappings={pulseMappings}
+          pulseAgencies={pulseAgencies}
           onClose={() => setSelectedAgency(null)}
         />
       )}
