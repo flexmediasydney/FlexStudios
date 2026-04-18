@@ -536,6 +536,18 @@ export function AgentSlideout({
 }) {
   const position = mapPosition(agent.job_title);
 
+  // Tier 3 drill-through: look up CRM mapping so the "In CRM" badge can link
+  // straight to the CRM record (PersonDetails).
+  const crmMapping = useMemo(() => {
+    if (!agent?.is_in_crm || !pulseMappings) return null;
+    return pulseMappings.find(
+      (m) =>
+        m.entity_type === "agent" &&
+        (m.pulse_entity_id === agent.id ||
+          (m.rea_id && agent.rea_agent_id && String(m.rea_id) === String(agent.rea_agent_id)))
+    );
+  }, [agent, pulseMappings]);
+
   const agentListings = useMemo(() => {
     const id = agent.rea_agent_id;
     if (!id) return { active: [], sold: [] };
@@ -606,7 +618,19 @@ export function AgentSlideout({
                 <h2 className="text-base font-bold leading-tight">{agent.full_name}</h2>
                 <PositionBadge position={position} />
                 <ReaBadge />
-                <CrmStatusBadge inCrm={agent.is_in_crm} />
+                {/* Tier 3: when mapped, the In CRM badge links to the CRM page. */}
+                {agent.is_in_crm && crmMapping?.crm_entity_id ? (
+                  <a
+                    href={`/people/${crmMapping.crm_entity_id}`}
+                    className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800 px-1.5 py-0 text-[9px] font-medium leading-4 hover:underline"
+                    title="Open CRM record"
+                  >
+                    In CRM
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                ) : (
+                  <CrmStatusBadge inCrm={agent.is_in_crm} />
+                )}
               </div>
               {agent.job_title && (
                 <p className="text-xs text-muted-foreground">{agent.job_title}</p>

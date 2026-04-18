@@ -114,7 +114,7 @@ function WeeklyTrendCard({ pulseListings }) {
 
 // ── Card 2: Top Agents Not In CRM ─────────────────────────────────────────────
 
-function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm }) {
+function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm, onOpenEntity }) {
   const agents = useMemo(
     () =>
       (pulseAgents || [])
@@ -138,29 +138,47 @@ function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm }) {
           <p className="text-xs text-muted-foreground/50 py-6 text-center">All territory agents are mapped to CRM</p>
         ) : (
           <div className="space-y-1.5">
-            {agents.map((agent) => (
-              <div
-                key={agent.id}
-                className="flex items-center gap-2 py-1 group"
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium truncate">{agent.full_name || "—"}</p>
-                  <p className="text-[10px] text-muted-foreground truncate">{agent.agency_name || "—"}</p>
-                </div>
-                <Badge variant="secondary" className="text-[9px] px-1.5 py-0 shrink-0 tabular-nums">
-                  {agent.total_listings_active ?? 0}
-                </Badge>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/30 shrink-0"
-                  onClick={() => onAddToCrm && onAddToCrm(agent)}
+            {agents.map((agent) => {
+              // Tier 3: make the whole row clickable to open the agent slideout
+              // (the Add-to-CRM button inside stops propagation).
+              const rowContent = (
+                <>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate">{agent.full_name || "—"}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{agent.agency_name || "—"}</p>
+                  </div>
+                  <Badge variant="secondary" className="text-[9px] px-1.5 py-0 shrink-0 tabular-nums">
+                    {agent.total_listings_active ?? 0}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/30 shrink-0"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onAddToCrm) onAddToCrm(agent);
+                    }}
+                  >
+                    <UserPlus className="h-3 w-3 mr-1" />
+                    Add
+                  </Button>
+                </>
+              );
+              return onOpenEntity ? (
+                <button
+                  key={agent.id}
+                  type="button"
+                  onClick={() => onOpenEntity({ type: "agent", id: agent.id })}
+                  className="w-full flex items-center gap-2 py-1 group text-left rounded hover:bg-muted/30 transition-colors"
                 >
-                  <UserPlus className="h-3 w-3 mr-1" />
-                  Add
-                </Button>
-              </div>
-            ))}
+                  {rowContent}
+                </button>
+              ) : (
+                <div key={agent.id} className="flex items-center gap-2 py-1 group">
+                  {rowContent}
+                </div>
+              );
+            })}
           </div>
         )}
       </CardContent>
@@ -170,7 +188,7 @@ function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm }) {
 
 // ── Card 3: Recent Agent Movements ────────────────────────────────────────────
 
-function RecentMovementsCard({ pulseAgents }) {
+function RecentMovementsCard({ pulseAgents, onOpenEntity }) {
   const movements = useMemo(() => {
     const d30 = new Date(Date.now() - 30 * 86400000);
     return (pulseAgents || [])
@@ -193,25 +211,40 @@ function RecentMovementsCard({ pulseAgents }) {
           <p className="text-xs text-muted-foreground/50 py-6 text-center">No agency changes detected recently</p>
         ) : (
           <div className="space-y-2">
-            {movements.map((agent) => (
-              <div key={agent.id} className="text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium truncate">{agent.full_name || "—"}</span>
-                  <span className="text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">
-                    {fmtShortDate(agent.agency_changed_at)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-muted-foreground">
-                  <span className="truncate line-through opacity-60">
-                    {agent.previous_agency_name || "Unknown"}
-                  </span>
-                  <ArrowRight className="h-2.5 w-2.5 shrink-0 text-purple-400" />
-                  <span className="truncate text-foreground/80 font-medium">
-                    {agent.agency_name || "—"}
-                  </span>
-                </div>
-              </div>
-            ))}
+            {movements.map((agent) => {
+              // Tier 3: row click opens the agent slideout via parent dispatcher.
+              const body = (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium truncate">{agent.full_name || "—"}</span>
+                    <span className="text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">
+                      {fmtShortDate(agent.agency_changed_at)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-muted-foreground">
+                    <span className="truncate line-through opacity-60">
+                      {agent.previous_agency_name || "Unknown"}
+                    </span>
+                    <ArrowRight className="h-2.5 w-2.5 shrink-0 text-purple-400" />
+                    <span className="truncate text-foreground/80 font-medium">
+                      {agent.agency_name || "—"}
+                    </span>
+                  </div>
+                </>
+              );
+              return onOpenEntity ? (
+                <button
+                  key={agent.id}
+                  type="button"
+                  onClick={() => onOpenEntity({ type: "agent", id: agent.id })}
+                  className="w-full text-xs text-left rounded p-1 -m-1 hover:bg-muted/30 transition-colors"
+                >
+                  {body}
+                </button>
+              ) : (
+                <div key={agent.id} className="text-xs">{body}</div>
+              );
+            })}
           </div>
         )}
       </CardContent>
@@ -312,8 +345,14 @@ function SuburbDistributionCard({ pulseListings }) {
           <div className="space-y-1.5">
             {data.map(({ suburb, count }) => {
               const pct = Math.round((count / maxVal) * 100);
+              // Tier 3: each bar links to Listings tab pre-filtered by suburb.
               return (
-                <div key={suburb} className="flex items-center gap-2">
+                <a
+                  key={suburb}
+                  href={`/IndustryPulse?tab=listings&suburb=${encodeURIComponent(suburb)}`}
+                  className="flex items-center gap-2 rounded p-1 -m-1 hover:bg-muted/30 transition-colors"
+                  title={`View ${count} listing${count !== 1 ? "s" : ""} in ${suburb}`}
+                >
                   <span className="text-[10px] text-muted-foreground w-24 shrink-0 truncate">{suburb}</span>
                   <div className="flex-1 h-4 bg-muted/40 rounded-full overflow-hidden">
                     <div
@@ -322,7 +361,7 @@ function SuburbDistributionCard({ pulseListings }) {
                     />
                   </div>
                   <span className="text-[10px] tabular-nums text-muted-foreground w-5 text-right shrink-0">{count}</span>
-                </div>
+                </a>
               );
             })}
           </div>
@@ -411,13 +450,18 @@ export default function PulseCommandCenter({
   stats = {},
   search = "",
   onAddToCrm,
+  onOpenEntity,
   onViewFullTimeline,
 }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <WeeklyTrendCard pulseListings={pulseListings} />
-      <TopAgentsNotInCrmCard pulseAgents={pulseAgents} onAddToCrm={onAddToCrm} />
-      <RecentMovementsCard pulseAgents={pulseAgents} />
+      <TopAgentsNotInCrmCard
+        pulseAgents={pulseAgents}
+        onAddToCrm={onAddToCrm}
+        onOpenEntity={onOpenEntity}
+      />
+      <RecentMovementsCard pulseAgents={pulseAgents} onOpenEntity={onOpenEntity} />
       <ConversionFunnelCard
         pulseAgents={pulseAgents}
         crmAgents={crmAgents}

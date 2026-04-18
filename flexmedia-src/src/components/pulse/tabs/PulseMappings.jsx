@@ -97,9 +97,24 @@ function MappingRow({ mapping, pulseName, crmName, onConfirm, onReject, confirmi
         </div>
       </td>
 
-      {/* Pulse entity */}
+      {/* Pulse entity — Tier 3: clickable. URL-driven entity opening in
+           IndustryPulse (?tab=&pulse_id=) drives the right slideout. */}
       <td className="py-2.5 pr-3 max-w-[180px]">
-        <p className="text-xs font-medium truncate">{pulseName || <span className="text-muted-foreground italic">—</span>}</p>
+        {pulseName && mapping.pulse_entity_id ? (
+          <a
+            href={`/IndustryPulse?tab=${mapping.entity_type === "agency" ? "agencies" : "agents"}&pulse_id=${mapping.pulse_entity_id}`}
+            className="text-xs font-medium truncate text-primary hover:underline flex items-center gap-1"
+            onClick={(e) => e.stopPropagation()}
+            title="Open Pulse record"
+          >
+            {pulseName}
+            <ExternalLink className="h-2.5 w-2.5 shrink-0 opacity-60" />
+          </a>
+        ) : (
+          <p className="text-xs font-medium truncate">
+            {pulseName || <span className="text-muted-foreground italic">—</span>}
+          </p>
+        )}
         {mapping.rea_id && (
           <p className="text-[10px] text-muted-foreground truncate">ID: {mapping.rea_id}</p>
         )}

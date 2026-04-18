@@ -22,6 +22,7 @@
  *   limit 10000 safety cap), not just the current page.
  */
 import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
@@ -671,10 +672,27 @@ export default function PulseListingsTab({
   search = "",
   onOpenEntity,
 }) {
+  // Tier 3 drill-through: pre-fill the column filter from ?suburb= when the
+  // Command Center's Suburb Distribution card deep-links into this tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const suburbParam = searchParams.get("suburb");
+
   const [listingFilter, setListingFilter] = useState("all");
   const [listingSort, setListingSort] = useState({ col: "listed_date", dir: "desc" });
-  const [listingColFilter, setListingColFilter] = useState("");
+  const [listingColFilter, setListingColFilter] = useState(suburbParam || "");
   const [listingPage, setListingPage] = useState(0);
+
+  // Consume the URL param once we've seeded state so back/forward doesn't
+  // re-fire and the URL stays tidy.
+  useEffect(() => {
+    if (!suburbParam) return;
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("suburb");
+      return np;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suburbParam]);
   // Page size persists in localStorage so the user's choice survives reloads
   // and tab switches. Default 50 matches the previous hardcoded value.
   const [pageSize, setPageSize] = useState(readStoredPageSize);
@@ -946,6 +964,9 @@ export default function PulseListingsTab({
                   <Th col="sold_date" className="hidden sm:table-cell">Sold Date</Th>
                   <Th className="hidden xl:table-cell">Synced</Th>
                   <Th col="price_text">Status</Th>
+                  {/* Tier 3: Property drill-through icon column (only populated
+                      when property_key is set on the listing). */}
+                  <Th className="w-8" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
@@ -1083,6 +1104,22 @@ export default function PulseListingsTab({
                       {/* Status */}
                       <td className="px-2 py-1.5 max-w-[120px]">
                         <p className="truncate text-muted-foreground">{status}</p>
+                      </td>
+
+                      {/* Tier 3: property drill-through — only when
+                          property_key is set. Stops row-click propagation so
+                          the listing slideout doesn't also open. */}
+                      <td className="px-2 py-1.5 w-8">
+                        {l.property_key ? (
+                          <a
+                            href={`/PropertyDetails?key=${encodeURIComponent(l.property_key)}`}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Open property history"
+                            className="inline-flex items-center text-emerald-600 hover:text-emerald-700 transition-colors"
+                          >
+                            <Home className="h-3.5 w-3.5" />
+                          </a>
+                        ) : null}
                       </td>
                     </tr>
                   );

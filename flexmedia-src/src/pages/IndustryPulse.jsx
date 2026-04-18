@@ -200,6 +200,41 @@ export default function IndustryPulse() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // ── URL-driven entity opening (Tier 3 drill-through) ──────────────────────
+  // PulseMappings and PropertyDetails can link with `?pulse_id=<id>` + an
+  // entity type (tab drives the type: agents → agent, agencies → agency,
+  // listings → listing). Once the matching entity dataset has loaded we push
+  // onto the stack and clear the param so the URL stays clean.
+  const pulseIdParam = searchParams.get("pulse_id");
+  useEffect(() => {
+    if (!pulseIdParam) return;
+    const tParam = searchParams.get("tab");
+    const entityType = tParam === "agencies" ? "agency"
+      : tParam === "listings" ? "listing"
+      : tParam === "agents" ? "agent"
+      : null;
+    if (!entityType) return;
+    // Don't dispatch until the underlying list is populated (avoid race on
+    // slow networks). Skip if we already have the same entity on top.
+    const coll = entityType === "agent" ? pulseAgents
+      : entityType === "agency" ? pulseAgencies
+      : pulseListings;
+    if (!coll.length) return;
+    const hit = coll.find((r) => r.id === pulseIdParam);
+    if (!hit) return;
+    setEntityStack((s) => {
+      const top = s[s.length - 1];
+      if (top && top.type === entityType && top.id === pulseIdParam) return s;
+      return [...s, { type: entityType, id: pulseIdParam }];
+    });
+    // Strip the query param so re-renders don't re-dispatch; keep ?tab.
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("pulse_id");
+      return np;
+    }, { replace: true });
+  }, [pulseIdParam, searchParams, pulseAgents, pulseAgencies, pulseListings, setSearchParams]);
+
   const [search, setSearch] = useState("");
   const [addToCrmFromCommand, setAddToCrmFromCommand] = useState(null);
 

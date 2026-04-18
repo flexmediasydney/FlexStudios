@@ -12,6 +12,7 @@
  *   crmEntity: full CRM entity record (optional, used for rea_agent_id fallback)
  */
 import React, { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -198,6 +199,7 @@ export default function PulseIntelligencePanel({
   // Accept both prop shapes (new: entityId, old: crmEntityId)
   const entityId = propEntityId || crmEntityId;
   const [metadataOpen, setMetadataOpen] = useState(false);
+  const navigate = useNavigate();
 
   /* ── Data hooks ─────────────────────────────────────────────────────────── */
   // PERF NOTE: This loads 5000+ agents, 500 agencies, and 5000 listings client-side
@@ -898,7 +900,9 @@ export default function PulseIntelligencePanel({
                         <tr
                           key={ag.id}
                           className={cn("border-t hover:bg-muted/20", hasCrm && "cursor-pointer")}
-                          onClick={hasCrm ? () => window.open(`/people/${agMapping.crm_entity_id}`, "_blank") : undefined}
+                          // Tier 3: drill through to CRM record without losing
+                          // the current tab/state — use client-side nav.
+                          onClick={hasCrm ? () => navigate(`/people/${agMapping.crm_entity_id}`) : undefined}
                         >
                           <td className="px-2 py-1.5">
                             <p className="font-medium">{ag.full_name}</p>

@@ -535,6 +535,18 @@ export function AgencySlideout({
     [crmAgencies, agency]
   );
 
+  /* Tier 3 drill-through: look up CRM mapping so the "In CRM" badge links to
+     the CRM Organisation record (OrgDetails). */
+  const crmAgencyMapping = useMemo(() => {
+    if (!agency?.is_in_crm || !pulseMappings) return null;
+    return pulseMappings.find(
+      (m) =>
+        m.entity_type === "agency" &&
+        (m.pulse_entity_id === agency.id ||
+          (m.rea_id && agency.rea_agency_id && String(m.rea_id) === String(agency.rea_agency_id)))
+    );
+  }, [agency, pulseMappings]);
+
   /* Add agency to CRM handler */
   async function handleAddAgencyToCrm() {
     if (!agency) return;
@@ -686,7 +698,19 @@ export function AgencySlideout({
                       {agency.name || "—"}
                     </h2>
                     <REABadge />
-                    <CrmBadge inCrm={isInCrm} />
+                    {/* Tier 3: when mapped, the In CRM badge links to OrgDetails. */}
+                    {isInCrm && crmAgencyMapping?.crm_entity_id ? (
+                      <a
+                        href={`/organisations/${crmAgencyMapping.crm_entity_id}`}
+                        className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 px-1.5 py-0 text-[9px] font-medium leading-4 hover:underline"
+                        title="Open CRM record"
+                      >
+                        In CRM
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    ) : (
+                      <CrmBadge inCrm={isInCrm} />
+                    )}
                   </div>
                   {agency.suburb && (
                     <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">

@@ -81,6 +81,11 @@ export default function PropertyDetails() {
   const [property, setProperty] = useState(null);
   const [listings, setListings] = useState([]);
   const [projects, setProjects] = useState([]);
+  // Tier 3 drill-through: resolve per-agent / per-agency pulse records +
+  // CRM mappings so "Agents Detected" and "Agencies" link to the right place.
+  const [pulseAgents, setPulseAgents] = useState([]);
+  const [pulseAgencies, setPulseAgencies] = useState([]);
+  const [pulseMappings, setPulseMappings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lightboxIndex, setLightboxIndex] = useState(null); // null = closed
@@ -107,6 +112,40 @@ export default function PropertyDetails() {
       setProperty(pRes.data);
       setListings(lRes.data || []);
       setProjects(prRes.data || []);
+
+      // Second-pass lookups: for every agent/agency rea_id appearing in the
+      // listings here, fetch the pulse record + CRM mapping in a single RT.
+      const agentReaIds = Array.from(new Set((lRes.data || [])
+        .map((l) => l.agent_rea_id).filter(Boolean)));
+      const agencyReaIds = Array.from(new Set((lRes.data || [])
+        .map((l) => l.agency_rea_id).filter(Boolean)));
+      if (agentReaIds.length > 0 || agencyReaIds.length > 0) {
+        const [paRes, pagRes, mapRes] = await Promise.all([
+          agentReaIds.length > 0
+            ? api._supabase.from("pulse_agents")
+                .select("id, rea_agent_id, full_name, is_in_crm")
+                .in("rea_agent_id", agentReaIds)
+            : Promise.resolve({ data: [] }),
+          agencyReaIds.length > 0
+            ? api._supabase.from("pulse_agencies")
+                .select("id, rea_agency_id, name, is_in_crm")
+                .in("rea_agency_id", agencyReaIds)
+            : Promise.resolve({ data: [] }),
+          api._supabase.from("pulse_crm_mappings")
+            .select("id, entity_type, pulse_entity_id, crm_entity_id, rea_id")
+            .in("entity_type", ["agent", "agency"]),
+        ]);
+        if (paRes.error) throw paRes.error;
+        if (pagRes.error) throw pagRes.error;
+        if (mapRes.error) throw mapRes.error;
+        setPulseAgents(paRes.data || []);
+        setPulseAgencies(pagRes.data || []);
+        setPulseMappings(mapRes.data || []);
+      } else {
+        setPulseAgents([]);
+        setPulseAgencies([]);
+        setPulseMappings([]);
+      }
     } catch (err) {
       console.error("PropertyDetails load failed:", err);
       setError(err.message || "Failed to load");
@@ -176,29 +215,60 @@ export default function PropertyDetails() {
     return out;
   }, [listings]);
 
-  // Unique agents/agencies
+  // Unique agents/agencies — decorated with resolved link targets (CRM if
+  // mapped, else Industry Pulse slideout, else plain text).
   const uniqueAgents = useMemo(() => {
     const map = new Map();
     for (const l of listings) {
       if (!l.agent_rea_id || !l.agent_name) continue;
-      if (!map.has(l.agent_rea_id)) map.set(l.agent_rea_id, { id: l.agent_rea_id, name: l.agent_name, count: 0, latest: null });
+      if (!map.has(l.agent_rea_id)) map.set(l.agent_rea_id, { reaId: l.agent_rea_id, name: l.agent_name, count: 0, latest: null });
       const e = map.get(l.agent_rea_id);
       e.count++;
       if (!e.latest || new Date(l.listed_date || 0) > new Date(e.latest)) e.latest = l.listed_date;
     }
-    return Array.from(map.values()).sort((a, b) => b.count - a.count);
-  }, [listings]);
+    const agents = Array.from(map.values());
+    // Resolve link target for each: CRM (mapping) > Pulse slideout (pulse agent) > text.
+    for (const a of agents) {
+      const pa = pulseAgents.find((p) => p.rea_agent_id === a.reaId);
+      a.pulseId = pa?.id || null;
+      if (pa) {
+        const m = pulseMappings.find((mm) =>
+          mm.entity_type === "agent" &&
+          (mm.pulse_entity_id === pa.id || String(mm.rea_id) === String(a.reaId))
+        );
+        a.crmEntityId = m?.crm_entity_id || null;
+      } else {
+        a.crmEntityId = null;
+      }
+    }
+    return agents.sort((a, b) => b.count - a.count);
+  }, [listings, pulseAgents, pulseMappings]);
 
   const uniqueAgencies = useMemo(() => {
     const map = new Map();
     for (const l of listings) {
       if (!l.agency_name && !l.agency_rea_id) continue;
       const key = l.agency_rea_id || l.agency_name;
-      if (!map.has(key)) map.set(key, { id: l.agency_rea_id, name: l.agency_name, count: 0 });
+      if (!map.has(key)) map.set(key, { reaId: l.agency_rea_id, name: l.agency_name, count: 0 });
       map.get(key).count++;
     }
-    return Array.from(map.values()).sort((a, b) => b.count - a.count);
-  }, [listings]);
+    const agencies = Array.from(map.values());
+    for (const ag of agencies) {
+      if (!ag.reaId) { ag.pulseId = null; ag.crmEntityId = null; continue; }
+      const pa = pulseAgencies.find((p) => p.rea_agency_id === ag.reaId);
+      ag.pulseId = pa?.id || null;
+      if (pa) {
+        const m = pulseMappings.find((mm) =>
+          mm.entity_type === "agency" &&
+          (mm.pulse_entity_id === pa.id || String(mm.rea_id) === String(ag.reaId))
+        );
+        ag.crmEntityId = m?.crm_entity_id || null;
+      } else {
+        ag.crmEntityId = null;
+      }
+    }
+    return agencies.sort((a, b) => b.count - a.count);
+  }, [listings, pulseAgencies, pulseMappings]);
 
   if (!propertyKey) {
     return (
@@ -443,7 +513,8 @@ export default function PropertyDetails() {
             </CardContent>
           </Card>
 
-          {/* Agents detected */}
+          {/* Agents detected — Tier 3: each row resolves to CRM, Pulse, or
+              static text based on what mapping data is available. */}
           <Card className="rounded-xl">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
@@ -454,14 +525,49 @@ export default function PropertyDetails() {
             <CardContent className="space-y-1">
               {uniqueAgents.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No agents detected yet.</p>
-              ) : uniqueAgents.map((a) => (
-                <div key={a.id} className="flex items-center justify-between text-xs">
-                  <span className="truncate">{a.name}</span>
-                  <Badge variant="outline" className="text-[9px] shrink-0">
-                    {a.count} campaign{a.count !== 1 ? "s" : ""}
-                  </Badge>
-                </div>
-              ))}
+              ) : uniqueAgents.map((a) => {
+                const label = (
+                  <>
+                    <span className="truncate">{a.name}</span>
+                    <Badge variant="outline" className="text-[9px] shrink-0">
+                      {a.count} campaign{a.count !== 1 ? "s" : ""}
+                    </Badge>
+                  </>
+                );
+                if (a.crmEntityId) {
+                  return (
+                    <Link
+                      key={a.reaId}
+                      to={`/people/${a.crmEntityId}`}
+                      className="flex items-center justify-between text-xs text-primary hover:underline"
+                      title="Open CRM record"
+                    >
+                      {label}
+                    </Link>
+                  );
+                }
+                if (a.pulseId) {
+                  return (
+                    <Link
+                      key={a.reaId}
+                      to={`/IndustryPulse?tab=agents&pulse_id=${a.pulseId}`}
+                      className="flex items-center justify-between text-xs hover:underline"
+                      title="Open Industry Pulse record"
+                    >
+                      {label}
+                    </Link>
+                  );
+                }
+                return (
+                  <div
+                    key={a.reaId}
+                    className="flex items-center justify-between text-xs"
+                    title="No Industry Pulse record yet"
+                  >
+                    {label}
+                  </div>
+                );
+              })}
             </CardContent>
           </Card>
 
@@ -476,14 +582,49 @@ export default function PropertyDetails() {
             <CardContent className="space-y-1">
               {uniqueAgencies.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No agencies detected yet.</p>
-              ) : uniqueAgencies.map((a, i) => (
-                <div key={a.id || a.name || i} className="flex items-center justify-between text-xs">
-                  <span className="truncate">{a.name}</span>
-                  <Badge variant="outline" className="text-[9px] shrink-0">
-                    {a.count}
-                  </Badge>
-                </div>
-              ))}
+              ) : uniqueAgencies.map((a, i) => {
+                const label = (
+                  <>
+                    <span className="truncate">{a.name}</span>
+                    <Badge variant="outline" className="text-[9px] shrink-0">
+                      {a.count}
+                    </Badge>
+                  </>
+                );
+                if (a.crmEntityId) {
+                  return (
+                    <Link
+                      key={a.reaId || a.name || i}
+                      to={`/organisations/${a.crmEntityId}`}
+                      className="flex items-center justify-between text-xs text-primary hover:underline"
+                      title="Open CRM record"
+                    >
+                      {label}
+                    </Link>
+                  );
+                }
+                if (a.pulseId) {
+                  return (
+                    <Link
+                      key={a.reaId || a.name || i}
+                      to={`/IndustryPulse?tab=agencies&pulse_id=${a.pulseId}`}
+                      className="flex items-center justify-between text-xs hover:underline"
+                      title="Open Industry Pulse record"
+                    >
+                      {label}
+                    </Link>
+                  );
+                }
+                return (
+                  <div
+                    key={a.reaId || a.name || i}
+                    className="flex items-center justify-between text-xs"
+                    title="No Industry Pulse record yet"
+                  >
+                    {label}
+                  </div>
+                );
+              })}
             </CardContent>
           </Card>
 

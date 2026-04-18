@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import {
   ArrowRight, Star, Home, User, Zap, RefreshCw, Link2, UserPlus,
   TrendingUp, Clock,
-  DollarSign, Play, CheckCircle2, Timer, ListPlus
+  DollarSign, Play, CheckCircle2, Timer, ListPlus, Info
 } from "lucide-react";
 
 /* ── System event types that get filtered out in compact mode ────────────── */
@@ -304,10 +304,25 @@ export default function PulseTimeline({
                           <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{entry.description}</p>
                         )}
                       </div>
-                      <span className={cn(
-                        "text-muted-foreground/60 shrink-0 tabular-nums",
-                        compact ? "text-[8px]" : "text-[10px]"
-                      )}>{formatDate(entry.created_at, compact)}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className={cn(
+                          "text-muted-foreground/60 tabular-nums",
+                          compact ? "text-[8px]" : "text-[10px]"
+                        )}>{formatDate(entry.created_at, compact)}</span>
+                        {/* Tier 3: link to the source run DrillDialog when the
+                            entry carries a sync_log_id. Will light up fully
+                            when URL-driven DrillDialog is wired (planned Tier 4). */}
+                        {entry.sync_log_id && (
+                          <a
+                            href={`/IndustryPulse?tab=sources&sync_log_id=${entry.sync_log_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-muted-foreground/40 hover:text-primary transition-colors"
+                            title="Open source run details"
+                          >
+                            <Info className={cn(compact ? "h-2.5 w-2.5" : "h-3 w-3")} />
+                          </a>
+                        )}
+                      </div>
                     </div>
 
                     {/* Event-specific detail panels — hidden in compact mode */}
