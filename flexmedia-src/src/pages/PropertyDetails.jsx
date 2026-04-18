@@ -1969,7 +1969,153 @@ function ProjectsTab({ projects, property }) {
 
 // ── Agents tab ───────────────────────────────────────────────────────────
 
-function AgentsTab({ agents, agencies }) {
+/**
+ * Build the per-agent loyalty timeline: collect listing + sold + shoot events
+ * at THIS property for one agent. Matches listings by agent_rea_id and
+ * projects by crm_agent_id (project.agent_id). Returns events, earliest,
+ * latest, and flags for the owner-inference heuristic.
+ */
+function buildAgentLoyalty(agent, listings, projects) {
+  const events = [];
+  const reaId = agent.rea_agent_id ? String(agent.rea_agent_id) : null;
+  const crmId = agent.crm_agent_id ? String(agent.crm_agent_id) : null;
+
+  const myListings = (listings || []).filter(
+    (l) => reaId && String(l.agent_rea_id || "") === reaId
+  );
+  for (const l of myListings) {
+    if (l.listed_date) {
+      events.push({ _kind: "list", _date: l.listed_date, _listingId: l.id });
+    }
+    if (l.sold_date) {
+      events.push({ _kind: "sold", _date: l.sold_date, _listingId: l.id });
+    }
+  }
+
+  const myProjects = (projects || []).filter(
+    (p) => crmId && String(p.agent_id || "") === crmId
+  );
+  for (const p of myProjects) {
+    const d = p.booking_date || p.shoot_date;
+    if (d) events.push({ _kind: "shoot", _date: d, _projectId: p.id });
+  }
+
+  events.sort((a, b) => new Date(a._date) - new Date(b._date));
+
+  const listCount = events.filter((e) => e._kind === "list").length;
+  // Repeat-vendor heuristic: at least one sale chronologically between first
+  // and last listing signals the agent sold for this owner and got the relist.
+  const soldBetween = (() => {
+    const lists = events.filter((e) => e._kind === "list");
+    const solds = events.filter((e) => e._kind === "sold");
+    if (lists.length < 2 || solds.length === 0) return false;
+    const firstList = new Date(lists[0]._date).getTime();
+    const lastList = new Date(lists[lists.length - 1]._date).getTime();
+    return solds.some((s) => {
+      const t = new Date(s._date).getTime();
+      return t >= firstList && t <= lastList;
+    });
+  })();
+
+  const first = events.length ? events[0]._date : null;
+  const last = events.length ? events[events.length - 1]._date : null;
+
+  let badge = null;
+  if (listCount >= 3) {
+    badge = { label: "High loyalty", tone: "gold" };
+  } else if (listCount >= 2 && soldBetween) {
+    badge = { label: "Likely repeat vendor", tone: "muted-gold" };
+  }
+
+  const latestActivity = events.reduce((max, e) => {
+    const t = new Date(e._date).getTime();
+    return isFinite(t) && t > max ? t : max;
+  }, 0);
+  const totalCampaigns = myListings.length + myProjects.length;
+  const activeListings = myListings.filter((l) => !l.sold_date).length;
+
+  return { events, first, last, badge, latestActivity, totalCampaigns, activeListings };
+}
+
+/**
+ * Ambient timeline strip: 30px tall row showing one agent's involvement at
+ * this property. Icons absolutely positioned by linear date interpolation;
+ * native-title tooltips show "<type> · <date>". No axis labels by design.
+ */
+function AgentLoyaltyStrip({ events, first, last }) {
+  if (!events || events.length === 0) {
+    return (
+      <div className="h-[30px] px-3 flex items-center">
+        <span className="text-[10px] text-muted-foreground/70 italic">
+          No dated activity for this agent at this property
+        </span>
+      </div>
+    );
+  }
+
+  const firstMs = new Date(first).getTime();
+  const lastMs = new Date(last).getTime();
+  const span = Math.max(lastMs - firstMs, 1);
+
+  const ICON_MAP = {
+    list:  { glyph: "\u{1F3E0}", label: "Listed" },
+    sold:  { glyph: "\u{1F4B0}", label: "Sold" },
+    shoot: { glyph: "\u{1F4F7}", label: "FlexMedia shoot" },
+  };
+
+  return (
+    <div className="h-[30px] relative px-3">
+      <div className="absolute left-3 right-3 top-1/2 -translate-y-1/2 h-px bg-border/60" />
+      {events.map((e, i) => {
+        const t = new Date(e._date).getTime();
+        const pct = span === 1 ? 50 : ((t - firstMs) / span) * 100;
+        const meta = ICON_MAP[e._kind] || { glyph: "\u2022", label: e._kind };
+        return (
+          <span
+            key={`${e._kind}-${e._date}-${i}`}
+            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 text-[13px] leading-none cursor-default select-none"
+            style={{ left: `calc(12px + (100% - 24px) * ${pct / 100})` }}
+            title={`${meta.label} \u00B7 ${fmtDate(e._date)}`}
+          >
+            {meta.glyph}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+const AGENT_SORT_OPTIONS = [
+  { value: "latest",    label: "Latest activity" },
+  { value: "active",    label: "Active listings" },
+  { value: "campaigns", label: "Total campaigns" },
+  { value: "name",      label: "Name" },
+];
+
+function AgentsTab({ agents, agencies, listings, projects }) {
+  const [sortBy, setSortBy] = useState("latest");
+
+  const decorated = useMemo(() => {
+    return (agents || []).map((a) => ({
+      ...a,
+      _loyalty: buildAgentLoyalty(a, listings, projects),
+    }));
+  }, [agents, listings, projects]);
+
+  const sorted = useMemo(() => {
+    const arr = [...decorated];
+    if (sortBy === "latest") {
+      arr.sort((a, b) => (b._loyalty.latestActivity || 0) - (a._loyalty.latestActivity || 0));
+    } else if (sortBy === "active") {
+      arr.sort((a, b) => (b._loyalty.activeListings || 0) - (a._loyalty.activeListings || 0));
+    } else if (sortBy === "campaigns") {
+      arr.sort((a, b) => (b._loyalty.totalCampaigns || 0) - (a._loyalty.totalCampaigns || 0));
+    } else if (sortBy === "name") {
+      arr.sort((a, b) => String(a.full_name || "").localeCompare(String(b.full_name || "")));
+    }
+    return arr;
+  }, [decorated, sortBy]);
+
   if (!agents || agents.length === 0) {
     return (
       <Card className="rounded-xl">
@@ -1984,11 +2130,26 @@ function AgentsTab({ agents, agencies }) {
   return (
     <Card className="rounded-xl overflow-hidden">
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm flex items-center gap-2">
-          <Users className="h-4 w-4 text-blue-600" />
-          Agents
-          <Badge variant="outline" className="text-[10px]">{agents.length}</Badge>
-        </CardTitle>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Users className="h-4 w-4 text-blue-600" />
+            Agents
+            <Badge variant="outline" className="text-[10px]">{agents.length}</Badge>
+          </CardTitle>
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <label htmlFor="agents-sort" className="text-muted-foreground">Sort by:</label>
+            <select
+              id="agents-sort"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="h-7 rounded-md border border-border bg-background px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {AGENT_SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">
@@ -2004,7 +2165,12 @@ function AgentsTab({ agents, agencies }) {
               </tr>
             </thead>
             <tbody>
-              {agents.map((a) => {
+              {sorted.map((a) => {
+                const loyalty = a._loyalty;
+                const badge = loyalty.badge;
+                const badgeClass = badge?.tone === "gold"
+                  ? "bg-amber-100 text-amber-800 border-amber-300"
+                  : "bg-amber-50 text-amber-700 border-amber-200";
                 const nameLabel = (
                   <div className="flex items-center gap-2 min-w-0">
                     <Avatar className="h-7 w-7 shrink-0">
@@ -2012,7 +2178,22 @@ function AgentsTab({ agents, agencies }) {
                       <AvatarFallback className="text-[10px]">{initials(a.full_name)}</AvatarFallback>
                     </Avatar>
                     <div className="min-w-0">
-                      <p className="font-medium truncate">{a.full_name || "—"}</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="font-medium truncate">{a.full_name || "—"}</p>
+                        {badge && (
+                          <Badge
+                            variant="outline"
+                            className={cn("text-[9px] shrink-0", badgeClass)}
+                            title={
+                              badge.label === "High loyalty"
+                                ? "\u22653 listings at this property"
+                                : "\u22652 listings with a sale in between"
+                            }
+                          >
+                            {badge.label}
+                          </Badge>
+                        )}
+                      </div>
                       {a.job_title && (
                         <p className="text-[10px] text-muted-foreground truncate">{a.job_title}</p>
                       )}
@@ -2045,25 +2226,37 @@ function AgentsTab({ agents, agencies }) {
                     </Link>
                   )
                   : nameLabel;
+                const rowKey = a.rea_agent_id || a.pulse_agent_id || a.full_name;
                 return (
-                  <tr key={a.rea_agent_id || a.pulse_agent_id || a.full_name} className="border-t border-border/60 hover:bg-muted/30">
-                    <td className="px-3 py-2">{wrapped}</td>
-                    <td className="px-3 py-2 hidden sm:table-cell truncate max-w-[180px]">
-                      {a.agency_name || "—"}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {a.campaigns_count != null ? a.campaigns_count : "—"}
-                    </td>
-                    <td className="px-3 py-2 hidden md:table-cell">
-                      {fmtDate(a.latest_campaign_date)}
-                    </td>
-                    <td className="px-3 py-2 text-right hidden lg:table-cell tabular-nums">
-                      {a.avg_days_on_market != null ? `${Math.round(a.avg_days_on_market)}d` : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-right hidden lg:table-cell tabular-nums">
-                      {a.sales_as_lead != null ? a.sales_as_lead : "—"}
-                    </td>
-                  </tr>
+                  <React.Fragment key={rowKey}>
+                    <tr className="border-t border-border/60 hover:bg-muted/30">
+                      <td className="px-3 py-2">{wrapped}</td>
+                      <td className="px-3 py-2 hidden sm:table-cell truncate max-w-[180px]">
+                        {a.agency_name || "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {a.campaigns_count != null ? a.campaigns_count : "—"}
+                      </td>
+                      <td className="px-3 py-2 hidden md:table-cell">
+                        {fmtDate(a.latest_campaign_date)}
+                      </td>
+                      <td className="px-3 py-2 text-right hidden lg:table-cell tabular-nums">
+                        {a.avg_days_on_market != null ? `${Math.round(a.avg_days_on_market)}d` : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right hidden lg:table-cell tabular-nums">
+                        {a.sales_as_lead != null ? a.sales_as_lead : "—"}
+                      </td>
+                    </tr>
+                    <tr className="bg-muted/10">
+                      <td colSpan={6} className="p-0 border-t border-border/30">
+                        <AgentLoyaltyStrip
+                          events={loyalty.events}
+                          first={loyalty.first}
+                          last={loyalty.last}
+                        />
+                      </td>
+                    </tr>
+                  </React.Fragment>
                 );
               })}
             </tbody>
