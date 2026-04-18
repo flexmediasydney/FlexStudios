@@ -35,6 +35,9 @@ const CATEGORIES = {
   training: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
   cpd: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
   awards: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300",
+  auction: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+  expo: "bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300",
+  industry_meetup: "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300",
   other: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
 };
 
@@ -43,6 +46,9 @@ const SOURCE_BADGE = {
   reb: "bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300 border border-violet-200 dark:border-violet-800",
   arec: "bg-teal-50 text-teal-600 dark:bg-teal-900/30 dark:text-teal-300 border border-teal-200 dark:border-teal-800",
   eventbrite: "bg-orange-50 text-orange-600 dark:bg-orange-900/30 dark:text-orange-300 border border-orange-200 dark:border-orange-800",
+  linkedin: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800",
+  domain: "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
+  realestate: "bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-300 border border-red-200 dark:border-red-800",
   manual: "bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400 border border-gray-200 dark:border-gray-700",
 };
 
@@ -50,6 +56,7 @@ const STATUS_BADGE = {
   upcoming: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
   attended: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
   skipped: "bg-muted text-muted-foreground",
+  cancelled: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
 };
 
 const STATUS_FILTERS = [
@@ -65,6 +72,9 @@ const CATEGORY_OPTIONS = [
   "training",
   "cpd",
   "awards",
+  "auction",
+  "expo",
+  "industry_meetup",
   "other",
 ];
 
@@ -73,6 +83,9 @@ const SOURCE_OPTIONS = [
   "reb",
   "arec",
   "eventbrite",
+  "linkedin",
+  "domain",
+  "realestate",
   "manual",
 ];
 
@@ -134,8 +147,11 @@ const EMPTY_FORM = {
   category: "other",
   source: "manual",
   location: "",
+  venue: "",
   source_url: "",
   description: "",
+  relevance_score: 50,
+  tags: "", // comma-separated; parsed on save
 };
 
 function AddEventDialog({ open, onClose }) {
@@ -153,10 +169,24 @@ function AddEventDialog({ open, onClose }) {
     }
     setSaving(true);
     try {
+      // Parse tags: comma-separated → trimmed array, drop empties
+      const tagsArr = (form.tags || "")
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      // Coerce relevance_score to integer in [0, 100]
+      const relN = Number(form.relevance_score);
+      const relevance =
+        Number.isFinite(relN) ? Math.max(0, Math.min(100, Math.round(relN))) : null;
+
+      const { tags: _drop, ...rest } = form;
       await api.entities.PulseEvent.create({
-        ...form,
+        ...rest,
         status: "upcoming",
         event_date: form.event_date || null,
+        venue: form.venue || null,
+        relevance_score: relevance,
+        tags: tagsArr,
       });
       await refetchEntityList("PulseEvent");
       toast.success("Event added");
@@ -250,15 +280,53 @@ function AddEventDialog({ open, onClose }) {
             </div>
           </div>
 
-          {/* Location */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">Location</label>
-            <Input
-              placeholder="Venue or city"
-              value={form.location}
-              onChange={(e) => set("location", e.target.value)}
-              className="h-8 text-sm"
-            />
+          {/* Location (city / suburb) + Venue (specific building) */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Location</label>
+              <Input
+                placeholder="City or suburb"
+                value={form.location}
+                onChange={(e) => set("location", e.target.value)}
+                className="h-8 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Venue</label>
+              <Input
+                placeholder="e.g. ICC Sydney"
+                value={form.venue}
+                onChange={(e) => set("venue", e.target.value)}
+                className="h-8 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Relevance score + Tags */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Relevance <span className="text-muted-foreground/60">({form.relevance_score || 0}/100)</span>
+              </label>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                step={5}
+                value={form.relevance_score}
+                onChange={(e) => set("relevance_score", e.target.value)}
+                className="h-8 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Tags</label>
+              <Input
+                placeholder="comma,separated"
+                value={form.tags}
+                onChange={(e) => set("tags", e.target.value)}
+                className="h-8 text-sm"
+              />
+            </div>
           </div>
 
           {/* URL */}
