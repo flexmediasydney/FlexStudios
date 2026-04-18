@@ -66,6 +66,8 @@ const EVENT_CONFIG = {
   listing_video_added:      { icon: Video,         color: "bg-blue-500",    label: "Video Added",        category_color: "text-blue-600 dark:text-blue-400" },
   listing_withdrawn:        { icon: XCircle,       color: "bg-red-500",     label: "Withdrawn",          category_color: "text-red-600 dark:text-red-400" },
   sold_date_captured:       { icon: CheckCircle2,  color: "bg-emerald-500", label: "Sold Date Captured", category_color: "text-emerald-600 dark:text-emerald-400" },
+  // B13 fix: agency contact events were emitted but had no config — rendered as generic gray fallback
+  agency_contact_discovered:{ icon: AtSign,        color: "bg-emerald-500", label: "Agency Contact Found", category_color: "text-emerald-600 dark:text-emerald-400" },
 };
 
 /* ── Fallback config for unknown event types ─────────────────────────────── */

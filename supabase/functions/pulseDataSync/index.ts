@@ -1685,21 +1685,47 @@ serveWithAudit('pulseDataSync', async (req) => {
         if (matchedCrm) { matchType = 'rea_id'; hasNameOverlap = true; }
       }
 
-      // Priority 2: Phone match — now INCLUDES alternate_mobiles (migration 103+104).
-      // Every mobile value ever observed for an agent lives in alternate_mobiles
-      // as {value, sources, confidence}. We match if ANY of those (incl. primary)
-      // matches the CRM contact's phone. This keeps mapping accuracy stable
-      // as detail-enrich discovers new mobiles (old primary demoted to alts).
+      // Priority 2: Phone match — includes alternate_mobiles.
+      // B23 fix: snapshot was loaded pre-upsert and may be stale w.r.t.
+      // detail-enrich runs that happened since. Re-fetch alternate_mobiles
+      // just-in-time for this specific agent to ensure freshness.
       if (!matchedCrm) {
-        // Collect every mobile value for this agent from the primary + alternates
         const agentMobilePool = new Set<string>();
         if (agent.mobile) {
           const n = normalizeMobile(agent.mobile);
           if (n) agentMobilePool.add(n);
         }
-        // Pull alternate_mobiles from the existing row (if any — new agents have none)
+        // Fresh read of alternate_mobiles + mobile + business_phone
+        try {
+          const { data: freshAgent } = await admin
+            .from('pulse_agents')
+            .select('mobile, business_phone, alternate_mobiles, alternate_phones')
+            .eq('rea_agent_id', reaId)
+            .maybeSingle();
+          if (freshAgent?.mobile) {
+            const n = normalizeMobile(freshAgent.mobile);
+            if (n) agentMobilePool.add(n);
+          }
+          if (freshAgent?.business_phone) {
+            const n = normalizeMobile(freshAgent.business_phone);
+            if (n) agentMobilePool.add(n);
+          }
+          if (Array.isArray(freshAgent?.alternate_mobiles)) {
+            for (const alt of freshAgent.alternate_mobiles) {
+              const n = normalizeMobile(alt?.value || '');
+              if (n) agentMobilePool.add(n);
+            }
+          }
+          if (Array.isArray(freshAgent?.alternate_phones)) {
+            for (const alt of freshAgent.alternate_phones) {
+              const n = normalizeMobile(alt?.value || '');
+              if (n) agentMobilePool.add(n);
+            }
+          }
+        } catch { /* fall back to stale snapshot below */ }
+        // Fallback to snapshot if fresh read failed
         const existingAgentSnap = existingByReaIdSnapshot.get(reaId);
-        if (existingAgentSnap?.alternate_mobiles && Array.isArray(existingAgentSnap.alternate_mobiles)) {
+        if (agentMobilePool.size === 0 && existingAgentSnap?.alternate_mobiles && Array.isArray(existingAgentSnap.alternate_mobiles)) {
           for (const alt of existingAgentSnap.alternate_mobiles) {
             const n = normalizeMobile(alt?.value || '');
             if (n) agentMobilePool.add(n);

@@ -50,9 +50,13 @@ const SOURCE_ID = 'rea_detail_enrich';
 // BATCH_SIZE × 5s < APIFY_WAIT_SECS. 15 URLs × 5s = 75s << 85s window.
 // Edge function wall-clock cap is 150s; we can fit 1 batch comfortably.
 // Cron calls this repeatedly for larger backfills.
-const APIFY_WAIT_SECS = 55;  // tight window; memo23 typically finishes in 30-50s for 15 URLs
+// Timing: memo23 at 5s/URL × 15 URLs = 75s typical. Wall-clock 150s edge limit
+// leaves room for exactly 1 batch with a safe 85s wait. For throughput the
+// cron now fires every 15 min (migration 113), so 30 listings/hour = 720/day
+// is sustainable without stacking batches.
+const APIFY_WAIT_SECS = 85;
 const BATCH_SIZE = 15;
-const MAX_BATCHES_PER_INVOCATION = 2;  // 2 × 55s = 110s, fits under 150s wall-clock
+const MAX_BATCHES_PER_INVOCATION = 1;
 
 // Confidence source labels (must match pulse_source_confidence() in 104)
 const SRC_LISTER  = 'detail_page_lister';
@@ -62,19 +66,59 @@ const SRC_AGENCY  = 'detail_page_agency';
 
 function parseAuctionDatetime(auctionTime: any): string | null {
   // listing.auctionTime.startTime = '2026-05-02T14:30:00' (local time, no TZ)
-  // Treat as AEST (UTC+10/+11); REA listings are AU-local. Emit ISO UTC.
+  // Treat as Sydney. B27 fix: AEDT (UTC+11) applies Oct 1st → Apr 1st (approx).
+  // Full Australia/Sydney DST rules via Intl — no manual offset math.
   if (!auctionTime?.startTime) return null;
   const raw = String(auctionTime.startTime).trim();
   // If already has timezone, return as-is
   if (/[Zz]|[+-]\d{2}:?\d{2}$/.test(raw)) return new Date(raw).toISOString();
-  // Assume local = Sydney; append +10:00 as a best approximation
-  // (DST handling is imperfect but only matters ±1h, acceptable for this use case)
+  // Determine Sydney offset for the given datetime via Intl
   try {
-    const withTz = raw + '+10:00';
-    const d = new Date(withTz);
-    if (isNaN(d.getTime())) return null;
-    return d.toISOString();
+    // Extract Y-M-D-H-M from the naive string
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+    if (!m) return null;
+    const [, yy, mm, dd, hh, mi, ss] = m;
+    // Determine if this AU date is in AEDT or AEST by formatting a known UTC
+    // timestamp in Australia/Sydney and reading the offset. We do this by
+    // finding the DST-aware UTC offset for the specific local date.
+    // Pragmatic approach: format "{yyyy}-{mm}-{dd}T{hh}:{mi} Australia/Sydney"
+    // into UTC via Date.UTC tricks. Use the DateTimeFormat trick:
+    const local = new Date(Date.UTC(Number(yy), Number(mm) - 1, Number(dd), Number(hh), Number(mi), Number(ss || 0)));
+    // Ask what Australia/Sydney thinks this UTC moment's local time is; the
+    // difference tells us which offset applies to this local time.
+    const sydFormatter = new Intl.DateTimeFormat('en-AU', {
+      timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    // Binary-search-style: test with +10 and +11 offsets and see which matches
+    for (const tryOffset of [10, 11]) {
+      const tentative = new Date(local.getTime() - tryOffset * 3600 * 1000);
+      const parts = Object.fromEntries(sydFormatter.formatToParts(tentative).map(p => [p.type, p.value]));
+      const sydHour = parts.hour === '24' ? '00' : parts.hour;
+      if (parts.year === yy && parts.month === mm && parts.day === dd
+          && sydHour === hh && parts.minute === mi) {
+        return tentative.toISOString();
+      }
+    }
+    // Fallback: treat as UTC+10
+    return new Date(local.getTime() - 10 * 3600 * 1000).toISOString();
   } catch { return null; }
+}
+
+/** Strip phone extensions and non-digit noise. B11 fix. */
+function sanitisePhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let s = String(raw).trim();
+  // Remove extension tokens like "x123", " ext 456", "extn 789"
+  s = s.replace(/\s*(x|ext|extn|extension)\s*\d+\s*$/i, '');
+  // Keep + and digits; drop everything else
+  s = s.replace(/[^0-9+]/g, '');
+  // Cap at 15 digits (E.164 max); prefer leading + preserved
+  const hasPlus = s.startsWith('+');
+  const digits = s.replace(/\+/g, '');
+  if (digits.length < 8) return null; // too short to be a phone
+  if (digits.length > 15) return null; // nonsensical
+  return hasPlus ? '+' + digits : digits;
 }
 
 function parseSoldDate(dateSold: any): string | null {
@@ -106,8 +150,9 @@ function parseLandSizeSqm(landSize: any): number | null {
   const unit = String(landSize.unit || '').toLowerCase();
   const v = Number(landSize.value);
   if (!v || v <= 0) return null;
-  if (unit === 'm2' || unit === 'm²' || unit === 'sqm') return v;
+  if (unit === 'm2' || unit === 'm²' || unit === 'sqm' || unit === 'sq m' || unit === '') return v;
   if (unit === 'ha' || unit === 'hectare' || unit === 'hectares') return v * 10_000;
+  if (unit === 'acres' || unit === 'acre') return v * 4046.8564224;  // B26: AU rural listings
   return null;
 }
 
@@ -131,12 +176,13 @@ function extractMediaItems(images: any[]): {
     const uri = String(img.uri || '');
 
     if (img.video === true || name === 'video' || server.includes('youtube.com')) {
-      // Video entry
-      if (img.id && !videoUrl) {
-        videoUrl = `https://www.youtube.com/watch?v=${img.id}`;
+      // B36 fix: each video gets its own URL (no first-video-wins overwrite)
+      const thisVideoUrl = img.id ? `https://www.youtube.com/watch?v=${img.id}` : `${server}${uri}`;
+      if (!videoUrl) {
+        videoUrl = thisVideoUrl;
         videoThumb = `${server}${uri}`;
       }
-      mediaItems.push({ type: 'video', url: videoUrl || `${server}${uri}`, thumb: `${server}${uri}`, order_index: idx });
+      mediaItems.push({ type: 'video', url: thisVideoUrl, thumb: `${server}${uri}`, order_index: idx });
     } else if (name === 'floorplan') {
       const full = `${server}${uri}`;
       floorplans.push(full);
@@ -167,7 +213,11 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
   if (urls.length === 0) return { ok: true, status: 'SKIPPED_EMPTY', items: [] };
 
   const safeSlug = ACTOR_SLUG.replace('/', '~');
-  const submitUrl = `${APIFY_BASE}/acts/${safeSlug}/runs?timeout=${APIFY_WAIT_SECS}&waitForFinish=${APIFY_WAIT_SECS}`;
+  // B38: Apify's `timeout` (actor run timeout) and `waitForFinish` (API blocking
+  // wait) are distinct. Give the actor enough runtime; wait only as long as
+  // our edge function budget allows.
+  const ACTOR_TIMEOUT_SECS = 120;  // actor can take up to 2 min
+  const submitUrl = `${APIFY_BASE}/acts/${safeSlug}/runs?timeout=${ACTOR_TIMEOUT_SECS}&waitForFinish=${APIFY_WAIT_SECS}`;
   const input = {
     startUrls: urls,
     maxItems: urls.length + 5, // small slack
@@ -290,6 +340,12 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
   const startedAt = Date.now();
   const WALL_BUDGET_MS = 140_000; // leave headroom
 
+  // B34: fail-fast on config error. Don't open a sync_log or touch the breaker
+  // — this is not an Apify health issue, it's misconfiguration.
+  if (!APIFY_TOKEN) {
+    return errorResponse('APIFY_TOKEN is not configured on this environment', 500);
+  }
+
   let body: Record<string, any> = {};
   try { body = await req.json(); } catch { /* empty */ }
   const trigger = String(body.trigger || 'manual');
@@ -299,10 +355,13 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
   const dryRun = body.dry_run === true;
 
   // ── Circuit breaker check ─────────────────────────────────────────────
+  // B12: when state='open' but reopen_at is NULL (data corruption / manual
+  // flip), treat as permanently open rather than falling through. Only
+  // auto-reopen when reopen_at is in the past.
   const breaker = await breakerGetState(admin);
   if (breaker.state === 'open') {
-    const reopenAt = breaker.reopenAt ? new Date(breaker.reopenAt).getTime() : 0;
-    if (reopenAt > Date.now()) {
+    const reopenAt = breaker.reopenAt ? new Date(breaker.reopenAt).getTime() : null;
+    if (reopenAt === null || reopenAt > Date.now()) {
       return jsonResponse({
         skipped: true,
         reason: 'circuit_breaker_open',
@@ -327,28 +386,34 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
 
   try {
     // ── Candidate selection ──────────────────────────────────────────────
+    // B03: include detail_enrich_count so we can increment it correctly.
+    const SELECT_COLS = 'id, source_listing_id, source_url, listing_type, sold_date, price_text, last_synced_at, detail_enriched_at, detail_enrich_count';
     let candidates: any[] = [];
     if (forceIds.length > 0) {
       const { data } = await admin
         .from('pulse_listings')
-        .select('id, source_listing_id, source_url, listing_type, sold_date, price_text, last_synced_at, detail_enriched_at')
+        .select(SELECT_COLS)
         .in('id', forceIds);
       candidates = data || [];
     } else {
       // Main path: pick stalest / priority targets
       let query = admin
         .from('pulse_listings')
-        .select('id, source_listing_id, source_url, listing_type, sold_date, price_text, last_synced_at, detail_enriched_at')
+        .select(SELECT_COLS)
         .eq('source', 'rea')
         .not('source_url', 'is', null)
         .limit(maxListings);
 
+      // B04: all priority modes sort by detail_enriched_at NULLS FIRST to avoid
+      // repeatedly picking the same already-processed listings.
       if (priorityMode === 'sold_first') {
-        // Sold listings with no sold_date captured yet — audit-highest-value
-        query = query.eq('listing_type', 'sold').is('sold_date', null).order('last_synced_at', { ascending: false });
+        query = query.eq('listing_type', 'sold').is('sold_date', null)
+          .order('detail_enriched_at', { ascending: true, nullsFirst: true })
+          .order('last_synced_at', { ascending: false });
       } else if (priorityMode === 'auction_first') {
-        // Active listings with 'auction' in price_text but no auction_date
-        query = query.in('listing_type', ['for_sale', 'under_contract']).ilike('price_text', '%auction%').order('last_synced_at', { ascending: false });
+        query = query.in('listing_type', ['for_sale', 'under_contract']).ilike('price_text', '%auction%')
+          .order('detail_enriched_at', { ascending: true, nullsFirst: true })
+          .order('last_synced_at', { ascending: false });
       } else {
         // auto: stalest or never-enriched first
         query = query.or('detail_enriched_at.is.null,detail_enriched_at.lt.' + new Date(Date.now() - 14 * 86400 * 1000).toISOString())
@@ -446,7 +511,7 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
               listing_withdrawn_at: now.toISOString(),
               listing_withdrawn_reason: 'absent_from_rea',
               detail_enriched_at: now.toISOString(),
-              detail_enrich_count: 1, // first time we noticed
+              detail_enrich_count: (cand.detail_enrich_count || 0) + 1,  // B02: preserve count
               last_sync_log_id: syncLogId,
             }).eq('id', cand.id);
             stats.items_withdrawn++;
@@ -482,8 +547,11 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
           detail_enriched_at: now.toISOString(),
           detail_enrich_count: (cand.detail_enrich_count || 0) + 1,
           last_sync_log_id: syncLogId,
+          // B17: clear withdrawn flags if listing reappears
+          listing_withdrawn_at: null,
+          listing_withdrawn_reason: null,
         };
-        if (auctionTimeIso) listingUpdates.auction_date = auctionTimeIso; // will work once 108 runs
+        if (auctionTimeIso) listingUpdates.auction_date = auctionTimeIso;
         if (soldDateIso) listingUpdates.sold_date = soldDateIso;
         if (dateAvailable) listingUpdates.date_available = dateAvailable;
         if (landSizeSqm) listingUpdates.land_size_sqm = landSizeSqm;
@@ -506,13 +574,15 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
 
         // Timeline events for new data discovered
         const prevEnrichedAt = cand.detail_enriched_at;
-        if (soldDateIso && !cand.sold_date) {
+        if (soldDateIso && (!cand.sold_date || cand.sold_date !== soldDateIso)) {
+          // B25: include date in the key so corrections (sold_date fixed) re-fire
           timelineEvents.push({
             entity_type: 'listing', pulse_entity_id: cand.id, event_type: 'sold_date_captured',
             event_category: 'market', title: `Sold date captured: ${soldDateIso}`,
-            description: `Detail enrich found dateSold.value=${soldDateIso} (was NULL). Exact sold date now available.`,
+            description: `Detail enrich found dateSold.value=${soldDateIso}`,
+            previous_value: cand.sold_date ? { sold_date: cand.sold_date } : null,
             new_value: { sold_date: soldDateIso }, source: SOURCE_ID,
-            idempotency_key: `sold_date_captured:${cand.source_listing_id}`,
+            idempotency_key: `sold_date_captured:${cand.source_listing_id}:${soldDateIso}`,
           });
         }
         if (auctionTimeIso) {
@@ -564,7 +634,10 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
           || (topAgent?.agentId && String(topAgent.agentId))
           || null;
         const agentEmail = lister?.email || (Array.isArray(topAgent?.emails) ? topAgent.emails[0] : null) || null;
-        const agentMobile = lister?.mobilePhoneNumber || lister?.phoneNumber || topAgent?.phoneNumber || topAgent?.phone || null;
+        // B11: strip extensions/non-digit junk BEFORE merging, so pulse_normalize_phone
+        // doesn't corrupt "0414 xxx xxx x123" into "0414xxxxxx123".
+        const rawMobile = lister?.mobilePhoneNumber || lister?.phoneNumber || topAgent?.phoneNumber || topAgent?.phone || null;
+        const agentMobile = sanitisePhone(rawMobile);
         if (reaAgentId) {
           // Find the matching pulse_agents row
           let { data: agentRow } = await admin.from('pulse_agents')
@@ -572,37 +645,36 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             .eq('rea_agent_id', reaAgentId)
             .maybeSingle();
 
-          // Bridge-create if missing (same pattern as pulseDataSync listing
-          // bridge): detail-enrich often sees agents before websift catches
-          // them. Low base score; will bump below as contacts merge in.
+          // Bridge-create if missing. B24: use placeholder name when no
+          // lister/topAgent name is present — we don't want to drop the agent
+          // just because REA sometimes ships partial data. B33: data_sources
+          // must be a jsonb ARRAY, not a JSON.stringify'd string.
           if (!agentRow) {
-            const listerName = lister?.name || topAgent?.name || null;
+            const listerName = lister?.name || topAgent?.name || `Agent ${reaAgentId}`;
             const listerTitle = lister?.jobTitle || topAgent?.jobTitle || null;
             const listerPhoto = lister?.mainPhoto ? `${lister.mainPhoto.server}${lister.mainPhoto.uri}` : (topAgent?.image || null);
-            if (listerName) {
-              const { data: created } = await admin.from('pulse_agents').insert({
-                rea_agent_id: reaAgentId,
-                full_name: listerName,
-                job_title: listerTitle,
-                profile_image: listerPhoto,
-                agency_name: listing.agency?.name || item.agencyName || null,
-                source: 'rea_detail_bridge',
-                data_sources: JSON.stringify(['rea_detail']),
-                data_integrity_score: 30,
-                last_synced_at: now.toISOString(),
-                last_sync_log_id: syncLogId,
-                first_seen_at: now.toISOString(),
-              }).select('id, email, email_source, mobile, mobile_source, rea_agent_id').maybeSingle();
-              if (created) {
-                agentRow = created;
-                timelineEvents.push({
-                  entity_type: 'agent', pulse_entity_id: created.id, rea_id: reaAgentId,
-                  event_type: 'first_seen', event_category: 'system',
-                  title: `${listerName} first detected via detail enrich`,
-                  description: `Agent discovered through listing detail page (no prior websift sync)`,
-                  source: SOURCE_ID, idempotency_key: `first_seen:${reaAgentId}`,
-                });
-              }
+            const { data: created } = await admin.from('pulse_agents').insert({
+              rea_agent_id: reaAgentId,
+              full_name: listerName,
+              job_title: listerTitle,
+              profile_image: listerPhoto,
+              agency_name: listing.agency?.name || item.agencyName || null,
+              source: 'rea_detail_bridge',
+              data_sources: ['rea_detail'],  // B33: raw array, not stringified
+              data_integrity_score: 30,
+              last_synced_at: now.toISOString(),
+              last_sync_log_id: syncLogId,
+              first_seen_at: now.toISOString(),
+            }).select('id, email, email_source, mobile, mobile_source, rea_agent_id').maybeSingle();
+            if (created) {
+              agentRow = created;
+              timelineEvents.push({
+                entity_type: 'agent', pulse_entity_id: created.id, rea_id: reaAgentId,
+                event_type: 'first_seen', event_category: 'system',
+                title: `${listerName} first detected via detail enrich`,
+                description: `Agent discovered through listing detail page (no prior websift sync)`,
+                source: SOURCE_ID, idempotency_key: `first_seen:${reaAgentId}`,
+              });
             }
           }
 
@@ -692,10 +764,46 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
         const agencyReaId = match ? match[1] : null;
 
         if (agencyReaId) {
-          const { data: agencyRow } = await admin.from('pulse_agencies')
-            .select('id, email, phone, website, address_street, brand_color_primary')
+          let { data: agencyRow } = await admin.from('pulse_agencies')
+            .select('id, email, phone, website, address_street, brand_color_primary, brand_color_text')
             .eq('rea_agency_id', agencyReaId)
             .maybeSingle();
+
+          // B37: bridge-create agency if missing (mirrors agent bridge). Agencies
+          // only ever come from listings; detail-enrich may see one before
+          // pulseDataSync has written the main record.
+          if (!agencyRow) {
+            const agencyName = listing.agency?.name || item.agencyName || null;
+            if (agencyName) {
+              const addr = listing.agency?.address || {};
+              const { data: created } = await admin.from('pulse_agencies').insert({
+                rea_agency_id: agencyReaId,
+                name: agencyName,
+                phone: null,  // pulse_merge_contact will set below
+                website: listing.agency?.website || null,
+                address_street: addr?.streetAddress || null,
+                suburb: addr?.suburb || null,
+                state: addr?.state || null,
+                postcode: addr?.postcode || null,
+                brand_color_primary: listing.agency?.brandingColors?.primary || null,
+                brand_color_text: listing.agency?.brandingColors?.text || null,
+                logo_url: listing.agency?.logo?.images?.[0] ? `${listing.agency.logo.images[0].server}${listing.agency.logo.images[0].uri}` : null,
+                source: 'rea_detail_bridge',
+                last_synced_at: now.toISOString(),
+                last_sync_log_id: syncLogId,
+              }).select('id, email, phone, website, address_street, brand_color_primary, brand_color_text').maybeSingle();
+              if (created) {
+                agencyRow = created;
+                timelineEvents.push({
+                  entity_type: 'agency', pulse_entity_id: created.id, rea_id: agencyReaId,
+                  event_type: 'first_seen', event_category: 'system',
+                  title: `${agencyName} first detected via detail enrich`,
+                  description: `Agency discovered through listing detail page`,
+                  source: SOURCE_ID, idempotency_key: `first_seen:agency:${agencyReaId}`,
+                });
+              }
+            }
+          }
 
           if (agencyRow) {
             // Helper to extract action from rpc result (handles both jsonb-direct and wrapped responses)
@@ -750,7 +858,8 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
                 });
               }
             }
-            // Plain fields (website, address, brand colors) — don't overwrite if already set
+            // Plain fields (website, address, brand colors) — don't overwrite if already set.
+            // B45: bcText also honours `!agencyRow.brand_color_text` (parity with bcPrimary).
             const aUpdates: Record<string, any> = {};
             if (agency.website && !agencyRow.website) aUpdates.website = agency.website;
             const addrStreet = agency.address?.streetAddress || null;
@@ -758,7 +867,7 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             const bcPrimary = agency.brandingColors?.primary || null;
             const bcText = agency.brandingColors?.text || null;
             if (bcPrimary && !agencyRow.brand_color_primary) aUpdates.brand_color_primary = bcPrimary;
-            if (bcText) aUpdates.brand_color_text = bcText;
+            if (bcText && !agencyRow.brand_color_text) aUpdates.brand_color_text = bcText;
             if (Object.keys(aUpdates).length > 0) {
               aUpdates.last_sync_log_id = syncLogId;
               await admin.from('pulse_agencies').update(aUpdates).eq('id', agencyRow.id);

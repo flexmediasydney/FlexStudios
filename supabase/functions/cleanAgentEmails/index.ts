@@ -168,22 +168,33 @@ serveWithAudit('cleanAgentEmails', async (req) => {
         const HYGIENE_CONFIDENCE = 65;
         const primaryProtected = detailSourced && existingConfidence > HYGIENE_CONFIDENCE;
 
+        // B20: all email writes should go through pulse_merge_contact so the
+        // alternate_emails array stays consistent with the primary. For the
+        // null-out path (B29), we also clear alternates of middleman values
+        // so the dossier doesn't surface them as suggestions.
         if (primary && primaryLc !== beforeEmailLc && existingNeedsFix && !primaryProtected) {
-          updates.email = primary;
-          // Hygiene stamps itself as the new source — but ONLY when we actually
-          // rewrote the primary. Detail-sourced promotions came via pulse_merge_contact.
-          updates.email_source = 'hygiene';
-          updates.email_confidence = HYGIENE_CONFIDENCE;
+          // Defer the email set — we call pulse_merge_contact AFTER the
+          // updates-object write, so the merge sees the cleaned list as
+          // alternates already-populated.
           if (beforeEmail && !beforeIsMiddleman) {
             updates.previous_email = beforeEmail;
           }
           stats.primary_replaced++;
+
+          if (!dryRun) {
+            const { error: mergeErr } = await admin.rpc('pulse_merge_contact', {
+              p_table: 'pulse_agents', p_row_id: row.id,
+              p_field: 'email', p_value: primary, p_source: 'hygiene',
+            });
+            if (mergeErr) stats.errors.push(`merge ${row.id}: ${mergeErr.message?.substring(0, 200)}`);
+          }
         } else if (!primary && beforeEmail && beforeIsMiddleman && !primaryProtected) {
-          // All known emails are middleman and nothing clean to replace with
-          // — null the primary but keep the audit trail in rejected_emails.
+          // B29: null the primary AND strip middleman values from alternates
+          // so UI doesn't surface them as suggestions.
           updates.email = null;
           updates.email_source = null;
           updates.email_confidence = null;
+          updates.alternate_emails = [];  // clear — all known candidates were middleman
           stats.primary_replaced++;
         } else {
           stats.primary_unchanged++;
