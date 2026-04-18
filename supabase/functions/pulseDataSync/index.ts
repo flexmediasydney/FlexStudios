@@ -725,6 +725,18 @@ serveWithAudit('pulseDataSync', async (req) => {
       if (listing.suburb) agency.suburbs.add(listing.suburb);
       const price = parseFloat(String(listing.price || '').replace(/[^0-9.]/g, ''));
       if (price > 0) agency.listing_prices.push(price);
+
+      // ── Bug fix: harvest rea_agency_id from listings too ──
+      // Previously only agents' agency_rea_id fed this set, so a listings-only
+      // run (any rea_listings_bb_*) couldn't populate pulse_agencies.rea_agency_id
+      // even though every listing row carries it. Belle Property Strathfield had
+      // rea_agency_id=NULL because of this — fix extracts the ID from the
+      // agencyProfileUrl pattern same as the listing-row extractor does.
+      const listingAgencyUrl = listing.agencyProfileUrl || '';
+      const listingAgencyIdMatch = listingAgencyUrl.match(/agency\/.*?([A-Z0-9]{5,})(?:\/|$)/i);
+      if (listingAgencyIdMatch) {
+        agency.rea_agency_ids.add(listingAgencyIdMatch[1]);
+      }
     }
 
     // 4b: Enrich agencies from agent data (REA IDs, sales, ratings)
@@ -991,11 +1003,18 @@ serveWithAudit('pulseDataSync', async (req) => {
     });
 
     for (const agency of mergedAgencies) {
-      const cleaned = {
+      const cleaned: Record<string, any> = {
         ...agency,
         suburbs_active: typeof agency.suburbs_active === 'string' ? JSON.parse(agency.suburbs_active) : (agency.suburbs_active || []),
         data_sources: typeof agency.data_sources === 'string' ? JSON.parse(agency.data_sources) : (agency.data_sources || []),
       };
+      // Don't overwrite a previously-captured rea_agency_id with NULL if this
+      // particular run didn't carry it (defensive — protects the Belle Property
+      // Strathfield fix from being re-broken on future runs that happen to
+      // omit the agencyProfileUrl pattern).
+      if (cleaned.rea_agency_id == null) {
+        delete cleaned.rea_agency_id;
+      }
       try {
         const existingId = existingAgencyMap.get(agency.name.trim().toLowerCase());
 
