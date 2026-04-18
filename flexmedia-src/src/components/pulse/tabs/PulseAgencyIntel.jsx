@@ -43,6 +43,7 @@ import {
   Clock,
   Loader2,
   History,
+  BarChart3,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
@@ -161,6 +162,101 @@ function parseArray(val) {
   } catch {
     return [];
   }
+}
+
+/**
+ * Convert a hex color (#RRGGBB or #RGB) to an `rgba(...)` string with the
+ * given alpha. Returns null if the input isn't parseable — callers should
+ * fall through to a neutral fallback in that case. Alpha is clamped 0..1.
+ */
+function hexToRgba(hex, alpha) {
+  if (!hex || typeof hex !== "string") return null;
+  const m = hex.trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const a = Math.max(0, Math.min(1, alpha));
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+/**
+ * Aggregate per-property-type sales_breakdown across an agency's roster.
+ * Each pulse_agent row carries its own jsonb like:
+ *   { house: { count, medianSoldPrice, medianDaysOnSite }, ... }
+ * We sum counts across agents and take the weighted-by-count mean of
+ * medianSoldPrice / medianDaysOnSite. pulse_agencies has no sales_breakdown
+ * column (0% populated), so this client-side rollup is the only source.
+ */
+function aggregateRosterSalesBreakdown(roster) {
+  if (!Array.isArray(roster) || roster.length === 0) return null;
+  const agg = {};
+  for (const ag of roster) {
+    let sb = ag?.sales_breakdown;
+    if (!sb) continue;
+    if (typeof sb === "string") {
+      try { sb = JSON.parse(sb); } catch { sb = null; }
+    }
+    if (!sb || typeof sb !== "object") continue;
+    for (const [type, data] of Object.entries(sb)) {
+      if (!data || typeof data !== "object") continue;
+      const c = Number(data.count) || 0;
+      if (c <= 0) continue;
+      if (!agg[type]) agg[type] = { count: 0, _priceSum: 0, _priceW: 0, _domSum: 0, _domW: 0 };
+      agg[type].count += c;
+      if (data.medianSoldPrice > 0) {
+        agg[type]._priceSum += Number(data.medianSoldPrice) * c;
+        agg[type]._priceW += c;
+      }
+      if (data.medianDaysOnSite > 0) {
+        agg[type]._domSum += Number(data.medianDaysOnSite) * c;
+        agg[type]._domW += c;
+      }
+    }
+  }
+  const out = {};
+  for (const [type, v] of Object.entries(agg)) {
+    out[type] = {
+      count: v.count,
+      medianSoldPrice: v._priceW > 0 ? Math.round(v._priceSum / v._priceW) : null,
+      medianDaysOnSite: v._domW > 0 ? +(v._domSum / v._domW).toFixed(1) : null,
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/* Roster sort options — photography pitch is "who's shooting a lot right now?",
+   so Active listings is the default. Values mirror the most useful columns
+   available on pulse_agents. */
+const ROSTER_SORT_OPTIONS = [
+  { value: "active", label: "Active listings" },
+  { value: "sold", label: "Sold (12m)" },
+  { value: "rating", label: "Rating" },
+  { value: "name", label: "Name" },
+];
+const ROSTER_SORT_DEFAULT = "active";
+
+function sortRoster(list, sortKey) {
+  if (!Array.isArray(list)) return [];
+  const arr = list.slice();
+  switch (sortKey) {
+    case "sold":
+      arr.sort((a, b) => (b.sales_as_lead || b.total_sold_12m || 0) - (a.sales_as_lead || a.total_sold_12m || 0));
+      break;
+    case "rating":
+      arr.sort((a, b) => (b.rea_rating || b.reviews_avg || 0) - (a.rea_rating || a.reviews_avg || 0));
+      break;
+    case "name":
+      arr.sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+      break;
+    case "active":
+    default:
+      arr.sort((a, b) => (b.total_listings_active || 0) - (a.total_listings_active || 0));
+      break;
+  }
+  return arr;
 }
 
 function mapPosition(jobTitle) {
@@ -569,6 +665,8 @@ export function AgencySlideout({
   const [addingToCrm, setAddingToCrm] = useState(false);
   // Tier 4: source-history drill
   const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
+  // AG05: roster sort — default = Active listings (photography pitch: "who's shooting a lot?")
+  const [rosterSort, setRosterSort] = useState(ROSTER_SORT_DEFAULT);
 
   // Fetch per-agency timeline via the dossier RPC — the global `pulseTimeline`
   // prop is capped at 500 rows across the platform, so for most agencies it
@@ -668,23 +766,27 @@ export function AgencySlideout({
     return mapping?.crm_entity_id || null;
   }
 
-  /* roster */
+  /* roster — AG05: apply user-selected sort (default: Active listings) */
   const roster = useMemo(() => {
     if (!agency) return [];
+    let base = [];
     if (agency.rea_agency_id) {
-      const byId = pulseAgents.filter(
-        (a) => a.agency_rea_id === agency.rea_agency_id
-      );
-      if (byId.length > 0)
-        return byId.sort((a, b) => (b.sales_as_lead || 0) - (a.sales_as_lead || 0));
+      base = pulseAgents.filter((a) => a.agency_rea_id === agency.rea_agency_id);
     }
-    const key = normAgencyKey(agency.name);
-    if (key)
-      return pulseAgents
-        .filter((a) => normAgencyKey(a.agency_name) === key)
-        .sort((a, b) => (b.sales_as_lead || 0) - (a.sales_as_lead || 0));
-    return [];
-  }, [agency, pulseAgents]);
+    if (base.length === 0) {
+      const key = normAgencyKey(agency.name);
+      if (key) base = pulseAgents.filter((a) => normAgencyKey(a.agency_name) === key);
+    }
+    return sortRoster(base, rosterSort);
+  }, [agency, pulseAgents, rosterSort]);
+
+  /* AG06: aggregate sales_breakdown from roster — pulse_agencies has no
+     sales_breakdown column, so we roll up per-agent sales_breakdown jsonb
+     client-side. Rendered as a mini chart mirroring the agent dossier. */
+  const rosterSalesBreakdown = useMemo(
+    () => aggregateRosterSalesBreakdown(roster),
+    [roster]
+  );
 
   /* CRM lookup for agents */
   const crmAgentIds = useMemo(() => {
@@ -728,11 +830,29 @@ export function AgencySlideout({
 
   if (!agency) return null;
 
+  // AG07: brand color accent — top-border + subtle bg tint when
+  // brand_color_primary is populated (~7% of agencies). Fallback: no border,
+  // neutral bg, identical to legacy behavior.
+  const brandAccent = hexToRgba(agency.brand_color_primary, 1);
+  const brandTint = hexToRgba(agency.brand_color_primary, 0.06);
+  const headerStyle = brandAccent
+    ? {
+        borderTop: `3px solid ${brandAccent}`,
+        backgroundColor: brandTint,
+      }
+    : undefined;
+
   return (
     <Dialog open={!!agency} onOpenChange={() => onClose()}>
       <DialogContent className="max-w-2xl w-full max-h-[90vh] overflow-y-auto p-0">
-        {/* ── Header ── */}
-        <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b px-5 py-4">
+        {/* ── Header (AG07: brand color top-border + subtle tint when set) ── */}
+        <div
+          className={cn(
+            "sticky top-0 z-10 backdrop-blur border-b px-5 py-4",
+            brandAccent ? "" : "bg-background/95"
+          )}
+          style={headerStyle}
+        >
           <DialogHeader>
             <DialogTitle asChild>
               <div className="flex items-start gap-3">
@@ -746,13 +866,19 @@ export function AgencySlideout({
                     <ChevronLeft className="h-4 w-4 text-muted-foreground" />
                   </button>
                 )}
-                {/* Logo */}
-                <div className="h-12 w-12 rounded-xl overflow-hidden bg-muted flex items-center justify-center shrink-0 border">
+                {/* Logo — AG07: 40px circular when logo_url present (~90%
+                    coverage); fallback to building icon square. */}
+                <div
+                  className={cn(
+                    "h-10 w-10 overflow-hidden bg-white flex items-center justify-center shrink-0 border",
+                    agency.logo_url ? "rounded-full" : "rounded-xl"
+                  )}
+                >
                   {agency.logo_url ? (
                     <img
                       src={agency.logo_url}
                       alt={agency.name}
-                      className="h-full w-full object-contain p-1"
+                      className="h-full w-full object-contain p-0.5"
                     />
                   ) : (
                     <Building2 className="h-5 w-5 text-muted-foreground/40" />
@@ -988,18 +1114,37 @@ export function AgencySlideout({
 
           {/* ── Agent Roster ── */}
           <section>
-            <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide mb-2 flex items-center gap-1.5">
-              <Users className="h-3.5 w-3.5" />
-              Agent Roster
-              {roster.length > 0 && (
-                <Badge
-                  variant="outline"
-                  className="text-[8px] py-0 px-1 ml-1 tabular-nums"
-                >
-                  {roster.length}
-                </Badge>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide flex items-center gap-1.5">
+                <Users className="h-3.5 w-3.5" />
+                Agent Roster
+                {roster.length > 0 && (
+                  <Badge
+                    variant="outline"
+                    className="text-[8px] py-0 px-1 ml-1 tabular-nums"
+                  >
+                    {roster.length}
+                  </Badge>
+                )}
+              </h3>
+              {/* AG05: sort options — default "Active listings" matches the
+                  photography pitch ("who's shooting a lot right now?"). */}
+              {roster.length > 1 && (
+                <label className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <span className="uppercase tracking-wide">Sort</span>
+                  <select
+                    value={rosterSort}
+                    onChange={(e) => setRosterSort(e.target.value)}
+                    className="h-6 text-[10px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
+                    aria-label="Sort roster by"
+                  >
+                    {ROSTER_SORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </label>
               )}
-            </h3>
+            </div>
             {roster.length === 0 ? (
               <p className="text-xs text-muted-foreground py-2">No agents found.</p>
             ) : (
@@ -1091,6 +1236,49 @@ export function AgencySlideout({
                     </div>
                   </div>
                 )}
+              </div>
+            </section>
+          )}
+
+          {/* ── Sales by Property Type (AG06) ──
+              pulse_agencies has no sales_breakdown column, so we aggregate
+              per-agent sales_breakdown jsonb across the roster. Chart mirrors
+              the agent dossier in PulseIntelligencePanel. */}
+          {rosterSalesBreakdown && Object.keys(rosterSalesBreakdown).length > 0 && (
+            <section>
+              <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide mb-2 flex items-center gap-1.5">
+                <BarChart3 className="h-3.5 w-3.5" />
+                Sales by Property Type
+                <span className="text-[9px] font-normal normal-case text-muted-foreground/70 ml-1">
+                  rolled up from roster
+                </span>
+              </h3>
+              <div className="space-y-1.5">
+                {Object.entries(rosterSalesBreakdown).map(([type, data]) => {
+                  const maxCount = Math.max(
+                    ...Object.values(rosterSalesBreakdown).map((d) => d.count || 0),
+                    1
+                  );
+                  const pct = Math.round(((data.count || 0) / maxCount) * 100);
+                  return (
+                    <div key={type} className="space-y-0.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="capitalize font-medium">{type}</span>
+                        <span className="text-muted-foreground tabular-nums">
+                          {data.count} sold
+                          {data.medianSoldPrice ? ` \u00B7 ${fmtPrice(data.medianSoldPrice)} median` : ""}
+                          {data.medianDaysOnSite ? ` \u00B7 ${data.medianDaysOnSite}d DOM` : ""}
+                        </span>
+                      </div>
+                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-red-400 dark:bg-red-500 rounded-full transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </section>
           )}

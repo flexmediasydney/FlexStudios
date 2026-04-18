@@ -94,6 +94,98 @@ const normAddr = (s) =>
   (s || "").replace(/[,\s]+/g, " ").replace(/\b(nsw|vic|qld|sa|wa|tas|nt|act)\b/gi, "")
     .replace(/\d{4}/, "").replace(/australia/gi, "").trim().toLowerCase();
 
+/**
+ * Convert a hex color (#RRGGBB or #RGB) to an `rgba(...)` string. Returns null
+ * when the input isn't parseable. Used for AG07 brand-color accents — a 3px
+ * top-border + ~6% tinted background on agency cards when brand_color_primary
+ * is populated (~7% of agencies).
+ */
+function hexToRgba(hex, alpha) {
+  if (!hex || typeof hex !== "string") return null;
+  const m = hex.trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const a = Math.max(0, Math.min(1, alpha));
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+/**
+ * Aggregate sales_breakdown across an agency's roster. pulse_agencies has
+ * no sales_breakdown column, so the dossier computes this client-side from
+ * the per-agent rows. Sums counts; weights median price / days-on-site by
+ * count for a stable rollup.
+ */
+function aggregateRosterSalesBreakdown(roster) {
+  if (!Array.isArray(roster) || roster.length === 0) return null;
+  const agg = {};
+  for (const ag of roster) {
+    let sb = ag?.sales_breakdown;
+    if (!sb) continue;
+    if (typeof sb === "string") {
+      try { sb = JSON.parse(sb); } catch { sb = null; }
+    }
+    if (!sb || typeof sb !== "object") continue;
+    for (const [type, data] of Object.entries(sb)) {
+      if (!data || typeof data !== "object") continue;
+      const c = Number(data.count) || 0;
+      if (c <= 0) continue;
+      if (!agg[type]) agg[type] = { count: 0, _priceSum: 0, _priceW: 0, _domSum: 0, _domW: 0 };
+      agg[type].count += c;
+      if (data.medianSoldPrice > 0) {
+        agg[type]._priceSum += Number(data.medianSoldPrice) * c;
+        agg[type]._priceW += c;
+      }
+      if (data.medianDaysOnSite > 0) {
+        agg[type]._domSum += Number(data.medianDaysOnSite) * c;
+        agg[type]._domW += c;
+      }
+    }
+  }
+  const out = {};
+  for (const [type, v] of Object.entries(agg)) {
+    out[type] = {
+      count: v.count,
+      medianSoldPrice: v._priceW > 0 ? Math.round(v._priceSum / v._priceW) : null,
+      medianDaysOnSite: v._domW > 0 ? +(v._domSum / v._domW).toFixed(1) : null,
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/* Roster sort options (AG05) — photography pitch: "who's shooting a lot?" */
+const ROSTER_SORT_OPTIONS = [
+  { value: "active", label: "Active listings" },
+  { value: "sold", label: "Sold (12m)" },
+  { value: "rating", label: "Rating" },
+  { value: "name", label: "Name" },
+];
+const ROSTER_SORT_DEFAULT = "active";
+
+function sortRoster(list, sortKey) {
+  if (!Array.isArray(list)) return [];
+  const arr = list.slice();
+  switch (sortKey) {
+    case "sold":
+      arr.sort((a, b) => (b.sales_as_lead || b.total_sold_12m || 0) - (a.sales_as_lead || a.total_sold_12m || 0));
+      break;
+    case "rating":
+      arr.sort((a, b) => (b.rea_rating || b.reviews_avg || 0) - (a.rea_rating || a.reviews_avg || 0));
+      break;
+    case "name":
+      arr.sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+      break;
+    case "active":
+    default:
+      arr.sort((a, b) => (b.total_listings_active || 0) - (a.total_listings_active || 0));
+      break;
+  }
+  return arr;
+}
+
 const normName = (s) =>
   (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -329,6 +421,8 @@ export default function PulseIntelligencePanel({
   const [addToCrmOpen, setAddToCrmOpen] = useState(false);
   // IP03: confirm/reject in-flight state
   const [mappingActionBusy, setMappingActionBusy] = useState(false);
+  // AG05: roster sort — default = Active listings
+  const [rosterSort, setRosterSort] = useState(ROSTER_SORT_DEFAULT);
   const navigate = useNavigate();
 
   /* ── IP01: Single-RPC dossier fetch ──────────────────────────────────────
@@ -481,18 +575,26 @@ export default function PulseIntelligencePanel({
 
   // Agency roster (agency entityType only) — RPC returns pulse_agents rows
   // with an attached `crm_mapping` field already joined server-side.
+  // AG05: sort order is user-selectable (default = Active listings).
   const agencyAgents = useMemo(() => {
-    if (USE_DOSSIER_RPC) return dossier?.agency_roster || [];
-    if (entityType !== "agency" || !pulseData) return [];
-    if (pulseData.rea_agency_id) {
-      const byId = legacyAgents.filter(a => a.agency_rea_id === pulseData.rea_agency_id);
-      if (byId.length > 0) return byId.sort((a, b) => (b.sales_as_lead || 0) - (a.sales_as_lead || 0));
+    let base = [];
+    if (USE_DOSSIER_RPC) base = dossier?.agency_roster || [];
+    else if (entityType !== "agency" || !pulseData) base = [];
+    else if (pulseData.rea_agency_id) {
+      base = legacyAgents.filter(a => a.agency_rea_id === pulseData.rea_agency_id);
     }
-    const name = normName(pulseData.name || crmEntity?.name);
-    if (name) return legacyAgents.filter(a => normName(a.agency_name) === name)
-      .sort((a, b) => (b.sales_as_lead || 0) - (a.sales_as_lead || 0));
-    return [];
-  }, [USE_DOSSIER_RPC, dossier, entityType, pulseData, crmEntity, legacyAgents]);
+    if (base.length === 0 && !USE_DOSSIER_RPC && pulseData) {
+      const name = normName(pulseData.name || crmEntity?.name);
+      if (name) base = legacyAgents.filter(a => normName(a.agency_name) === name);
+    }
+    return sortRoster(base, rosterSort);
+  }, [USE_DOSSIER_RPC, dossier, entityType, pulseData, crmEntity, legacyAgents, rosterSort]);
+
+  // AG06: aggregate sales_breakdown from roster for the agency dossier chart.
+  const rosterSalesBreakdown = useMemo(
+    () => aggregateRosterSalesBreakdown(agencyAgents),
+    [agencyAgents]
+  );
 
   // Sales breakdown / suburbs — derived from pulse_record, path-independent
   const salesBreakdown = useMemo(
@@ -1124,79 +1226,96 @@ export default function PulseIntelligencePanel({
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {entityType === "agency" && a && (<>
 
-        {/* ── 2. Agency Profile Card ───────────────────────────────────── */}
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-start gap-4">
-              {a.logo_url ? (
-                <img src={a.logo_url} alt="" className="h-14 w-24 object-contain shrink-0 rounded border bg-white" />
-              ) : (
-                <div className="h-14 w-24 rounded border bg-muted/40 flex items-center justify-center shrink-0">
-                  <Building2 className="h-6 w-6 text-muted-foreground/40" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-lg leading-tight">{a.name}</h3>
-                {(a.suburb || a.address) && (
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
-                    <MapPin className="h-3 w-3" />
-                    {a.address || a.suburb}
-                    {a.state ? `, ${a.state}` : ""}
-                    {a.postcode ? ` ${a.postcode}` : ""}
-                  </div>
-                )}
-                {/* Contact row — with primary + alternates for email/phone.
-                    email is NEW on pulse_agencies (migration 108+). */}
-                {(() => {
-                  const phoneInfo = primaryContact(a, "phone");
-                  const emailInfo = primaryContact(a, "email");
-                  return (
-                    <div className="mt-1.5 space-y-1">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        {phoneInfo.value && (
-                          <div className="flex items-center gap-1 text-xs">
-                            <Phone className="h-3 w-3 text-muted-foreground" />
-                            <a href={`tel:${phoneInfo.value}`} className="text-primary hover:underline">{phoneInfo.value}</a>
-                            <ContactProvBadges info={phoneInfo} />
-                          </div>
-                        )}
-                        {emailInfo.value && (
-                          <div className="flex items-center gap-1 text-xs">
-                            <Mail className="h-3 w-3 text-muted-foreground" />
-                            <a href={`mailto:${emailInfo.value}`} className="text-primary hover:underline">{emailInfo.value}</a>
-                            <ContactProvBadges info={emailInfo} />
-                          </div>
-                        )}
-                        {a.website && (
-                          <div className="flex items-center gap-1 text-xs">
-                            <Globe className="h-3 w-3 text-muted-foreground" />
-                            <a
-                              href={a.website.startsWith("http") ? a.website : `https://${a.website}`}
-                              target="_blank" rel="noopener noreferrer"
-                              className="text-primary hover:underline truncate max-w-[200px]"
-                            >{a.website}</a>
-                          </div>
-                        )}
-                      </div>
-                      <AlternateContactsDisclosure entity={a} field="email" labelPlural="emails" icon={Mail} />
-                      <AlternateContactsDisclosure entity={a} field="phone" labelPlural="phones" icon={Phone} />
+        {/* ── 2. Agency Profile Card ─────────────────────────────────────
+            AG07: brand color accent — 3px top-border in brand_color_primary +
+            ~6% tinted bg when populated (~7% coverage). Fallback: no border,
+            default bg, identical legacy look. Logo rendered circular (~40px)
+            when logo_url is present (~90% coverage). */}
+        {(() => {
+          const brand = hexToRgba(a.brand_color_primary, 1);
+          const tint = hexToRgba(a.brand_color_primary, 0.06);
+          const cardStyle = brand
+            ? { borderTop: `3px solid ${brand}`, backgroundColor: tint }
+            : undefined;
+          return (
+            <Card style={cardStyle}>
+              <CardContent className="p-4">
+                <div className="flex items-start gap-4">
+                  {a.logo_url ? (
+                    <img
+                      src={a.logo_url}
+                      alt=""
+                      className="h-12 w-12 object-contain shrink-0 rounded-full border bg-white p-0.5"
+                    />
+                  ) : (
+                    <div className="h-12 w-12 rounded-full border bg-muted/40 flex items-center justify-center shrink-0">
+                      <Building2 className="h-5 w-5 text-muted-foreground/40" />
                     </div>
-                  );
-                })()}
-                {a.rea_profile_url && (
-                  <a
-                    href={a.rea_profile_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline mt-1.5"
-                  >
-                    <ExternalLink className="h-3 w-3" /> View REA Profile
-                  </a>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-lg leading-tight">{a.name}</h3>
+                    {(a.suburb || a.address) && (
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                        <MapPin className="h-3 w-3" />
+                        {a.address || a.suburb}
+                        {a.state ? `, ${a.state}` : ""}
+                        {a.postcode ? ` ${a.postcode}` : ""}
+                      </div>
+                    )}
+                    {/* Contact row — with primary + alternates for email/phone.
+                        email is NEW on pulse_agencies (migration 108+). */}
+                    {(() => {
+                      const phoneInfo = primaryContact(a, "phone");
+                      const emailInfo = primaryContact(a, "email");
+                      return (
+                        <div className="mt-1.5 space-y-1">
+                          <div className="flex items-center gap-3 flex-wrap">
+                            {phoneInfo.value && (
+                              <div className="flex items-center gap-1 text-xs">
+                                <Phone className="h-3 w-3 text-muted-foreground" />
+                                <a href={`tel:${phoneInfo.value}`} className="text-primary hover:underline">{phoneInfo.value}</a>
+                                <ContactProvBadges info={phoneInfo} />
+                              </div>
+                            )}
+                            {emailInfo.value && (
+                              <div className="flex items-center gap-1 text-xs">
+                                <Mail className="h-3 w-3 text-muted-foreground" />
+                                <a href={`mailto:${emailInfo.value}`} className="text-primary hover:underline">{emailInfo.value}</a>
+                                <ContactProvBadges info={emailInfo} />
+                              </div>
+                            )}
+                            {a.website && (
+                              <div className="flex items-center gap-1 text-xs">
+                                <Globe className="h-3 w-3 text-muted-foreground" />
+                                <a
+                                  href={a.website.startsWith("http") ? a.website : `https://${a.website}`}
+                                  target="_blank" rel="noopener noreferrer"
+                                  className="text-primary hover:underline truncate max-w-[200px]"
+                                >{a.website}</a>
+                              </div>
+                            )}
+                          </div>
+                          <AlternateContactsDisclosure entity={a} field="email" labelPlural="emails" icon={Mail} />
+                          <AlternateContactsDisclosure entity={a} field="phone" labelPlural="phones" icon={Phone} />
+                        </div>
+                      );
+                    })()}
+                    {a.rea_profile_url && (
+                      <a
+                        href={a.rea_profile_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline mt-1.5"
+                      >
+                        <ExternalLink className="h-3 w-3" /> View REA Profile
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* ── 2b. Branding (migration 108+: HQ address + brand colors) ─── */}
         {(a.address_street || a.brand_color_primary || a.brand_color_text) && (
@@ -1262,7 +1381,26 @@ export default function PulseIntelligencePanel({
         {agencyAgents.length > 0 && (
           <Card>
             <CardContent className="p-4">
-              <SectionHeader icon={Users} count={agencyAgents.length}>Agent Roster</SectionHeader>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <SectionHeader icon={Users} count={agencyAgents.length}>Agent Roster</SectionHeader>
+                {/* AG05: sort options — default "Active listings" matches the
+                    photography pitch ("who's shooting a lot right now?"). */}
+                {agencyAgents.length > 1 && (
+                  <label className="inline-flex items-center gap-1 text-[10px] text-muted-foreground mb-2">
+                    <span className="uppercase tracking-wide">Sort</span>
+                    <select
+                      value={rosterSort}
+                      onChange={(e) => setRosterSort(e.target.value)}
+                      className="h-6 text-[10px] rounded border bg-background px-1 focus:outline-none focus:ring-1 focus:ring-ring"
+                      aria-label="Sort roster by"
+                    >
+                      {ROSTER_SORT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
               <div className="border rounded-lg overflow-hidden">
                 <table className="w-full text-xs">
                   <thead className="bg-muted/30">
@@ -1356,6 +1494,47 @@ export default function PulseIntelligencePanel({
                 {soldListings.slice(0, 20).map(l => (
                   <ListingRow key={l.id} l={l} showSoldInfo />
                 ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── 5b. Sales by Property Type (AG06) ─────────────────────────
+            pulse_agencies has no sales_breakdown column (0% populated), so
+            we roll up the per-agent sales_breakdown jsonb across the roster.
+            Mirrors the agent dossier chart above. */}
+        {rosterSalesBreakdown && Object.keys(rosterSalesBreakdown).length > 0 && (
+          <Card>
+            <CardContent className="p-4">
+              <SectionHeader icon={BarChart3}>
+                Sales by Property Type
+                <span className="text-[9px] font-normal normal-case text-muted-foreground/70 ml-1">
+                  rolled up from roster
+                </span>
+              </SectionHeader>
+              <div className="space-y-1.5">
+                {Object.entries(rosterSalesBreakdown).map(([type, data]) => {
+                  const maxCount = Math.max(
+                    ...Object.values(rosterSalesBreakdown).map((d) => d.count || 0),
+                    1
+                  );
+                  const pct = Math.round(((data.count || 0) / maxCount) * 100);
+                  return (
+                    <div key={type} className="space-y-0.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="capitalize font-medium">{type}</span>
+                        <span className="text-muted-foreground tabular-nums">
+                          {data.count} sold
+                          {data.medianSoldPrice ? ` \u00B7 ${fmtPrice(data.medianSoldPrice)} median` : ""}
+                          {data.medianDaysOnSite ? ` \u00B7 ${data.medianDaysOnSite}d DOM` : ""}
+                        </span>
+                      </div>
+                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div className="h-full bg-red-400 dark:bg-red-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
