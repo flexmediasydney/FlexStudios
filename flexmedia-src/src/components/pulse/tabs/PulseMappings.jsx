@@ -57,10 +57,46 @@ function ConfidenceBadge({ confidence }) {
   );
 }
 
+// Friendlier labels for the opaque match_type codes stored by pulseDataSync.
+// See supabase/functions/pulseDataSync/index.ts — values can include "rea_id",
+// "rea_id+name", "name_exact", "name_fuzzy", "phone", "phone+name", "manual".
+const MATCH_TYPE_LABELS = {
+  "rea_id+name": "Exact REA ID + name match",
+  "rea_id": "REA ID match (no name confirmation)",
+  "name_exact": "Exact name match",
+  "name_fuzzy": "Fuzzy name match",
+  "phone+name": "Phone + name match",
+  "phone": "Phone number match",
+  "manual": "Manual",
+};
+
+// Tone per match type — reflects confidence of the match strategy.
+const MATCH_TYPE_TONE = {
+  "rea_id+name": "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400",
+  "rea_id": "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400",
+  "name_exact": "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400",
+  "phone+name": "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400",
+  "name_fuzzy": "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400",
+  "phone": "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400",
+  "manual": "bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/30 dark:text-violet-400",
+};
+
 function MatchTypeBadge({ matchType }) {
-  const label = matchType || "—";
+  if (!matchType) {
+    return (
+      <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">
+        —
+      </Badge>
+    );
+  }
+  const label = MATCH_TYPE_LABELS[matchType] || matchType;
+  const tone = MATCH_TYPE_TONE[matchType] || "";
   return (
-    <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal">
+    <Badge
+      variant="outline"
+      className={cn("text-[10px] px-1.5 py-0 font-normal", tone)}
+      title={`match_type=${matchType}`}
+    >
       {label}
     </Badge>
   );

@@ -200,6 +200,20 @@ export default function IndustryPulse() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // ── Tier 4: URL-driven source payload deep-link ────────────────────────
+  // Timeline entries (and EntitySyncHistoryDialog rows) link with
+  // `?tab=sources&sync_log_id=<id>`. We surface this param to PulseDataSources
+  // as a prop; that component watches it and opens its DrillDialog. Once
+  // consumed the param is stripped so refreshes / back-nav don't re-open.
+  const syncLogIdParam = searchParams.get("sync_log_id");
+  const clearSyncLogIdParam = useCallback(() => {
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("sync_log_id");
+      return np;
+    }, { replace: true });
+  }, [setSearchParams]);
+
   // ── URL-driven entity opening (Tier 3 drill-through) ──────────────────────
   // PulseMappings and PropertyDetails can link with `?pulse_id=<id>` + an
   // entity type (tab drives the type: agents → agent, agencies → agency,
@@ -590,7 +604,11 @@ export default function IndustryPulse() {
 
         <TabsContent value="sources" className="mt-2">
           <ErrorBoundary>
-            <PulseDataSources {...sharedProps} />
+            <PulseDataSources
+              {...sharedProps}
+              deepLinkSyncLogId={syncLogIdParam}
+              onConsumeDeepLinkSyncLogId={clearSyncLogIdParam}
+            />
           </ErrorBoundary>
         </TabsContent>
 

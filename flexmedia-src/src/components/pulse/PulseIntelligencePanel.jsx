@@ -21,8 +21,10 @@ import PulseTimeline from "@/components/pulse/PulseTimeline";
 import { Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   TrendingUp, Users, Home, Clock, AlertTriangle, CheckCircle2, DollarSign,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
-  BarChart3, User, Loader2, BookOpen, Database
+  BarChart3, User, Loader2, BookOpen, Database, History
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import {
   displayPrice as sharedDisplayPrice,
   LISTING_TYPE_LABEL,
@@ -199,6 +201,8 @@ export default function PulseIntelligencePanel({
   // Accept both prop shapes (new: entityId, old: crmEntityId)
   const entityId = propEntityId || crmEntityId;
   const [metadataOpen, setMetadataOpen] = useState(false);
+  // Tier 4: source-history drill
+  const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
   const navigate = useNavigate();
 
   /* ── Data hooks ─────────────────────────────────────────────────────────── */
@@ -783,12 +787,38 @@ export default function PulseIntelligencePanel({
                     </div>
                   );
                 })()}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap">
                   <span>First detected: {fmtDate(a?.first_seen_at)}</span>
                   <span>Last synced: {fmtDate(a?.last_synced_at)}</span>
                 </div>
+                {/* Tier 4: last_sync_log_id drill + full source history */}
+                {a?.last_sync_log_id && (
+                  <p>
+                    Last sync run:{" "}
+                    <a
+                      href={`/IndustryPulse?tab=sources&sync_log_id=${a.last_sync_log_id}`}
+                      className="font-mono text-primary hover:underline inline-flex items-center gap-0.5"
+                      title="Open payload for this run"
+                    >
+                      {String(a.last_sync_log_id).slice(0, 8)}
+                      <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  </p>
+                )}
                 {a?.rea_agent_id && <p>REA Agent ID: <span className="font-mono">{a.rea_agent_id}</span></p>}
                 {a?.agency_rea_id && <p>REA Agency ID: <span className="font-mono">{a.agency_rea_id}</span></p>}
+                <div className="pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 h-7 text-[10px]"
+                    onClick={() => setSyncHistoryOpen(true)}
+                    title="See which sync runs touched this agent"
+                  >
+                    <History className="h-3 w-3" />
+                    View full source history
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>
@@ -1023,11 +1053,37 @@ export default function PulseIntelligencePanel({
                     </div>
                   );
                 })()}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap">
                   <span>First detected: {fmtDate(a?.first_seen_at)}</span>
                   <span>Last synced: {fmtDate(a?.last_synced_at)}</span>
                 </div>
+                {/* Tier 4: last_sync_log_id drill + full source history */}
+                {a?.last_sync_log_id && (
+                  <p>
+                    Last sync run:{" "}
+                    <a
+                      href={`/IndustryPulse?tab=sources&sync_log_id=${a.last_sync_log_id}`}
+                      className="font-mono text-primary hover:underline inline-flex items-center gap-0.5"
+                      title="Open payload for this run"
+                    >
+                      {String(a.last_sync_log_id).slice(0, 8)}
+                      <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  </p>
+                )}
                 {a?.rea_agency_id && <p>REA Agency ID: <span className="font-mono">{a.rea_agency_id}</span></p>}
+                <div className="pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 h-7 text-[10px]"
+                    onClick={() => setSyncHistoryOpen(true)}
+                    title="See which sync runs touched this agency"
+                  >
+                    <History className="h-3 w-3" />
+                    View full source history
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>
@@ -1047,6 +1103,16 @@ export default function PulseIntelligencePanel({
           />
         </CardContent>
       </Card>
+
+      {/* Tier 4: source history dialog */}
+      {syncHistoryOpen && a && (
+        <EntitySyncHistoryDialog
+          entityType={entityType}
+          entityId={a.id}
+          entityLabel={a.full_name || a.name || entityName}
+          onClose={() => setSyncHistoryOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -3070,7 +3070,19 @@ function DrillPaginatedList({ items, page, setPage }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], targetSuburbs = [], pulseTimeline = [], stats = {}, user }) {
+export default function PulseDataSources({
+  syncLogs = [],
+  sourceConfigs = [],
+  targetSuburbs = [],
+  pulseTimeline = [],
+  stats = {},
+  user,
+  // Tier 4: when IndustryPulse sees `?sync_log_id=X` on the sources tab, it
+  // passes the id down here. We open DrillDialog for that log and call
+  // onConsumeDeepLinkSyncLogId to strip the param so back-nav doesn't re-open.
+  deepLinkSyncLogId = null,
+  onConsumeDeepLinkSyncLogId,
+}) {
   const [runningSources, setRunningSources] = useState(new Set());
   const [drillLog, setDrillLog] = useState(null);
   const [scheduleSource, setScheduleSource] = useState(null);
@@ -3135,6 +3147,23 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
     },
     [syncLogs]
   );
+
+  // Tier 4 deep-link: when IndustryPulse passes a sync_log_id via URL, open
+  // the DrillDialog for that log and consume the param so refresh/back-nav
+  // doesn't re-trigger. Ref guard prevents a double-open in React StrictMode;
+  // it resets when the param clears so the SAME id can re-open later (after
+  // the dialog was closed + the link clicked again).
+  const lastConsumedDeepLinkRef = React.useRef(null);
+  useEffect(() => {
+    if (!deepLinkSyncLogId) {
+      lastConsumedDeepLinkRef.current = null;
+      return;
+    }
+    if (lastConsumedDeepLinkRef.current === deepLinkSyncLogId) return;
+    lastConsumedDeepLinkRef.current = deepLinkSyncLogId;
+    handleDrillDispatch(deepLinkSyncLogId);
+    onConsumeDeepLinkSyncLogId?.();
+  }, [deepLinkSyncLogId, handleDrillDispatch, onConsumeDeepLinkSyncLogId]);
 
   // Last log per source
   const lastLogBySource = useMemo(() => {

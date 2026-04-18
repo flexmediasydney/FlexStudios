@@ -54,8 +54,10 @@ import {
   Clock,
   Download,
   Loader2,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import {
   displayPrice as sharedDisplayPrice,
   stalenessInfo,
@@ -228,6 +230,8 @@ function SortIcon({ col, sort }) {
 
 export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onClose, onOpenEntity, hasHistory = false, onBack }) {
   const [heroErr, setHeroErr] = useState(false);
+  // Tier 4: source-history drill
+  const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
 
   if (!listing) return null;
 
@@ -574,8 +578,8 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
           )}
 
           {/* External link */}
-          {listing.source_url && (
-            <div className="border-t border-border/60 pt-3 flex items-center gap-4 flex-wrap">
+          <div className="border-t border-border/60 pt-3 flex items-center gap-4 flex-wrap">
+            {listing.source_url && (
               <a
                 href={listing.source_url}
                 target="_blank"
@@ -585,17 +589,27 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
                 <ExternalLink className="h-3.5 w-3.5" />
                 View on realestate.com.au
               </a>
-              {listing.property_key && (
-                <a
-                  href={`/PropertyDetails?key=${encodeURIComponent(listing.property_key)}`}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:underline"
-                >
-                  <Home className="h-3.5 w-3.5" />
-                  Open property history
-                </a>
-              )}
-            </div>
-          )}
+            )}
+            {listing.property_key && (
+              <a
+                href={`/PropertyDetails?key=${encodeURIComponent(listing.property_key)}`}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:underline"
+              >
+                <Home className="h-3.5 w-3.5" />
+                Open property history
+              </a>
+            )}
+            {/* Tier 4: sync-run history for this listing */}
+            <button
+              type="button"
+              onClick={() => setSyncHistoryOpen(true)}
+              className="ml-auto inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-primary hover:underline"
+              title="See which sync runs touched this listing"
+            >
+              <History className="h-3.5 w-3.5" />
+              Source history
+            </button>
+          </div>
 
           {/* Price/Status History */}
           {(listing.previous_asking_price || listing.previous_listing_type) && (
@@ -625,6 +639,14 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
           )}
         </div>
       </DialogContent>
+      {syncHistoryOpen && (
+        <EntitySyncHistoryDialog
+          entityType="listing"
+          entityId={listing.id}
+          entityLabel={[listing.address, listing.suburb].filter(Boolean).join(", ") || "Listing"}
+          onClose={() => setSyncHistoryOpen(false)}
+        />
+      )}
     </Dialog>
   );
 }

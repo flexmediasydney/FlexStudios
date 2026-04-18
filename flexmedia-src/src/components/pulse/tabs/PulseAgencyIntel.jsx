@@ -40,8 +40,10 @@ import {
   Download,
   Clock,
   Loader2,
+  History,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
+import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import {
   displayPrice as sharedDisplayPrice,
   LISTING_TYPE_LABEL,
@@ -528,6 +530,8 @@ export function AgencySlideout({
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [metaOpen, setMetaOpen] = useState(false);
   const [addingToCrm, setAddingToCrm] = useState(false);
+  // Tier 4: source-history drill
+  const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
 
   /* Check if already in CRM */
   const existingCrmAgency = useMemo(
@@ -1030,21 +1034,41 @@ export function AgencySlideout({
           {(isInCrm || existingCrmAgency) && (
             <span className="text-xs text-muted-foreground">Already in CRM</span>
           )}
-          {agency.rea_profile_url && (
-            <a
-              href={agency.rea_profile_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="ml-auto"
+          <div className="ml-auto flex items-center gap-2">
+            {/* Tier 4: sync-run history for this agency */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => setSyncHistoryOpen(true)}
+              title="See which sync runs touched this agency"
             >
-              <Button variant="outline" size="sm" className="gap-1.5">
-                <ExternalLink className="h-3.5 w-3.5" />
-                View REA Profile
-              </Button>
-            </a>
-          )}
+              <History className="h-3.5 w-3.5" />
+              Source history
+            </Button>
+            {agency.rea_profile_url && (
+              <a
+                href={agency.rea_profile_url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button variant="outline" size="sm" className="gap-1.5">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  View REA Profile
+                </Button>
+              </a>
+            )}
+          </div>
         </div>
       </DialogContent>
+      {syncHistoryOpen && (
+        <EntitySyncHistoryDialog
+          entityType="agency"
+          entityId={agency.id}
+          entityLabel={agency.name}
+          onClose={() => setSyncHistoryOpen(false)}
+        />
+      )}
     </Dialog>
   );
 }
