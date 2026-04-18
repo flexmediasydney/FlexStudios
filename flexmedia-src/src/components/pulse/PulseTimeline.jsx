@@ -66,6 +66,7 @@ const EVENT_CONFIG = {
   listing_floorplan_added:  { icon: FileImage,     color: "bg-blue-500",    label: "Floorplan Added",    category_color: "text-blue-600 dark:text-blue-400" },
   listing_video_added:      { icon: Video,         color: "bg-blue-500",    label: "Video Added",        category_color: "text-blue-600 dark:text-blue-400" },
   listing_withdrawn:        { icon: XCircle,       color: "bg-red-500",     label: "Withdrawn",          category_color: "text-red-600 dark:text-red-400" },
+  listing_relisted:         { icon: RefreshCw,     color: "bg-indigo-500",  label: "Relisted",           category_color: "text-indigo-600 dark:text-indigo-400" },
   sold_date_captured:       { icon: CheckCircle2,  color: "bg-emerald-500", label: "Sold Date Captured", category_color: "text-emerald-600 dark:text-emerald-400" },
   // B13 fix: agency contact events were emitted but had no config — rendered as generic gray fallback
   agency_contact_discovered:{ icon: AtSign,        color: "bg-emerald-500", label: "Agency Contact Found", category_color: "text-emerald-600 dark:text-emerald-400" },
@@ -243,6 +244,289 @@ function FirstSeenDetail({ newVal }) {
   );
 }
 
+/* ── TL05: detail renderers for contact / enrichment / media / movement ──── */
+
+// Helper — tolerate both shapes: either the value is already the string
+// (e.g. `new_value: "jo@example.com"`) or an object carrying the field.
+function pickField(val, ...fields) {
+  if (val == null) return null;
+  if (typeof val !== "object") return val;
+  for (const f of fields) {
+    if (val[f] != null && val[f] !== "") return val[f];
+  }
+  return null;
+}
+
+function ContactDiscoveredDetail({ newVal, kind, source }) {
+  const value = pickField(newVal, kind === "email" ? "email" : "mobile", "value");
+  if (!value) return null;
+  const srcChip = source || pickField(newVal, "source", "origin");
+  return (
+    <div className="mt-2 text-xs bg-emerald-50/50 dark:bg-emerald-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
+      {kind === "email"
+        ? <AtSign className="h-3 w-3 text-emerald-600" />
+        : <Phone className="h-3 w-3 text-emerald-600" />}
+      <span className="font-mono text-[11px] font-medium text-foreground break-all">{value}</span>
+      {srcChip && (
+        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
+          via {srcChip}
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+function ContactChangedDetail({ prevVal, newVal, kind }) {
+  const prev = pickField(prevVal, kind === "email" ? "email" : "mobile", "value");
+  const next = pickField(newVal,  kind === "email" ? "email" : "mobile", "value");
+  if (!prev && !next) return null;
+  const Icon = kind === "email" ? AtSign : Phone;
+  return (
+    <div className="mt-2 text-xs bg-amber-50/50 dark:bg-amber-900/10 rounded-lg p-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Icon className="h-3 w-3 text-amber-600" />
+        {prev && (
+          <span className="font-mono text-[11px] line-through text-muted-foreground break-all">{prev}</span>
+        )}
+        <ArrowRight className="h-3 w-3 text-muted-foreground" />
+        <span className="font-mono text-[11px] font-semibold text-foreground break-all">{next || "—"}</span>
+      </div>
+    </div>
+  );
+}
+
+function AuctionScheduledDetail({ newVal }) {
+  const dt = pickField(newVal, "auction_date", "auction_at", "scheduled_at", "date");
+  const venue = pickField(newVal, "venue", "location");
+  if (!dt && !venue) return null;
+  let when = dt;
+  if (dt) {
+    const d = new Date(dt);
+    if (!isNaN(d.getTime())) {
+      when = d.toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+  }
+  return (
+    <div className="mt-2 text-xs bg-amber-50/50 dark:bg-amber-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
+      <Gavel className="h-3 w-3 text-amber-600" />
+      {when && <span className="font-medium text-foreground">{when}</span>}
+      {venue && (
+        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
+          {venue}
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+function SoldDateCapturedDetail({ newVal }) {
+  const dt = pickField(newVal, "sold_date", "sold_at", "date");
+  const price = pickField(newVal, "sold_price", "price");
+  if (!dt && !price) return null;
+  let when = dt;
+  if (dt) {
+    const d = new Date(dt);
+    if (!isNaN(d.getTime())) {
+      when = d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    }
+  }
+  return (
+    <div className="mt-2 text-xs bg-emerald-50/50 dark:bg-emerald-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
+      <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+      {when && <span className="font-medium text-foreground">Sold {when}</span>}
+      {price && (
+        <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-emerald-300 text-emerald-700">
+          {formatPrice(price)}
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+function MediaAddedDetail({ newVal, kind }) {
+  // Accept either a URL string or an object with url/thumbnail_url/poster_url.
+  const url = typeof newVal === "string"
+    ? newVal
+    : pickField(newVal, "url", "thumbnail_url", "floorplan_url", "video_url");
+  const thumb = typeof newVal === "object"
+    ? pickField(newVal, "thumbnail_url", "poster_url", "preview_url") || url
+    : url;
+  if (!url && !thumb) return null;
+  const Icon = kind === "video" ? Video : FileImage;
+  const isImage = thumb && !/\.(mp4|webm|mov)(\?|$)/i.test(thumb);
+  return (
+    <div className="mt-2 text-xs bg-blue-50/50 dark:bg-blue-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
+      {isImage && thumb ? (
+        <img
+          src={thumb}
+          alt={kind === "video" ? "Video thumbnail" : "Floorplan"}
+          className="h-12 w-16 object-cover rounded border border-border/40"
+          loading="lazy"
+          onError={(e) => { e.currentTarget.style.display = "none"; }}
+        />
+      ) : (
+        <Icon className="h-3 w-3 text-blue-600" />
+      )}
+      {url && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="text-[11px] text-blue-600 hover:underline truncate max-w-[220px]"
+          title={url}
+        >
+          {kind === "video" ? "Open video" : "Open floorplan"}
+        </a>
+      )}
+    </div>
+  );
+}
+
+function WithdrawnDetail({ newVal }) {
+  const reason = pickField(newVal, "reason", "withdrawal_reason", "status_reason");
+  const withdrawnAt = pickField(newVal, "withdrawn_at", "withdrawn_date", "date");
+  if (!reason && !withdrawnAt) return null;
+  let when = withdrawnAt;
+  if (withdrawnAt) {
+    const d = new Date(withdrawnAt);
+    if (!isNaN(d.getTime())) {
+      when = d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+    }
+  }
+  return (
+    <div className="mt-2 text-xs bg-red-50/50 dark:bg-red-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
+      <XCircle className="h-3 w-3 text-red-600" />
+      {when && <span className="text-muted-foreground">Withdrawn {when}</span>}
+      {reason && <span className="font-medium text-foreground">{reason}</span>}
+    </div>
+  );
+}
+
+function RelistedDetail({ prevVal, newVal }) {
+  const withdrawn = pickField(prevVal, "last_withdrawn", "withdrawn_at", "withdrawn_date");
+  const relisted  = pickField(newVal,  "latest_active_at", "relisted_at", "date");
+  if (!withdrawn && !relisted) return null;
+  const fmt = (v) => {
+    if (!v) return null;
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+  };
+  return (
+    <div className="mt-2 text-xs bg-muted/30 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
+      <RefreshCw className="h-3 w-3 text-muted-foreground" />
+      <span className="text-muted-foreground">
+        Withdrawn <span className="font-medium text-foreground">{fmt(withdrawn) || "—"}</span>, relisted{" "}
+        <span className="font-medium text-foreground">{fmt(relisted) || "—"}</span>
+      </span>
+    </div>
+  );
+}
+
+function AgencyContactDiscoveredDetail({ newVal }) {
+  // Shape varies: { field: 'email', value: 'a@b.com' } OR { email: '...' } OR { phone: '...' }
+  let field = pickField(newVal, "field", "type");
+  let value = pickField(newVal, "value");
+  if (!value) {
+    if (newVal && typeof newVal === "object") {
+      if (newVal.email) { field = field || "email"; value = newVal.email; }
+      else if (newVal.phone) { field = field || "phone"; value = newVal.phone; }
+      else if (newVal.mobile) { field = field || "mobile"; value = newVal.mobile; }
+    }
+  }
+  if (!value) return null;
+  const Icon = /phone|mobile/i.test(field || "") ? Phone : AtSign;
+  return (
+    <div className="mt-2 text-xs bg-emerald-50/50 dark:bg-emerald-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
+      <Icon className="h-3 w-3 text-emerald-600" />
+      {field && (
+        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
+          {field}
+        </Badge>
+      )}
+      <span className="font-mono text-[11px] font-medium text-foreground break-all">{value}</span>
+    </div>
+  );
+}
+
+/* Generic fallback — renders a 2-column "previous → new" grid for any event
+   with structured previous_value / new_value that doesn't have a bespoke
+   renderer above. Skips render when both sides are empty scalars. */
+function GenericPrevNewDetail({ prevVal, newVal }) {
+  const hasPrev = prevVal != null && !(typeof prevVal === "object" && Object.keys(prevVal || {}).length === 0);
+  const hasNew  = newVal  != null && !(typeof newVal  === "object" && Object.keys(newVal  || {}).length === 0);
+  if (!hasPrev && !hasNew) return null;
+
+  // Collect keys we want to display. For objects, show a flat list of scalar
+  // fields. For scalars, show a single "value" row.
+  const rowsForSide = (v) => {
+    if (v == null) return [];
+    if (typeof v !== "object") return [{ k: "value", v: String(v) }];
+    const out = [];
+    for (const [k, val] of Object.entries(v)) {
+      if (val == null) continue;
+      if (typeof val === "object") continue; // skip nested — keeps panel tight
+      const s = String(val);
+      if (s === "") continue;
+      out.push({ k, v: s });
+    }
+    return out.slice(0, 6); // safety cap
+  };
+
+  const prevRows = rowsForSide(prevVal);
+  const newRows  = rowsForSide(newVal);
+  if (prevRows.length === 0 && newRows.length === 0) return null;
+
+  return (
+    <div className="mt-2 text-xs bg-muted/30 rounded-lg p-2.5">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="min-w-0">
+          <p className="text-[9px] uppercase tracking-wide text-muted-foreground mb-1">Previous</p>
+          {prevRows.length === 0 ? (
+            <p className="text-muted-foreground/60 italic">—</p>
+          ) : (
+            <dl className="space-y-0.5">
+              {prevRows.map((r) => (
+                <div key={r.k} className="flex gap-1.5 min-w-0">
+                  <dt className="text-muted-foreground shrink-0">{r.k}:</dt>
+                  <dd className="font-medium text-foreground truncate" title={r.v}>{r.v}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+        <div className="min-w-0">
+          <p className="text-[9px] uppercase tracking-wide text-muted-foreground mb-1">New</p>
+          {newRows.length === 0 ? (
+            <p className="text-muted-foreground/60 italic">—</p>
+          ) : (
+            <dl className="space-y-0.5">
+              {newRows.map((r) => (
+                <div key={r.k} className="flex gap-1.5 min-w-0">
+                  <dt className="text-muted-foreground shrink-0">{r.k}:</dt>
+                  <dd className="font-medium text-foreground truncate" title={r.v}>{r.v}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Event types that have a bespoke renderer — skip the generic fallback for these.
+const BESPOKE_RENDERED_TYPES = new Set([
+  "agency_change", "price_change", "status_change", "first_seen",
+  "agent_email_discovered", "agent_mobile_discovered",
+  "agent_email_changed", "agent_mobile_changed",
+  "listing_auction_scheduled", "sold_date_captured",
+  "listing_floorplan_added", "listing_video_added",
+  "listing_withdrawn", "listing_relisted",
+  "agency_contact_discovered",
+]);
+
 /* ── Main component ──────────────────────────────────────────────────────── */
 
 export default function PulseTimeline({
@@ -378,6 +662,44 @@ export default function PulseTimeline({
                         )}
                         {entry.event_type === "first_seen" && (
                           <FirstSeenDetail newVal={newVal} />
+                        )}
+                        {entry.event_type === "agent_email_discovered" && (
+                          <ContactDiscoveredDetail newVal={newVal} kind="email" source={entry.source} />
+                        )}
+                        {entry.event_type === "agent_mobile_discovered" && (
+                          <ContactDiscoveredDetail newVal={newVal} kind="mobile" source={entry.source} />
+                        )}
+                        {entry.event_type === "agent_email_changed" && (
+                          <ContactChangedDetail prevVal={prevVal} newVal={newVal} kind="email" />
+                        )}
+                        {entry.event_type === "agent_mobile_changed" && (
+                          <ContactChangedDetail prevVal={prevVal} newVal={newVal} kind="mobile" />
+                        )}
+                        {entry.event_type === "listing_auction_scheduled" && (
+                          <AuctionScheduledDetail newVal={newVal} />
+                        )}
+                        {entry.event_type === "sold_date_captured" && (
+                          <SoldDateCapturedDetail newVal={newVal} />
+                        )}
+                        {entry.event_type === "listing_floorplan_added" && (
+                          <MediaAddedDetail newVal={newVal} kind="floorplan" />
+                        )}
+                        {entry.event_type === "listing_video_added" && (
+                          <MediaAddedDetail newVal={newVal} kind="video" />
+                        )}
+                        {entry.event_type === "listing_withdrawn" && (
+                          <WithdrawnDetail newVal={newVal} />
+                        )}
+                        {entry.event_type === "listing_relisted" && (
+                          <RelistedDetail prevVal={prevVal} newVal={newVal} />
+                        )}
+                        {entry.event_type === "agency_contact_discovered" && (
+                          <AgencyContactDiscoveredDetail newVal={newVal} />
+                        )}
+                        {/* Generic fallback for any other event with structured
+                            values — e.g. rating_change, title_change, etc. */}
+                        {!BESPOKE_RENDERED_TYPES.has(entry.event_type) && (
+                          <GenericPrevNewDetail prevVal={prevVal} newVal={newVal} />
                         )}
                       </>
                     )}

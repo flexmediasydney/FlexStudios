@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  SelectGroup, SelectLabel,
 } from "@/components/ui/select";
 import PulseTimeline, { EVENT_CONFIG } from "@/components/pulse/PulseTimeline";
 import {
@@ -34,11 +35,26 @@ const TIME_WINDOWS = [
 ];
 
 // Build event-type list from the canonical EVENT_CONFIG so filter stays in sync
-// when new events are added in PulseTimeline.jsx.
+// when new events are added in PulseTimeline.jsx. Fallback label used when the
+// DB registry returns a category we didn't pre-map.
 const EVENT_TYPE_OPTIONS = Object.keys(EVENT_CONFIG).map(key => ({
   value: key,
   label: EVENT_CONFIG[key].label,
 }));
+
+// Category display order and labels — mirrors pulse_timeline_event_types.category
+// (migration 116). Unknown categories fall through to "Other".
+const CATEGORY_ORDER = ["agent", "contact", "mapping", "market", "media", "movement", "system"];
+const CATEGORY_LABELS = {
+  agent:    "Agent",
+  contact:  "Contact",
+  mapping:  "Mapping",
+  market:   "Market",
+  media:    "Media",
+  movement: "Movement",
+  system:   "System",
+  other:    "Other",
+};
 
 const ENTITY_TYPE_OPTIONS = [
   { value: "all", label: "All entities" },
@@ -51,6 +67,7 @@ const ENTITY_TYPE_OPTIONS = [
 export default function PulseTimelineTab({ onOpenEntity }) {
   const [eventTypeFilter, setEventTypeFilter] = useState("all");
   const [entityTypeFilter, setEntityTypeFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
   const [timeWindow, setTimeWindow] = useState("7d");
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
@@ -60,9 +77,74 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastFetched, setLastFetched] = useState(null);
+  // TL03: event-type registry (category-grouped) fetched from DB at mount
+  const [eventTypeRegistry, setEventTypeRegistry] = useState([]);
+  // TL08: distinct source values fetched from DB at mount
+  const [sourceOptions, setSourceOptions] = useState([]);
 
   // Reset page when filters change
-  useEffect(() => { setPage(0); }, [eventTypeFilter, entityTypeFilter, timeWindow, pageSize]);
+  useEffect(() => { setPage(0); }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, pageSize]);
+
+  // Fetch event-type registry + distinct sources once at mount. These are small
+  // (~30 rows, ~5 sources) and rarely change — no need to refresh on every page.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: regData } = await api._supabase
+          .from("pulse_timeline_event_types")
+          .select("event_type, category, description")
+          .order("category", { ascending: true })
+          .order("event_type", { ascending: true });
+        if (!cancelled && Array.isArray(regData)) setEventTypeRegistry(regData);
+      } catch { /* non-fatal — dropdown falls back to flat EVENT_CONFIG keys */ }
+
+      try {
+        // Pull a bounded recent slice and derive distinct sources client-side.
+        // Cheaper than a DISTINCT RPC; source cardinality is tiny (~5).
+        const { data: srcRows } = await api._supabase
+          .from("pulse_timeline")
+          .select("source")
+          .not("source", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(5000);
+        if (!cancelled && Array.isArray(srcRows)) {
+          const set = new Set();
+          for (const r of srcRows) if (r.source) set.add(r.source);
+          setSourceOptions(Array.from(set).sort());
+        }
+      } catch { /* non-fatal — source filter just won't populate */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Group the event-type registry by category, keeping entries that also have
+  // a matching EVENT_CONFIG label (so the dropdown shows friendly names).
+  const groupedEventOptions = React.useMemo(() => {
+    if (!eventTypeRegistry.length) {
+      // Fallback: single "Other" bucket with everything in EVENT_CONFIG.
+      return [{ category: "other", label: "Other", items: EVENT_TYPE_OPTIONS }];
+    }
+    const byCat = new Map();
+    for (const row of eventTypeRegistry) {
+      const cat = row.category || "other";
+      const label = EVENT_CONFIG[row.event_type]?.label || row.event_type;
+      if (!byCat.has(cat)) byCat.set(cat, []);
+      byCat.get(cat).push({ value: row.event_type, label, description: row.description });
+    }
+    const ordered = [];
+    for (const cat of CATEGORY_ORDER) {
+      if (byCat.has(cat)) {
+        ordered.push({ category: cat, label: CATEGORY_LABELS[cat] || cat, items: byCat.get(cat) });
+        byCat.delete(cat);
+      }
+    }
+    // Append any categories we didn't pre-order (forward compat).
+    for (const [cat, items] of byCat.entries()) {
+      ordered.push({ category: cat, label: CATEGORY_LABELS[cat] || cat, items });
+    }
+    return ordered;
+  }, [eventTypeRegistry]);
 
   const fetchPage = useCallback(async () => {
     setError(null);
@@ -77,6 +159,9 @@ export default function PulseTimelineTab({ onOpenEntity }) {
       }
       if (entityTypeFilter !== "all") {
         q = q.eq("entity_type", entityTypeFilter);
+      }
+      if (sourceFilter !== "all") {
+        q = q.eq("source", sourceFilter);
       }
       const tw = TIME_WINDOWS.find(t => t.value === timeWindow);
       if (tw && tw.ms != null) {
@@ -99,7 +184,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
     } finally {
       setLoading(false);
     }
-  }, [eventTypeFilter, entityTypeFilter, timeWindow, page, pageSize]);
+  }, [eventTypeFilter, entityTypeFilter, sourceFilter, timeWindow, page, pageSize]);
 
   useEffect(() => {
     setLoading(true);
@@ -122,6 +207,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   const filterCount =
     (eventTypeFilter !== "all" ? 1 : 0) +
     (entityTypeFilter !== "all" ? 1 : 0) +
+    (sourceFilter !== "all" ? 1 : 0) +
     (timeWindow !== "7d" ? 1 : 0);
 
   const fmtRelative = useCallback((ts) => {
@@ -182,7 +268,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
         </div>
 
         {/* Filter row */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mt-3">
           <div>
             <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
               Event type
@@ -191,10 +277,17 @@ export default function PulseTimelineTab({ onOpenEntity }) {
               <SelectTrigger className="h-8 text-xs mt-0.5">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="max-h-[420px]">
                 <SelectItem value="all">All event types</SelectItem>
-                {EVENT_TYPE_OPTIONS.map(opt => (
-                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                {groupedEventOptions.map((grp) => (
+                  <SelectGroup key={grp.category}>
+                    <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground pt-2">
+                      {grp.label}
+                    </SelectLabel>
+                    {grp.items.map(opt => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectGroup>
                 ))}
               </SelectContent>
             </Select>
@@ -210,6 +303,22 @@ export default function PulseTimelineTab({ onOpenEntity }) {
               <SelectContent>
                 {ENTITY_TYPE_OPTIONS.map(opt => (
                   <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
+              Source
+            </label>
+            <Select value={sourceFilter} onValueChange={setSourceFilter}>
+              <SelectTrigger className="h-8 text-xs mt-0.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sources</SelectItem>
+                {sourceOptions.map(src => (
+                  <SelectItem key={src} value={src}>{src}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -255,6 +364,7 @@ export default function PulseTimelineTab({ onOpenEntity }) {
               onClick={() => {
                 setEventTypeFilter("all");
                 setEntityTypeFilter("all");
+                setSourceFilter("all");
                 setTimeWindow("7d");
               }}
             >
