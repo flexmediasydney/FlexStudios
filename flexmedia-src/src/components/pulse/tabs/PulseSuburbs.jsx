@@ -168,8 +168,47 @@ function HealthBanner({ health }) {
 
 // ── Main tab ─────────────────────────────────────────────────────────────────
 
+// ── Shared inflight-status hook ─────────────────────────────────────────────
+// Polls pulse_fire_queue every 20s. Returns aggregate + per-source counts so
+// the suburbs page can surface a warning banner + guard destructive actions.
+function useInflightStatus() {
+  const [state, setState] = useState({ anyInflight: false, totalInflight: 0, sourcesInflight: [] });
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const { data } = await api._supabase
+          .from("pulse_fire_queue")
+          .select("source_id, status")
+          .in("status", ["pending", "running"])
+          .limit(2000);
+        if (cancelled) return;
+        const bySource = {};
+        for (const row of data || []) bySource[row.source_id] = (bySource[row.source_id] || 0) + 1;
+        const sources = Object.entries(bySource).map(([sid, n]) => ({ source_id: sid, count: n }));
+        const total = data?.length || 0;
+        setState({ anyInflight: total > 0, totalInflight: total, sourcesInflight: sources });
+      } catch { /* non-fatal */ }
+    };
+    load();
+    const id = setInterval(load, 20000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+  return state;
+}
+
 export default function PulseSuburbs() {
   const qc = useQueryClient();
+
+  // ── Run-button lockdown awareness ─────────────────────────────────────
+  // Suburb edits are SAFE during a drain (pulse_fire_queue rows snapshot
+  // suburb_name + postcode at enqueue time, so existing in-flight items
+  // aren't affected by pool mutations). BUT future cron runs will see the
+  // new pool. Deactivating a suburb that's currently in-flight creates
+  // confusing UX (the sync still finishes). So we surface a loud banner
+  // when anything's in flight and require an ack checkbox for destructive
+  // actions (Deactivate, Hard-delete) during that window.
+  const { anyInflight, totalInflight, sourcesInflight } = useInflightStatus();
 
   // Filter / pagination state
   const [search, setSearch] = useState("");
@@ -312,6 +351,33 @@ export default function PulseSuburbs() {
 
       <HealthBanner health={health} />
 
+      {/* ── In-flight warning banner (run-button lockdown awareness) ──
+          Surfaces when pulse_fire_queue has pending/running items. Suburb
+          edits are safe (snapshot semantics in the queue), but operators
+          need to know their edits apply to FUTURE cron runs, not the
+          currently-draining batch. */}
+      {anyInflight && (
+        <div className="rounded-md border-2 border-amber-400/70 bg-amber-50/80 dark:bg-amber-950/30 p-3 space-y-1.5 text-[11px]">
+          <div className="flex items-start gap-2 font-semibold text-amber-900 dark:text-amber-300">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>{totalInflight} pulse item{totalInflight === 1 ? "" : "s"} in flight across {sourcesInflight.length} source{sourcesInflight.length === 1 ? "" : "s"}</span>
+          </div>
+          <div className="pl-6 text-amber-800 dark:text-amber-400 space-y-1">
+            <p>
+              Pool edits are <strong>safe</strong> — in-flight queue items already captured
+              suburb name + postcode at enqueue time and aren't affected by changes here.
+              But future cron dispatches will see the new pool.
+            </p>
+            <p className="text-[10px]">
+              Active sources:{" "}
+              {sourcesInflight
+                .map((s) => `${s.source_id} (${s.count})`)
+                .join(", ")}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Filters strip */}
       <Card className="rounded-xl border shadow-sm">
         <CardContent className="p-3">
@@ -444,6 +510,8 @@ export default function PulseSuburbs() {
       {confirmDelete && (
         <DeactivateConfirm
           suburb={confirmDelete}
+          anyInflight={anyInflight}
+          totalInflight={totalInflight}
           onCancel={() => setConfirmDelete(null)}
           onDeactivate={() => handleDeactivate(confirmDelete)}
           onHardDelete={() => handleHardDelete(confirmDelete)}
@@ -746,7 +814,13 @@ function SuburbEditDialog({ suburb, onClose, onSaved }) {
 
 // ── Deactivate / hard-delete confirm ─────────────────────────────────────────
 
-function DeactivateConfirm({ suburb, onCancel, onDeactivate, onHardDelete }) {
+function DeactivateConfirm({ suburb, onCancel, onDeactivate, onHardDelete, anyInflight = false, totalInflight = 0 }) {
+  // Require ack checkbox when in-flight items exist (prevents accidental
+  // destructive action during a drain — even though it's technically safe).
+  const [ack, setAck] = useState(false);
+  const requireAck = anyInflight;
+  const confirmDisabled = requireAck && !ack;
+
   return (
     <AlertDialog open onOpenChange={(o) => !o && onCancel()}>
       <AlertDialogContent>
@@ -769,14 +843,40 @@ function DeactivateConfirm({ suburb, onCancel, onDeactivate, onHardDelete }) {
             )}
           </AlertDialogDescription>
         </AlertDialogHeader>
+
+        {requireAck && (
+          <div className="rounded-md border-2 border-red-400/70 bg-red-50 dark:bg-red-950/30 p-2.5 space-y-2 text-[11px] text-red-900 dark:text-red-300 mt-3">
+            <div className="flex items-start gap-2 font-semibold">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <span>{totalInflight} pulse item{totalInflight === 1 ? "" : "s"} currently in flight</span>
+            </div>
+            <p className="pl-6 text-red-800 dark:text-red-400">
+              Items already enqueued won't be affected — but future cron runs will exclude this suburb.
+              Confirm you still want to {suburb.is_active ? "deactivate" : "delete"} now.
+            </p>
+            <label className="flex items-center gap-2 pl-6 cursor-pointer text-red-900 dark:text-red-300 font-medium">
+              <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} className="h-3.5 w-3.5" />
+              I understand — proceed anyway
+            </label>
+          </div>
+        )}
+
         <AlertDialogFooter className="gap-2">
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           {suburb.is_active ? (
-            <AlertDialogAction onClick={onDeactivate} className="bg-amber-600 hover:bg-amber-700">
+            <AlertDialogAction
+              onClick={onDeactivate}
+              disabled={confirmDisabled}
+              className="bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 disabled:cursor-not-allowed"
+            >
               Deactivate
             </AlertDialogAction>
           ) : (
-            <AlertDialogAction onClick={onHardDelete} className="bg-red-600 hover:bg-red-700">
+            <AlertDialogAction
+              onClick={onHardDelete}
+              disabled={confirmDisabled}
+              className="bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed"
+            >
               Delete permanently
             </AlertDialogAction>
           )}

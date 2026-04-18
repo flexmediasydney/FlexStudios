@@ -1129,6 +1129,115 @@ function SuburbCoverageBlock({ stats, isBoundingBox }) {
 // last_error, attempts, and a "Requeue" button that resets status='pending'
 // and zeros attempts so the worker picks them up again on the next tick.
 
+// --- Run-button confirm dialog (hardens against accidental double-fire) ---
+//
+// Triggered by runSource / runAllSources when any targeted source has items
+// still in the queue or an open circuit breaker. Renders a per-source
+// breakdown and gives the operator actionable choices (not just "ok/cancel"):
+//   - Dispatch anyway (red, acknowledges duplicate risk)
+//   - Skip blocked sources (fire only the clean ones — Run All path)
+//   - Cancel pending + dispatch (kill old, start fresh)
+//   - Cancel (dismiss)
+//
+// Circuit-breaker-open sources cannot be dispatched regardless of which
+// action is chosen — they're shown in the list with a red lock icon to
+// explain why they're skipped. (runSource for a single source with an
+// open breaker doesn't open this dialog at all; it toasts an error and
+// bails. This dialog handles the Run-All case where some sources are
+// clean, some are inflight, some are breakered.)
+
+function RunConfirmDialog({ payload, onClose }) {
+  if (!payload) return null;
+  const { title, perSource = [], onDispatchAnyway, onCancelInflight, onSkipBlocked, onDismiss } = payload;
+
+  const fmtAge = (iso) => {
+    if (!iso) return "just now";
+    const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (mins < 1) return "<1min ago";
+    if (mins < 60) return `${mins}min ago`;
+    return `${Math.round(mins / 60)}h ago`;
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && (onDismiss || onClose)?.()}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="text-sm flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            {title}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-2 text-xs">
+          <div className="text-muted-foreground">
+            Dispatching now will create duplicate work (same suburbs scraped twice) and double Apify spend.
+            Pick an action below.
+          </div>
+
+          <div className="border rounded-md divide-y">
+            {perSource.map((s, i) => (
+              <div key={i} className="p-2 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold">{s.label}</span>
+                  {s.kind === "circuit" || s.circuit === "open" ? (
+                    <Badge variant="outline" className="text-[9px] bg-red-100 text-red-700 border-red-300">
+                      <AlertCircle className="h-2.5 w-2.5 mr-1" />
+                      Circuit OPEN — cannot dispatch
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[9px] bg-amber-50 text-amber-700 border-amber-300">
+                      <Activity className="h-2.5 w-2.5 mr-1" />
+                      {s.inflight} in flight
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground tabular-nums flex items-center gap-2 flex-wrap">
+                  {s.pending > 0 && <span>{s.pending} pending</span>}
+                  {s.running > 0 && (
+                    <span className="inline-flex items-center gap-0.5">
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                      {s.running} running
+                    </span>
+                  )}
+                  {s.earliestStartedAt && <span>· started {fmtAge(s.earliestStartedAt)}</span>}
+                  {s.circuit === "open" && s.consecutiveFailures > 0 && (
+                    <span className="text-red-700">· {s.consecutiveFailures} consecutive failures</span>
+                  )}
+                  {s.reopenAt && (
+                    <span className="text-red-700">· reopens {fmtAge(s.reopenAt).replace(" ago", "")}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <DialogFooter className="flex-col gap-1.5 sm:flex-row">
+          <Button variant="ghost" size="sm" className="text-xs h-8" onClick={onDismiss || onClose}>
+            Cancel
+          </Button>
+          {onSkipBlocked && (
+            <Button variant="outline" size="sm" className="text-xs h-8" onClick={onSkipBlocked}>
+              Skip blocked, fire clean only
+            </Button>
+          )}
+          {onCancelInflight && (
+            <Button variant="outline" size="sm" className="text-xs h-8" onClick={onCancelInflight}>
+              Cancel pending + dispatch fresh
+            </Button>
+          )}
+          {onDispatchAnyway && (
+            <Button size="sm" variant="destructive" className="text-xs h-8 gap-1" onClick={onDispatchAnyway}>
+              <AlertTriangle className="h-3 w-3" />
+              Dispatch anyway (duplicates!)
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function DlqDrillDialog({ sourceId, onClose }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1634,22 +1743,50 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
 
         {/* Actions */}
         <div className="flex items-center gap-1.5">
-          <Button
-            size="sm"
-            className="flex-1 h-7 text-xs"
-            onClick={() => onRun(sourceConfig)}
-            disabled={isRunning || isDisabled}
-            title={isDisabled ? "Source disabled — enable in Edit dialog" : undefined}
-          >
-            {isRunning ? (
-              <>
-                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                Running...
-              </>
-            ) : (
-              "Run Now"
-            )}
-          </Button>
+          {(() => {
+            const inflightCount = (queueStats?.pending || 0) + (queueStats?.running || 0);
+            const breakerOpenForRun = circuit?.state === "open";
+            const buttonTitle = breakerOpenForRun
+              ? `Circuit breaker open (${circuit?.consecutive_failures || 0} failures). Cannot dispatch until reopen.`
+              : inflightCount > 0
+                ? `${inflightCount} item${inflightCount === 1 ? "" : "s"} already in flight — clicking will show confirm dialog`
+                : isDisabled
+                  ? "Source disabled — enable in Edit dialog"
+                  : undefined;
+            return (
+              <Button
+                size="sm"
+                variant={breakerOpenForRun ? "outline" : inflightCount > 0 ? "outline" : "default"}
+                className={cn(
+                  "flex-1 h-7 text-xs",
+                  breakerOpenForRun && "border-red-400/60 text-red-700 dark:text-red-400",
+                  inflightCount > 0 && !breakerOpenForRun && "border-amber-400/60 text-amber-700 dark:text-amber-400"
+                )}
+                onClick={() => onRun(sourceConfig)}
+                disabled={isRunning || isDisabled || breakerOpenForRun}
+                title={buttonTitle}
+              >
+                {isRunning ? (
+                  <>
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                    Running...
+                  </>
+                ) : breakerOpenForRun ? (
+                  <>
+                    <AlertCircle className="h-3 w-3 mr-1.5" />
+                    Circuit open
+                  </>
+                ) : inflightCount > 0 ? (
+                  <>
+                    <Activity className="h-3 w-3 mr-1.5" />
+                    Run Now ({inflightCount} active)
+                  </>
+                ) : (
+                  "Run Now"
+                )}
+              </Button>
+            );
+          })()}
           <Button
             size="sm"
             variant="outline"
@@ -1706,7 +1843,7 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
 // is_enabled. Persists to pulse_source_configs. A success triggers
 // refetchEntityList('PulseSourceConfig') so the card reflects changes.
 
-function EditConfigDialog({ config, onClose, onSaved }) {
+function EditConfigDialog({ config, onClose, onSaved, anyInflight = false, inflightForThisSource = 0 }) {
   const [form, setForm] = useState(() => ({
     actor_input_json: JSON.stringify(config?.actor_input || {}, null, 2),
     max_results_per_suburb: config?.max_results_per_suburb ?? "",
@@ -1720,6 +1857,15 @@ function EditConfigDialog({ config, onClose, onSaved }) {
   }));
   const [saving, setSaving] = useState(false);
   const [jsonError, setJsonError] = useState(null);
+  // Hardening (run-button lockdown): when the source has in-flight items,
+  // require an explicit acknowledgement before saving. Safe-by-design:
+  // actor_input / max_suburbs / min_priority / max_results_per_suburb are
+  // captured at enqueue time (migration 093 stores actor_input snapshot on
+  // each pulse_fire_queue row), so in-flight items are NOT affected by the
+  // edit. But future dispatches will pick up the new config — which is
+  // confusing UX during a drain. The acknowledgement checkbox forces the
+  // operator to see that distinction.
+  const [ackInflight, setAckInflight] = useState(false);
 
   // Render actor_input as individual fields + a JSON textarea for power users.
   const parsedInput = useMemo(() => {
@@ -1846,6 +1992,48 @@ function EditConfigDialog({ config, onClose, onSaved }) {
               pulseFireScrapes, pulseScheduledScrape and pulseDataSync all read from this row.
             </div>
           </div>
+
+          {/* In-flight lockdown warning (migration 093 snapshot semantics) */}
+          {inflightForThisSource > 0 && (
+            <div className="rounded-md border-2 border-red-400/70 bg-red-50 dark:bg-red-950/30 p-3 space-y-2 text-[11px] text-red-900 dark:text-red-300">
+              <div className="flex items-start gap-2 font-semibold">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>This source has {inflightForThisSource} item{inflightForThisSource === 1 ? "" : "s"} in flight</span>
+              </div>
+              <div className="pl-6 space-y-1.5 text-red-800 dark:text-red-400">
+                <p>
+                  <strong>In-flight items are safe</strong> — the queue captured a snapshot of
+                  <code className="mx-1 font-mono text-[10px] bg-red-100 dark:bg-red-900/40 px-1 rounded">actor_input</code>
+                  at enqueue time. They'll finish with the OLD config.
+                </p>
+                <p>
+                  <strong>Future dispatches will use the NEW config</strong> you're editing here.
+                  This can produce a confusing mix (old-config data + new-config data in the same 24h window).
+                </p>
+                <p>
+                  Safest path: wait for the queue to drain (or cancel pending items from the Run Now dialog),
+                  then edit. If you need to change something now, acknowledge below.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 pl-6 cursor-pointer text-red-900 dark:text-red-300 font-medium">
+                <input
+                  type="checkbox"
+                  checked={ackInflight}
+                  onChange={(e) => setAckInflight(e.target.checked)}
+                  className="h-3.5 w-3.5"
+                />
+                I understand the in-flight risk — allow this save
+              </label>
+            </div>
+          )}
+
+          {/* Global inflight hint (other sources active) */}
+          {inflightForThisSource === 0 && anyInflight && (
+            <div className="rounded-md border border-amber-300/50 bg-amber-50/60 dark:bg-amber-950/20 p-2 flex items-start gap-2 text-[10px] text-amber-800 dark:text-amber-400">
+              <Activity className="h-3 w-3 shrink-0 mt-0.5" />
+              <span>Other sources have work in flight. This source is clean — edits safe.</span>
+            </div>
+          )}
 
           {/* Label + description */}
           <div className="grid grid-cols-2 gap-3">
@@ -2040,7 +2228,16 @@ function EditConfigDialog({ config, onClose, onSaved }) {
           <Button variant="outline" size="sm" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving || !!jsonError}>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={saving || !!jsonError || (inflightForThisSource > 0 && !ackInflight)}
+            title={
+              inflightForThisSource > 0 && !ackInflight
+                ? "In-flight items on this source — tick the acknowledgement checkbox above to enable save"
+                : undefined
+            }
+          >
             {saving ? (
               <>
                 <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
@@ -2877,6 +3074,10 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
   const [runningSources, setRunningSources] = useState(new Set());
   const [drillLog, setDrillLog] = useState(null);
   const [scheduleSource, setScheduleSource] = useState(null);
+
+  // Aggregate in-flight state (polled every 20s). Used for Run All button,
+  // Edit dialog warnings, and Suburbs pool lockdown.
+  const { inflightBySourceId, anyInflight } = useAnySourceInflight();
   // Controlled "deep-link" filter for the SyncHistory table — set by SourceCard
   // "View History" links so a card can scroll to and filter the history.
   const [historyFilterSourceId, setHistoryFilterSourceId] = useState(null);
@@ -2957,15 +3158,75 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
     return map;
   }, [sourceConfigs]);
 
-  // runSource now ONLY passes source_id — pulseFireScrapes reads the full
-  // actor_input, approach, max_results, etc. from pulse_source_configs.
-  // No more hardcoded runParams or per-source branching.
-  const runSource = useCallback(async (sourceConfig) => {
+  // ── Run-button hardening (prevents accidental double-dispatch) ────────
+  // Fetches fresh per-source state right at click time (not cached) so the
+  // Run buttons can refuse / warn about duplicates. Returns per-source:
+  //   inflight: pending + running count
+  //   pending, running
+  //   earliestStartedAt: when the oldest in-flight item was enqueued
+  //   circuit: breaker state (closed | open | half_open)
+  //   reopenAt: if open, when it reopens
+  const fetchSourcesInflight = useCallback(async (sourceIds) => {
+    if (!sourceIds || sourceIds.length === 0) return {};
+    try {
+      const [queueRes, breakerRes] = await Promise.all([
+        api._supabase
+          .from("pulse_fire_queue")
+          .select("source_id, status, created_at")
+          .in("source_id", sourceIds)
+          .in("status", ["pending", "running"]),
+        api._supabase
+          .from("pulse_source_circuit_breakers")
+          .select("source_id, state, consecutive_failures, reopen_at")
+          .in("source_id", sourceIds),
+      ]);
+      const result = {};
+      for (const sid of sourceIds) {
+        result[sid] = {
+          sourceId: sid,
+          inflight: 0,
+          pending: 0,
+          running: 0,
+          earliestStartedAt: null,
+          circuit: "closed",
+          consecutiveFailures: 0,
+          reopenAt: null,
+        };
+      }
+      for (const row of queueRes.data || []) {
+        const s = result[row.source_id];
+        if (!s) continue;
+        s.inflight++;
+        if (row.status === "pending") s.pending++;
+        if (row.status === "running") s.running++;
+        if (!s.earliestStartedAt || row.created_at < s.earliestStartedAt) {
+          s.earliestStartedAt = row.created_at;
+        }
+      }
+      for (const b of breakerRes.data || []) {
+        const s = result[b.source_id];
+        if (!s) continue;
+        s.circuit = b.state;
+        s.consecutiveFailures = b.consecutive_failures;
+        s.reopenAt = b.reopen_at;
+      }
+      return result;
+    } catch (err) {
+      console.warn("fetchSourcesInflight failed:", err.message);
+      return {};
+    }
+  }, []);
+
+  // Confirm-dialog state. When non-null, the RunConfirmDialog is shown with
+  // the given payload. onConfirm/onCancel are called by the dialog buttons.
+  const [runConfirm, setRunConfirm] = useState(null);
+
+  // Internal: the actual dispatch to pulseFireScrapes (moved out of runSource
+  // so the confirm dialog can call it after the user approves).
+  const actuallyDispatch = useCallback(async (sourceConfig) => {
     const sid = sourceConfig.source_id;
     setRunningSources((prev) => new Set([...prev, sid]));
     try {
-      // Manual run cap at 20 suburbs for per-suburb sources — avoids blowing
-      // the edge function wall clock. (This can be raised in the DB config too.)
       const fireParams = sourceConfig.approach === "bounding_box"
         ? { source_id: sid }
         : { source_id: sid, min_priority: sourceConfig.min_priority ?? 0, max_suburbs: sourceConfig.max_suburbs ?? 20 };
@@ -2995,6 +3256,70 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
     }
   }, []);
 
+  // Cancel pending (not running) queue items for given sources. Used when
+  // the confirm dialog's "Cancel in-flight" action is chosen instead of
+  // "Dispatch anyway".
+  const cancelInflightForSources = useCallback(async (sourceIds) => {
+    if (!sourceIds?.length) return 0;
+    const { count, error } = await api._supabase
+      .from("pulse_fire_queue")
+      .update({
+        status: "cancelled",
+        last_error: "Cancelled by user via Run button dialog",
+        last_error_category: "permanent",
+        completed_at: new Date().toISOString(),
+      }, { count: "exact" })
+      .in("source_id", sourceIds)
+      .eq("status", "pending");
+    if (error) {
+      toast.error(`Cancel failed: ${error.message}`);
+      return 0;
+    }
+    toast.success(`Cancelled ${count || 0} pending item${count === 1 ? "" : "s"}`);
+    return count || 0;
+  }, []);
+
+  // Public: guarded dispatcher for a single source card's "Run Now" button.
+  // Shows a confirm dialog if the source has in-flight work or an open
+  // circuit breaker. Straight-through if clear.
+  const runSource = useCallback(async (sourceConfig) => {
+    const sid = sourceConfig.source_id;
+    const state = (await fetchSourcesInflight([sid]))[sid];
+
+    // Hard-block on open circuit breaker
+    if (state?.circuit === "open") {
+      const reopenIn = state.reopenAt
+        ? Math.round((new Date(state.reopenAt).getTime() - Date.now()) / 60000)
+        : null;
+      toast.error(
+        `Circuit breaker OPEN for ${sourceConfig.label} — ${state.consecutiveFailures} consecutive failures. `
+        + `Reopens in ${reopenIn != null ? `${reopenIn}min` : "awhile"}. Upstream (Apify) may be rate-limiting; wait and retry.`
+      );
+      return;
+    }
+
+    // Soft-warn on in-flight items
+    if (state?.inflight > 0) {
+      setRunConfirm({
+        title: `${sourceConfig.label} — already has work in flight`,
+        perSource: [{ label: sourceConfig.label, ...state }],
+        onDispatchAnyway: async () => {
+          setRunConfirm(null);
+          await actuallyDispatch(sourceConfig);
+        },
+        onCancelInflight: async () => {
+          await cancelInflightForSources([sid]);
+          setRunConfirm(null);
+        },
+        onDismiss: () => setRunConfirm(null),
+      });
+      return;
+    }
+
+    // Clear path — dispatch directly
+    await actuallyDispatch(sourceConfig);
+  }, [fetchSourcesInflight, actuallyDispatch, cancelInflightForSources]);
+
   // Edit dialog state
   const [editConfig, setEditConfig] = useState(null);
 
@@ -3019,29 +3344,94 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
   // Sequential (not parallel) so we don't double-dispatch the websift actor
   // which is rate-limited. Each source gets a 1s pause before the next
   // starts — pulseFireScrapes itself handles the inter-suburb stagger.
+  //
+  // Hardened (run-button guard): before firing, aggregates per-source
+  // in-flight state. If ANY source has items in flight or an open circuit
+  // breaker, shows the confirm dialog with the full breakdown + options:
+  //   - Dispatch anyway (acknowledge the duplicate risk)
+  //   - Cancel pending + dispatch (kill old, start fresh)
+  //   - Skip blocked sources (fire only the clean ones)
+  //   - Cancel the whole operation
   const [runningAll, setRunningAll] = useState(false);
+  const _dispatchAllSequentially = useCallback(async (sources) => {
+    setRunningAll(true);
+    try {
+      toast.info(`Run All: dispatching ${sources.length} REA source${sources.length === 1 ? "" : "s"}…`);
+      for (const cfg of sources) {
+        // Call actuallyDispatch directly (not runSource) — we've already
+        // done the aggregate inflight check in runAllSources. runSource
+        // would double-check and re-prompt per source, creating a prompt
+        // storm.
+        // eslint-disable-next-line no-await-in-loop
+        await actuallyDispatch(cfg);
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      toast.success(`Run All complete — ${sources.length} source${sources.length === 1 ? "" : "s"} dispatched`);
+    } catch (err) {
+      toast.error(`Run All failed mid-batch: ${err.message}`);
+    } finally {
+      setRunningAll(false);
+    }
+  }, [actuallyDispatch]);
+
   const runAllSources = useCallback(async () => {
     const enabled = visibleSources.filter((s) => s.is_enabled !== false);
     if (enabled.length === 0) {
       toast.warning("No enabled sources to run");
       return;
     }
-    setRunningAll(true);
-    try {
-      toast.info(`Run All: dispatching ${enabled.length} REA sources…`);
-      for (const cfg of enabled) {
-        // eslint-disable-next-line no-await-in-loop
-        await runSource(cfg);
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-      toast.success(`Run All complete — ${enabled.length} sources dispatched`);
-    } catch (err) {
-      toast.error(`Run All failed mid-batch: ${err.message}`);
-    } finally {
-      setRunningAll(false);
+
+    // Fetch fresh per-source state for ALL enabled sources
+    const stateMap = await fetchSourcesInflight(enabled.map((s) => s.source_id));
+
+    // Partition: clean (can fire now), openCircuit (can never fire), inflight (needs confirm)
+    const clean = [];
+    const openCircuit = [];
+    const inflight = [];
+    for (const cfg of enabled) {
+      const st = stateMap[cfg.source_id];
+      if (!st) { clean.push(cfg); continue; }
+      if (st.circuit === "open") openCircuit.push({ cfg, state: st });
+      else if (st.inflight > 0) inflight.push({ cfg, state: st });
+      else clean.push(cfg);
     }
-  }, [visibleSources, runSource]);
+
+    // If everything's clean, straight-through
+    if (openCircuit.length === 0 && inflight.length === 0) {
+      await _dispatchAllSequentially(clean);
+      return;
+    }
+
+    // Otherwise build the confirm dialog with a full breakdown
+    setRunConfirm({
+      title: `Run All — ${inflight.length + openCircuit.length} of ${enabled.length} source${enabled.length === 1 ? "" : "s"} need${enabled.length === 1 ? "s" : ""} attention`,
+      perSource: [
+        ...inflight.map(({ cfg, state }) => ({ label: cfg.label, ...state, kind: "inflight" })),
+        ...openCircuit.map(({ cfg, state }) => ({ label: cfg.label, ...state, kind: "circuit" })),
+      ],
+      cleanSources: clean,
+      inflightSources: inflight.map((x) => x.cfg),
+      // "Skip blocked sources" — fire only the clean ones
+      onSkipBlocked: clean.length > 0 ? async () => {
+        setRunConfirm(null);
+        await _dispatchAllSequentially(clean);
+      } : null,
+      // "Cancel pending and run all" — kill pending for inflight sources, then fire everything clean + inflight
+      // (openCircuit sources are always skipped because the breaker is a hard block)
+      onCancelInflight: inflight.length > 0 ? async () => {
+        await cancelInflightForSources(inflight.map(({ cfg }) => cfg.source_id));
+        setRunConfirm(null);
+        await _dispatchAllSequentially([...clean, ...inflight.map(({ cfg }) => cfg)]);
+      } : null,
+      // "Dispatch anyway" — proceed with clean + inflight (will create duplicates)
+      onDispatchAnyway: inflight.length > 0 ? async () => {
+        setRunConfirm(null);
+        await _dispatchAllSequentially([...clean, ...inflight.map(({ cfg }) => cfg)]);
+      } : null,
+      onDismiss: () => setRunConfirm(null),
+    });
+  }, [visibleSources, fetchSourcesInflight, cancelInflightForSources, _dispatchAllSequentially]);
 
   const perSuburbCount = visibleSources.filter((s) => s.approach !== "bounding_box").length;
   const boundingBoxCount = visibleSources.filter((s) => s.approach === "bounding_box").length;
@@ -3079,13 +3469,22 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
           <Button
             size="sm"
             variant="outline"
-            className="h-7 px-2.5 text-xs gap-1.5"
+            className={cn(
+              "h-7 px-2.5 text-xs gap-1.5",
+              anyInflight && "border-amber-400/60 text-amber-700 dark:text-amber-400"
+            )}
             onClick={runAllSources}
             disabled={runningAll || runningSources.size > 0 || visibleSources.length === 0}
-            title="Dispatch every enabled REA source sequentially"
+            title={
+              anyInflight
+                ? `Some sources have items in flight — clicking will show a confirm dialog before dispatching`
+                : "Dispatch every enabled REA source sequentially"
+            }
           >
             {runningAll ? (
               <><Loader2 className="h-3 w-3 animate-spin" /> Running all…</>
+            ) : anyInflight ? (
+              <><AlertTriangle className="h-3 w-3" /> Run All (queue active)</>
             ) : (
               <><Repeat className="h-3 w-3" /> Run All</>
             )}
@@ -3145,8 +3544,60 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
         <ScheduleDialog source={scheduleSource} onClose={() => setScheduleSource(null)} />
       )}
       {editConfig && (
-        <EditConfigDialog config={editConfig} onClose={() => setEditConfig(null)} />
+        <EditConfigDialog
+          config={editConfig}
+          onClose={() => setEditConfig(null)}
+          anyInflight={anyInflight}
+          inflightForThisSource={inflightBySourceId[editConfig.source_id] || 0}
+        />
+      )}
+      {runConfirm && (
+        <RunConfirmDialog payload={runConfirm} onClose={() => setRunConfirm(null)} />
       )}
     </div>
   );
+}
+
+// ── Aggregate in-flight state hook ───────────────────────────────────────────
+//
+// Polls pulse_fire_queue every 20s for any pending/running items across all
+// sources. Used to:
+//   - Disable "Run All" button when anything's in flight
+//   - Show a global warning banner when edits are risky
+//   - Lock the Suburbs pool editor (editing the suburb list during a drain
+//     doesn't affect in-flight queue items, but adding/removing suburbs
+//     during a drain creates confusing UX — show a warning)
+//   - Lock EditConfigDialog with a warning when editing a source that has
+//     in-flight items (snapshot semantics: the queue holds the actor_input
+//     at enqueue time, so in-flight is safe, but future dispatches use new
+//     config — confusing if user doesn't understand)
+function useAnySourceInflight() {
+  const [inflightBySourceId, setInflightBySourceId] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const { data } = await api._supabase
+          .from("pulse_fire_queue")
+          .select("source_id, status")
+          .in("status", ["pending", "running"])
+          .limit(2000);
+        if (cancelled) return;
+        const counts = {};
+        for (const row of data || []) {
+          counts[row.source_id] = (counts[row.source_id] || 0) + 1;
+        }
+        setInflightBySourceId(counts);
+      } catch { /* non-fatal */ }
+    };
+    load();
+    const id = setInterval(load, 20000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  const anyInflight = useMemo(
+    () => Object.values(inflightBySourceId).some((n) => n > 0),
+    [inflightBySourceId]
+  );
+  return { inflightBySourceId, anyInflight };
 }
