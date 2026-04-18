@@ -179,11 +179,18 @@ function exportCsv(filename, header, rows) {
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
+// Type filters for the Listings table. Each button counts listing ROWS
+// in `pulse_listings` (one listing = one row) — NOT unique properties.
+// A single property that was sold twice counts twice; a property sold
+// then re-listed still contributes its sold row here. Properties module
+// ("Properties > Sold (current)") dedupes to one row per property_key
+// and only surfaces properties whose LATEST listing is sold, so its
+// total will always be ≤ this one.
 const TYPE_FILTERS = [
   { value: "all", label: "All" },
   { value: "for_sale", label: "For Sale" },
   { value: "for_rent", label: "For Rent" },
-  { value: "sold", label: "Sold" },
+  { value: "sold", label: "Sold", tooltip: "All sold listing rows (not unique properties). Properties module dedupes by address and shows fewer." },
   { value: "under_contract", label: "Under Contract" },
 ];
 
@@ -1069,10 +1076,11 @@ export default function PulseListingsTab({
       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
         {/* Type buttons */}
         <div className="flex flex-wrap gap-1">
-          {TYPE_FILTERS.map(({ value, label }) => (
+          {TYPE_FILTERS.map(({ value, label, tooltip }) => (
             <button
               key={value}
               onClick={() => { setListingFilter(value); setListingPage(0); }}
+              title={tooltip}
               className={cn(
                 "text-[11px] px-2.5 py-1 rounded-md border font-medium transition-colors",
                 listingFilter === value

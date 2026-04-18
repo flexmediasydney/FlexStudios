@@ -88,13 +88,19 @@ const TYPE_LABEL = {
   other: "Other",
 };
 
+// Filter tabs for the list/map views. "sold" tab filters on
+// `current_listing_type = 'sold'` — i.e. the property's LATEST listing is
+// a sold record, deduplicated to one row per property_key. This differs
+// from Industry Pulse > Listings > Sold, which counts every sold listing
+// row (no dedupe, includes properties that later re-listed). See
+// `PulseListings.jsx` + `property_full_v` view def for the mechanics.
 const FILTER_TABS = [
   { value: "all",          label: "All" },
   { value: "with_project", label: "Mine" },
   { value: "linked",       label: "Linked" },
   { value: "multi_listing", label: "Multi-campaign" },
   { value: "for_sale",      label: "For Sale" },
-  { value: "sold",          label: "Recently Sold" },
+  { value: "sold",          label: "Sold (current)", tooltip: "Properties whose latest listing is sold — one row per address. Pulse > Listings > Sold counts every sold listing row (no dedupe), so its total is slightly higher." },
 ];
 
 export default function Properties() {
@@ -277,7 +283,7 @@ export default function Properties() {
         <Tabs value={tab} onValueChange={onTabChange}>
           <TabsList className="bg-muted/40 flex-wrap h-auto">
             {FILTER_TABS.map((t) => (
-              <TabsTrigger key={t.value} value={t.value} className="text-xs">
+              <TabsTrigger key={t.value} value={t.value} className="text-xs" title={t.tooltip}>
                 {t.label}
               </TabsTrigger>
             ))}
