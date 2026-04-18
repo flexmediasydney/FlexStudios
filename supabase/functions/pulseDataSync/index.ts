@@ -57,6 +57,13 @@ interface ApifyRunResult {
   items: any[];
   runId: string | null;
   datasetId: string | null;
+  // OP03 (2026-04-18): capture Apify's authoritative billed cost + runtime so
+  // we can write result_summary.apify_billed_cost_usd / runtime_secs per run.
+  // Both read from the Apify run object's `usageTotalUsd` and `stats.runTimeSecs`.
+  // Nullable because aborted/timed-out/failed runs may not expose them.
+  usageTotalUsd: number | null;
+  runTimeSecs: number | null;
+  status: string | null;
 }
 
 /**
@@ -77,12 +84,23 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 async function runApifyActor(actorSlug: string, input: any, label: string, timeoutSecs = 180): Promise<ApifyRunResult> {
   if (!APIFY_TOKEN) throw new Error('APIFY_TOKEN not set in environment');
 
+  // Baseline result shape — every exit path returns a full ApifyRunResult so
+  // the caller doesn't have to null-check individual fields.
+  const empty = (runId: string | null = null, datasetId: string | null = null, status: string | null = null): ApifyRunResult => ({
+    items: [],
+    runId,
+    datasetId,
+    usageTotalUsd: null,
+    runTimeSecs: null,
+    status,
+  });
+
   // Respect the global wall budget — caller may have already burned most of it.
   // Reserve 5s grace so a finalize/jsonResponse path still has time to run.
   const remaining = Math.max(0, wallRemainingMs() - 5_000);
   if (remaining < 5_000) {
     console.warn(`Apify ${label}: wall budget exhausted (${wallRemainingMs()}ms left), skipping`);
-    return { items: [], runId: null, datasetId: null };
+    return empty();
   }
 
   const safeId = actorSlug.replace('/', '~');
@@ -102,19 +120,25 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
     }, fetchTimeoutMs);
   } catch (err: any) {
     console.error(`Apify ${label} run submit failed (aborted/network): ${err?.message || err}`);
-    return { items: [], runId: null, datasetId: null };
+    return empty();
   }
 
   if (!resp.ok) {
     const body = await resp.text().catch(() => '');
     console.error(`Apify ${label} failed: ${resp.status} — ${body.substring(0, 200)}`);
-    return { items: [], runId: null, datasetId: null };
+    return empty();
   }
 
   const runData = await resp.json().catch(() => ({}));
   let runId = runData?.data?.id || null;
   let status = runData?.data?.status;
   let datasetId = runData?.data?.defaultDatasetId || null;
+  // OP03 (2026-04-18): Apify's run object carries billed cost in usageTotalUsd
+  // (sum across all chargeable events). runtime is data.stats.runTimeSecs.
+  // Captured on every poll and on the initial submit so even early-exit paths
+  // retain whatever the last-seen values are.
+  let usageTotalUsd: number | null = typeof runData?.data?.usageTotalUsd === 'number' ? runData.data.usageTotalUsd : null;
+  let runTimeSecs: number | null = typeof runData?.data?.stats?.runTimeSecs === 'number' ? runData.data.stats.runTimeSecs : null;
 
   // Poll if still running — cap total poll time at timeoutSecs so we respect the caller's budget.
   // Also cap by the wall remaining so we don't blow past the 150s edge runtime kill.
@@ -130,6 +154,8 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
         const pollData = await pollResp.json().catch(() => ({}));
         status = pollData?.data?.status;
         datasetId = pollData?.data?.defaultDatasetId || datasetId;
+        if (typeof pollData?.data?.usageTotalUsd === 'number') usageTotalUsd = pollData.data.usageTotalUsd;
+        if (typeof pollData?.data?.stats?.runTimeSecs === 'number') runTimeSecs = pollData.data.stats.runTimeSecs;
         if (status !== 'RUNNING' && status !== 'READY') break;
       } catch (pollErr: any) {
         // One poll failing is fine — try again next iteration. If we run out
@@ -141,7 +167,7 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
 
   if (status !== 'SUCCEEDED') {
     console.error(`Apify ${label}: status=${status}`);
-    return { items: [], runId, datasetId };
+    return { items: [], runId, datasetId, usageTotalUsd, runTimeSecs, status };
   }
 
   try {
@@ -151,14 +177,14 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
     }, datasetTimeout);
     if (!itemsResp.ok) {
       console.error(`Apify ${label}: dataset fetch failed (${itemsResp.status})`);
-      return { items: [], runId, datasetId };
+      return { items: [], runId, datasetId, usageTotalUsd, runTimeSecs, status };
     }
     const items = await itemsResp.json();
-    console.log(`Apify ${label}: ${items.length} results`);
-    return { items: Array.isArray(items) ? items : [], runId, datasetId };
+    console.log(`Apify ${label}: ${items.length} results (cost=$${(usageTotalUsd ?? 0).toFixed(4)}, runtime=${runTimeSecs ?? '?'}s)`);
+    return { items: Array.isArray(items) ? items : [], runId, datasetId, usageTotalUsd, runTimeSecs, status };
   } catch (fetchErr: any) {
     console.error(`Apify ${label}: dataset fetch error: ${fetchErr.message}`);
-    return { items: [], runId, datasetId };
+    return { items: [], runId, datasetId, usageTotalUsd, runTimeSecs, status };
   }
 }
 
@@ -299,16 +325,30 @@ function fuzzyNameMatch(a: string, b: string): boolean {
 }
 
 /**
- * Expand {suburb} / {suburb-slug} placeholders in every string value of the
- * actor input template. Non-string values pass through unchanged. Safe to
- * call multiple times — idempotent on already-inflated strings.
+ * Expand {suburb} / {suburb-slug} / {suburb-full} / {postcode} placeholders in
+ * every string value of the actor input template. Non-string values pass
+ * through unchanged. Safe to call multiple times — idempotent on already-
+ * inflated strings.
+ *
+ * OP01 (2026-04-18): added {suburb-full} = "<name> NSW <postcode>" for actors
+ * that resolve location by free-text (e.g. websift REA agent profiles). Note
+ * that direct invocations to pulseDataSync (not through pulseFireScrapes) do
+ * NOT have the postcode in scope here, so we fall back to "{suburb} NSW".
+ * Cron-driven runs inflate in pulseFireScrapes where the postcode IS known;
+ * by the time the queue payload arrives here, the template strings are
+ * already literal.
  */
 function inflateSuburbTemplate(input: Record<string, any>, suburb: string): Record<string, any> {
   const slug = suburb.toLowerCase().replace(/\s+/g, '-');
+  const suburbFullFallback = `${suburb} NSW`;
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(input || {})) {
     if (typeof v === 'string') {
-      out[k] = v.replace(/\{suburb\}/g, suburb).replace(/\{suburb-slug\}/g, slug);
+      out[k] = v
+        .replace(/\{suburb-full\}/g, suburbFullFallback)
+        .replace(/\{suburb-slug\}/g, slug)
+        .replace(/\{suburb\}/g, suburb)
+        .replace(/\{postcode\}/g, '');
     } else {
       out[k] = v;
     }
@@ -325,6 +365,33 @@ serveWithAudit('pulseDataSync', async (req) => {
   // Initialize wall budget for this invocation. Reset every call so the global
   // never carries over between cold/warm starts.
   invocationStart = Date.now();
+  // OP03 (2026-04-18): hoist apifyStats + apifyRunIds out of the try-block so
+  // the outer catch can still persist cost data when we bail with an error.
+  // Otherwise a mid-run throw would wipe the accounting and result_summary
+  // would lose the partial invoice line.
+  const apifyStats = {
+    apify_billed_cost_usd: 0,
+    value_producing_cost_usd: 0,
+    runtime_secs: 0,
+    runs_attempted: 0,
+    runs_succeeded: 0,
+  };
+  const apifyRunIds: Record<string, string | null> = {};
+  function accumulateApify(result: ApifyRunResult) {
+    apifyStats.runs_attempted += 1;
+    if (typeof result.usageTotalUsd === 'number') {
+      apifyStats.apify_billed_cost_usd += result.usageTotalUsd;
+    }
+    if (typeof result.runTimeSecs === 'number') {
+      apifyStats.runtime_secs += result.runTimeSecs;
+    }
+    if (result.status === 'SUCCEEDED') {
+      apifyStats.runs_succeeded += 1;
+      if (result.items.length > 0 && typeof result.usageTotalUsd === 'number') {
+        apifyStats.value_producing_cost_usd += result.usageTotalUsd;
+      }
+    }
+  }
   try {
     const entities = createEntities(admin);
     const body = await req.json().catch(() => ({}));
@@ -403,7 +470,8 @@ serveWithAudit('pulseDataSync', async (req) => {
     const isAzzouzanaActor = actorSlug === 'azzouzana/real-estate-au-scraper-pro';
 
     const now = new Date().toISOString();
-    const apifyRunIds: Record<string, string | null> = {};
+    // apifyStats + apifyRunIds hoisted above the try-block so the catch path
+    // can also persist partial-run cost info (see OP03 fix at top of handler).
 
     // Log sync start
     // ── Migration 095 ──────────────────────────────────────────────────
@@ -465,6 +533,7 @@ serveWithAudit('pulseDataSync', async (req) => {
         'listings-boundingbox',
         300
       );
+      accumulateApify(bbResult);
       bbResult.items.forEach(l => { l._suburb = l.suburb || 'Greater Sydney'; l._source = 'rea_boundingbox'; });
       allListings.push(...bbResult.items);
       if (bbResult.runId) apifyRunIds['listings-boundingbox'] = bbResult.runId;
@@ -475,6 +544,7 @@ serveWithAudit('pulseDataSync', async (req) => {
         startUrl: listingsStartUrl,
         maxItems: maxListingsTotal,
       }, 'listings-boundingbox', 300);
+      accumulateApify(bbResult);
       bbResult.items.forEach(l => { l._suburb = l.suburb || 'Greater Sydney'; l._source = 'rea_boundingbox'; });
       allListings.push(...bbResult.items);
       if (bbResult.runId) apifyRunIds['listings-boundingbox'] = bbResult.runId;
@@ -514,6 +584,7 @@ serveWithAudit('pulseDataSync', async (req) => {
           // websift = REA agent profiles pipeline
           console.log(`[${suburb}] v3 websift with actor_input=${JSON.stringify(inflated).substring(0, 120)}...`);
           const reaResult = await runApifyActor(actorSlug, inflated, `websift-${suburb}`, 180);
+          accumulateApify(reaResult);
           reaResult.items.forEach(a => { a._suburb = suburb; a._source = 'rea'; });
           allReaAgents.push(...reaResult.items);
           if (reaResult.runId) apifyRunIds[`websift-${suburb}`] = reaResult.runId;
@@ -521,6 +592,7 @@ serveWithAudit('pulseDataSync', async (req) => {
           // azzouzana = REA listings pipeline
           console.log(`[${suburb}] v3 azzouzana with actor_input=${JSON.stringify(inflated).substring(0, 120)}...`);
           const listResult = await runApifyActor(actorSlug, inflated, `listings-${suburb}`, 120);
+          accumulateApify(listResult);
           listResult.items.forEach(l => { l._suburb = suburb; l._source = 'rea'; });
           allListings.push(...listResult.items);
           if (listResult.runId) apifyRunIds[`listings-${suburb}`] = listResult.runId;
@@ -533,14 +605,25 @@ serveWithAudit('pulseDataSync', async (req) => {
 
       // v2 legacy: 2-actor pipeline with hardcoded params per suburb
       // 2A: websift REA agent profiles (correct input params: maxPages + fullScrape)
+      // OP01 (2026-04-18): legacy path ran with bare "<suburb> <state>" which
+      // fuzzy-matched wrong on many common suburb names (Randwick, Sydney,
+      // Mosman — 80% silent-zero rate). v3 config-driven path now uses
+      // {suburb-full} inflated to "<name> NSW <postcode>" in pulseFireScrapes.
+      // Legacy callers have to pass postcode explicitly via body.postcode if
+      // they want the same disambiguation here.
       if (maxAgentsPerSuburb > 0) {
         console.log(`[${suburb}] Running websift REA agents (legacy)...`);
+        const legacyPostcode = (body.postcode || '').toString().trim();
+        const legacyLocation = legacyPostcode
+          ? `${suburb} ${state} ${legacyPostcode}`
+          : `${suburb} ${state}`;
         const reaResult = await runApifyActor('websift/realestateau', {
-          location: `${suburb} ${state}`,
+          location: legacyLocation,
           maxPages: Math.ceil(maxAgentsPerSuburb / 10),
           fullScrape: true,
           sortBy: 'SUBURB_SALES_PERFORMANCE',
         }, `websift-${suburb}`, 180);
+        accumulateApify(reaResult);
         reaResult.items.forEach(a => { a._suburb = suburb; a._source = 'rea'; });
         allReaAgents.push(...reaResult.items);
         if (reaResult.runId) apifyRunIds[`websift-${suburb}`] = reaResult.runId;
@@ -553,6 +636,7 @@ serveWithAudit('pulseDataSync', async (req) => {
           startUrl: `https://www.realestate.com.au/buy/in-${suburbSlug},+${state.toLowerCase()}/list-1`,
           maxItems: maxListingsPerSuburb,
         }, `listings-${suburb}`, 120);
+        accumulateApify(listResult);
         listResult.items.forEach(l => { l._suburb = suburb; l._source = 'rea'; });
         allListings.push(...listResult.items);
         if (listResult.runId) apifyRunIds[`listings-${suburb}`] = listResult.runId;
@@ -582,6 +666,17 @@ serveWithAudit('pulseDataSync', async (req) => {
               suburbs_skipped: suburbsSkipped,
               agents_collected: allReaAgents.length,
               listings_collected: allListings.length,
+              // OP03: cost visibility even on timed-out runs — these still cost
+              // money because the Apify actor ran; we just didn't finish post-
+              // processing. Matters for daily cost reconciliation.
+              apify_billed_cost_usd: apifyStats.apify_billed_cost_usd,
+              value_producing_cost_usd: apifyStats.value_producing_cost_usd,
+              runtime_secs: apifyStats.runtime_secs,
+              apify_runs_attempted: apifyStats.runs_attempted,
+              apify_runs_succeeded: apifyStats.runs_succeeded,
+              apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
+              apify_run_ids: apifyRunIds,
+              items_processed: allReaAgents.length + allListings.length,
               note: 'Post-processing skipped — partial data not persisted to live tables.',
             },
           }, { onConflict: 'sync_log_id' });
@@ -1992,6 +2087,21 @@ serveWithAudit('pulseDataSync', async (req) => {
             mappings_created: mappingsCreated,
             in_crm_agents: processedAgents.filter(a => a.is_in_crm).length,
             agent_errors: agentErrors,
+            // OP03 (2026-04-18): cost + runtime reconciliation fields so the
+            // daily billing dashboard can see $/source and per-run efficiency
+            // on the same side-table row the UI already renders from. Keys
+            // match pulseDetailEnrich so both REA sources aggregate with the
+            // same SQL. items_processed = raw items surfaced by the scraper
+            // (pre-dedup); use records_fetched on the main table for the
+            // count after dedup if you want that view instead.
+            apify_billed_cost_usd: apifyStats.apify_billed_cost_usd,
+            value_producing_cost_usd: apifyStats.value_producing_cost_usd,
+            runtime_secs: apifyStats.runtime_secs,
+            apify_runs_attempted: apifyStats.runs_attempted,
+            apify_runs_succeeded: apifyStats.runs_succeeded,
+            apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
+            apify_run_ids: apifyRunIds,
+            items_processed: allReaAgents.length + allListings.length,
           },
         }, { onConflict: 'sync_log_id' });
       } catch (pErr) {
@@ -2069,9 +2179,22 @@ serveWithAudit('pulseDataSync', async (req) => {
           error_message: errMsg,
         }).eq('id', syncLogId);
         // Migration 095: result_summary routes to side-table
+        // OP03 (2026-04-18): persist cost data on the error path so runs that
+        // burned Apify credits before throwing still show up in billing
+        // reconciliation rather than appearing free.
         await admin.from('pulse_sync_log_payloads').upsert({
           sync_log_id: syncLogId,
-          result_summary: { error: errMsg },
+          result_summary: {
+            error: errMsg,
+            apify_billed_cost_usd: apifyStats.apify_billed_cost_usd,
+            value_producing_cost_usd: apifyStats.value_producing_cost_usd,
+            runtime_secs: apifyStats.runtime_secs,
+            apify_runs_attempted: apifyStats.runs_attempted,
+            apify_runs_succeeded: apifyStats.runs_succeeded,
+            apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
+            apify_run_ids: apifyRunIds,
+            items_processed: 0,
+          },
         }, { onConflict: 'sync_log_id' });
       } catch (logErr) {
         console.error('pulseDataSync: failed to mark sync log as failed:', logErr);

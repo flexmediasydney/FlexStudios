@@ -125,15 +125,17 @@ serveWithAudit('pulseFireScrapes', async (req) => {
     }
 
     if (suburbs.length === 0) {
-      await admin.from('pulse_timeline').insert({
-        entity_type: 'system',
-        event_type: 'cron_dispatched',
-        event_category: 'system',
-        title: `Cron dispatched: ${sourceLabel}`,
-        description: 'No eligible suburbs matched filters',
-        new_value: { source_id, dispatched: 0, min_priority, max_items: maxItems, enqueued: 0 },
-        source: 'cron',
-      }).catch(() => {});
+      try {
+        await admin.from('pulse_timeline').insert({
+          entity_type: 'system',
+          event_type: 'cron_dispatched',
+          event_category: 'system',
+          title: `Cron dispatched: ${sourceLabel}`,
+          description: 'No eligible suburbs matched filters',
+          new_value: { source_id, dispatched: 0, min_priority, max_items: maxItems, enqueued: 0 },
+          source: 'cron',
+        });
+      } catch { /* non-fatal */ }
       return jsonResponse({ success: true, source_id, enqueued: 0, message: 'No eligible suburbs' });
     }
 
@@ -150,15 +152,17 @@ serveWithAudit('pulseFireScrapes', async (req) => {
     });
 
     if (eligible.length === 0) {
-      await admin.from('pulse_timeline').insert({
-        entity_type: 'system',
-        event_type: 'cron_dispatched',
-        event_category: 'system',
-        title: `Cron dispatched: ${sourceLabel}`,
-        description: `All ${suburbs.length} suburbs skipped (missing postcode)`,
-        new_value: { source_id, dispatched: 0, enqueued: 0, skipped },
-        source: 'cron',
-      }).catch(() => {});
+      try {
+        await admin.from('pulse_timeline').insert({
+          entity_type: 'system',
+          event_type: 'cron_dispatched',
+          event_category: 'system',
+          title: `Cron dispatched: ${sourceLabel}`,
+          description: `All ${suburbs.length} suburbs skipped (missing postcode)`,
+          new_value: { source_id, dispatched: 0, enqueued: 0, skipped },
+          source: 'cron',
+        });
+      } catch { /* non-fatal */ }
       return jsonResponse({ success: true, source_id, enqueued: 0, skipped: skipped.length });
     }
 
@@ -192,12 +196,23 @@ serveWithAudit('pulseFireScrapes', async (req) => {
     const queueRows = eligible.map((s, idx) => {
       // Inflate the actor_input template for this specific suburb
       const slug = s.name.toLowerCase().replace(/\s+/g, '-');
+      // OP01 (2026-04-18): {suburb-full} = "Name NSW <postcode>" — available
+      // for actors that fuzzy-match on location strings and benefit from
+      // postcode disambiguation. Tested on websift/realestateau REA-agents
+      // actor: the postcode-qualified format did NOT fix the 80% silent-zero
+      // rate seen in production (both "Strathfield NSW" and
+      // "Strathfield NSW 2135" returned 0 in the same run). Root cause
+      // appears to be actor-side rate-limiting or indexing regression, not
+      // location-string format. Token retained for future actors or for a
+      // fallback retry step; current rea_agents config keeps {suburb} NSW.
+      const suburbFull = s.postcode ? `${s.name} NSW ${s.postcode}` : `${s.name} NSW`;
       const inflated: Record<string, any> = {};
       for (const [k, v] of Object.entries(actorInput)) {
         if (typeof v === 'string') {
           inflated[k] = v
-            .replace(/\{suburb\}/g, s.name)
+            .replace(/\{suburb-full\}/g, suburbFull)
             .replace(/\{suburb-slug\}/g, slug)
+            .replace(/\{suburb\}/g, s.name)
             .replace(/\{postcode\}/g, s.postcode || '');
         } else {
           inflated[k] = v;
@@ -237,32 +252,35 @@ serveWithAudit('pulseFireScrapes', async (req) => {
 
     // ── Audit event (kept as 'cron_dispatched' so pulse_source_card_stats()
     // in migration 083 keeps working without schema changes) ─────────────
-    await admin.from('pulse_timeline').insert({
-      entity_type: 'system',
-      event_type: 'cron_dispatched',
-      event_category: 'system',
-      title: `Cron dispatched: ${sourceLabel}`,
-      description: `Enqueued ${eligible.length} suburb${eligible.length === 1 ? '' : 's'} for ${sourceLabel}${skipped.length ? ` (${skipped.length} skipped missing postcode)` : ''}`,
-      new_value: {
-        source_id,
-        batch_id: batch.id,
-        dispatched: eligible.length,  // keeps legacy field name for migration-083 SQL
-        enqueued: eligible.length,
-        total_count: eligible.length,
-        min_priority,
-        max_items: maxItems,
-        skipped,
-        suburbs: eligible.map(s => s.name),
-        actor_input: actorInput,
-      },
-      source: 'cron',
-    }).catch(() => {});
+    try {
+      await admin.from('pulse_timeline').insert({
+        entity_type: 'system',
+        event_type: 'cron_dispatched',
+        event_category: 'system',
+        title: `Cron dispatched: ${sourceLabel}`,
+        description: `Enqueued ${eligible.length} suburb${eligible.length === 1 ? '' : 's'} for ${sourceLabel}${skipped.length ? ` (${skipped.length} skipped missing postcode)` : ''}`,
+        new_value: {
+          source_id,
+          batch_id: batch.id,
+          dispatched: eligible.length,  // keeps legacy field name for migration-083 SQL
+          enqueued: eligible.length,
+          total_count: eligible.length,
+          min_priority,
+          max_items: maxItems,
+          skipped,
+          suburbs: eligible.map(s => s.name),
+          actor_input: actorInput,
+        },
+        source: 'cron',
+      });
+    } catch { /* non-fatal */ }
 
     // Update source config last_run_at
-    await admin.from('pulse_source_configs')
-      .update({ last_run_at: new Date().toISOString() })
-      .eq('source_id', source_id)
-      .then(() => {}).catch(() => {});
+    try {
+      await admin.from('pulse_source_configs')
+        .update({ last_run_at: new Date().toISOString() })
+        .eq('source_id', source_id);
+    } catch { /* non-fatal */ }
 
     return jsonResponse({
       success: true,
