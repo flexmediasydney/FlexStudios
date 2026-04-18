@@ -151,25 +151,41 @@ export async function handleRescheduled(entities: any, orderId: string, p: any, 
         if (updates.agency_id) calUpdates.agency_id = updates.agency_id;
         await entities.CalendarEvent.update(appointmentEvent.id, calUpdates);
       } else {
-        // CalendarEvent not found — create one as fallback (original scheduled may have failed)
-        const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
-        await entities.CalendarEvent.create({
-          title: project.title || `Shoot — ${orderId}`,
-          description: `Tonomo appointment (created during reschedule) for order ${orderId}`,
-          start_time: new Date(startTime).toISOString(),
-          end_time: endTime ? new Date(endTime).toISOString() : null,
-          location: project.property_address || '',
-          google_event_id: eventId,
-          tonomo_appointment_id: eventId,
-          project_id: project.id,
-          activity_type: 'shoot',
-          is_synced: false,
-          is_done: false,
-          auto_linked: true,
-          link_source: 'tonomo_webhook',
-          link_confidence: 'exact',
-          event_source: 'tonomo',
-        });
+        // Guard against the cancel-race ghost bug (see migration 094):
+        // Only recreate a calendar event if this appointment is still tracked
+        // on the project and the order hasn't been cancelled at the order
+        // level. Prevents a 'rescheduled' payload that races against a
+        // 'canceled' from resurrecting the calendar row.
+        const trackedAppointmentIds = Array.isArray(project.tonomo_appointment_ids)
+          ? project.tonomo_appointment_ids
+          : (typeof project.tonomo_appointment_ids === 'string'
+              ? (() => { try { return JSON.parse(project.tonomo_appointment_ids); } catch { return []; } })()
+              : []);
+        const appointmentStillTracked = trackedAppointmentIds.includes(eventId);
+        const orderCancelled = (p.order?.orderStatus || p.orderStatus) === 'cancelled';
+
+        if (appointmentStillTracked && !orderCancelled) {
+          const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
+          await entities.CalendarEvent.create({
+            title: project.title || `Shoot — ${orderId}`,
+            description: `Tonomo appointment (created during reschedule) for order ${orderId}`,
+            start_time: new Date(startTime).toISOString(),
+            end_time: endTime ? new Date(endTime).toISOString() : null,
+            location: project.property_address || '',
+            google_event_id: eventId,
+            tonomo_appointment_id: eventId,
+            project_id: project.id,
+            activity_type: 'shoot',
+            is_synced: false,
+            is_done: false,
+            auto_linked: true,
+            link_source: 'tonomo_webhook',
+            link_confidence: 'exact',
+            event_source: 'tonomo',
+          });
+        } else {
+          console.log(`[rescheduled] Skipping calendar-event recreate for appointment ${eventId}: tracked=${appointmentStillTracked}, orderCancelled=${orderCancelled}`);
+        }
       }
     } catch (calErr: any) {
       console.error('CalendarEvent reschedule update failed (non-fatal):', calErr.message);

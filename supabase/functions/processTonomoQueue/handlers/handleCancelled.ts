@@ -10,10 +10,26 @@ export async function handleCancelled(entities: any, orderId: string, p: any) {
   const project = await findProjectByOrderId(entities, orderId);
   if (!project) return { summary: `No project found for cancelled order ${orderId}`, skipped: true };
 
-  // --- Partial cancellation: single appointment in a multi-appointment order ---
-  const appointmentIds = project.tonomo_appointment_ids || [];
+  // Normalize tracked appointment ids (can be JSON string or array in DB)
+  const rawAppts = project.tonomo_appointment_ids;
+  const appointmentIds: string[] = Array.isArray(rawAppts)
+    ? rawAppts
+    : (typeof rawAppts === 'string'
+        ? (() => { try { return JSON.parse(rawAppts) as string[]; } catch { return []; } })()
+        : []);
   const cancelledEventId = p.id || p.appointment_id || null;
 
+  // Classify: is this a full ORDER cancel, or just an APPOINTMENT cancel?
+  // Tonomo sends action='canceled' for BOTH cases with the same payload shape.
+  // The discriminator is p.order.orderStatus:
+  //   - 'cancelled' → customer cancelled the whole order
+  //   - anything else (inProgress, scheduled, etc.) → customer removed an
+  //     appointment but the order/booking is still live (they'll reschedule)
+  const orderStatusInPayload = (p.order?.orderStatus || p.orderStatus || '').toLowerCase();
+  const isFullOrderCancel = orderStatusInPayload === 'cancelled' || orderStatusInPayload === 'canceled';
+
+  // --- Partial cancellation (MULTIPLE appointments in order) ---
+  // User removed one of N appointments. Keep the others + project status.
   if (appointmentIds.length > 1 && cancelledEventId) {
     // Remove just this appointment's calendar event
     try {
@@ -74,7 +90,78 @@ export async function handleCancelled(entities: any, orderId: string, p: any) {
     return { summary: `Partial cancellation: removed appointment ${cancelledEventId}, ${remaining.length} appointments remain` };
   }
 
-  // --- Full order / single appointment cancel: move to pending_review ---
+  // --- Appointment-only cancel (1 appointment, order still active) ---
+  // Customer removed the appointment from a live order (will reschedule later).
+  // Keep the order/project live; just clear the calendar event + appointment
+  // metadata. Common Tonomo flow: "I need to reschedule, cancel first then
+  // pick a new time" → we'd be wrong to mark the project as cancelled.
+  if (!isFullOrderCancel && appointmentIds.length <= 1 && cancelledEventId) {
+    // Delete the calendar event
+    try {
+      const linkedEvents = await entities.CalendarEvent.filter({ project_id: project.id }, null, 50);
+      const cancelledEvents = linkedEvents.filter((ev: any) =>
+        ev.tonomo_appointment_id === cancelledEventId || ev.google_event_id === cancelledEventId
+      );
+      for (const ev of cancelledEvents) {
+        await entities.CalendarEvent.delete(ev.id).catch(() => {});
+        console.log(`[cancelled/appt-only] Deleted calendar event ${ev.id}`);
+      }
+    } catch (err: any) {
+      console.warn(`[cancelled/appt-only] Failed to clean calendar events:`, err?.message);
+    }
+
+    // Clear appointment metadata but keep project status (booking is still live)
+    const apptOnlyUpdates: Record<string, any> = {
+      tonomo_appointment_ids: [],
+      shoot_date: null,
+      shoot_time: null,
+      pending_review_type: 'appointment_cancelled',
+      pending_review_reason: 'Appointment removed in Tonomo — order is still active. Awaiting reschedule.',
+    };
+    // If the project is currently 'scheduled' or similar, move to pending_review
+    // so operators see it needs attention (new shoot date required).
+    if (project.status && !['pending_review', 'delivered', 'cancelled'].includes(project.status)) {
+      apptOnlyUpdates.pre_revision_stage = project.status;
+      apptOnlyUpdates.status = 'pending_review';
+    }
+    if (project.tonomo_event_id === cancelledEventId) apptOnlyUpdates.tonomo_event_id = null;
+    if (project.tonomo_google_event_id === cancelledEventId) apptOnlyUpdates.tonomo_google_event_id = null;
+
+    await entities.Project.update(project.id, apptOnlyUpdates);
+
+    await writeAudit(entities, {
+      action: 'canceled', entity_type: 'Project', entity_id: project.id, operation: 'appointment_only_cancel',
+      tonomo_order_id: orderId, tonomo_event_id: cancelledEventId,
+      notes: `Appointment ${cancelledEventId} cancelled but order stays active (orderStatus=${orderStatusInPayload}). Cleared shoot_date/time + calendar event. Awaiting reschedule.`,
+    });
+
+    await writeProjectActivity(entities, {
+      project_id: project.id,
+      project_title: project.title || '',
+      action: 'tonomo_appointment_cancelled',
+      description: `Appointment removed in Tonomo (order still active). Calendar event deleted, awaiting new shoot time.`,
+      tonomo_order_id: orderId,
+      tonomo_event_type: 'canceled',
+    });
+
+    const apptProjectName = project.title || project.property_address || 'Project';
+    fireRoleNotif(entities, ['master_admin', 'project_owner'], {
+      type: 'booking_appointment_cancelled',
+      category: 'tonomo',
+      severity: 'warning',
+      title: `Appointment removed — ${apptProjectName}`,
+      message: `Customer removed the appointment but the order is still active (${orderId}). Calendar cleared; awaiting reschedule.`,
+      projectId: project.id,
+      projectName: apptProjectName,
+      ctaLabel: 'Review Booking',
+      source: 'tonomo',
+      idempotencyKey: `appt_cancel:${orderId}:${cancelledEventId}`,
+    }, project).catch(() => {});
+
+    return { summary: `Appointment ${cancelledEventId} removed from order ${orderId} (order still active)` };
+  }
+
+  // --- Full order cancel: order-level cancellation, move to pending_review ---
   const updates: Record<string, any> = {
     status: 'pending_review',
     pending_review_type: 'cancellation',

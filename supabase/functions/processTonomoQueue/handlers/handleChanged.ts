@@ -234,28 +234,49 @@ export async function handleChanged(entities: any, orderId: string, p: any, ctx:
           await entities.CalendarEvent.update(appointmentEvent.id, calUpdates);
         }
       } else if (changedStartTime) {
-        // Fallback: create calendar event if none exists for this appointment
-        const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
-        await entities.CalendarEvent.create({
-          title: project.title || `Shoot — ${orderId}`,
-          description: `Tonomo appointment (created during change event) for order ${orderId}`,
-          start_time: new Date(changedStartTime).toISOString(),
-          end_time: endTime ? new Date(endTime).toISOString() : null,
-          location: project.property_address || '',
-          google_event_id: appointmentEventId,
-          tonomo_appointment_id: appointmentEventId,
-          project_id: project.id,
-          owner_user_id: updates.project_owner_id || project.photographer_id || null,
-          agent_id: updates.agent_id || project.agent_id || null,
-          agency_id: updates.agency_id || project.agency_id || null,
-          activity_type: 'shoot',
-          is_synced: false,
-          is_done: false,
-          auto_linked: true,
-          link_source: 'tonomo_webhook',
-          link_confidence: 'exact',
-          event_source: 'tonomo',
-        });
+        // Guard against the cancel-race ghost bug (see migration 094):
+        // Only recreate a calendar event if this appointment is still tracked
+        // on the project. If a 'canceled' webhook removed this appointment_id
+        // from project.tonomo_appointment_ids, we must NOT resurrect its
+        // calendar row from a stale 'changed' payload that's about to arrive
+        // moments later in the queue.
+        //
+        // We also skip if the order itself has been cancelled at the order
+        // level (orderStatus='cancelled'), even if appointment_ids weren't
+        // cleared for some reason.
+        const trackedAppointmentIds = Array.isArray(project.tonomo_appointment_ids)
+          ? project.tonomo_appointment_ids
+          : (typeof project.tonomo_appointment_ids === 'string'
+              ? (() => { try { return JSON.parse(project.tonomo_appointment_ids); } catch { return []; } })()
+              : []);
+        const appointmentStillTracked = trackedAppointmentIds.includes(appointmentEventId);
+        const orderCancelled = (p.order?.orderStatus || p.orderStatus) === 'cancelled';
+
+        if (appointmentStillTracked && !orderCancelled) {
+          const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
+          await entities.CalendarEvent.create({
+            title: project.title || `Shoot — ${orderId}`,
+            description: `Tonomo appointment (created during change event) for order ${orderId}`,
+            start_time: new Date(changedStartTime).toISOString(),
+            end_time: endTime ? new Date(endTime).toISOString() : null,
+            location: project.property_address || '',
+            google_event_id: appointmentEventId,
+            tonomo_appointment_id: appointmentEventId,
+            project_id: project.id,
+            owner_user_id: updates.project_owner_id || project.photographer_id || null,
+            agent_id: updates.agent_id || project.agent_id || null,
+            agency_id: updates.agency_id || project.agency_id || null,
+            activity_type: 'shoot',
+            is_synced: false,
+            is_done: false,
+            auto_linked: true,
+            link_source: 'tonomo_webhook',
+            link_confidence: 'exact',
+            event_source: 'tonomo',
+          });
+        } else {
+          console.log(`[changed] Skipping calendar-event recreate for appointment ${appointmentEventId}: tracked=${appointmentStillTracked}, orderCancelled=${orderCancelled}`);
+        }
       }
     } catch (calErr: any) {
       console.error('CalendarEvent update failed (non-fatal):', calErr.message);
