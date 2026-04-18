@@ -360,8 +360,27 @@ export default function PropertyDetails() {
   if (property.bathrooms) facts.push({ icon: Bath, val: property.bathrooms });
   if (property.parking) facts.push({ icon: Car, val: property.parking });
 
-  // CRM agent at this property (if linked via project)
-  const linkedAgentName = projects.find((p) => p.agent_name)?.agent_name;
+  // LS14: Land size — pulled from the most recent listing (listings[0]),
+  // preferring the numeric `land_size_sqm` column, falling back to the
+  // free-text `land_size` field if numeric is null. Values >10,000 m² are
+  // displayed in hectares for readability (e.g. 0.84 ha) like REA does.
+  const currentListing = listings[0];
+  const landSqm = Number(currentListing?.land_size_sqm) || null;
+  const landText = !landSqm && currentListing?.land_size ? String(currentListing.land_size) : null;
+  const formatLand = (sqm) => {
+    if (!sqm || sqm <= 0) return null;
+    if (sqm >= 10000) return `${(sqm / 10000).toFixed(2)} ha`;
+    return `${Math.round(sqm).toLocaleString()} m²`;
+  };
+  const landLabel = landSqm ? formatLand(landSqm) : landText;
+
+  // LS18: "Last shot for" label falls back to the most recent listing's
+  // agent when no FlexMedia project exists at this address. Dynamic label
+  // distinguishes the two sources so the user can tell what's CRM vs Pulse.
+  const projectAgentName = projects.find((p) => p.agent_name)?.agent_name || null;
+  const listingAgentName = currentListing?.agent_name || null;
+  const linkedAgentName = projectAgentName ?? listingAgentName;
+  const linkedAgentSource = projectAgentName ? "project" : (listingAgentName ? "listing" : null);
 
   return (
     <div className="px-4 pt-3 pb-4 lg:px-6 space-y-3">
@@ -440,18 +459,37 @@ export default function PropertyDetails() {
                   {!currentState?.fresh && <span className="text-xs font-normal text-muted-foreground ml-2">historical</span>}
                 </p>
               )}
-              {facts.length > 0 && (
-                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              {(facts.length > 0 || landLabel) && (
+                <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
                   {facts.map((f, i) => (
                     <span key={i} className="flex items-center gap-1">
                       <f.icon className="h-3.5 w-3.5" /> {f.val}
                     </span>
                   ))}
+                  {/* LS14: Land size — shown inline with beds/baths/parking.
+                      Short format (612 m² / 0.84 ha) for readability. */}
+                  {landLabel && (
+                    <span className="flex items-center gap-1" title="Land size">
+                      <MapPin className="h-3.5 w-3.5" /> {landLabel}
+                    </span>
+                  )}
                 </div>
               )}
               {linkedAgentName && (
-                <p className="text-xs text-muted-foreground">
-                  Last shot for: <span className="font-medium text-foreground">{linkedAgentName}</span>
+                // LS18: label + color-tag change based on the source. Project
+                // (CRM-backed FlexStudios shoot) uses violet to echo project
+                // chrome; listing-sourced (falls back from Pulse data) uses
+                // blue so the user can tell at a glance.
+                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  {linkedAgentSource === "project" ? (
+                    <Camera className="h-3 w-3 text-violet-600 shrink-0" />
+                  ) : (
+                    <Building2 className="h-3 w-3 text-blue-600 shrink-0" />
+                  )}
+                  <span>
+                    {linkedAgentSource === "project" ? "Last shot for: " : "Currently listed by: "}
+                    <span className="font-medium text-foreground">{linkedAgentName}</span>
+                  </span>
                 </p>
               )}
             </div>

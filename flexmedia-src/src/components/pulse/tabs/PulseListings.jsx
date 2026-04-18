@@ -429,10 +429,17 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
                     <ChevronRight className="h-3 w-3 opacity-40 group-hover:opacity-100" />
                   </p>
                   {listing.agent_phone && (
-                    <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                    // LS11: click-to-dial parity with the non-enriched branch.
+                    // `onClick` stops propagation so tapping the phone dials
+                    // rather than opening the agent slideout.
+                    <a
+                      href={`tel:${listing.agent_phone}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[10px] text-muted-foreground hover:text-primary hover:underline flex items-center gap-0.5"
+                    >
                       <Phone className="h-2.5 w-2.5" />
                       {listing.agent_phone}
-                    </span>
+                    </a>
                   )}
                   <p className="text-[10px] text-blue-500 mt-0.5">
                     In Pulse · click to drill in
@@ -798,6 +805,10 @@ const CSV_EXPORT_CAP = 10000;
 const LS_PAGE_SIZE_KEY = "pulse_listings_page_size";
 const LS_AUTO_REFRESH_KEY = "pulse_listings_auto_refresh";
 const LS_EXCLUDE_WITHDRAWN_KEY = "pulse_listings_exclude_withdrawn";
+// LS04: price range + DoM filter persistence.
+const LS_PRICE_MIN_KEY = "pulse_listings_price_min";
+const LS_PRICE_MAX_KEY = "pulse_listings_price_max";
+const LS_DOM_MIN_KEY = "pulse_listings_dom_min";
 // Listings are "less urgent than Sources/inbox" per spec — default OFF.
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
 
@@ -820,6 +831,14 @@ function readStoredExcludeWithdrawn() {
   const raw = window.localStorage.getItem(LS_EXCLUDE_WITHDRAWN_KEY);
   // Default ON when nothing has been stored yet.
   return raw === null ? true : raw === "1";
+}
+// LS04: read stored numeric filter. Empty string means "no filter".
+function readStoredNumericFilter(key) {
+  if (typeof window === "undefined") return "";
+  const raw = window.localStorage.getItem(key);
+  if (raw == null) return "";
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? String(n) : "";
 }
 
 export default function PulseListingsTab({
@@ -868,6 +887,12 @@ export default function PulseListingsTab({
   // toggle is still shown/stored for sold/under_contract but has no effect
   // there (those listings shouldn't fan out withdrawn states in practice).
   const [excludeWithdrawn, setExcludeWithdrawn] = useState(readStoredExcludeWithdrawn);
+  // LS04: price range + days-on-market filters. Kept as strings so the
+  // controlled inputs don't fight the user's typing; parsed to numbers in
+  // buildQuery below. Empty string = filter disabled.
+  const [priceMin, setPriceMin] = useState(() => readStoredNumericFilter(LS_PRICE_MIN_KEY));
+  const [priceMax, setPriceMax] = useState(() => readStoredNumericFilter(LS_PRICE_MAX_KEY));
+  const [domMin, setDomMin] = useState(() => readStoredNumericFilter(LS_DOM_MIN_KEY));
 
   // Persist page-size changes the moment they happen.
   useEffect(() => {
@@ -883,6 +908,26 @@ export default function PulseListingsTab({
   useEffect(() => {
     try { window.localStorage.setItem(LS_EXCLUDE_WITHDRAWN_KEY, excludeWithdrawn ? "1" : "0"); } catch { /* quota / SSR */ }
   }, [excludeWithdrawn]);
+
+  // Persist LS04 numeric filters (empty string clears the key).
+  useEffect(() => {
+    try {
+      if (priceMin) window.localStorage.setItem(LS_PRICE_MIN_KEY, priceMin);
+      else window.localStorage.removeItem(LS_PRICE_MIN_KEY);
+    } catch { /* quota / SSR */ }
+  }, [priceMin]);
+  useEffect(() => {
+    try {
+      if (priceMax) window.localStorage.setItem(LS_PRICE_MAX_KEY, priceMax);
+      else window.localStorage.removeItem(LS_PRICE_MAX_KEY);
+    } catch { /* quota / SSR */ }
+  }, [priceMax]);
+  useEffect(() => {
+    try {
+      if (domMin) window.localStorage.setItem(LS_DOM_MIN_KEY, domMin);
+      else window.localStorage.removeItem(LS_DOM_MIN_KEY);
+    } catch { /* quota / SSR */ }
+  }, [domMin]);
 
   // ── Region filter derivations (Auditor-11 F1) ─────────────────────────────
   const regions = useMemo(() => {
@@ -902,7 +947,7 @@ export default function PulseListingsTab({
   // Reset to page 0 when filters/sort/search change so we never page past the
   // new result window. Must happen AFTER a filter change and BEFORE the
   // useQuery fires (React runs state updates before committing).
-  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, regionFilter, pageSize, search, listingSort.col, listingSort.dir, excludeWithdrawn]);
+  useEffect(() => { setListingPage(0); }, [listingFilter, listingColFilter, regionFilter, pageSize, search, listingSort.col, listingSort.dir, excludeWithdrawn, priceMin, priceMax, domMin]);
 
   // ── Sorting helper ──────────────────────────────────────────────────────────
   const handleSort = useCallback(
@@ -961,13 +1006,48 @@ export default function PulseListingsTab({
       q = q.ilike("search_text", `%${s}%`);
     }
 
+    // LS04: price range. Apply defensively — only when a positive number is
+    // entered. For listings where asking_price is NULL (sold after mig-100),
+    // we also match on sold_price via an OR clause so the filter doesn't
+    // silently exclude the entire sold inventory.
+    const parseNum = (v) => {
+      if (!v) return null;
+      const n = Number(String(v).replace(/[^0-9.]/g, ""));
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+    const minP = parseNum(priceMin);
+    const maxP = parseNum(priceMax);
+    if (minP != null && maxP != null) {
+      q = q.or(
+        `and(asking_price.gte.${minP},asking_price.lte.${maxP}),` +
+        `and(asking_price.is.null,sold_price.gte.${minP},sold_price.lte.${maxP})`
+      );
+    } else if (minP != null) {
+      q = q.or(
+        `asking_price.gte.${minP},` +
+        `and(asking_price.is.null,sold_price.gte.${minP})`
+      );
+    } else if (maxP != null) {
+      q = q.or(
+        `asking_price.lte.${maxP},` +
+        `and(asking_price.is.null,sold_price.lte.${maxP})`
+      );
+    }
+
+    // LS04: days-on-market minimum (most common query is "show me stale
+    // listings >N days"). Only apply when a positive number is entered.
+    const minDom = parseNum(domMin);
+    if (minDom != null) {
+      q = q.gte("days_on_market", minDom);
+    }
+
     // Server-side sort — falls back to created_at desc for columns PostgREST
     // can't sort on (derived/display-only fields like getListingDisplayDate).
     const sortCol = SERVER_SORTABLE.has(listingSort.col) ? listingSort.col : "created_at";
     q = q.order(sortCol, { ascending: listingSort.dir === "asc", nullsFirst: false });
 
     return q;
-  }, [listingFilter, listingColFilter, search, listingSort, excludeWithdrawn, suburbsInRegion]);
+  }, [listingFilter, listingColFilter, search, listingSort, excludeWithdrawn, suburbsInRegion, priceMin, priceMax, domMin]);
 
   // ── Page fetch via react-query ─────────────────────────────────────────────
   const queryKey = useMemo(
@@ -975,8 +1055,9 @@ export default function PulseListingsTab({
       listingFilter, listingColFilter, regionFilter, search,
       sortCol: listingSort.col, sortDir: listingSort.dir,
       page: listingPage, pageSize, excludeWithdrawn,
+      priceMin, priceMax, domMin,
     }],
-    [listingFilter, listingColFilter, regionFilter, search, listingSort, listingPage, pageSize, excludeWithdrawn],
+    [listingFilter, listingColFilter, regionFilter, search, listingSort, listingPage, pageSize, excludeWithdrawn, priceMin, priceMax, domMin],
   );
 
   const { data, isLoading, isFetching, refetch } = useQuery({
@@ -1109,6 +1190,50 @@ export default function PulseListingsTab({
               ))}
             </select>
           )}
+          {/* LS04: price range — two inputs with $ prefix. Applied server-side
+              via asking_price.gte/lte, with sold_price fallback when
+              asking_price is null (post-migration-100 sold rows). */}
+          <div className="flex items-center gap-1" title="Price range (applied to asking_price, falls back to sold_price for sold listings)">
+            <div className="relative">
+              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground pointer-events-none">$</span>
+              <Input
+                type="number"
+                inputMode="numeric"
+                min="0"
+                placeholder="Min"
+                value={priceMin}
+                onChange={(e) => setPriceMin(e.target.value)}
+                className="h-7 text-xs pl-4 pr-1.5 w-20"
+              />
+            </div>
+            <span className="text-[10px] text-muted-foreground">–</span>
+            <div className="relative">
+              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground pointer-events-none">$</span>
+              <Input
+                type="number"
+                inputMode="numeric"
+                min="0"
+                placeholder="Max"
+                value={priceMax}
+                onChange={(e) => setPriceMax(e.target.value)}
+                className="h-7 text-xs pl-4 pr-1.5 w-20"
+              />
+            </div>
+          </div>
+
+          {/* LS04: Days-on-Market minimum — "show me stale listings >N days". */}
+          <div className="relative" title="Days on Market minimum — filter to listings that have been on the market at least this many days">
+            <Input
+              type="number"
+              inputMode="numeric"
+              min="0"
+              placeholder="DoM min"
+              value={domMin}
+              onChange={(e) => setDomMin(e.target.value)}
+              className="h-7 text-xs pl-2 pr-1.5 w-20"
+            />
+          </div>
+
           <div className="relative">
             <Input
               placeholder="Filter by suburb, agent, agency…"

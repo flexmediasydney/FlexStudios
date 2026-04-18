@@ -30,6 +30,9 @@ import {
   Home, MapPin, DollarSign, Calendar, Users, Building2, ExternalLink,
   TrendingUp, History, Clock, Tag, ArrowRight, Loader2,
 } from "lucide-react";
+// LS10: canonical sold/asking/price_text fallback — needed so rows no longer
+// show "—" for sold listings after migration 100 cleared asking_price.
+import { displayPrice as sharedDisplayPrice } from "@/components/pulse/utils/listingHelpers";
 
 function fmtPrice(v) {
   if (!v || v <= 0) return "—";
@@ -469,7 +472,10 @@ function TimelineRow({ event, onOpenListing }) {
           <Badge variant="outline" className={cn("text-[8px] py-0 px-1", typeColor)}>
             {TYPE_LABEL[l.listing_type] || l.listing_type}
           </Badge>
-          <span className="tabular-nums">{fmtPrice(l.asking_price)}</span>
+          {/* LS10: sharedDisplayPrice handles sold/asking/price_text fallback.
+              Pre-fix this showed "—" for every sold listing because
+              migration 100 cleared asking_price on sold rows. */}
+          <span className="tabular-nums">{sharedDisplayPrice(l).label}</span>
         </p>
         <p className="text-[10px] text-muted-foreground truncate">
           {l.agent_name && <>{l.agent_name} · </>}
