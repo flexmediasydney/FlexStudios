@@ -233,14 +233,13 @@ export default function IndustryPulse() {
         : tParam === "agents" ? "agent"
         : null);
     if (!entityType) return;
-    // Don't dispatch until the underlying list is populated (avoid race on
-    // slow networks). Skip if we already have the same entity on top.
-    const coll = entityType === "agent" ? pulseAgents
-      : entityType === "agency" ? pulseAgencies
-      : pulseListings;
-    if (!coll.length) return;
-    const hit = coll.find((r) => r.id === pulseIdParam);
-    if (!hit) return;
+    // Previously we also required the id to exist in the cached list before
+    // pushing to the stack. That silently blocked deep-links for any row
+    // past the 5k useEntityList cap (there are 6.5k+ listings in prod). The
+    // dispatcher now fetches-on-miss, so it's safe to push the stack entry
+    // even without a cache hit — currentEntityRecord will be populated by
+    // the effect above as soon as the single-row fetch resolves. We still
+    // deduplicate to avoid stacking the same entry repeatedly on rerender.
     setEntityStack((s) => {
       const top = s[s.length - 1];
       if (top && top.type === entityType && top.id === pulseIdParam) return s;
@@ -248,7 +247,7 @@ export default function IndustryPulse() {
     });
     // URL stays as-is. If the user navigates back or bookmarks the page, the
     // same ?pulse_id= + ?entity_type= will reopen the slideout idempotently.
-  }, [pulseIdParam, entityTypeParam, searchParams, pulseAgents, pulseAgencies, pulseListings]);
+  }, [pulseIdParam, entityTypeParam, searchParams]);
 
   const [search, setSearch] = useState("");
   const [addToCrmFromCommand, setAddToCrmFromCommand] = useState(null);
@@ -455,7 +454,15 @@ export default function IndustryPulse() {
   };
 
   // ── Resolve current entity from stack to actual record ────────────────────
-  const currentEntityRecord = useMemo(() => {
+  //
+  // First try the cached list (fast path, covers ~99% of clicks). If the row
+  // isn't cached — which happens for the 1500+ oldest listings past the 5k
+  // useEntityList cap — fall back to a one-shot Supabase fetch keyed on id
+  // so the slideout still renders. Without this, clicking a row outside the
+  // cached window silently fails: lookup returns null → currentEntityRecord
+  // null → slideout never mounts. Seen in prod with 16 MacArthur Avenue,
+  // Strathfield (rank #6096 & #6290 in created_at DESC order).
+  const cachedEntityRecord = useMemo(() => {
     if (!currentEntity) return null;
     if (currentEntity.type === "listing")
       return pulseListings.find((l) => l.id === currentEntity.id) || null;
@@ -465,6 +472,60 @@ export default function IndustryPulse() {
       return pulseAgencies.find((a) => a.id === currentEntity.id) || null;
     return null;
   }, [currentEntity, pulseListings, pulseAgents, pulseAgencies]);
+
+  // Fetched-on-miss record for entities not in the cache (cap-beyond rows or
+  // URL deep-links that arrive before the list has loaded). Cleared when
+  // currentEntity changes.
+  const [fetchedEntityRecord, setFetchedEntityRecord] = useState(null);
+  const [fetchingEntity, setFetchingEntity] = useState(false);
+  useEffect(() => {
+    if (!currentEntity) {
+      setFetchedEntityRecord(null);
+      setFetchingEntity(false);
+      return;
+    }
+    // Cache hit? Nothing to fetch.
+    if (cachedEntityRecord) {
+      setFetchedEntityRecord(null);
+      setFetchingEntity(false);
+      return;
+    }
+    // Cache miss — fetch the single row directly. Uses the same PostgREST
+    // clients the rest of Pulse uses so RLS/column aliases match.
+    const table = currentEntity.type === "listing" ? "pulse_listings"
+      : currentEntity.type === "agent" ? "pulse_agents"
+      : currentEntity.type === "agency" ? "pulse_agencies"
+      : null;
+    if (!table) return;
+    let cancelled = false;
+    setFetchingEntity(true);
+    (async () => {
+      try {
+        const { data, error } = await api._supabase
+          .from(table)
+          .select("*")
+          .eq("id", currentEntity.id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) {
+          console.warn(`[IndustryPulse] fetch-on-miss ${table} failed:`, error);
+          setFetchedEntityRecord(null);
+        } else {
+          setFetchedEntityRecord(data || null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn(`[IndustryPulse] fetch-on-miss ${table} threw:`, err);
+          setFetchedEntityRecord(null);
+        }
+      } finally {
+        if (!cancelled) setFetchingEntity(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentEntity, cachedEntityRecord]);
+
+  const currentEntityRecord = cachedEntityRecord || fetchedEntityRecord;
 
   const hasEntityHistory = entityStack.length > 1;
 
@@ -663,6 +724,30 @@ export default function IndustryPulse() {
       </Tabs>
 
       {/* ── Central drill-through dispatcher ── */}
+      {/* When the cache misses and we're fetching the row on-demand, show a
+          transient loading dialog so the user doesn't experience a "dead
+          click". Without this, a cap-beyond row produces no visible effect. */}
+      {currentEntity && !currentEntityRecord && fetchingEntity && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
+          <div className="bg-background rounded-lg px-5 py-4 shadow-lg flex items-center gap-3">
+            <RefreshCw className="h-4 w-4 animate-spin text-primary" />
+            <span className="text-sm text-muted-foreground">Loading {currentEntity.type}…</span>
+          </div>
+        </div>
+      )}
+      {/* Cache miss AND fetch failed / returned null — tell the user rather
+          than silently doing nothing. */}
+      {currentEntity && !currentEntityRecord && !fetchingEntity && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center" onClick={closeAllEntities}>
+          <div className="bg-background rounded-lg px-5 py-4 shadow-lg max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
+            <p className="text-sm font-medium mb-1">Couldn't load {currentEntity.type}</p>
+            <p className="text-xs text-muted-foreground mb-3">
+              This record may have been deleted or is no longer accessible.
+            </p>
+            <Button size="sm" variant="outline" onClick={closeAllEntities}>Close</Button>
+          </div>
+        </div>
+      )}
       {currentEntity && currentEntityRecord && (
         <ErrorBoundary>
           {currentEntity.type === "listing" && (
