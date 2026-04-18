@@ -15,8 +15,8 @@ import React, { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
-  ArrowRight, Star, Home, User, Building2, Zap, RefreshCw, Link2, UserPlus,
-  TrendingUp, Clock, Calendar, ChevronDown, ExternalLink, AlertTriangle,
+  ArrowRight, Star, Home, User, Zap, RefreshCw, Link2, UserPlus,
+  TrendingUp, Clock,
   DollarSign, Play, CheckCircle2, Timer, ListPlus
 } from "lucide-react";
 

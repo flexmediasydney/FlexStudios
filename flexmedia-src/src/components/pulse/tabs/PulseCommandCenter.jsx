@@ -13,7 +13,6 @@ import {
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
 import { TrendingUp, Users, ArrowRight, UserPlus, MapPin, Activity, ExternalLink } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 // ── Tooltip styling ───────────────────────────────────────────────────────────
 

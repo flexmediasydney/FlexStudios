@@ -3,7 +3,7 @@
  * Manages REA scraper runs, cron schedule display, sync history,
  * suburb pool, and raw payload drill-through.
  */
-import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -2714,14 +2714,12 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
   // Edit dialog state
   const [editConfig, setEditConfig] = useState(null);
 
-  // Visible sources: every enabled (or all?) row from pulse_source_configs.
+  // Visible sources: every REA row from pulse_source_configs.
   // Sorted: per-suburb first (visual group), then bounding_box, each by label.
+  // Domain source rows were deleted in migration 092 — this filter just
+  // guards against stray non-REA rows being inserted later.
   const visibleSources = useMemo(() => {
     const rows = [...(sourceConfigs || [])];
-    // Filter out legacy non-REA rows (domain_*) that are disabled — these are
-    // kept in DB for archival but don't need cards. Easy to re-include by
-    // setting is_enabled=true. We keep disabled REA sources visible so users
-    // can re-enable from the UI.
     const isReaSource = (c) => c.source_id?.startsWith("rea_");
     const filtered = rows.filter(isReaSource);
     filtered.sort((a, b) => {
@@ -2732,6 +2730,34 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
     });
     return filtered;
   }, [sourceConfigs]);
+
+  // ── Run All: fire every enabled REA source sequentially ──────────────
+  // Sequential (not parallel) so we don't double-dispatch the websift actor
+  // which is rate-limited. Each source gets a 1s pause before the next
+  // starts — pulseFireScrapes itself handles the inter-suburb stagger.
+  const [runningAll, setRunningAll] = useState(false);
+  const runAllSources = useCallback(async () => {
+    const enabled = visibleSources.filter((s) => s.is_enabled !== false);
+    if (enabled.length === 0) {
+      toast.warning("No enabled sources to run");
+      return;
+    }
+    setRunningAll(true);
+    try {
+      toast.info(`Run All: dispatching ${enabled.length} REA sources…`);
+      for (const cfg of enabled) {
+        // eslint-disable-next-line no-await-in-loop
+        await runSource(cfg);
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      toast.success(`Run All complete — ${enabled.length} sources dispatched`);
+    } catch (err) {
+      toast.error(`Run All failed mid-batch: ${err.message}`);
+    } finally {
+      setRunningAll(false);
+    }
+  }, [visibleSources, runSource]);
 
   const perSuburbCount = visibleSources.filter((s) => s.approach !== "bounding_box").length;
   const boundingBoxCount = visibleSources.filter((s) => s.approach === "bounding_box").length;
@@ -2762,9 +2788,25 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
 
       {/* ── Source cards grid ── */}
       <div>
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-          Data Sources
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+            Data Sources
+          </h2>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2.5 text-xs gap-1.5"
+            onClick={runAllSources}
+            disabled={runningAll || runningSources.size > 0 || visibleSources.length === 0}
+            title="Dispatch every enabled REA source sequentially"
+          >
+            {runningAll ? (
+              <><Loader2 className="h-3 w-3 animate-spin" /> Running all…</>
+            ) : (
+              <><Repeat className="h-3 w-3" /> Run All</>
+            )}
+          </Button>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {visibleSources.map((config) => (
             <SourceCard

@@ -9,7 +9,7 @@
  * Why server-side: client-side `slice(0, 20)` was hiding 90%+ of events on
  * busy weeks. PulseTimeline can run thousands of rows after a big sync.
  */
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";

@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import {
-  Rss, Search, TrendingUp, Users, UserPlus, Home, Clock, Calendar, Zap,
+  Rss, Search, TrendingUp, Users, Home, Clock, Calendar, Zap,
   ArrowRight, Target, RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";

@@ -27,14 +27,13 @@ import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -50,7 +49,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import {
-  MapPin, Plus, Search, Filter, RefreshCw, ChevronLeft, ChevronRight,
+  MapPin, Plus, Search, RefreshCw, ChevronLeft, ChevronRight,
   Edit3, Trash2, Upload, ShieldCheck, AlertTriangle, CheckCircle2,
   ArrowUp, ArrowDown, X, FileSpreadsheet, Loader2,
 } from "lucide-react";

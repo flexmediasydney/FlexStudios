@@ -5,8 +5,7 @@
 import React, { useState, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,7 +23,6 @@ import {
   ExternalLink,
   MapPin,
   Clock,
-  X,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";

@@ -17,8 +17,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
-import {
-  Rss, Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
+import { Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   TrendingUp, Users, Home, Clock, AlertTriangle, CheckCircle2, DollarSign,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
   BarChart3, User, Loader2, BookOpen, Database
