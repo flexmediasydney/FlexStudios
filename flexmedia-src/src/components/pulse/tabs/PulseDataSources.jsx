@@ -201,11 +201,25 @@ function nextCronLabel(scheduleOrCron) {
 }
 
 function recordsSummary(log) {
-  if (!log?.result_summary) return "—";
-  const s = log.result_summary;
+  // ── Migration 095 ────────────────────────────────────────────────────
+  // result_summary moved to pulse_sync_log_payloads side-table. Prefer the
+  // slim-row columns (records_fetched, records_new, records_updated) so
+  // this function works off the hot-path list query. Fall back to the
+  // side-table payload when it's been hydrated (drill dialog context).
+  const s = log?.result_summary || {};
   const parts = [];
-  if (s.agents_processed != null)   parts.push(`${s.agents_processed} agents`);
-  if (s.listings_stored != null) parts.push(`${s.listings_stored} listings`);
+  if (s.agents_processed != null) parts.push(`${s.agents_processed} agents`);
+  if (s.listings_stored != null)  parts.push(`${s.listings_stored} listings`);
+  if (!parts.length && log?.records_fetched != null) {
+    const fetched = log.records_fetched || 0;
+    const newRows = log.records_new || 0;
+    const updated = log.records_updated || 0;
+    if (fetched > 0 || newRows > 0 || updated > 0) {
+      parts.push(`${fetched} fetched`);
+      if (newRows > 0) parts.push(`${newRows} new`);
+      if (updated > 0) parts.push(`${updated} updated`);
+    }
+  }
   if (s.records_saved != null && !parts.length) parts.push(`${s.records_saved} records`);
   return parts.join(", ") || "—";
 }
@@ -2755,8 +2769,33 @@ function DrillPayloadRow({ item, index }) {
 function DrillDialog({ log, onClose }) {
   const [agentsPage, setAgentsPage] = useState(0);
   const [listingsPage, setListingsPage] = useState(0);
+  // ── Migration 095 ────────────────────────────────────────────────────
+  // Heavy payload lives in pulse_sync_log_payloads (side-table) now. If the
+  // caller handed us a log object without raw_payload (e.g. it came from the
+  // slim list query), lazy-fetch from the side-table when the dialog opens.
+  const [sidePayload, setSidePayload] = useState(null);
+  const [loadingPayload, setLoadingPayload] = useState(false);
+  useEffect(() => {
+    if (!log?.id) return;
+    // Already has payload (from handleDrillDispatch, which merges both tables)
+    if (log.raw_payload !== undefined && log.raw_payload !== null) return;
+    let cancelled = false;
+    setLoadingPayload(true);
+    api._supabase
+      .from("pulse_sync_log_payloads")
+      .select("raw_payload, result_summary, input_config, records_detail")
+      .eq("sync_log_id", log.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) setSidePayload(data || {});
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPayload(false);
+      });
+    return () => { cancelled = true; };
+  }, [log?.id]);
 
-  const payload = log?.raw_payload ?? {};
+  const payload = log?.raw_payload ?? sidePayload?.raw_payload ?? {};
   const agents   = useMemo(() => Array.isArray(payload?.rea_agents) ? payload.rea_agents : Array.isArray(payload?.agents) ? payload.agents : [], [payload]);
   const listings = useMemo(() => Array.isArray(payload?.listings) ? payload.listings : [], [payload]);
   const hasAgents   = agents.length > 0;
@@ -2857,20 +2896,38 @@ export default function PulseDataSources({ syncLogs = [], sourceConfigs = [], ta
   // Powers the "X / Y suburbs covered" line on each Source Card.
   const cardStatsById = usePulseSourceCardStats();
 
-  // Open the drill dialog for a given sync_log id (looked up in the list first,
-  // else fetched directly). Used by the per-suburb DispatchTable row clicks —
-  // we only have IDs in the pulse_sync_runs view, not full payloads.
+  // Open the drill dialog for a given sync_log id.
+  // ── Migration 095 ────────────────────────────────────────────────────
+  // pulse_sync_logs no longer carries raw_payload / result_summary /
+  // input_config / records_detail — those live in the pulse_sync_log_payloads
+  // side-table. When the user opens the drill dialog, we fetch header from
+  // pulse_sync_logs and heavy payload from the side-table in parallel, then
+  // merge into the single `log` object the dialog component expects.
   const handleDrillDispatch = useCallback(
     async (syncLogId) => {
       if (!syncLogId) return;
-      const existing = syncLogs.find((l) => l.id === syncLogId);
-      if (existing) {
-        setDrillLog(existing);
-        return;
-      }
       try {
-        const log = await api.entities.PulseSyncLog.get(syncLogId);
-        if (log) setDrillLog(log);
+        const [header, payloadRes] = await Promise.all([
+          (() => {
+            const existing = syncLogs.find((l) => l.id === syncLogId);
+            if (existing) return Promise.resolve(existing);
+            return api.entities.PulseSyncLog.get(syncLogId);
+          })(),
+          api._supabase
+            .from("pulse_sync_log_payloads")
+            .select("raw_payload, result_summary, input_config, records_detail")
+            .eq("sync_log_id", syncLogId)
+            .maybeSingle(),
+        ]);
+        if (!header) return;
+        const payload = payloadRes?.data || {};
+        setDrillLog({
+          ...header,
+          raw_payload: payload.raw_payload ?? header.raw_payload ?? null,
+          result_summary: payload.result_summary ?? header.result_summary ?? null,
+          input_config: payload.input_config ?? header.input_config ?? null,
+          records_detail: payload.records_detail ?? header.records_detail ?? null,
+        });
       } catch (err) {
         toast.error(`Could not load payload: ${err.message}`);
       }

@@ -41,6 +41,14 @@ Deno.serve(async (req) => {
     const entities = createEntities(admin);
 
     // Step 1: Always log first — never lose a webhook
+    // ── Note on tonomo_webhook_log_payloads (migration 096) ───────────
+    // A payload side-table exists for future growth-mitigation. For now
+    // we keep raw_payload on the main row because SettingsTonomoWebhooks
+    // parses it per-row to display orderId / photographer / agent / etc.
+    // Splitting here would silently break that page. The header table is
+    // still small (~11 MB) so this isn't urgent. TTL cron (migration 096)
+    // caps growth at 180 days. If the webhook UI is ever refactored to
+    // pre-compute those fields, split this the same way we did for sync logs.
     let logId: string | null = null;
     try {
       const log = await entities.TonomoWebhookLog.create({

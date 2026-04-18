@@ -402,6 +402,13 @@ serveWithAudit('pulseDataSync', async (req) => {
     const apifyRunIds: Record<string, string | null> = {};
 
     // Log sync start
+    // ── Migration 095 ──────────────────────────────────────────────────
+    // Heavy JSONB columns (raw_payload, result_summary, input_config,
+    // records_detail) now live in pulse_sync_log_payloads (side-table)
+    // instead of being TOAST'd inline. The main pulse_sync_logs table
+    // stays slim so the UI list query doesn't pay the 6.6s detoast cost.
+    // See migration 095 for RCA. We still write input_config below — just
+    // to the side-table.
     if (!dryRun) {
       const log = await entities.PulseSyncLog.create({
         sync_type: source_id || 'full_sweep',
@@ -409,7 +416,6 @@ serveWithAudit('pulseDataSync', async (req) => {
         source_label: source_label || null,
         status: 'running',
         started_at: now,
-        input_config: { suburbs, state, maxAgentsPerSuburb, maxListingsPerSuburb, skipListings, actorInput, actor_slug: actorSlug, approach: configApproach },
         triggered_by: triggered_by || null,
         triggered_by_name: triggered_by_name || null,
         // Batch attribution (migration 088). All three are nullable; when set,
@@ -419,6 +425,17 @@ serveWithAudit('pulseDataSync', async (req) => {
         total_batches: Number.isInteger(total_batches) ? Number(total_batches) : null,
       });
       syncLogId = log.id;
+
+      // Write input_config to the side-table (kept out of the hot list path)
+      try {
+        await admin.from('pulse_sync_log_payloads').insert({
+          sync_log_id: syncLogId,
+          input_config: { suburbs, state, maxAgentsPerSuburb, maxListingsPerSuburb, skipListings, actorInput, actor_slug: actorSlug, approach: configApproach },
+          created_at: now,
+        });
+      } catch (pErr) {
+        console.warn('pulseDataSync: side-table input_config write failed (non-fatal):', (pErr as any)?.message);
+      }
     }
 
     const allReaAgents: any[] = [];
@@ -542,6 +559,10 @@ serveWithAudit('pulseDataSync', async (req) => {
             completed_at: new Date().toISOString(),
             error_message: `Wall-clock budget (${WALL_BUDGET_MS}ms) exceeded after ${suburbsProcessed.length}/${suburbs.length} suburbs`,
             apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
+          }).eq('id', syncLogId);
+          // Migration 095: result_summary routes to side-table
+          await admin.from('pulse_sync_log_payloads').upsert({
+            sync_log_id: syncLogId,
             result_summary: {
               timed_out: true,
               suburbs_processed: suburbsProcessed,
@@ -550,7 +571,7 @@ serveWithAudit('pulseDataSync', async (req) => {
               listings_collected: allListings.length,
               note: 'Post-processing skipped — partial data not persisted to live tables.',
             },
-          }).eq('id', syncLogId);
+          }, { onConflict: 'sync_log_id' });
         } catch (logErr) {
           console.error('pulseDataSync: failed to mark sync log as timed_out:', logErr);
         }
@@ -1578,31 +1599,46 @@ serveWithAudit('pulseDataSync', async (req) => {
     console.log(`Post-sync: ${movementsDetected} movements, ${timelineEntries} timeline entries, ${mappingsCreated} mappings`);
 
     // Update sync log
+    // ── Migration 095 ──────────────────────────────────────────────────
+    // Heavy JSONB (raw_payload, result_summary) routes to pulse_sync_log_payloads
+    // so the UI list query stays fast. Main sync_logs row only carries
+    // header fields.
     if (syncLogId) {
+      const completedAt = new Date().toISOString();
       await entities.PulseSyncLog.update(syncLogId, {
         status: 'completed',
         records_fetched: allReaAgents.length + allListings.length,
         records_new: agentsInserted + agenciesInserted,
         records_updated: agentsUpdated + agenciesUpdated + listingsInserted,
-        completed_at: new Date().toISOString(),
+        completed_at: completedAt,
         apify_run_id: Object.values(apifyRunIds).filter(Boolean).join(',') || null,
-        raw_payload: {
-          rea_agents: allReaAgents,
-          listings: allListings,
-        },
-        result_summary: {
-          agents_inserted: agentsInserted,
-          agents_updated: agentsUpdated,
-          agencies_inserted: agenciesInserted,
-          agencies_updated: agenciesUpdated,
-          listings_stored: listingsInserted,
-          movements_detected: movementsDetected,
-          timeline_entries: timelineEntries,
-          mappings_created: mappingsCreated,
-          in_crm_agents: processedAgents.filter(a => a.is_in_crm).length,
-          agent_errors: agentErrors,
-        },
       });
+
+      // Write heavy payload to the side-table (upsert — a row with input_config
+      // already exists from the sync-start step above).
+      try {
+        await admin.from('pulse_sync_log_payloads').upsert({
+          sync_log_id: syncLogId,
+          raw_payload: {
+            rea_agents: allReaAgents,
+            listings: allListings,
+          },
+          result_summary: {
+            agents_inserted: agentsInserted,
+            agents_updated: agentsUpdated,
+            agencies_inserted: agenciesInserted,
+            agencies_updated: agenciesUpdated,
+            listings_stored: listingsInserted,
+            movements_detected: movementsDetected,
+            timeline_entries: timelineEntries,
+            mappings_created: mappingsCreated,
+            in_crm_agents: processedAgents.filter(a => a.is_in_crm).length,
+            agent_errors: agentErrors,
+          },
+        }, { onConflict: 'sync_log_id' });
+      } catch (pErr) {
+        console.warn('pulseDataSync: side-table payload write failed (non-fatal):', (pErr as any)?.message);
+      }
     }
 
     // Update source config last_run_at
@@ -1673,8 +1709,12 @@ serveWithAudit('pulseDataSync', async (req) => {
           status: 'failed',
           completed_at: new Date().toISOString(),
           error_message: errMsg,
-          result_summary: { error: errMsg },
         }).eq('id', syncLogId);
+        // Migration 095: result_summary routes to side-table
+        await admin.from('pulse_sync_log_payloads').upsert({
+          sync_log_id: syncLogId,
+          result_summary: { error: errMsg },
+        }, { onConflict: 'sync_log_id' });
       } catch (logErr) {
         console.error('pulseDataSync: failed to mark sync log as failed:', logErr);
       }
