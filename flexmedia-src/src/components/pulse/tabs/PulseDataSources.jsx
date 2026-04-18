@@ -242,16 +242,26 @@ function usePulseSyncRuns(sourceId, limit = 10) {
   // to see on the card. `activeBatch` is a strict subset (status='running')
   // of `latestBatch`.
   const [latestBatch, setLatestBatch] = useState(null);
+  // Queue state (migration 093): per-source totals across the queue table.
+  // Shape: { pending, running, completed_24h, failed_24h, failed_attempts_exhausted }
+  const [queueStats, setQueueStats] = useState(null);
+  // Circuit breaker state (migration 093): { state, consecutive_failures, reopen_at }
+  const [circuit, setCircuit] = useState(null);
+  // Coverage row from pulse_source_coverage view
+  const [coverage, setCoverage] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // An operation is active if there's a non-terminal batch row OR if any run has
-  // per-suburb dispatches still firing. The batch check matters during the
-  // handoff gap between batches (30-60s each) when no sync_logs are in 'running'
-  // state but the chunked operation is still progressing — prevents the card
-  // from flickering "in progress" ↔ "complete" on every batch handoff.
+  // An operation is active if there's a non-terminal batch row, any run has
+  // per-suburb dispatches still firing, OR the queue has pending/running items.
+  // The batch check matters during the handoff gap between worker ticks when
+  // no sync_logs are in 'running' state but the queue still has work pending —
+  // prevents the card from flickering "in progress" ↔ "complete".
   const hasActive = useMemo(
-    () => (activeBatch != null) || runs.some((r) => (r.in_progress || 0) > 0),
-    [runs, activeBatch]
+    () =>
+      (activeBatch != null) ||
+      runs.some((r) => (r.in_progress || 0) > 0) ||
+      ((queueStats?.pending || 0) + (queueStats?.running || 0)) > 0,
+    [runs, activeBatch, queueStats]
   );
 
   useEffect(() => {
@@ -260,7 +270,7 @@ function usePulseSyncRuns(sourceId, limit = 10) {
 
     const fetchRuns = async () => {
       try {
-        const [runsRes, activeBatchRes, latestBatchRes] = await Promise.all([
+        const [runsRes, activeBatchRes, latestBatchRes, queuePendingRes, queueRunningRes, queueRecentRes, circuitRes, coverageRes] = await Promise.all([
           api._supabase
             .from("pulse_sync_runs")
             .select("*")
@@ -282,14 +292,55 @@ function usePulseSyncRuns(sourceId, limit = 10) {
             .eq("source_id", sourceId)
             .order("started_at", { ascending: false })
             .limit(1),
+          // Queue counts — split into 3 head queries because postgrest doesn't
+          // give us aggregations in one hit; the three combined are still <10ms.
+          api._supabase
+            .from("pulse_fire_queue")
+            .select("id", { count: "exact", head: true })
+            .eq("source_id", sourceId)
+            .eq("status", "pending"),
+          api._supabase
+            .from("pulse_fire_queue")
+            .select("id", { count: "exact", head: true })
+            .eq("source_id", sourceId)
+            .eq("status", "running"),
+          // Recent terminal state (24h window) for the "just ran" stats
+          api._supabase
+            .from("pulse_fire_queue")
+            .select("status,attempts", { count: "exact" })
+            .eq("source_id", sourceId)
+            .in("status", ["completed", "failed"])
+            .gte("completed_at", new Date(Date.now() - 24 * 3600 * 1000).toISOString())
+            .limit(500),
+          api._supabase
+            .from("pulse_source_circuit_breakers")
+            .select("state,consecutive_failures,failure_threshold,opened_at,reopen_at,total_opens")
+            .eq("source_id", sourceId)
+            .maybeSingle(),
+          api._supabase
+            .from("pulse_source_coverage")
+            .select("coverage_pct_24h,suburbs_synced_24h,items_dead_lettered_24h,pool_size,last_completion_at")
+            .eq("source_id", sourceId)
+            .maybeSingle(),
         ]);
         if (runsRes.error) throw runsRes.error;
         if (cancelled) return;
         setRuns(runsRes.data || []);
-        // Batch fetch failures are non-fatal — `pulse_fire_batches` table is new
-        // (migration 084) and might not exist in older environments.
         setActiveBatch(activeBatchRes.error ? null : (activeBatchRes.data?.[0] || null));
         setLatestBatch(latestBatchRes.error ? null : (latestBatchRes.data?.[0] || null));
+
+        const recentRows = queueRecentRes.error ? [] : (queueRecentRes.data || []);
+        const completed24h = recentRows.filter((r) => r.status === "completed").length;
+        const failed24h = recentRows.filter((r) => r.status === "failed").length;
+        setQueueStats({
+          pending: queuePendingRes.count || 0,
+          running: queueRunningRes.count || 0,
+          completed_24h: completed24h,
+          failed_24h: failed24h,
+        });
+
+        setCircuit(circuitRes.error ? null : circuitRes.data);
+        setCoverage(coverageRes.error ? null : coverageRes.data);
       } catch (err) {
         console.warn("pulse_sync_runs fetch failed:", err.message);
       } finally {
@@ -307,7 +358,7 @@ function usePulseSyncRuns(sourceId, limit = 10) {
     };
   }, [sourceId, limit, hasActive]);
 
-  return { runs, activeBatch, latestBatch, loading };
+  return { runs, activeBatch, latestBatch, queueStats, circuit, coverage, loading };
 }
 
 // ── pulse_source_card_stats RPC hook ──────────────────────────────────────────
@@ -1058,6 +1109,109 @@ function SuburbCoverageBlock({ stats, isBoundingBox }) {
   );
 }
 
+// --- Queue pipeline block (migration 093) ---
+//
+// Replaces the silent-dispatch fragility of the old chained self-invocation
+// with a visible, per-state count of the durable work queue. Shows:
+//   - Pending → Running → Completed (24h)
+//   - Failed (24h) with DLQ warning tint
+//   - Circuit breaker state (red chip when open/half_open)
+//   - Coverage % (from pulse_source_coverage view)
+
+function QueuePipelineBlock({ queueStats, circuit, coverage }) {
+  const { pending = 0, running = 0, completed_24h = 0, failed_24h = 0 } = queueStats || {};
+  const hasActive = pending > 0 || running > 0;
+  const hasFailed = failed_24h > 0;
+  const breakerOpen = circuit?.state === "open" || circuit?.state === "half_open";
+  const cov = coverage?.coverage_pct_24h;
+
+  // Color the block based on most-alarming signal
+  let tone = "border-border bg-muted/20";
+  if (breakerOpen) tone = "border-red-400/60 bg-red-50/50 dark:bg-red-950/20";
+  else if (hasFailed) tone = "border-amber-400/60 bg-amber-50/50 dark:bg-amber-950/20";
+  else if (hasActive) tone = "border-blue-400/60 bg-blue-50/50 dark:bg-blue-950/20";
+  else if (cov != null && cov >= 95) tone = "border-emerald-400/60 bg-emerald-50/40 dark:bg-emerald-950/20";
+
+  return (
+    <div className={cn("rounded-md border px-2.5 py-1.5 text-[10px] space-y-1", tone)}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1 text-muted-foreground uppercase tracking-wide font-semibold">
+          <Activity className="h-3 w-3" />
+          Queue pipeline
+        </span>
+        {cov != null && (
+          <span
+            className={cn(
+              "tabular-nums font-medium",
+              cov >= 95 ? "text-emerald-700 dark:text-emerald-400" :
+              cov >= 75 ? "text-amber-700 dark:text-amber-400" :
+              "text-red-700 dark:text-red-400"
+            )}
+            title="coverage_pct_24h from pulse_source_coverage view"
+          >
+            {cov}% · 24h
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap tabular-nums">
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 px-1.5 py-0 rounded border",
+            pending > 0 ? "border-blue-400/50 text-blue-700 dark:text-blue-300 bg-blue-100/30 dark:bg-blue-900/20" : "border-border text-muted-foreground/60"
+          )}
+          title="Items waiting for a worker tick"
+        >
+          <span className="font-semibold">{pending}</span>
+          <span className="text-[9px] uppercase">pending</span>
+        </span>
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 px-1.5 py-0 rounded border",
+            running > 0 ? "border-blue-500/60 text-blue-700 dark:text-blue-300 bg-blue-100/40 dark:bg-blue-900/30 animate-pulse" : "border-border text-muted-foreground/60"
+          )}
+          title="Items currently being processed by pulseDataSync"
+        >
+          <Loader2 className={cn("h-2.5 w-2.5", running > 0 && "animate-spin")} />
+          <span className="font-semibold">{running}</span>
+          <span className="text-[9px] uppercase">running</span>
+        </span>
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 px-1.5 py-0 rounded border",
+            completed_24h > 0 ? "border-emerald-400/50 text-emerald-700 dark:text-emerald-300 bg-emerald-100/30 dark:bg-emerald-900/20" : "border-border text-muted-foreground/60"
+          )}
+          title="Suburbs successfully synced in last 24h"
+        >
+          <CheckCircle2 className="h-2.5 w-2.5" />
+          <span className="font-semibold">{completed_24h}</span>
+          <span className="text-[9px] uppercase">synced 24h</span>
+        </span>
+        {failed_24h > 0 && (
+          <span
+            className="inline-flex items-center gap-1 px-1.5 py-0 rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 bg-amber-100/40 dark:bg-amber-900/30"
+            title="Items that hit max_attempts and were dead-lettered"
+          >
+            <AlertTriangle className="h-2.5 w-2.5" />
+            <span className="font-semibold">{failed_24h}</span>
+            <span className="text-[9px] uppercase">DLQ</span>
+          </span>
+        )}
+      </div>
+      {breakerOpen && circuit && (
+        <div className="flex items-center gap-1.5 text-[9px] text-red-700 dark:text-red-400 font-medium pt-0.5 border-t border-red-500/20">
+          <AlertCircle className="h-2.5 w-2.5" />
+          Circuit breaker {circuit.state.toUpperCase()} ({circuit.consecutive_failures} consecutive failures)
+          {circuit.reopen_at && (
+            <span className="text-muted-foreground font-normal">
+              · reopens {fmtRelativeTs(circuit.reopen_at)}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Source Card (enhanced, DB-driven) ---
 //
 // Everything the user sees on each source card reads from the DB row
@@ -1078,7 +1232,7 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
   // `latestBatch` is the authoritative "last cron dispatch" counter (spans all
   // 15-min buckets of a chunked run); `latestRun` is only the latest 15-min
   // slice from pulse_sync_runs and can under-count.
-  const { runs: syncRuns, activeBatch, latestBatch } = usePulseSyncRuns(sourceConfig.source_id, 10);
+  const { runs: syncRuns, activeBatch, latestBatch, queueStats, circuit, coverage } = usePulseSyncRuns(sourceConfig.source_id, 10);
   const latestRun = syncRuns[0] || null;
   const historyRuns = syncRuns.slice(1);
   const isBoundingBox = sourceConfig.approach === "bounding_box";
@@ -1286,6 +1440,18 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
             no cron is configured to fire. */}
         {!isDisabled && (
           <SuburbCoverageBlock stats={cardStats} isBoundingBox={isBoundingBox} />
+        )}
+
+        {/* Queue pipeline (migration 093) — durable work queue state.
+            Shows pending → running → completed (24h) → failed (24h) and
+            circuit breaker state if tripped. Answers the real question:
+            "is my data getting synced reliably right now?" */}
+        {!isDisabled && queueStats && (
+          <QueuePipelineBlock
+            queueStats={queueStats}
+            circuit={circuit}
+            coverage={coverage}
+          />
         )}
 
         {/* Last run summary block.
