@@ -963,6 +963,12 @@ serveWithAudit('pulseDataSync', async (req) => {
         source: 'rea',
         data_sources: JSON.stringify([...agency.sources]),
         last_synced_at: now,
+        // Migration 100/134: stamp the drill-back reference on agency upserts
+        // too, matching what agents (line ~835) and listings (line ~1305)
+        // already do. Without this, the bulk-history emit at the end of the
+        // run never records agency touches (its query filters by
+        // last_sync_log_id = syncLogId).
+        last_sync_log_id: syncLogId,
         is_in_crm: false,
       });
     }
@@ -2049,62 +2055,124 @@ serveWithAudit('pulseDataSync', async (req) => {
 
     console.log(`Post-sync: ${movementsDetected} movements, ${timelineEntries} timeline entries, ${mappingsCreated} mappings`);
 
-    // ── Migration 100: pulse_entity_sync_history bulk write ─────────────
+    // ── Migration 100 + 134: pulse_entity_sync_history bulk write ───────
     // Every entity touched by this sync gets a history row so the UI can
-    // drill back to "which run produced this state". Query by last_sync_log_id
-    // (which we stamped on every upsert above) so we only record entities
-    // this run actually touched. Best-effort — non-fatal on failure.
+    // drill back to "which run produced this state". This replaced the
+    // single-filter-on-last_sync_log_id approach from migration 100 which
+    // silently missed rows whenever `last_sync_log_id` failed to stamp
+    // (e.g. migration 134 found 0/3,567 agents had it set in prod — the
+    // column was added in migration 100 but the emit block at the end of
+    // the run filtered by it, so no rows were ever recorded for
+    // pulseDataSync runs despite the code being "deployed").
+    //
+    // New approach: query by rea_agent_id / source_listing_id / name (the
+    // stable business keys from this run's processed batches) then cross-
+    // reference against pre-upsert snapshots to split created vs updated.
+    // This doesn't depend on last_sync_log_id propagating correctly, so it
+    // survives partial upsert failures / trigger quirks / shadowed writes.
     if (syncLogId) {
       try {
         const sourceLabelForHistory = source_id || 'pulse_sync';
-        const [agentsTouched, listingsTouched, agenciesTouched] = await Promise.all([
-          admin.from('pulse_agents').select('id, rea_agent_id').eq('last_sync_log_id', syncLogId),
-          admin.from('pulse_listings').select('id, source_listing_id').eq('last_sync_log_id', syncLogId),
-          admin.from('pulse_agencies').select('id, rea_agency_id').eq('last_sync_log_id', syncLogId),
-        ]);
         const historyRows: any[] = [];
-        for (const row of agentsTouched.data || []) {
-          historyRows.push({
-            entity_type: 'agent',
-            entity_id: (row as any).id,
-            entity_key: (row as any).rea_agent_id,
-            sync_log_id: syncLogId,
-            action: 'updated',
-            source: sourceLabelForHistory,
-            seen_at: new Date().toISOString(),
-          });
+
+        // Agents touched this run: every rea_agent_id we tried to upsert.
+        const touchedAgentReaIds = uniqueAgents
+          .map((a: any) => a.rea_agent_id)
+          .filter((v: any): v is string => typeof v === 'string' && v.length > 0);
+        if (touchedAgentReaIds.length > 0) {
+          // Chunk the IN query to avoid URL overflow on large batches.
+          const CHUNK = 200;
+          for (let i = 0; i < touchedAgentReaIds.length; i += CHUNK) {
+            const slice = touchedAgentReaIds.slice(i, i + CHUNK);
+            const { data: agentRows = [] } = await admin.from('pulse_agents')
+              .select('id, rea_agent_id')
+              .in('rea_agent_id', slice);
+            for (const row of agentRows as any[]) {
+              const wasExisting = existingByReaIdSnapshot.has(row.rea_agent_id);
+              historyRows.push({
+                entity_type: 'agent',
+                entity_id: row.id,
+                entity_key: row.rea_agent_id,
+                sync_log_id: syncLogId,
+                action: wasExisting ? 'updated' : 'created',
+                source: sourceLabelForHistory,
+                seen_at: new Date().toISOString(),
+              });
+            }
+          }
         }
-        for (const row of listingsTouched.data || []) {
-          historyRows.push({
-            entity_type: 'listing',
-            entity_id: (row as any).id,
-            entity_key: (row as any).source_listing_id,
-            sync_log_id: syncLogId,
-            action: 'updated',
-            source: sourceLabelForHistory,
-            seen_at: new Date().toISOString(),
-          });
+
+        // Listings touched this run: every source_listing_id we processed.
+        const touchedListingIds = filteredListingRecords
+          .map((l: any) => l.source_listing_id)
+          .filter((v: any): v is string => typeof v === 'string' && v.length > 0);
+        if (touchedListingIds.length > 0) {
+          const CHUNK = 200;
+          for (let i = 0; i < touchedListingIds.length; i += CHUNK) {
+            const slice = touchedListingIds.slice(i, i + CHUNK);
+            const { data: listingRows = [] } = await admin.from('pulse_listings')
+              .select('id, source_listing_id')
+              .in('source_listing_id', slice);
+            for (const row of listingRows as any[]) {
+              const wasExisting = existingListingIds.has(row.source_listing_id);
+              historyRows.push({
+                entity_type: 'listing',
+                entity_id: row.id,
+                entity_key: row.source_listing_id,
+                sync_log_id: syncLogId,
+                action: wasExisting ? 'updated' : 'created',
+                source: sourceLabelForHistory,
+                seen_at: new Date().toISOString(),
+              });
+            }
+          }
         }
-        for (const row of agenciesTouched.data || []) {
-          historyRows.push({
-            entity_type: 'agency',
-            entity_id: (row as any).id,
-            entity_key: (row as any).rea_agency_id,
-            sync_log_id: syncLogId,
-            action: 'updated',
-            source: sourceLabelForHistory,
-            seen_at: new Date().toISOString(),
-          });
+
+        // Agencies touched this run: lookup by name (unique key is
+        // lower(trim(name))). existingAgencyMap keyed by lower-trim name
+        // gives us the was-existing flag.
+        const touchedAgencyNames = mergedAgencies
+          .map((a: any) => (a.name || '').trim())
+          .filter((v: string) => v.length > 0);
+        if (touchedAgencyNames.length > 0) {
+          const CHUNK = 200;
+          for (let i = 0; i < touchedAgencyNames.length; i += CHUNK) {
+            const slice = touchedAgencyNames.slice(i, i + CHUNK);
+            const { data: agencyRows = [] } = await admin.from('pulse_agencies')
+              .select('id, name, rea_agency_id')
+              .in('name', slice);
+            for (const row of agencyRows as any[]) {
+              const normKey = (row.name || '').trim().toLowerCase();
+              const wasExisting = existingAgencyMap.has(normKey);
+              historyRows.push({
+                entity_type: 'agency',
+                entity_id: row.id,
+                entity_key: row.rea_agency_id,
+                sync_log_id: syncLogId,
+                action: wasExisting ? 'updated' : 'created',
+                source: sourceLabelForHistory,
+                seen_at: new Date().toISOString(),
+              });
+            }
+          }
         }
+
         if (historyRows.length > 0) {
           // Chunked insert to avoid hitting payload caps on very large runs
           const HIST_BATCH = 500;
+          let insertedCount = 0;
           for (let i = 0; i < historyRows.length; i += HIST_BATCH) {
             const chunk = historyRows.slice(i, i + HIST_BATCH);
             const { error } = await admin.from('pulse_entity_sync_history').insert(chunk);
-            if (error) console.warn(`sync_history insert chunk ${i / HIST_BATCH}: ${error.message?.substring(0, 200)}`);
+            if (error) {
+              console.warn(`sync_history insert chunk ${i / HIST_BATCH}: ${error.message?.substring(0, 200)}`);
+            } else {
+              insertedCount += chunk.length;
+            }
           }
-          console.log(`Wrote ${historyRows.length} pulse_entity_sync_history rows`);
+          console.log(`Wrote ${insertedCount}/${historyRows.length} pulse_entity_sync_history rows (agents+listings+agencies)`);
+        } else {
+          console.log('pulse_entity_sync_history: 0 rows to write (empty run)');
         }
       } catch (histErr: any) {
         console.warn('pulse_entity_sync_history write failed (non-fatal):', histErr?.message);
