@@ -3,8 +3,9 @@
  * Thin container: loads all data hooks, computes shared stats,
  * renders header / stats strip / tab bar, delegates to tab components.
  */
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { api } from "@/api/supabaseClient";
@@ -76,19 +77,88 @@ export function normAgencyKey(s) {
   return (s || "").replace(/\s*-\s*/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-// ── StatCard ──────────────────────────────────────────────────────────────────
+// ── formatCountShort — QoL #3 ────────────────────────────────────────────────
+// Compact number formatting for tab badges + tight UI slots. Under 1000 stays
+// as-is ("42"); 1000–9999 uses one decimal ("1.2k"); 10k+ rounds to the nearest
+// thousand ("12k"). Mirrors the convention used on GitHub/Twitter badges.
+export function formatCountShort(n) {
+  if (n === null || n === undefined) return "—";
+  const num = Number(n);
+  if (!isFinite(num)) return "—";
+  if (num < 1000) return String(num);
+  if (num < 10000) {
+    // One decimal, trim trailing .0 ("1.0k" → "1k")
+    const v = (num / 1000).toFixed(1);
+    return v.endsWith(".0") ? `${v.slice(0, -2)}k` : `${v}k`;
+  }
+  if (num < 1_000_000) return `${Math.round(num / 1000)}k`;
+  return `${(num / 1_000_000).toFixed(1)}M`;
+}
 
-function StatCard({ label, value, icon: Icon, color, subtitle }) {
+// ── Relative time helper — QoL #4 ────────────────────────────────────────────
+function formatRelativeTime(then) {
+  if (!then) return "";
+  const ms = Date.now() - new Date(then).getTime();
+  if (isNaN(ms)) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return `${d}d ago`;
+}
+
+// ── StatCard ──────────────────────────────────────────────────────────────────
+// QoL #1 + #2: clickable (navigates to the matching tab) + optional trend badge.
+function StatCard({ label, value, icon: Icon, color, subtitle, onClick, trend }) {
+  const clickable = typeof onClick === "function";
+  // trend: { pct: number, direction: 'up' | 'down' } | null
+  const renderTrend = () => {
+    if (!trend || trend.pct === null || trend.pct === undefined) return null;
+    const up = trend.direction === "up";
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-0.5 text-[9px] font-semibold leading-none tabular-nums ml-1",
+          up ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+        )}
+        title={`${up ? "+" : "-"}${trend.pct}% vs 7 days ago`}
+      >
+        {up ? "▲" : "▼"} {up ? "+" : "−"}{Math.abs(trend.pct)}%
+      </span>
+    );
+  };
   return (
-    <Card className="rounded-xl border-0 shadow-sm">
+    <Card
+      className={cn(
+        "rounded-xl border-0 shadow-sm",
+        clickable && "cursor-pointer hover:shadow-md hover:bg-muted/40 transition-all focus-within:ring-2 focus-within:ring-primary/40"
+      )}
+      onClick={clickable ? onClick : undefined}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-label={clickable ? `View ${label}` : undefined}
+      onKeyDown={clickable ? (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      } : undefined}
+    >
       <CardContent className="p-3 flex items-center gap-3">
         <div className="p-1.5 rounded-lg bg-muted/60">
           <Icon className={cn("h-4 w-4", color || "text-muted-foreground")} />
         </div>
         <div className="min-w-0">
-          <p className={cn("text-lg font-bold tabular-nums leading-none", color || "text-foreground")}>
-            {value}
-          </p>
+          <div className="flex items-center">
+            <p className={cn("text-lg font-bold tabular-nums leading-none", color || "text-foreground")}>
+              {value}
+            </p>
+            {renderTrend()}
+          </div>
           <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
           {subtitle && (
             <p className="text-[9px] text-muted-foreground/60">{subtitle}</p>
@@ -249,7 +319,74 @@ export default function IndustryPulse() {
     // same ?pulse_id= + ?entity_type= will reopen the slideout idempotently.
   }, [pulseIdParam, entityTypeParam, searchParams]);
 
-  const [search, setSearch] = useState("");
+  // ── QoL #81: search persisted in `?q=` URL param ─────────────────────────
+  const initialSearch = searchParams.get("q") || "";
+  const [search, setSearchState] = useState(initialSearch);
+  const setSearch = useCallback((next) => {
+    setSearchState(next);
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (next && next.trim()) np.set("q", next);
+      else np.delete("q");
+      return np;
+    }, { replace: true });
+  }, [setSearchParams]);
+  // Keep state in sync on back/forward
+  useEffect(() => {
+    const q = searchParams.get("q") || "";
+    if (q !== search) setSearchState(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // ── QoL #82: shared filter state — suburb, agency — persisted in URL ──────
+  // The tab components read `sharedSuburb` / `sharedAgency` from sharedProps;
+  // when either is non-empty, the tab scopes its existing list filters to
+  // that value. Typing in Agents' suburb filter sets `?suburb=X`, switching
+  // to Listings keeps the same scope in effect.
+  const initialSharedSuburb = searchParams.get("suburb") || "";
+  const initialSharedAgency = searchParams.get("agency") || "";
+  const [sharedSuburb, setSharedSuburbState] = useState(initialSharedSuburb);
+  const [sharedAgency, setSharedAgencyState] = useState(initialSharedAgency);
+  const setSharedSuburb = useCallback((next) => {
+    setSharedSuburbState(next || "");
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (next) np.set("suburb", next); else np.delete("suburb");
+      return np;
+    }, { replace: true });
+  }, [setSearchParams]);
+  const setSharedAgency = useCallback((next) => {
+    setSharedAgencyState(next || "");
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (next) np.set("agency", next); else np.delete("agency");
+      return np;
+    }, { replace: true });
+  }, [setSearchParams]);
+  useEffect(() => {
+    const s = searchParams.get("suburb") || "";
+    const a = searchParams.get("agency") || "";
+    if (s !== sharedSuburb) setSharedSuburbState(s);
+    if (a !== sharedAgency) setSharedAgencyState(a);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // ── QoL #83: per-tab page + sort round-tripped through URL ──────────────
+  const urlPage = searchParams.get("page");
+  const urlSort = searchParams.get("sort");
+  const setUrlPageSort = useCallback((page, sort) => {
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (page === null || page === undefined || page === 0) np.delete("page");
+      else np.set("page", String(page));
+      if (!sort) np.delete("sort"); else np.set("sort", sort);
+      return np;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  // ── QoL #84: slideout deep-link tab (e.g. `?slideout_tab=timeline`) ──────
+  const slideoutTabParam = searchParams.get("slideout_tab") || "overview";
+
   const [addToCrmFromCommand, setAddToCrmFromCommand] = useState(null);
 
   // ── Cross-tab drill-through stack ───────────────────────────────────────────
@@ -312,6 +449,10 @@ export default function IndustryPulse() {
 
   // Refresh all entity data
   const [refreshing, setRefreshing] = useState(false);
+  // QoL #4: track when a refresh last completed so "Refreshed Xm ago" can
+  // render a relative-time hint next to the Refresh button. Initialised on
+  // first successful mount via the effect below.
+  const [lastFetched, setLastFetched] = useState(() => Date.now());
   const handleRefreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -330,10 +471,106 @@ export default function IndustryPulse() {
         refetchEntityList("PulseSourceConfig"),
         refetchEntityList("PulseTargetSuburb"),
       ]);
+      setLastFetched(Date.now());
     } finally {
       setRefreshing(false);
     }
   }, []);
+
+  // Tick every 30s so the relative-time label ("Refreshed 2m ago") updates
+  // without needing a user action. Cheap: single interval, no network.
+  const [, _forceTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => _forceTick(t => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── QoL #85: row-hover prefetch helper ──────────────────────────────────
+  // Tabs receive this via sharedProps and call it in `onMouseEnter` on each
+  // row. Uses a 200ms debounce per-row so rapid mouse drags over a list
+  // don't trigger a storm of prefetches. When the user finally hovers for
+  // long enough (intent), we ask react-query to populate the dossier cache —
+  // so by the time they click, the slideout opens instantly.
+  const queryClient = useQueryClient();
+  const prefetchTimers = useRef(new Map());
+  const prefetchEntity = useCallback((entityType, id) => {
+    if (!entityType || !id) return;
+    const key = `${entityType}:${id}`;
+    // Already queued or already cached? Skip.
+    if (prefetchTimers.current.has(key)) return;
+    const existing = queryClient.getQueryData(["pulse_dossier_slideout", entityType, id]);
+    if (existing) return;
+    const t = setTimeout(() => {
+      prefetchTimers.current.delete(key);
+      queryClient.prefetchQuery({
+        queryKey: ["pulse_dossier_slideout", entityType, id],
+        queryFn: async () => {
+          const { data, error } = await api._supabase.rpc("pulse_get_dossier", {
+            p_entity_type: entityType,
+            p_entity_id: id,
+          });
+          if (error) throw error;
+          return data;
+        },
+        staleTime: 30_000,
+      }).catch(() => {
+        // Swallow prefetch errors — the real click will retry and surface
+        // any error through the normal UI.
+      });
+    }, 200);
+    prefetchTimers.current.set(key, t);
+  }, [queryClient]);
+  const cancelPrefetch = useCallback((entityType, id) => {
+    if (!entityType || !id) return;
+    const key = `${entityType}:${id}`;
+    const t = prefetchTimers.current.get(key);
+    if (t) {
+      clearTimeout(t);
+      prefetchTimers.current.delete(key);
+    }
+  }, []);
+  // Cleanup on unmount
+  useEffect(() => {
+    const timers = prefetchTimers.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
+
+  // ── QoL #1: 7-day-ago snapshot for trend arrows ─────────────────────────
+  // Fetches aggregate counts as they stood 7 days ago via `created_at` cutoff
+  // filters. We compare to today's accurate counts to render `▲ +12%` badges
+  // on each stat card. Non-blocking: if the query fails (RLS, network),
+  // `trendSnapshot` stays null and the cards just omit the badge.
+  const [trendSnapshot, setTrendSnapshot] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+        const sb = api._supabase;
+        const [agents, agencies, forSale, forRent, sold] = await Promise.all([
+          sb.from("pulse_agents").select("id", { count: "exact", head: true }).lt("created_at", sevenDaysAgo),
+          sb.from("pulse_agencies").select("id", { count: "exact", head: true }).lt("created_at", sevenDaysAgo),
+          sb.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "for_sale").lt("created_at", sevenDaysAgo),
+          sb.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "for_rent").lt("created_at", sevenDaysAgo),
+          sb.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "sold").lt("created_at", sevenDaysAgo),
+        ]);
+        if (cancelled) return;
+        setTrendSnapshot({
+          agents: agents.count ?? 0,
+          agencies: agencies.count ?? 0,
+          activeListings: forSale.count ?? 0,
+          rentals: forRent.count ?? 0,
+          sold: sold.count ?? 0,
+        });
+      } catch {
+        // Silent — trend badges just won't render.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [lastFetched]);
 
   // ── Server-side accurate counts ───────────────────────────────────────────
   // The client-side useMemo below reduces pulseListings.length, which is
@@ -428,6 +665,27 @@ export default function IndustryPulse() {
     setTab("timeline");
   }, [setTab]);
 
+  // QoL #1: compute trend % from (current - baseline) / baseline for each
+  // tracked stat. Returns `{ pct, direction }` or null when baseline is
+  // missing (first week of data, or query failed).
+  const computeTrend = useCallback((current, baseline) => {
+    if (baseline === null || baseline === undefined) return null;
+    if (baseline <= 0) return null;
+    const delta = current - baseline;
+    const pct = Math.round((delta / baseline) * 100);
+    if (pct === 0) return null;
+    return { pct: Math.abs(pct), direction: pct > 0 ? "up" : "down" };
+  }, []);
+  const trends = useMemo(() => {
+    if (!trendSnapshot) return {};
+    return {
+      agents: computeTrend(stats.totalAgents, trendSnapshot.agents),
+      agencies: computeTrend(stats.totalAgencies, trendSnapshot.agencies),
+      activeListings: computeTrend(stats.activeListings, trendSnapshot.activeListings),
+      rentals: computeTrend(stats.rentals, trendSnapshot.rentals),
+    };
+  }, [stats, trendSnapshot, computeTrend]);
+
   // ── Shared props spread into every tab ──────────────────────────────────────
   const sharedProps = {
     pulseAgents,
@@ -451,6 +709,18 @@ export default function IndustryPulse() {
     onClearAddToCrmFromCommand: handleClearAddToCrmFromCommand,
     onOpenEntity: openEntity,
     onViewFullTimeline: handleViewFullTimeline,
+    // QoL #82 — shared filter state lifted to parent, tabs can opt in
+    sharedSuburb,
+    sharedAgency,
+    onChangeSharedSuburb: setSharedSuburb,
+    onChangeSharedAgency: setSharedAgency,
+    // QoL #83 — URL-driven page + sort (opt-in on tabs that already use useQuery)
+    urlPage: urlPage ? Number(urlPage) : null,
+    urlSort,
+    onChangeUrlPageSort: setUrlPageSort,
+    // QoL #85 — row-hover prefetch helpers
+    onRowHover: prefetchEntity,
+    onRowHoverLeave: cancelPrefetch,
   };
 
   // ── Resolve current entity from stack to actual record ────────────────────
@@ -529,6 +799,63 @@ export default function IndustryPulse() {
 
   const hasEntityHistory = entityStack.length > 1;
 
+  // ── QoL #2: stat card click-through ──────────────────────────────────────
+  // Navigates to the matching tab + optionally sets a `?type=` listing filter
+  // so "For Sale" jumps to Listings scoped to listing_type=for_sale etc.
+  const navigateToTab = useCallback((nextTab, listingType = null) => {
+    setTab(nextTab);
+    if (listingType) {
+      setSearchParams((prev) => {
+        const np = new URLSearchParams(prev);
+        np.set("type", listingType);
+        return np;
+      }, { replace: true });
+    }
+  }, [setTab, setSearchParams]);
+
+  // ── QoL #5: `Cmd+K` / `/` focus the search input ──────────────────────────
+  // ── QoL #6: `1`–`9` / `0` / `-` switch tabs when focus is free ────────────
+  const searchInputRef = useRef(null);
+  useEffect(() => {
+    const isEditable = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (el.isContentEditable) return true;
+      return false;
+    };
+    const onKey = (e) => {
+      // Cmd+K / Ctrl+K / "/" → focus search. Cmd+K works even inside inputs.
+      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+      if (e.key === "/" && !isEditable()) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+      // Digits 1–9 + 0 (tab 10) + "-" (tab 11). Skip when a modifier is held
+      // so we don't hijack Cmd+1 (browser tab switching on macOS).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isEditable()) return;
+      let idx = -1;
+      if (e.key >= "1" && e.key <= "9") idx = parseInt(e.key, 10) - 1;
+      else if (e.key === "0") idx = 9;
+      else if (e.key === "-") idx = 10;
+      if (idx >= 0 && idx < TABS.length) {
+        e.preventDefault();
+        setTab(TABS[idx].value);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setTab]);
+
   // ── Early return: loading skeleton ───────────────────────────────────────────
   if (isLoading) return <LoadingSkeleton />;
 
@@ -549,12 +876,23 @@ export default function IndustryPulse() {
           <div className="relative w-full sm:w-56">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <Input
-              placeholder="Search agents, agencies…"
+              ref={searchInputRef}
+              placeholder="Search agents, agencies… (Cmd+K)"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-8 h-8 text-xs"
+              aria-label="Search Industry Pulse"
             />
           </div>
+          {/* QoL #4: relative time since last refresh — updates every 30s */}
+          {lastFetched && (
+            <span
+              className="hidden md:inline text-[10px] text-muted-foreground tabular-nums whitespace-nowrap"
+              title={new Date(lastFetched).toLocaleString()}
+            >
+              Refreshed {formatRelativeTime(lastFetched)}
+            </span>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -562,6 +900,7 @@ export default function IndustryPulse() {
             onClick={handleRefreshAll}
             disabled={refreshing}
             title="Refresh all data"
+            aria-label="Refresh all Industry Pulse data"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
             <span className="hidden sm:inline">Refresh</span>
@@ -569,7 +908,7 @@ export default function IndustryPulse() {
         </div>
       </div>
 
-      {/* ── Stats strip ── */}
+      {/* ── Stats strip (QoL #1 + #2) ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
         <StatCard
           label="Agents"
@@ -577,6 +916,8 @@ export default function IndustryPulse() {
           icon={Users}
           color="text-blue-500"
           subtitle={`${stats.notInCrm} not in CRM`}
+          trend={trends.agents}
+          onClick={() => navigateToTab("agents")}
         />
         <StatCard
           label="Agencies"
@@ -584,6 +925,8 @@ export default function IndustryPulse() {
           icon={Target}
           color="text-violet-500"
           subtitle={`${stats.agenciesNotInCrm} not in CRM`}
+          trend={trends.agencies}
+          onClick={() => navigateToTab("agencies")}
         />
         <StatCard
           label="For Sale"
@@ -591,18 +934,23 @@ export default function IndustryPulse() {
           icon={Home}
           color="text-emerald-500"
           subtitle={`${stats.sold} sold`}
+          trend={trends.activeListings}
+          onClick={() => navigateToTab("listings", "for_sale")}
         />
         <StatCard
           label="Rentals"
           value={stats.rentals.toLocaleString()}
           icon={ArrowRight}
           color="text-cyan-500"
+          trend={trends.rentals}
+          onClick={() => navigateToTab("listings", "for_rent")}
         />
         <StatCard
           label="Avg DOM"
           value={stats.avgDom > 0 ? `${stats.avgDom}d` : "—"}
           icon={Clock}
           color="text-amber-500"
+          onClick={() => navigateToTab("listings")}
         />
         <StatCard
           label="Events"
@@ -610,6 +958,7 @@ export default function IndustryPulse() {
           icon={Calendar}
           color="text-rose-500"
           subtitle="upcoming"
+          onClick={() => navigateToTab("events")}
         />
         <StatCard
           label="Signals"
@@ -617,6 +966,7 @@ export default function IndustryPulse() {
           icon={Zap}
           color="text-orange-500"
           subtitle="new"
+          onClick={() => navigateToTab("signals")}
         />
         <StatCard
           label="Market Share"
@@ -624,27 +974,45 @@ export default function IndustryPulse() {
           icon={TrendingUp}
           color="text-green-500"
           subtitle="30-day"
+          onClick={() => navigateToTab("market")}
         />
       </div>
 
       {/* ── Tab bar + content ── */}
+      {/* QoL #89: on mobile (<md) render as horizontal-scroll strip with */}
+      {/* snap-x; on >=md keep the flex-wrap layout. Active tab auto-scrolls */}
+      {/* into view via scrollIntoView below. */}
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="flex flex-wrap h-auto gap-0.5 w-full rounded-lg bg-muted p-1">
+        <TabsList
+          className="flex md:flex-wrap h-auto gap-0.5 w-full rounded-lg bg-muted p-1 overflow-x-auto md:overflow-visible snap-x md:snap-none scroll-smooth"
+        >
           {TABS.map(({ value, label, badgeKey }) => {
-            const count = badgeKey && stats[badgeKey] > 0 ? stats[badgeKey] : null;
+            const rawCount = badgeKey ? (stats[badgeKey] || 0) : 0;
+            const count = badgeKey && rawCount > 0 ? rawCount : null;
             return (
               <TabsTrigger
                 key={value}
                 value={value}
-                className="relative flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                ref={(el) => {
+                  // QoL #89: when a tab becomes active on mobile, scroll it
+                  // into view so it's not clipped off the edge of the strip.
+                  if (el && value === tab && typeof el.scrollIntoView === "function") {
+                    try {
+                      el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+                    } catch { /* older browsers */ }
+                  }
+                }}
+                className="relative flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-md snap-start shrink-0 md:shrink data-[state=active]:bg-background data-[state=active]:shadow-sm"
               >
                 {label}
                 {count !== null && (
                   <Badge
                     variant="secondary"
                     className="h-4 min-w-[1rem] px-1 text-[9px] tabular-nums rounded-full"
+                    title={count.toLocaleString()}
                   >
-                    {count > 999 ? "999+" : count}
+                    {/* QoL #3: compact formatting (5000 → 5k) */}
+                    {formatCountShort(count)}
                   </Badge>
                 )}
               </TabsTrigger>
@@ -652,44 +1020,46 @@ export default function IndustryPulse() {
           })}
         </TabsList>
 
+        {/* QoL #88: each ErrorBoundary gets `resetKey={tab}` so switching */}
+        {/* tabs clears any caught error; switching back remounts the tab. */}
         <TabsContent value="command" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Command">
             <PulseCommandCenter {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="agents" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Agents">
             <PulseAgentIntel {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="agencies" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Agencies">
             <PulseAgencyIntel {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="listings" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Listings">
             <PulseListingsTab {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="events" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Events">
             <PulseEventsTab {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="market" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Market">
             <PulseMarketData {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="sources" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Sources">
             <PulseDataSources
               {...sharedProps}
               deepLinkSyncLogId={syncLogIdParam}
@@ -699,25 +1069,25 @@ export default function IndustryPulse() {
         </TabsContent>
 
         <TabsContent value="suburbs" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Suburbs">
             <PulseSuburbs />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="mappings" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Mappings">
             <PulseMappings {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="signals" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Signals">
             <PulseSignals {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="timeline" className="mt-2">
-          <ErrorBoundary>
+          <ErrorBoundary resetKey={tab} fallbackLabel="Timeline">
             <PulseTimelineTab {...sharedProps} />
           </ErrorBoundary>
         </TabsContent>
@@ -744,7 +1114,7 @@ export default function IndustryPulse() {
             <p className="text-xs text-muted-foreground mb-3">
               This record may have been deleted or is no longer accessible.
             </p>
-            <Button size="sm" variant="outline" onClick={closeAllEntities}>Close</Button>
+            <Button size="sm" variant="outline" onClick={closeAllEntities} aria-label="Close dialog">Close</Button>
           </div>
         </div>
       )}
@@ -759,6 +1129,7 @@ export default function IndustryPulse() {
               onOpenEntity={openEntity}
               hasHistory={hasEntityHistory}
               onBack={popEntity}
+              initialTab={slideoutTabParam}
             />
           )}
           {currentEntity.type === "agent" && (
@@ -781,6 +1152,7 @@ export default function IndustryPulse() {
               onOpenEntity={openEntity}
               hasHistory={hasEntityHistory}
               onBack={popEntity}
+              initialTab={slideoutTabParam}
             />
           )}
           {currentEntity.type === "agency" && (
@@ -795,6 +1167,7 @@ export default function IndustryPulse() {
               onOpenEntity={openEntity}
               hasHistory={hasEntityHistory}
               onBack={popEntity}
+              initialTab={slideoutTabParam}
             />
           )}
         </ErrorBoundary>

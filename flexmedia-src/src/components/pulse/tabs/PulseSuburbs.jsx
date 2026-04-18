@@ -130,6 +130,12 @@ function useSuburbPoolHealth() {
       };
     },
     refetchInterval: 60_000,
+    // QoL #86: pause polling when the tab isn't visible — saves bandwidth +
+    // keeps react-query from burning cache on a backgrounded tab.
+    refetchIntervalInBackground: false,
+    // QoL #87: this is reference-ish aggregate data (suburb pool health);
+    // bump the staleTime so re-visits within 5min don't re-fetch.
+    staleTime: 5 * 60_000,
   });
 }
 
@@ -260,6 +266,9 @@ export default function PulseSuburbs() {
       return { rows: rows || [], count: count || 0 };
     },
     keepPreviousData: true,
+    // QoL #87: suburbs are reference data — targets rarely churn within a
+    // session. 30min staleTime keeps the table snappy on pagination.
+    staleTime: 30 * 60_000,
   });
 
   const rows = data?.rows || [];
