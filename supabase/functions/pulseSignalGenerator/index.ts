@@ -364,6 +364,9 @@ serveWithAudit('pulseSignalGenerator', async (req: Request) => {
     ['crm_suggestion',  generateCrmSuggestions],
   ];
 
+  // Collected signal rows (with returned ids) so we can mirror them into pulse_timeline.
+  const allInsertedSignals: Array<{ id: string; row: SignalInsert }> = [];
+
   for (const [name, fn] of classes) {
     try {
       const rows = await fn(admin, since, runId);
@@ -386,13 +389,105 @@ serveWithAudit('pulseSignalGenerator', async (req: Request) => {
       const { error, data } = await admin
         .from('pulse_signals')
         .insert(fresh)
-        .select('id');
+        .select('id, idempotency_key');
       if (error) throw new Error(error.message);
       results[name].inserted = data?.length || 0;
+
+      // Map returned ids back to their source rows by idempotency_key so we can
+      // mirror each signal into pulse_timeline for every linked entity.
+      const byKey = new Map(fresh.map((r) => [r.idempotency_key, r]));
+      for (const inserted of (data || [])) {
+        const row = byKey.get(inserted.idempotency_key);
+        if (row) allInsertedSignals.push({ id: inserted.id, row });
+      }
     } catch (err: any) {
       recordError(ctx, err, 'error');
       results[name].error = err?.message || String(err);
     }
+  }
+
+  // ── Mirror signals into pulse_timeline ───────────────────────────────────
+  // For each freshly inserted signal, emit one pulse_timeline row per linked
+  // entity (agent + agency + any pulse_entity_id from source_data). This
+  // surfaces the signal on the entity's dossier timeline so operators see
+  // "Signal: Price drop" when reading the agency's intel page, not just on
+  // the Signals tab.
+  //
+  // Idempotency: signal_mirror:<signal_id>:<entity_type>:<entity_id>
+  let mirrorInserted = 0;
+  try {
+    const mirrorRows: Array<Record<string, unknown>> = [];
+    for (const { id: signalId, row } of allInsertedSignals) {
+      const kind = String((row.source_data as any)?.kind || 'signal');
+
+      // Collect (entity_type, entity_id) pairs to mirror.
+      const targets: Array<{ entity_type: string; entity_id: string }> = [];
+      for (const agentId of row.linked_agent_ids || []) {
+        targets.push({ entity_type: 'agent', entity_id: agentId });
+      }
+      for (const agencyId of row.linked_agency_ids || []) {
+        targets.push({ entity_type: 'agency', entity_id: agencyId });
+      }
+      // Pulse-native agent / agency ids in source_data (agency_growth stores them).
+      const sd: any = row.source_data || {};
+      for (const pid of (sd.agent_pulse_ids || [])) {
+        targets.push({ entity_type: 'agent', entity_id: pid });
+      }
+      for (const pid of (sd.agency_pulse_ids || [])) {
+        targets.push({ entity_type: 'agency', entity_id: pid });
+      }
+      // Pulse entity id (crm_suggestion stores it directly, may be null).
+      if (sd.pulse_entity_id) {
+        const et = sd.entity_type === 'agency' ? 'agency' : 'agent';
+        targets.push({ entity_type: et, entity_id: sd.pulse_entity_id });
+      }
+
+      // Dedupe — a single signal might list the same agent twice.
+      const seen = new Set<string>();
+      for (const t of targets) {
+        const k = `${t.entity_type}:${t.entity_id}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        mirrorRows.push({
+          entity_type: t.entity_type,
+          pulse_entity_id: t.entity_id,
+          event_type: 'signal_emitted',
+          event_category: 'signal',
+          title: row.title,
+          description: row.description,
+          new_value: {
+            signal_id: signalId,
+            kind,
+            level: row.level,
+            category: row.category,
+            suggested_action: row.suggested_action,
+          },
+          metadata: { signal_id: signalId, kind, level: row.level },
+          source: GENERATOR,
+          idempotency_key: `signal_mirror:${signalId}:${t.entity_type}:${t.entity_id}`,
+        });
+      }
+    }
+
+    if (mirrorRows.length) {
+      // Chunk insert; idempotency_key collisions are silently ignored by the
+      // partial unique index (migration 126). Same row-by-row fallback pattern
+      // as pulseRelistDetector for duplicate safety.
+      for (let i = 0; i < mirrorRows.length; i += 100) {
+        const chunk = mirrorRows.slice(i, i + 100);
+        const { data, error } = await admin.from('pulse_timeline').insert(chunk).select('id');
+        if (error) {
+          for (const r of chunk) {
+            const { error: e2, data: d2 } = await admin.from('pulse_timeline').insert(r).select('id');
+            if (!e2) mirrorInserted += d2?.length || 1;
+          }
+        } else {
+          mirrorInserted += data?.length || 0;
+        }
+      }
+    }
+  } catch (err: any) {
+    recordError(ctx, err, 'warn');
   }
 
   const totalInserted = Object.values(results).reduce((a, r) => a + r.inserted, 0);
@@ -444,5 +539,6 @@ serveWithAudit('pulseSignalGenerator', async (req: Request) => {
     duration_ms: Date.now() - startedAt,
     results,
     total_inserted: totalInserted,
+    timeline_mirror_inserted: mirrorInserted,
   }, 200, req);
 });

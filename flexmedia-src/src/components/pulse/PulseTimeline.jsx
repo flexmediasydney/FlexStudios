@@ -70,6 +70,9 @@ const EVENT_CONFIG = {
   sold_date_captured:       { icon: CheckCircle2,  color: "bg-emerald-500", label: "Sold Date Captured", category_color: "text-emerald-600 dark:text-emerald-400" },
   // B13 fix: agency contact events were emitted but had no config — rendered as generic gray fallback
   agency_contact_discovered:{ icon: AtSign,        color: "bg-emerald-500", label: "Agency Contact Found", category_color: "text-emerald-600 dark:text-emerald-400" },
+  // Signal mirror events — every pulse_signals row emits one of these per linked entity so
+  // it shows up on the linked agent/agency/listing dossier timeline (migration 136).
+  signal_emitted:           { icon: Zap,           color: "bg-yellow-500",  label: "Signal",             category_color: "text-yellow-600 dark:text-yellow-400" },
 };
 
 /* ── Fallback config for unknown event types ─────────────────────────────── */

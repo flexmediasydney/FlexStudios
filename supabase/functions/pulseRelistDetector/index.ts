@@ -283,6 +283,47 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     } else {
       result.timeline_skipped_dup++;
     }
+
+    // Mirror a signal_emitted row onto each linked agent + agency so the
+    // signal surfaces on their dossier timeline (not just the listing's).
+    // See migration 136 for the event_type registration.
+    const mirrorTargets: Array<{ entity_type: string; entity_id: string }> = [];
+    for (const pid of (c.agent_pulse_ids || [])) {
+      if (pid) mirrorTargets.push({ entity_type: 'agent', entity_id: pid });
+    }
+    for (const pid of (c.agency_pulse_ids || [])) {
+      if (pid) mirrorTargets.push({ entity_type: 'agency', entity_id: pid });
+    }
+    const seenMirror = new Set<string>();
+    for (const t of mirrorTargets) {
+      const dupKey = `${t.entity_type}:${t.entity_id}`;
+      if (seenMirror.has(dupKey)) continue;
+      seenMirror.add(dupKey);
+      const mirrorKey = `signal_mirror_relist:${c.property_key}:${c.latest_active_at}:${t.entity_type}:${t.entity_id}`;
+      timelineToInsert.push({
+        entity_type: t.entity_type,
+        pulse_entity_id: t.entity_id,
+        event_type: 'signal_emitted',
+        event_category: 'signal',
+        title,
+        description,
+        new_value: {
+          kind: 'relist',
+          level: 'person',
+          category: 'movement',
+          property_key: c.property_key,
+          latest_active_listing_id: c.latest_active_listing_id,
+          suggested_action: 'Reach out to the listing agent to offer a re-shoot — the owner has re-engaged',
+        },
+        metadata: {
+          kind: 'relist',
+          property_key: c.property_key,
+          run_id: runId,
+        },
+        source: GENERATOR,
+        idempotency_key: mirrorKey,
+      });
+    }
   }
 
   // ── 4. Insert in chunks — the partial unique index catches any races ───

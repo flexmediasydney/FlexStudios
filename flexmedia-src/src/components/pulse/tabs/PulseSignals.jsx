@@ -7,8 +7,85 @@ import PulseSignalCard from "@/components/nurturing/PulseSignalCard";
 import PulseSignalQuickAdd from "@/components/nurturing/PulseSignalQuickAdd";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { Plus, Zap, ArrowDownUp } from "lucide-react";
+import {
+  Plus, Zap, ArrowDownUp, HelpCircle,
+  ArrowRight, Building2, DollarSign, Link2, RefreshCw,
+} from "lucide-react";
+
+// ── Signal Legend ─────────────────────────────────────────────────────────────
+// Every kind pulseSignalGenerator / pulseRelistDetector can emit today. Keep in
+// sync with supabase/functions/pulseSignalGenerator/index.ts and
+// supabase/functions/pulseRelistDetector/index.ts.
+const SIGNAL_LEGEND = [
+  {
+    group: "Movement",
+    items: [
+      {
+        kind: "agent_movement",
+        label: "Agent moved agencies",
+        icon: ArrowRight,
+        level: "person",
+        category: "movement",
+        trigger: "pulse_timeline agency_change event detected in last 24h (agent switched agency between scrapes).",
+        action: "Congratulate and reconnect with the agent at their new agency.",
+      },
+      {
+        kind: "relist",
+        label: "Listing re-listed (re-shoot candidate)",
+        icon: RefreshCw,
+        level: "person",
+        category: "movement",
+        trigger: "Same property_key went withdrawn then back to for_sale / for_rent / under_contract within 30 days.",
+        action: "Offer the listing agent a re-shoot — owner has re-committed to marketing.",
+      },
+    ],
+  },
+  {
+    group: "Market",
+    items: [
+      {
+        kind: "price_drop",
+        label: "Price drop",
+        icon: DollarSign,
+        level: "organisation",
+        category: "market",
+        trigger: "pulse_timeline price_change event with at least one listing's new price below old price.",
+        action: "Reach out — motivated vendor may now need re-marketing or a fresh campaign.",
+      },
+      {
+        kind: "agency_growth",
+        label: "Agency growth surge",
+        icon: Building2,
+        level: "organisation",
+        category: "market",
+        trigger: "≥2 first_seen agent events at the same agency_rea_id within 24h.",
+        action: "Review the agency — if a dormant prospect, re-engage while they're expanding.",
+      },
+    ],
+  },
+  {
+    group: "CRM",
+    items: [
+      {
+        kind: "crm_suggestion",
+        label: "New CRM match suggestion",
+        icon: Link2,
+        level: "person / organisation",
+        category: "custom",
+        trigger: "pulse_crm_mappings row inserted with confidence='suggested' (auto-mapper proposes a link).",
+        action: "Open the Mappings tab and confirm or reject.",
+      },
+    ],
+  },
+];
+
+const LEVEL_BADGE = {
+  industry:     "bg-purple-100 text-purple-700",
+  organisation: "bg-blue-100 text-blue-700",
+  person:       "bg-green-100 text-green-700",
+};
 
 // ── Filter config ─────────────────────────────────────────────────────────────
 
@@ -70,11 +147,64 @@ const SORT_OPTIONS = [
 // Priority used by "By level" sort: industry first, then org, then person.
 const LEVEL_PRIORITY = { industry: 0, organisation: 1, person: 2 };
 
+function SignalLegendDialog({ open, onClose }) {
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <HelpCircle className="h-4 w-4" />
+            Signal Legend
+          </DialogTitle>
+          <DialogDescription>
+            Every event type the auto-generators can emit, what triggers it, and what to do about it.
+            Signals also appear on each linked entity&apos;s dossier timeline.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-5 pt-2">
+          {SIGNAL_LEGEND.map((group) => (
+            <div key={group.group}>
+              <h3 className="text-xs uppercase tracking-wide font-semibold text-muted-foreground mb-2">{group.group}</h3>
+              <div className="space-y-2">
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.kind} className="rounded-md border p-3 space-y-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Icon className="h-4 w-4 text-muted-foreground" />
+                        <span className="font-medium text-sm">{item.label}</span>
+                        <code className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{item.kind}</code>
+                        {item.level.split(" / ").map((lvl) => (
+                          <Badge key={lvl} variant="secondary" className={cn("text-[10px] px-1.5 py-0", LEVEL_BADGE[lvl] || "")}>
+                            {lvl}
+                          </Badge>
+                        ))}
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">{item.category}</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground"><span className="font-semibold">Triggers when:</span> {item.trigger}</p>
+                      <p className="text-xs text-muted-foreground"><span className="font-semibold">What to do:</span> {item.action}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <div className="rounded-md bg-muted/40 border p-3 text-xs text-muted-foreground">
+            <p className="font-semibold mb-1">Manual signals</p>
+            <p>Signals can also be added by hand via <strong>Add Signal</strong>. Manual signals use the same levels (industry / organisation / person) and show alongside auto-generated ones.</p>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function PulseSignals({ pulseSignals = [], search = "" }) {
   const [levelFilter, setLevelFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
   const [addOpen, setAddOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
 
   // Counts for badges
   const counts = useMemo(() => {
@@ -135,6 +265,16 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
             {filtered.length}
             {filtered.length !== pulseSignals.length && ` / ${pulseSignals.length}`}
           </Badge>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+            onClick={() => setLegendOpen(true)}
+            title="What are all these signal types?"
+          >
+            <HelpCircle className="h-3.5 w-3.5" />
+            Legend
+          </Button>
         </div>
         <div className="flex items-center gap-2">
           {/* Sort selector */}
@@ -206,6 +346,15 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
               ? "Add a signal manually or run a scrape to auto-generate signals."
               : "Try adjusting the filters above."}
           </p>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-7 text-xs mt-2"
+            onClick={() => setLegendOpen(true)}
+          >
+            <HelpCircle className="h-3.5 w-3.5 mr-1" />
+            See the signal legend
+          </Button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -219,6 +368,9 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
       {addOpen && (
         <PulseSignalQuickAdd open={addOpen} onClose={() => setAddOpen(false)} />
       )}
+
+      {/* ── Signal legend ── */}
+      <SignalLegendDialog open={legendOpen} onClose={() => setLegendOpen(false)} />
     </div>
   );
 }
